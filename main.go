@@ -24,6 +24,12 @@ import (
 //	@version		1.0
 //	@description	This is the API documentation for Skymail.
 
+//	@tag.name			Templates
+//	@tag.description	Email template management operations
+
+//	@tag.name			Lists
+//	@tag.description	Mailing list and recipient management operations
+
 //	@contact.name	Enes Genç
 //	@contact.url	https://enesgenc.dev
 //	@contact.email	hello@enesgenc.dev
@@ -67,6 +73,7 @@ func main() {
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
 		AllowHeaders:     []string{"*", "Authorization", "Retry-After"},
+		ExposeHeaders:    []string{"X-Total-Count"},
 		AllowCredentials: false,
 	}))
 
@@ -76,14 +83,14 @@ func main() {
 	templates.Post("/", templateHandler.CreateTemplate)
 	templates.Get("/", templateHandler.GetTemplates)
 	templates.Get("/:id", templateHandler.GetTemplate)
-	templates.Put("/:id", templateHandler.UpdateTemplate)
+	templates.Patch("/:id", templateHandler.UpdateTemplate)
 	templates.Delete("/:id", templateHandler.DeleteTemplate)
 
-	lists := api.Group("/lists")
+	lists := api.Group("/mailing_lists")
 	lists.Post("/", listHandler.CreateList)
 	lists.Get("/", listHandler.GetLists)
 	lists.Get("/:id", listHandler.GetList)
-	lists.Put("/:id", listHandler.UpdateList)
+	lists.Patch("/:id", listHandler.UpdateList)
 	lists.Delete("/:id", listHandler.DeleteList)
 	lists.Post("/:id/recipients", listHandler.AddRecipient)
 	lists.Get("/:id/recipients", listHandler.GetRecipients)

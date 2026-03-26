@@ -7,20 +7,23 @@ package database
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
 
-const addRecipientToMailingList = `-- name: AddRecipientToMailingList :exec
+const addRecipientToMailingList = `-- name: AddRecipientToMailingList :one
 WITH recipient AS (
     INSERT INTO recipients (full_name, email)
     VALUES ($2, $3)
     ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name
-    RETURNING id
+    RETURNING id, full_name, email, created_at, updated_at
+), association AS (
+    INSERT INTO mailing_list_recipients (mail_list_id, recipient_id)
+    SELECT $1, id FROM recipient
+    ON CONFLICT DO NOTHING
 )
-INSERT INTO mailing_list_recipients (mail_list_id, recipient_id)
-VALUES ($1, recipient.id)
-ON CONFLICT DO NOTHING
+SELECT id, full_name, email, created_at, updated_at FROM recipient
 `
 
 type AddRecipientToMailingListParams struct {
@@ -29,9 +32,72 @@ type AddRecipientToMailingListParams struct {
 	Email      string    `json:"email"`
 }
 
-func (q *Queries) AddRecipientToMailingList(ctx context.Context, arg AddRecipientToMailingListParams) error {
-	_, err := q.db.Exec(ctx, addRecipientToMailingList, arg.MailListID, arg.FullName, arg.Email)
-	return err
+type AddRecipientToMailingListRow struct {
+	ID        uuid.UUID `json:"id"`
+	FullName  string    `json:"full_name"`
+	Email     string    `json:"email"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (q *Queries) AddRecipientToMailingList(ctx context.Context, arg AddRecipientToMailingListParams) (AddRecipientToMailingListRow, error) {
+	row := q.db.QueryRow(ctx, addRecipientToMailingList, arg.MailListID, arg.FullName, arg.Email)
+	var i AddRecipientToMailingListRow
+	err := row.Scan(
+		&i.ID,
+		&i.FullName,
+		&i.Email,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const countMailingLists = `-- name: CountMailingLists :one
+SELECT count(*) FROM mailing_lists
+`
+
+func (q *Queries) CountMailingLists(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countMailingLists)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countRecipients = `-- name: CountRecipients :one
+SELECT count(*) FROM recipients
+`
+
+func (q *Queries) CountRecipients(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countRecipients)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countRecipientsByMailingListId = `-- name: CountRecipientsByMailingListId :one
+SELECT count(*)
+FROM recipients r
+JOIN mailing_list_recipients mlr ON r.id = mlr.recipient_id
+WHERE mlr.mail_list_id = $1
+`
+
+func (q *Queries) CountRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countRecipientsByMailingListId, mailListID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countTemplates = `-- name: CountTemplates :one
+SELECT count(*) FROM templates
+`
+
+func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countTemplates)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const createMailingList = `-- name: CreateMailingList :one
@@ -54,25 +120,32 @@ func (q *Queries) CreateMailingList(ctx context.Context, name string) (MailingLi
 }
 
 const createTemplate = `-- name: CreateTemplate :one
-INSERT INTO templates (name, html_content, plain_text_content)
-VALUES ($1, $2, $3)
-RETURNING id, name, html_content, plain_text_content, created_at, updated_at
+INSERT INTO templates (name, html_content, plain_text_content, react_email_content)
+VALUES ($1, $2, $3, $4)
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at
 `
 
 type CreateTemplateParams struct {
-	Name             string `json:"name"`
-	HtmlContent      string `json:"html_content"`
-	PlainTextContent string `json:"plain_text_content"`
+	Name              string `json:"name"`
+	HtmlContent       string `json:"html_content"`
+	PlainTextContent  string `json:"plain_text_content"`
+	ReactEmailContent string `json:"react_email_content"`
 }
 
 func (q *Queries) CreateTemplate(ctx context.Context, arg CreateTemplateParams) (Template, error) {
-	row := q.db.QueryRow(ctx, createTemplate, arg.Name, arg.HtmlContent, arg.PlainTextContent)
+	row := q.db.QueryRow(ctx, createTemplate,
+		arg.Name,
+		arg.HtmlContent,
+		arg.PlainTextContent,
+		arg.ReactEmailContent,
+	)
 	var i Template
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
 		&i.HtmlContent,
 		&i.PlainTextContent,
+		&i.ReactEmailContent,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -99,10 +172,17 @@ func (q *Queries) DeleteTemplate(ctx context.Context, id uuid.UUID) error {
 
 const getAllMailingLists = `-- name: GetAllMailingLists :many
 SELECT id, name, description, created_at, updated_at FROM mailing_lists
+ORDER BY created_at DESC
+LIMIT $1 OFFSET $2
 `
 
-func (q *Queries) GetAllMailingLists(ctx context.Context) ([]MailingList, error) {
-	rows, err := q.db.Query(ctx, getAllMailingLists)
+type GetAllMailingListsParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+func (q *Queries) GetAllMailingLists(ctx context.Context, arg GetAllMailingListsParams) ([]MailingList, error) {
+	rows, err := q.db.Query(ctx, getAllMailingLists, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -128,11 +208,18 @@ func (q *Queries) GetAllMailingLists(ctx context.Context) ([]MailingList, error)
 }
 
 const getAllTemplates = `-- name: GetAllTemplates :many
-SELECT id, name, html_content, plain_text_content, created_at, updated_at FROM templates
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at FROM templates
+ORDER BY created_at DESC
+LIMIT $1 OFFSET $2
 `
 
-func (q *Queries) GetAllTemplates(ctx context.Context) ([]Template, error) {
-	rows, err := q.db.Query(ctx, getAllTemplates)
+type GetAllTemplatesParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams) ([]Template, error) {
+	rows, err := q.db.Query(ctx, getAllTemplates, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +232,7 @@ func (q *Queries) GetAllTemplates(ctx context.Context) ([]Template, error) {
 			&i.Name,
 			&i.HtmlContent,
 			&i.PlainTextContent,
+			&i.ReactEmailContent,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -194,10 +282,17 @@ func (q *Queries) GetRecipientByEmail(ctx context.Context, email string) (Recipi
 
 const getRecipients = `-- name: GetRecipients :many
 SELECT id, full_name, email, created_at, updated_at FROM recipients
+ORDER BY created_at DESC
+LIMIT $1 OFFSET $2
 `
 
-func (q *Queries) GetRecipients(ctx context.Context) ([]Recipient, error) {
-	rows, err := q.db.Query(ctx, getRecipients)
+type GetRecipientsParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+func (q *Queries) GetRecipients(ctx context.Context, arg GetRecipientsParams) ([]Recipient, error) {
+	rows, err := q.db.Query(ctx, getRecipients, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -227,10 +322,18 @@ SELECT r.id, r.full_name, r.email, r.created_at, r.updated_at
 FROM recipients r
 JOIN mailing_list_recipients mlr ON r.id = mlr.recipient_id
 WHERE mlr.mail_list_id = $1
+ORDER BY r.created_at DESC
+LIMIT $2 OFFSET $3
 `
 
-func (q *Queries) GetRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) ([]Recipient, error) {
-	rows, err := q.db.Query(ctx, getRecipientsByMailingListId, mailListID)
+type GetRecipientsByMailingListIdParams struct {
+	MailListID uuid.UUID `json:"mail_list_id"`
+	Limit      int32     `json:"limit"`
+	Offset     int32     `json:"offset"`
+}
+
+func (q *Queries) GetRecipientsByMailingListId(ctx context.Context, arg GetRecipientsByMailingListIdParams) ([]Recipient, error) {
+	rows, err := q.db.Query(ctx, getRecipientsByMailingListId, arg.MailListID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +359,7 @@ func (q *Queries) GetRecipientsByMailingListId(ctx context.Context, mailListID u
 }
 
 const getTemplateById = `-- name: GetTemplateById :one
-SELECT id, name, html_content, plain_text_content, created_at, updated_at FROM templates WHERE id = $1
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at FROM templates WHERE id = $1
 `
 
 func (q *Queries) GetTemplateById(ctx context.Context, id uuid.UUID) (Template, error) {
@@ -267,6 +370,7 @@ func (q *Queries) GetTemplateById(ctx context.Context, id uuid.UUID) (Template, 
 		&i.Name,
 		&i.HtmlContent,
 		&i.PlainTextContent,
+		&i.ReactEmailContent,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -341,17 +445,18 @@ func (q *Queries) UpdateRecipient(ctx context.Context, arg UpdateRecipientParams
 
 const updateTemplate = `-- name: UpdateTemplate :one
 UPDATE templates
-SET name = $2, html_content = $3, plain_text_content = $4,
+SET name = $2, html_content = $3, plain_text_content = $4, react_email_content = $5,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, name, html_content, plain_text_content, created_at, updated_at
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at
 `
 
 type UpdateTemplateParams struct {
-	ID               uuid.UUID `json:"id"`
-	Name             string    `json:"name"`
-	HtmlContent      string    `json:"html_content"`
-	PlainTextContent string    `json:"plain_text_content"`
+	ID                uuid.UUID `json:"id"`
+	Name              string    `json:"name"`
+	HtmlContent       string    `json:"html_content"`
+	PlainTextContent  string    `json:"plain_text_content"`
+	ReactEmailContent string    `json:"react_email_content"`
 }
 
 func (q *Queries) UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) (Template, error) {
@@ -360,6 +465,7 @@ func (q *Queries) UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) 
 		arg.Name,
 		arg.HtmlContent,
 		arg.PlainTextContent,
+		arg.ReactEmailContent,
 	)
 	var i Template
 	err := row.Scan(
@@ -367,6 +473,7 @@ func (q *Queries) UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) 
 		&i.Name,
 		&i.HtmlContent,
 		&i.PlainTextContent,
+		&i.ReactEmailContent,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

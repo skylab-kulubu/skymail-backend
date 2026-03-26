@@ -80,6 +80,9 @@ const docTemplate = `{
                     "plain_text_content": {
                         "type": "string"
                     },
+                    "react_email_content": {
+                        "type": "string"
+                    },
                     "updated_at": {
                         "type": "string"
                     }
@@ -122,12 +125,16 @@ const docTemplate = `{
                     },
                     "plain_text_content": {
                         "type": "string"
+                    },
+                    "react_email_content": {
+                        "type": "string"
                     }
                 },
                 "required": [
                     "html_content",
                     "name",
-                    "plain_text_content"
+                    "plain_text_content",
+                    "react_email_content"
                 ],
                 "type": "object"
             },
@@ -152,12 +159,16 @@ const docTemplate = `{
                     },
                     "plain_text_content": {
                         "type": "string"
+                    },
+                    "react_email_content": {
+                        "type": "string"
                     }
                 },
                 "required": [
                     "html_content",
                     "name",
-                    "plain_text_content"
+                    "plain_text_content",
+                    "react_email_content"
                 ],
                 "type": "object"
             }
@@ -178,9 +189,27 @@ const docTemplate = `{
         "url": ""
     },
     "paths": {
-        "/lists": {
+        "/mailing_lists": {
             "get": {
-                "description": "Get a list of all mailing lists.",
+                "description": "Get a list of all mailing lists with pagination.",
+                "parameters": [
+                    {
+                        "description": "Start index",
+                        "in": "query",
+                        "name": "_start",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "End index",
+                        "in": "query",
+                        "name": "_end",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
                 "responses": {
                     "200": {
                         "content": {
@@ -208,7 +237,7 @@ const docTemplate = `{
                 },
                 "summary": "List all mailing lists",
                 "tags": [
-                    "lists"
+                    "Lists"
                 ]
             },
             "post": {
@@ -234,8 +263,15 @@ const docTemplate = `{
                     "required": true
                 },
                 "responses": {
-                    "204": {
-                        "description": "No Content"
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/database.MailingList"
+                                }
+                            }
+                        },
+                        "description": "Created"
                     },
                     "400": {
                         "content": {
@@ -260,11 +296,11 @@ const docTemplate = `{
                 },
                 "summary": "Create a new mailing list",
                 "tags": [
-                    "lists"
+                    "Lists"
                 ]
             }
         },
-        "/lists/{id}": {
+        "/mailing_lists/{id}": {
             "delete": {
                 "description": "Delete an existing mailing list by its ID.",
                 "parameters": [
@@ -315,7 +351,7 @@ const docTemplate = `{
                 },
                 "summary": "Delete a mailing list",
                 "tags": [
-                    "lists"
+                    "Lists"
                 ]
             },
             "get": {
@@ -375,10 +411,10 @@ const docTemplate = `{
                 },
                 "summary": "Get a mailing list by ID",
                 "tags": [
-                    "lists"
+                    "Lists"
                 ]
             },
-            "put": {
+            "patch": {
                 "description": "Update an existing mailing list with the provided ID and details.",
                 "parameters": [
                     {
@@ -412,8 +448,15 @@ const docTemplate = `{
                     "required": true
                 },
                 "responses": {
-                    "204": {
-                        "description": "No Content"
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/database.MailingList"
+                                }
+                            }
+                        },
+                        "description": "OK"
                     },
                     "400": {
                         "content": {
@@ -448,13 +491,13 @@ const docTemplate = `{
                 },
                 "summary": "Update a mailing list",
                 "tags": [
-                    "lists"
+                    "Lists"
                 ]
             }
         },
-        "/lists/{id}/recipients": {
+        "/mailing_lists/{id}/recipients": {
             "get": {
-                "description": "Get a list of all recipients in a specific mailing list.",
+                "description": "Get a list of all recipients in a specific mailing list with pagination.",
                 "parameters": [
                     {
                         "description": "List ID",
@@ -463,6 +506,22 @@ const docTemplate = `{
                         "required": true,
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Start index",
+                        "in": "query",
+                        "name": "_start",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "End index",
+                        "in": "query",
+                        "name": "_end",
+                        "schema": {
+                            "type": "integer"
                         }
                     }
                 ],
@@ -503,7 +562,7 @@ const docTemplate = `{
                 },
                 "summary": "List recipients of a mailing list",
                 "tags": [
-                    "lists"
+                    "Lists"
                 ]
             },
             "post": {
@@ -540,8 +599,15 @@ const docTemplate = `{
                     "required": true
                 },
                 "responses": {
-                    "204": {
-                        "description": "No Content"
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/database.Recipient"
+                                }
+                            }
+                        },
+                        "description": "Created"
                     },
                     "400": {
                         "content": {
@@ -566,11 +632,11 @@ const docTemplate = `{
                 },
                 "summary": "Add a recipient to a mailing list",
                 "tags": [
-                    "lists"
+                    "Lists"
                 ]
             }
         },
-        "/lists/{id}/recipients/{recipientId}": {
+        "/mailing_lists/{id}/recipients/{recipientId}": {
             "delete": {
                 "description": "Remove a specific recipient from a mailing list by their IDs.",
                 "parameters": [
@@ -620,13 +686,31 @@ const docTemplate = `{
                 },
                 "summary": "Remove a recipient from a mailing list",
                 "tags": [
-                    "lists"
+                    "Lists"
                 ]
             }
         },
         "/templates": {
             "get": {
-                "description": "Get a list of all email templates.",
+                "description": "Get a list of all email templates with pagination.",
+                "parameters": [
+                    {
+                        "description": "Start index",
+                        "in": "query",
+                        "name": "_start",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "End index",
+                        "in": "query",
+                        "name": "_end",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
                 "responses": {
                     "200": {
                         "content": {
@@ -654,7 +738,7 @@ const docTemplate = `{
                 },
                 "summary": "List all email templates",
                 "tags": [
-                    "templates"
+                    "Templates"
                 ]
             },
             "post": {
@@ -680,8 +764,15 @@ const docTemplate = `{
                     "required": true
                 },
                 "responses": {
-                    "204": {
-                        "description": "No Content"
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/database.Template"
+                                }
+                            }
+                        },
+                        "description": "Created"
                     },
                     "400": {
                         "content": {
@@ -706,7 +797,7 @@ const docTemplate = `{
                 },
                 "summary": "Create a new email template",
                 "tags": [
-                    "templates"
+                    "Templates"
                 ]
             }
         },
@@ -761,7 +852,7 @@ const docTemplate = `{
                 },
                 "summary": "Delete an email template",
                 "tags": [
-                    "templates"
+                    "Templates"
                 ]
             },
             "get": {
@@ -821,10 +912,10 @@ const docTemplate = `{
                 },
                 "summary": "Get an email template by ID",
                 "tags": [
-                    "templates"
+                    "Templates"
                 ]
             },
-            "put": {
+            "patch": {
                 "description": "Update an existing email template with the provided ID and details.",
                 "parameters": [
                     {
@@ -858,8 +949,15 @@ const docTemplate = `{
                     "required": true
                 },
                 "responses": {
-                    "204": {
-                        "description": "No Content"
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/database.Template"
+                                }
+                            }
+                        },
+                        "description": "OK"
                     },
                     "400": {
                         "content": {
@@ -894,12 +992,22 @@ const docTemplate = `{
                 },
                 "summary": "Update an email template",
                 "tags": [
-                    "templates"
+                    "Templates"
                 ]
             }
         }
     },
     "openapi": "3.1.0",
+    "tags": [
+        {
+            "description": "Email template management operations",
+            "name": "Templates"
+        },
+        {
+            "description": "Mailing list and recipient management operations",
+            "name": "Lists"
+        }
+    ],
     "servers": [
         {
             "url": "skymail-api.yildizskylab.com/v1"

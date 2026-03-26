@@ -11,17 +11,21 @@ import (
 )
 
 type Querier interface {
-	AddRecipientToMailingList(ctx context.Context, arg AddRecipientToMailingListParams) error
+	AddRecipientToMailingList(ctx context.Context, arg AddRecipientToMailingListParams) (AddRecipientToMailingListRow, error)
+	CountMailingLists(ctx context.Context) (int64, error)
+	CountRecipients(ctx context.Context) (int64, error)
+	CountRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) (int64, error)
+	CountTemplates(ctx context.Context) (int64, error)
 	CreateMailingList(ctx context.Context, name string) (MailingList, error)
 	CreateTemplate(ctx context.Context, arg CreateTemplateParams) (Template, error)
 	DeleteMailingList(ctx context.Context, id uuid.UUID) error
 	DeleteTemplate(ctx context.Context, id uuid.UUID) error
-	GetAllMailingLists(ctx context.Context) ([]MailingList, error)
-	GetAllTemplates(ctx context.Context) ([]Template, error)
+	GetAllMailingLists(ctx context.Context, arg GetAllMailingListsParams) ([]MailingList, error)
+	GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams) ([]Template, error)
 	GetMailingListById(ctx context.Context, id uuid.UUID) (MailingList, error)
 	GetRecipientByEmail(ctx context.Context, email string) (Recipient, error)
-	GetRecipients(ctx context.Context) ([]Recipient, error)
-	GetRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) ([]Recipient, error)
+	GetRecipients(ctx context.Context, arg GetRecipientsParams) ([]Recipient, error)
+	GetRecipientsByMailingListId(ctx context.Context, arg GetRecipientsByMailingListIdParams) ([]Recipient, error)
 	GetTemplateById(ctx context.Context, id uuid.UUID) (Template, error)
 	RemoveRecipientFromMailingListByID(ctx context.Context, arg RemoveRecipientFromMailingListByIDParams) error
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)

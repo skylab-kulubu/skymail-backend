@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"strconv"
+
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
@@ -32,14 +34,14 @@ func NewListHandler(db *database.Store) ListHandler {
 //
 //	@Summary		Create a new mailing list
 //	@Description	Create a new mailing list with the provided name.
-//	@Tags			lists
+//	@Tags			Lists
 //	@Accept			json
 //	@Produce		json
-//	@Param			list	body	requests.CreateMailingList	true	"List details"
-//	@Success		204		"No Content"
+//	@Param			list	body		requests.CreateMailingList	true	"List details"
+//	@Success		201		{object}	database.MailingList
 //	@Failure		400		{object}	apperrors.AppError	"Bad Request"
 //	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
-//	@Router			/lists [post]
+//	@Router			/mailing_lists [post]
 func (h *listHandlerImpl) CreateList(c fiber.Ctx) error {
 	var params requests.CreateMailingList
 
@@ -47,28 +49,42 @@ func (h *listHandlerImpl) CreateList(c fiber.Ctx) error {
 		return err
 	}
 
-	_, err := h.db.CreateMailingList(c.Context(), params.Name)
+	list, err := h.db.CreateMailingList(c.Context(), params.Name)
 	if err != nil {
 		return err
 	}
 
-	return c.SendStatus(fiber.StatusNoContent)
+	return c.Status(fiber.StatusCreated).JSON(list)
 }
 
 // GetLists godoc
 //
 //	@Summary		List all mailing lists
-//	@Description	Get a list of all mailing lists.
-//	@Tags			lists
+//	@Description	Get a list of all mailing lists with pagination.
+//	@Tags			Lists
 //	@Produce		json
-//	@Success		200	{array}		database.MailingList
-//	@Failure		500	{object}	apperrors.AppError	"Internal Server Error"
-//	@Router			/lists [get]
+//	@Param			_start	query		int	false	"Start index"
+//	@Param			_end	query		int	false	"End index"
+//	@Success		200		{array}		database.MailingList
+//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Router			/mailing_lists [get]
 func (h *listHandlerImpl) GetLists(c fiber.Ctx) error {
-	lists, err := h.db.GetAllMailingLists(c.Context())
+	limit, offset := getPaginationParams(c)
+
+	lists, err := h.db.GetAllMailingLists(c.Context(), database.GetAllMailingListsParams{
+		Limit:  limit,
+		Offset: offset,
+	})
 	if err != nil {
 		return err
 	}
+
+	count, err := h.db.CountMailingLists(c.Context())
+	if err != nil {
+		return err
+	}
+
+	c.Response().Header.Set("X-Total-Count", strconv.FormatInt(count, 10))
 
 	return c.JSON(lists)
 }
@@ -77,14 +93,14 @@ func (h *listHandlerImpl) GetLists(c fiber.Ctx) error {
 //
 //	@Summary		Get a mailing list by ID
 //	@Description	Get details of a specific mailing list by its ID.
-//	@Tags			lists
+//	@Tags			Lists
 //	@Produce		json
 //	@Param			id	path		string	true	"List ID"
 //	@Success		200	{object}	database.MailingList
 //	@Failure		400	{object}	apperrors.AppError	"Bad Request"
 //	@Failure		404	{object}	apperrors.AppError	"Not Found"
 //	@Failure		500	{object}	apperrors.AppError	"Internal Server Error"
-//	@Router			/lists/{id} [get]
+//	@Router			/mailing_lists/{id} [get]
 func (h *listHandlerImpl) GetList(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
@@ -103,16 +119,16 @@ func (h *listHandlerImpl) GetList(c fiber.Ctx) error {
 //
 //	@Summary		Update a mailing list
 //	@Description	Update an existing mailing list with the provided ID and details.
-//	@Tags			lists
+//	@Tags			Lists
 //	@Accept			json
 //	@Produce		json
-//	@Param			id		path	string						true	"List ID"
-//	@Param			list	body	requests.UpdateMailingList	true	"List details"
-//	@Success		204		"No Content"
+//	@Param			id		path		string						true	"List ID"
+//	@Param			list	body		requests.UpdateMailingList	true	"List details"
+//	@Success		200		{object}	database.MailingList
 //	@Failure		400		{object}	apperrors.AppError	"Bad Request"
 //	@Failure		404		{object}	apperrors.AppError	"Not Found"
 //	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
-//	@Router			/lists/{id} [put]
+//	@Router			/mailing_lists/{id} [patch]
 func (h *listHandlerImpl) UpdateList(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
@@ -124,7 +140,7 @@ func (h *listHandlerImpl) UpdateList(c fiber.Ctx) error {
 		return err
 	}
 
-	_, err = h.db.UpdateMailingList(c.Context(), database.UpdateMailingListParams{
+	list, err := h.db.UpdateMailingList(c.Context(), database.UpdateMailingListParams{
 		ID:   id,
 		Name: params.Name,
 	})
@@ -132,21 +148,21 @@ func (h *listHandlerImpl) UpdateList(c fiber.Ctx) error {
 		return err
 	}
 
-	return c.SendStatus(fiber.StatusNoContent)
+	return c.JSON(list)
 }
 
 // DeleteList godoc
 //
 //	@Summary		Delete a mailing list
 //	@Description	Delete an existing mailing list by its ID.
-//	@Tags			lists
+//	@Tags			Lists
 //	@Produce		json
 //	@Param			id	path	string	true	"List ID"
 //	@Success		204	"No Content"
 //	@Failure		400	{object}	apperrors.AppError	"Bad Request"
 //	@Failure		404	{object}	apperrors.AppError	"Not Found"
 //	@Failure		500	{object}	apperrors.AppError	"Internal Server Error"
-//	@Router			/lists/{id} [delete]
+//	@Router			/mailing_lists/{id} [delete]
 func (h *listHandlerImpl) DeleteList(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
@@ -164,15 +180,15 @@ func (h *listHandlerImpl) DeleteList(c fiber.Ctx) error {
 //
 //	@Summary		Add a recipient to a mailing list
 //	@Description	Add a new recipient or link an existing one by email to a mailing list.
-//	@Tags			lists
+//	@Tags			Lists
 //	@Accept			json
 //	@Produce		json
-//	@Param			id			path	string					true	"List ID"
-//	@Param			recipient	body	requests.AddRecipient	true	"Recipient details"
-//	@Success		204			"No Content"
+//	@Param			id			path		string					true	"List ID"
+//	@Param			recipient	body		requests.AddRecipient	true	"Recipient details"
+//	@Success		201			{object}	database.Recipient
 //	@Failure		400			{object}	apperrors.AppError	"Bad Request"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
-//	@Router			/lists/{id}/recipients [post]
+//	@Router			/mailing_lists/{id}/recipients [post]
 func (h *listHandlerImpl) AddRecipient(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
@@ -184,7 +200,7 @@ func (h *listHandlerImpl) AddRecipient(c fiber.Ctx) error {
 		return err
 	}
 
-	err = h.db.AddRecipientToMailingList(c.Context(), database.AddRecipientToMailingListParams{
+	recipient, err := h.db.AddRecipientToMailingList(c.Context(), database.AddRecipientToMailingListParams{
 		MailListID: id,
 		FullName:   params.FullName,
 		Email:      params.Email,
@@ -193,21 +209,21 @@ func (h *listHandlerImpl) AddRecipient(c fiber.Ctx) error {
 		return err
 	}
 
-	return c.SendStatus(fiber.StatusNoContent)
+	return c.Status(fiber.StatusCreated).JSON(recipient)
 }
 
 // RemoveRecipient godoc
 //
 //	@Summary		Remove a recipient from a mailing list
 //	@Description	Remove a specific recipient from a mailing list by their IDs.
-//	@Tags			lists
+//	@Tags			Lists
 //	@Produce		json
 //	@Param			id			path	string	true	"List ID"
 //	@Param			recipientId	path	string	true	"Recipient ID"
 //	@Success		204			"No Content"
 //	@Failure		400			{object}	apperrors.AppError	"Bad Request"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
-//	@Router			/lists/{id}/recipients/{recipientId} [delete]
+//	@Router			/mailing_lists/{id}/recipients/{recipientId} [delete]
 func (h *listHandlerImpl) RemoveRecipient(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
@@ -233,24 +249,39 @@ func (h *listHandlerImpl) RemoveRecipient(c fiber.Ctx) error {
 // GetRecipients godoc
 //
 //	@Summary		List recipients of a mailing list
-//	@Description	Get a list of all recipients in a specific mailing list.
-//	@Tags			lists
+//	@Description	Get a list of all recipients in a specific mailing list with pagination.
+//	@Tags			Lists
 //	@Produce		json
-//	@Param			id	path		string	true	"List ID"
-//	@Success		200	{array}		database.Recipient
-//	@Failure		400	{object}	apperrors.AppError	"Bad Request"
-//	@Failure		500	{object}	apperrors.AppError	"Internal Server Error"
-//	@Router			/lists/{id}/recipients [get]
+//	@Param			id		path		string	true	"List ID"
+//	@Param			_start	query		int		false	"Start index"
+//	@Param			_end	query		int		false	"End index"
+//	@Success		200		{array}		database.Recipient
+//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
+//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Router			/mailing_lists/{id}/recipients [get]
 func (h *listHandlerImpl) GetRecipients(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
 		return err
 	}
 
-	recipients, err := h.db.GetRecipientsByMailingListId(c.Context(), id)
+	limit, offset := getPaginationParams(c)
+
+	recipients, err := h.db.GetRecipientsByMailingListId(c.Context(), database.GetRecipientsByMailingListIdParams{
+		MailListID: id,
+		Limit:      limit,
+		Offset:     offset,
+	})
 	if err != nil {
 		return err
 	}
+
+	count, err := h.db.CountRecipientsByMailingListId(c.Context(), id)
+	if err != nil {
+		return err
+	}
+
+	c.Response().Header.Set("X-Total-Count", strconv.FormatInt(count, 10))
 
 	return c.JSON(recipients)
 }

@@ -32,10 +32,11 @@ type Recipient struct {
 }
 
 type Template struct {
-	ID               uuid.UUID `json:"id"`
-	Name             string    `json:"name"`
-	HtmlContent      string    `json:"html_content"`
-	PlainTextContent string    `json:"plain_text_content"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID                uuid.UUID `json:"id"`
+	Name              string    `json:"name"`
+	HtmlContent       string    `json:"html_content"`
+	PlainTextContent  string    `json:"plain_text_content"`
+	ReactEmailContent string    `json:"react_email_content"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
