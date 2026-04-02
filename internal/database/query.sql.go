@@ -15,15 +15,15 @@ import (
 const addRecipientToMailingList = `-- name: AddRecipientToMailingList :one
 WITH recipient AS (
     INSERT INTO recipients (full_name, email)
-    VALUES ($2, $3)
-    ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name
-    RETURNING id, full_name, email, created_at, updated_at
-), association AS (
-    INSERT INTO mailing_list_recipients (mail_list_id, recipient_id)
-    SELECT $1, id FROM recipient
-    ON CONFLICT DO NOTHING
-)
-SELECT id, full_name, email, created_at, updated_at FROM recipient
+        VALUES ($2, $3)
+        ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name
+        RETURNING id, full_name, email, created_at, updated_at),
+     association AS (
+         INSERT INTO mailing_list_recipients (mail_list_id, recipient_id)
+             SELECT $1, id FROM recipient
+             ON CONFLICT DO NOTHING)
+SELECT id, full_name, email, created_at, updated_at
+FROM recipient
 `
 
 type AddRecipientToMailingListParams struct {
@@ -54,7 +54,8 @@ func (q *Queries) AddRecipientToMailingList(ctx context.Context, arg AddRecipien
 }
 
 const countMailingLists = `-- name: CountMailingLists :one
-SELECT count(*) FROM mailing_lists
+SELECT count(*)
+FROM mailing_lists
 `
 
 func (q *Queries) CountMailingLists(ctx context.Context) (int64, error) {
@@ -65,7 +66,8 @@ func (q *Queries) CountMailingLists(ctx context.Context) (int64, error) {
 }
 
 const countRecipients = `-- name: CountRecipients :one
-SELECT count(*) FROM recipients
+SELECT count(*)
+FROM recipients
 `
 
 func (q *Queries) CountRecipients(ctx context.Context) (int64, error) {
@@ -78,7 +80,7 @@ func (q *Queries) CountRecipients(ctx context.Context) (int64, error) {
 const countRecipientsByMailingListId = `-- name: CountRecipientsByMailingListId :one
 SELECT count(*)
 FROM recipients r
-JOIN mailing_list_recipients mlr ON r.id = mlr.recipient_id
+         JOIN mailing_list_recipients mlr ON r.id = mlr.recipient_id
 WHERE mlr.mail_list_id = $1
 `
 
@@ -90,7 +92,8 @@ func (q *Queries) CountRecipientsByMailingListId(ctx context.Context, mailListID
 }
 
 const countTemplates = `-- name: CountTemplates :one
-SELECT count(*) FROM templates
+SELECT count(*)
+FROM templates
 `
 
 func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
@@ -153,7 +156,9 @@ func (q *Queries) CreateTemplate(ctx context.Context, arg CreateTemplateParams) 
 }
 
 const deleteMailingList = `-- name: DeleteMailingList :exec
-DELETE FROM mailing_lists WHERE id = $1
+DELETE
+FROM mailing_lists
+WHERE id = $1
 `
 
 func (q *Queries) DeleteMailingList(ctx context.Context, id uuid.UUID) error {
@@ -162,7 +167,9 @@ func (q *Queries) DeleteMailingList(ctx context.Context, id uuid.UUID) error {
 }
 
 const deleteTemplate = `-- name: DeleteTemplate :exec
-DELETE FROM templates WHERE id = $1
+DELETE
+FROM templates
+WHERE id = $1
 `
 
 func (q *Queries) DeleteTemplate(ctx context.Context, id uuid.UUID) error {
@@ -171,7 +178,8 @@ func (q *Queries) DeleteTemplate(ctx context.Context, id uuid.UUID) error {
 }
 
 const getAllMailingLists = `-- name: GetAllMailingLists :many
-SELECT id, name, description, created_at, updated_at FROM mailing_lists
+SELECT id, name, description, created_at, updated_at
+FROM mailing_lists
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
@@ -208,7 +216,8 @@ func (q *Queries) GetAllMailingLists(ctx context.Context, arg GetAllMailingLists
 }
 
 const getAllTemplates = `-- name: GetAllTemplates :many
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at FROM templates
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at
+FROM templates
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
@@ -247,7 +256,9 @@ func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams
 }
 
 const getMailingListById = `-- name: GetMailingListById :one
-SELECT id, name, description, created_at, updated_at FROM mailing_lists WHERE id = $1
+SELECT id, name, description, created_at, updated_at
+FROM mailing_lists
+WHERE id = $1
 `
 
 func (q *Queries) GetMailingListById(ctx context.Context, id uuid.UUID) (MailingList, error) {
@@ -264,7 +275,9 @@ func (q *Queries) GetMailingListById(ctx context.Context, id uuid.UUID) (Mailing
 }
 
 const getRecipientByEmail = `-- name: GetRecipientByEmail :one
-SELECT id, full_name, email, created_at, updated_at FROM recipients WHERE email = $1
+SELECT id, full_name, email, created_at, updated_at
+FROM recipients
+WHERE email = $1
 `
 
 func (q *Queries) GetRecipientByEmail(ctx context.Context, email string) (Recipient, error) {
@@ -281,7 +294,8 @@ func (q *Queries) GetRecipientByEmail(ctx context.Context, email string) (Recipi
 }
 
 const getRecipients = `-- name: GetRecipients :many
-SELECT id, full_name, email, created_at, updated_at FROM recipients
+SELECT id, full_name, email, created_at, updated_at
+FROM recipients
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
@@ -320,7 +334,7 @@ func (q *Queries) GetRecipients(ctx context.Context, arg GetRecipientsParams) ([
 const getRecipientsByMailingListId = `-- name: GetRecipientsByMailingListId :many
 SELECT r.id, r.full_name, r.email, r.created_at, r.updated_at
 FROM recipients r
-JOIN mailing_list_recipients mlr ON r.id = mlr.recipient_id
+         JOIN mailing_list_recipients mlr ON r.id = mlr.recipient_id
 WHERE mlr.mail_list_id = $1
 ORDER BY r.created_at DESC
 LIMIT $2 OFFSET $3
@@ -359,7 +373,9 @@ func (q *Queries) GetRecipientsByMailingListId(ctx context.Context, arg GetRecip
 }
 
 const getTemplateById = `-- name: GetTemplateById :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at FROM templates WHERE id = $1
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at
+FROM templates
+WHERE id = $1
 `
 
 func (q *Queries) GetTemplateById(ctx context.Context, id uuid.UUID) (Template, error) {
@@ -377,9 +393,53 @@ func (q *Queries) GetTemplateById(ctx context.Context, id uuid.UUID) (Template, 
 	return i, err
 }
 
+const processQueueItems = `-- name: ProcessQueueItems :many
+UPDATE mail_queue
+SET status = 'processing'
+WHERE id IN (SELECT id
+             FROM mail_queue
+             WHERE status = 'pending'
+             ORDER BY created_at
+             LIMIT 100 FOR UPDATE SKIP LOCKED)
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at
+`
+
+func (q *Queries) ProcessQueueItems(ctx context.Context) ([]MailQueue, error) {
+	rows, err := q.db.Query(ctx, processQueueItems)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MailQueue
+	for rows.Next() {
+		var i MailQueue
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.RecipientFullName,
+			&i.RecipientEmail,
+			&i.Subject,
+			&i.Body,
+			&i.BodyHtml,
+			&i.Status,
+			&i.Error,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const removeRecipientFromMailingListByID = `-- name: RemoveRecipientFromMailingListByID :exec
-DELETE FROM mailing_list_recipients
-WHERE mail_list_id = $1 AND recipient_id = $2
+DELETE
+FROM mailing_list_recipients
+WHERE mail_list_id = $1
+  AND recipient_id = $2
 `
 
 type RemoveRecipientFromMailingListByIDParams struct {
@@ -392,9 +452,53 @@ func (q *Queries) RemoveRecipientFromMailingListByID(ctx context.Context, arg Re
 	return err
 }
 
+const resetDeadJobs = `-- name: ResetDeadJobs :exec
+UPDATE mail_queue
+SET status = 'pending'
+WHERE status = 'processing'
+`
+
+func (q *Queries) ResetDeadJobs(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, resetDeadJobs)
+	return err
+}
+
+const setMailQueueItemFailed = `-- name: SetMailQueueItemFailed :exec
+UPDATE mail_queue
+SET status    = 'failed',
+    mail_id   = NULL,
+    error     = $2,
+    updated_at = NOW()
+WHERE id = $1
+`
+
+type SetMailQueueItemFailedParams struct {
+	ID    uuid.UUID `json:"id"`
+	Error *string   `json:"error"`
+}
+
+func (q *Queries) SetMailQueueItemFailed(ctx context.Context, arg SetMailQueueItemFailedParams) error {
+	_, err := q.db.Exec(ctx, setMailQueueItemFailed, arg.ID, arg.Error)
+	return err
+}
+
+const setMailQueueItemSent = `-- name: SetMailQueueItemSent :exec
+UPDATE mail_queue
+SET status    = 'sent',
+    error     = NULL,
+    updated_at = NOW()
+WHERE id = $1
+`
+
+func (q *Queries) SetMailQueueItemSent(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, setMailQueueItemSent, id)
+	return err
+}
+
 const updateMailingList = `-- name: UpdateMailingList :one
 UPDATE mailing_lists
-SET name = $2, updated_at = NOW()
+SET name       = $2,
+    updated_at = NOW()
 WHERE id = $1
 RETURNING id, name, description, created_at, updated_at
 `
@@ -419,7 +523,9 @@ func (q *Queries) UpdateMailingList(ctx context.Context, arg UpdateMailingListPa
 
 const updateRecipient = `-- name: UpdateRecipient :one
 UPDATE recipients
-SET full_name = $2, email = $3, updated_at = NOW()
+SET full_name  = $2,
+    email      = $3,
+    updated_at = NOW()
 WHERE id = $1
 RETURNING id, full_name, email, created_at, updated_at
 `
@@ -445,8 +551,11 @@ func (q *Queries) UpdateRecipient(ctx context.Context, arg UpdateRecipientParams
 
 const updateTemplate = `-- name: UpdateTemplate :one
 UPDATE templates
-SET name = $2, html_content = $3, plain_text_content = $4, react_email_content = $5,
-    updated_at = NOW()
+SET name                = $2,
+    html_content        = $3,
+    plain_text_content  = $4,
+    react_email_content = $5,
+    updated_at          = NOW()
 WHERE id = $1
 RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at
 `

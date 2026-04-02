@@ -27,7 +27,11 @@ type Querier interface {
 	GetRecipients(ctx context.Context, arg GetRecipientsParams) ([]Recipient, error)
 	GetRecipientsByMailingListId(ctx context.Context, arg GetRecipientsByMailingListIdParams) ([]Recipient, error)
 	GetTemplateById(ctx context.Context, id uuid.UUID) (Template, error)
+	ProcessQueueItems(ctx context.Context) ([]MailQueue, error)
 	RemoveRecipientFromMailingListByID(ctx context.Context, arg RemoveRecipientFromMailingListByIDParams) error
+	ResetDeadJobs(ctx context.Context) error
+	SetMailQueueItemFailed(ctx context.Context, arg SetMailQueueItemFailedParams) error
+	SetMailQueueItemSent(ctx context.Context, id uuid.UUID) error
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
 	UpdateRecipient(ctx context.Context, arg UpdateRecipientParams) (Recipient, error)
 	UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) (Template, error)

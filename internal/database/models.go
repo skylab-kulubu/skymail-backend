@@ -5,10 +5,77 @@
 package database
 
 import (
+	"database/sql/driver"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+type MailQueueStatus string
+
+const (
+	MailQueueStatusPending    MailQueueStatus = "pending"
+	MailQueueStatusProcessing MailQueueStatus = "processing"
+	MailQueueStatusSent       MailQueueStatus = "sent"
+	MailQueueStatusFailed     MailQueueStatus = "failed"
+)
+
+func (e *MailQueueStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = MailQueueStatus(s)
+	case string:
+		*e = MailQueueStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for MailQueueStatus: %T", src)
+	}
+	return nil
+}
+
+type NullMailQueueStatus struct {
+	MailQueueStatus MailQueueStatus `json:"mail_queue_status"`
+	Valid           bool            `json:"valid"` // Valid is true if MailQueueStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullMailQueueStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.MailQueueStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.MailQueueStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullMailQueueStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.MailQueueStatus), nil
+}
+
+type MailQueue struct {
+	ID                uuid.UUID           `json:"id"`
+	TaskID            uuid.UUID           `json:"task_id"`
+	RecipientFullName string              `json:"recipient_full_name"`
+	RecipientEmail    string              `json:"recipient_email"`
+	Subject           string              `json:"subject"`
+	Body              string              `json:"body"`
+	BodyHtml          *string             `json:"body_html"`
+	Status            NullMailQueueStatus `json:"status"`
+	Error             *string             `json:"error"`
+	CreatedAt         *time.Time          `json:"created_at"`
+}
+
+type MailTask struct {
+	ID         uuid.UUID  `json:"id"`
+	SentBy     string     `json:"sent_by"`
+	TemplateID *uuid.UUID `json:"template_id"`
+	MailListID *uuid.UUID `json:"mail_list_id"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
 
 type MailingList struct {
 	ID          uuid.UUID `json:"id"`
