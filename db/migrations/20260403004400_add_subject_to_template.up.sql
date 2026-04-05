@@ -1,0 +1,1 @@
+ALTER TABLE templates ADD COLUMN subject TEXT NOT NULL DEFAULT '';

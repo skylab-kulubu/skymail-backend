@@ -65,6 +65,7 @@ func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
 
 	template, err := h.db.CreateTemplate(c.Context(), database.CreateTemplateParams{
 		Name:              params.Name,
+		Subject:           params.Subject,
 		HtmlContent:       params.HTMLContent,
 		PlainTextContent:  params.PlainTextContent,
 		ReactEmailContent: params.ReactEmailContent,
@@ -162,6 +163,7 @@ func (h *templateHandlerImpl) UpdateTemplate(c fiber.Ctx) error {
 	template, err := h.db.UpdateTemplate(c.Context(), database.UpdateTemplateParams{
 		ID:                id,
 		Name:              params.Name,
+		Subject:           params.Subject,
 		HtmlContent:       params.HTMLContent,
 		PlainTextContent:  params.PlainTextContent,
 		ReactEmailContent: params.ReactEmailContent,
