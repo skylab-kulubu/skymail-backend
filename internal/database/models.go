@@ -70,11 +70,12 @@ type MailQueue struct {
 }
 
 type MailTask struct {
-	ID         uuid.UUID  `json:"id"`
-	SentBy     string     `json:"sent_by"`
-	TemplateID *uuid.UUID `json:"template_id"`
-	MailListID *uuid.UUID `json:"mail_list_id"`
-	CreatedAt  time.Time  `json:"created_at"`
+	ID            uuid.UUID  `json:"id"`
+	SentBy        string     `json:"sent_by"`
+	TemplateID    *uuid.UUID `json:"template_id"`
+	MailListID    *uuid.UUID `json:"mail_list_id"`
+	BodyVariables []byte     `json:"body_variables"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 type MailingList struct {
@@ -106,4 +107,5 @@ type Template struct {
 	ReactEmailContent string    `json:"react_email_content"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
+	Subject           string    `json:"subject"`
 }

@@ -53,6 +53,31 @@ func (q *Queries) AddRecipientToMailingList(ctx context.Context, arg AddRecipien
 	return i, err
 }
 
+const countMailQueueItemsByTaskId = `-- name: CountMailQueueItemsByTaskId :one
+SELECT count(*)
+FROM mail_queue
+WHERE task_id = $1
+`
+
+func (q *Queries) CountMailQueueItemsByTaskId(ctx context.Context, taskID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countMailQueueItemsByTaskId, taskID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countMailTasks = `-- name: CountMailTasks :one
+SELECT count(*)
+FROM mail_tasks
+`
+
+func (q *Queries) CountMailTasks(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countMailTasks)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countMailingLists = `-- name: CountMailingLists :one
 SELECT count(*)
 FROM mailing_lists
@@ -103,6 +128,87 @@ func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+type CreateMailQueueItemsParams struct {
+	TaskID            uuid.UUID `json:"task_id"`
+	RecipientFullName string    `json:"recipient_full_name"`
+	RecipientEmail    string    `json:"recipient_email"`
+	Subject           string    `json:"subject"`
+	Body              string    `json:"body"`
+	BodyHtml          *string   `json:"body_html"`
+}
+
+const createMailTask = `-- name: CreateMailTask :many
+WITH inserted_task AS (
+    INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at
+)
+SELECT it.id               AS task_id,
+       it.body_variables,
+       t.name              AS template_name,
+       t.subject           AS template_subject,
+       t.html_content,
+       t.plain_text_content,
+       r.full_name         AS recipient_full_name,
+       r.email             AS recipient_email
+FROM inserted_task it
+         JOIN templates t ON it.template_id = t.id
+         JOIN mailing_list_recipients mlr ON it.mail_list_id = mlr.mail_list_id
+         JOIN recipients r ON mlr.recipient_id = r.id
+`
+
+type CreateMailTaskParams struct {
+	SentBy        string     `json:"sent_by"`
+	TemplateID    *uuid.UUID `json:"template_id"`
+	MailListID    *uuid.UUID `json:"mail_list_id"`
+	BodyVariables []byte     `json:"body_variables"`
+}
+
+type CreateMailTaskRow struct {
+	TaskID            uuid.UUID `json:"task_id"`
+	BodyVariables     []byte    `json:"body_variables"`
+	TemplateName      string    `json:"template_name"`
+	TemplateSubject   string    `json:"template_subject"`
+	HtmlContent       string    `json:"html_content"`
+	PlainTextContent  string    `json:"plain_text_content"`
+	RecipientFullName string    `json:"recipient_full_name"`
+	RecipientEmail    string    `json:"recipient_email"`
+}
+
+func (q *Queries) CreateMailTask(ctx context.Context, arg CreateMailTaskParams) ([]CreateMailTaskRow, error) {
+	rows, err := q.db.Query(ctx, createMailTask,
+		arg.SentBy,
+		arg.TemplateID,
+		arg.MailListID,
+		arg.BodyVariables,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CreateMailTaskRow
+	for rows.Next() {
+		var i CreateMailTaskRow
+		if err := rows.Scan(
+			&i.TaskID,
+			&i.BodyVariables,
+			&i.TemplateName,
+			&i.TemplateSubject,
+			&i.HtmlContent,
+			&i.PlainTextContent,
+			&i.RecipientFullName,
+			&i.RecipientEmail,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createMailingList = `-- name: CreateMailingList :one
 INSERT INTO mailing_lists (name)
 VALUES ($1)
@@ -123,13 +229,14 @@ func (q *Queries) CreateMailingList(ctx context.Context, name string) (MailingLi
 }
 
 const createTemplate = `-- name: CreateTemplate :one
-INSERT INTO templates (name, html_content, plain_text_content, react_email_content)
-VALUES ($1, $2, $3, $4)
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at
+INSERT INTO templates (name, subject, html_content, plain_text_content, react_email_content)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject
 `
 
 type CreateTemplateParams struct {
 	Name              string `json:"name"`
+	Subject           string `json:"subject"`
 	HtmlContent       string `json:"html_content"`
 	PlainTextContent  string `json:"plain_text_content"`
 	ReactEmailContent string `json:"react_email_content"`
@@ -138,6 +245,7 @@ type CreateTemplateParams struct {
 func (q *Queries) CreateTemplate(ctx context.Context, arg CreateTemplateParams) (Template, error) {
 	row := q.db.QueryRow(ctx, createTemplate,
 		arg.Name,
+		arg.Subject,
 		arg.HtmlContent,
 		arg.PlainTextContent,
 		arg.ReactEmailContent,
@@ -151,6 +259,7 @@ func (q *Queries) CreateTemplate(ctx context.Context, arg CreateTemplateParams) 
 		&i.ReactEmailContent,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Subject,
 	)
 	return i, err
 }
@@ -175,6 +284,62 @@ WHERE id = $1
 func (q *Queries) DeleteTemplate(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, deleteTemplate, id)
 	return err
+}
+
+const getAllMailTasks = `-- name: GetAllMailTasks :many
+SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at,
+       t.name  AS template_name,
+       ml.name AS mail_list_name
+FROM mail_tasks mt
+         LEFT JOIN templates t ON mt.template_id = t.id
+         LEFT JOIN mailing_lists ml ON mt.mail_list_id = ml.id
+ORDER BY mt.created_at DESC
+LIMIT $1 OFFSET $2
+`
+
+type GetAllMailTasksParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+type GetAllMailTasksRow struct {
+	ID            uuid.UUID  `json:"id"`
+	SentBy        string     `json:"sent_by"`
+	TemplateID    *uuid.UUID `json:"template_id"`
+	MailListID    *uuid.UUID `json:"mail_list_id"`
+	BodyVariables []byte     `json:"body_variables"`
+	CreatedAt     time.Time  `json:"created_at"`
+	TemplateName  *string    `json:"template_name"`
+	MailListName  *string    `json:"mail_list_name"`
+}
+
+func (q *Queries) GetAllMailTasks(ctx context.Context, arg GetAllMailTasksParams) ([]GetAllMailTasksRow, error) {
+	rows, err := q.db.Query(ctx, getAllMailTasks, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetAllMailTasksRow
+	for rows.Next() {
+		var i GetAllMailTasksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SentBy,
+			&i.TemplateID,
+			&i.MailListID,
+			&i.BodyVariables,
+			&i.CreatedAt,
+			&i.TemplateName,
+			&i.MailListName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getAllMailingLists = `-- name: GetAllMailingLists :many
@@ -216,7 +381,7 @@ func (q *Queries) GetAllMailingLists(ctx context.Context, arg GetAllMailingLists
 }
 
 const getAllTemplates = `-- name: GetAllTemplates :many
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject
 FROM templates
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
@@ -244,6 +409,7 @@ func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams
 			&i.ReactEmailContent,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Subject,
 		); err != nil {
 			return nil, err
 		}
@@ -253,6 +419,93 @@ func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams
 		return nil, err
 	}
 	return items, nil
+}
+
+const getMailQueueItemsByTaskId = `-- name: GetMailQueueItemsByTaskId :many
+SELECT id, recipient_full_name, recipient_email, status, error, created_at
+FROM mail_queue
+WHERE task_id = $1
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type GetMailQueueItemsByTaskIdParams struct {
+	TaskID uuid.UUID `json:"task_id"`
+	Limit  int32     `json:"limit"`
+	Offset int32     `json:"offset"`
+}
+
+type GetMailQueueItemsByTaskIdRow struct {
+	ID                uuid.UUID           `json:"id"`
+	RecipientFullName string              `json:"recipient_full_name"`
+	RecipientEmail    string              `json:"recipient_email"`
+	Status            NullMailQueueStatus `json:"status"`
+	Error             *string             `json:"error"`
+	CreatedAt         *time.Time          `json:"created_at"`
+}
+
+func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueueItemsByTaskIdParams) ([]GetMailQueueItemsByTaskIdRow, error) {
+	rows, err := q.db.Query(ctx, getMailQueueItemsByTaskId, arg.TaskID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetMailQueueItemsByTaskIdRow
+	for rows.Next() {
+		var i GetMailQueueItemsByTaskIdRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RecipientFullName,
+			&i.RecipientEmail,
+			&i.Status,
+			&i.Error,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getMailTaskById = `-- name: GetMailTaskById :one
+SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at,
+       t.name  AS template_name,
+       ml.name AS mail_list_name
+FROM mail_tasks mt
+         LEFT JOIN templates t ON mt.template_id = t.id
+         LEFT JOIN mailing_lists ml ON mt.mail_list_id = ml.id
+WHERE mt.id = $1
+`
+
+type GetMailTaskByIdRow struct {
+	ID            uuid.UUID  `json:"id"`
+	SentBy        string     `json:"sent_by"`
+	TemplateID    *uuid.UUID `json:"template_id"`
+	MailListID    *uuid.UUID `json:"mail_list_id"`
+	BodyVariables []byte     `json:"body_variables"`
+	CreatedAt     time.Time  `json:"created_at"`
+	TemplateName  *string    `json:"template_name"`
+	MailListName  *string    `json:"mail_list_name"`
+}
+
+func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTaskByIdRow, error) {
+	row := q.db.QueryRow(ctx, getMailTaskById, id)
+	var i GetMailTaskByIdRow
+	err := row.Scan(
+		&i.ID,
+		&i.SentBy,
+		&i.TemplateID,
+		&i.MailListID,
+		&i.BodyVariables,
+		&i.CreatedAt,
+		&i.TemplateName,
+		&i.MailListName,
+	)
+	return i, err
 }
 
 const getMailingListById = `-- name: GetMailingListById :one
@@ -373,7 +626,7 @@ func (q *Queries) GetRecipientsByMailingListId(ctx context.Context, arg GetRecip
 }
 
 const getTemplateById = `-- name: GetTemplateById :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject
 FROM templates
 WHERE id = $1
 `
@@ -389,6 +642,7 @@ func (q *Queries) GetTemplateById(ctx context.Context, id uuid.UUID) (Template, 
 		&i.ReactEmailContent,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Subject,
 	)
 	return i, err
 }
@@ -466,9 +720,7 @@ func (q *Queries) ResetDeadJobs(ctx context.Context) error {
 const setMailQueueItemFailed = `-- name: SetMailQueueItemFailed :exec
 UPDATE mail_queue
 SET status    = 'failed',
-    mail_id   = NULL,
-    error     = $2,
-    updated_at = NOW()
+    error     = $2
 WHERE id = $1
 `
 
@@ -485,8 +737,7 @@ func (q *Queries) SetMailQueueItemFailed(ctx context.Context, arg SetMailQueueIt
 const setMailQueueItemSent = `-- name: SetMailQueueItemSent :exec
 UPDATE mail_queue
 SET status    = 'sent',
-    error     = NULL,
-    updated_at = NOW()
+    error     = NULL
 WHERE id = $1
 `
 
@@ -552,17 +803,19 @@ func (q *Queries) UpdateRecipient(ctx context.Context, arg UpdateRecipientParams
 const updateTemplate = `-- name: UpdateTemplate :one
 UPDATE templates
 SET name                = $2,
-    html_content        = $3,
-    plain_text_content  = $4,
-    react_email_content = $5,
+    subject             = $3,
+    html_content        = $4,
+    plain_text_content  = $5,
+    react_email_content = $6,
     updated_at          = NOW()
 WHERE id = $1
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject
 `
 
 type UpdateTemplateParams struct {
 	ID                uuid.UUID `json:"id"`
 	Name              string    `json:"name"`
+	Subject           string    `json:"subject"`
 	HtmlContent       string    `json:"html_content"`
 	PlainTextContent  string    `json:"plain_text_content"`
 	ReactEmailContent string    `json:"react_email_content"`
@@ -572,6 +825,7 @@ func (q *Queries) UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) 
 	row := q.db.QueryRow(ctx, updateTemplate,
 		arg.ID,
 		arg.Name,
+		arg.Subject,
 		arg.HtmlContent,
 		arg.PlainTextContent,
 		arg.ReactEmailContent,
@@ -585,6 +839,7 @@ func (q *Queries) UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) 
 		&i.ReactEmailContent,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Subject,
 	)
 	return i, err
 }

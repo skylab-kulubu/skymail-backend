@@ -1,8 +1,12 @@
 package mailer
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	htmlt "html/template"
+	textt "text/template"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -13,6 +17,7 @@ import (
 
 type Mailer interface {
 	Start(ctx context.Context, workerCount int)
+	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) error
 }
 
 type mailerImpl struct {
@@ -28,6 +33,7 @@ type SMTPConfig struct {
 	Port      int
 	User      string
 	Password  string
+	FQDN      string
 }
 
 func NewMailer(db *database.Store, smtpConfig SMTPConfig) Mailer {
@@ -54,6 +60,82 @@ func (m *mailerImpl) Start(ctx context.Context, workerCount int) {
 	}
 
 	go m.startDispatcher(ctx)
+}
+
+func (m *mailerImpl) Enqueue(ctx context.Context, arg database.CreateMailTaskParams) error {
+	rows, err := m.db.CreateMailTask(ctx, arg)
+	if err != nil {
+		m.logger.Err(err).Msg("Failed to enqueue mail task")
+		return err
+	}
+
+	if len(rows) == 0 {
+		m.logger.Warn().Msg("No mail queue items were created")
+		return nil
+	}
+
+	var taskVars map[string]interface{}
+	if err := json.Unmarshal(rows[0].BodyVariables, &taskVars); err != nil {
+		return fmt.Errorf("invalid json variables: %w", err)
+	}
+
+	subjectTemplate, err := textt.New("subject").Parse(rows[0].TemplateSubject)
+	if err != nil {
+		m.logger.Err(err).Msg("Failed to parse subject template")
+	}
+	textTemplate, err := textt.New("text").Parse(rows[0].PlainTextContent)
+	if err != nil {
+		return fmt.Errorf("invalid template: %w", err)
+	}
+	htmlTemplate, err := htmlt.New("html").Parse(rows[0].HtmlContent)
+	if err != nil {
+		return fmt.Errorf("invalid template: %w", err)
+	}
+
+	queueItems := make([]database.CreateMailQueueItemsParams, len(rows))
+	for i, row := range rows {
+		renderData := make(map[string]interface{})
+		for k, v := range taskVars {
+			renderData[k] = v
+		}
+		renderData["Email"] = row.RecipientEmail
+		renderData["FullName"] = row.RecipientFullName
+
+		var subjectBuf bytes.Buffer
+		err = subjectTemplate.Execute(&subjectBuf, renderData)
+		if err != nil {
+			m.logger.Err(err).Msg("Failed to render subject template")
+			continue
+		}
+
+		var textBuf bytes.Buffer
+		err = textTemplate.Execute(&textBuf, renderData)
+		if err != nil {
+			m.logger.Err(err).Msg("Failed to render template")
+			continue
+		}
+
+		var htmlBuf bytes.Buffer
+		err = htmlTemplate.Execute(&htmlBuf, renderData)
+		if err != nil {
+			m.logger.Err(err).Msg("Failed to render template")
+			continue
+		}
+
+		htmlRes := htmlBuf.String()
+
+		queueItems[i] = database.CreateMailQueueItemsParams{
+			TaskID:            row.TaskID,
+			RecipientFullName: row.RecipientFullName,
+			RecipientEmail:    row.RecipientEmail,
+			Subject:           subjectBuf.String(),
+			Body:              textBuf.String(),
+			BodyHtml:          &htmlRes,
+		}
+	}
+
+	_, err = m.db.CreateMailQueueItems(ctx, queueItems)
+	return err
 }
 
 func (m *mailerImpl) startDispatcher(ctx context.Context) {
@@ -150,6 +232,9 @@ func (m *mailerImpl) sendEmail(ctx context.Context, client *mail.Client, job dat
 	if err := msg.To(fmt.Sprintf("%s <%s>", job.RecipientFullName, job.RecipientEmail)); err != nil {
 		return fmt.Errorf("invalid recipient: %w", err)
 	}
+
+	msg.SetGenHeader(mail.HeaderMessageID, fmt.Sprintf("<%s@%s>", job.ID.String(), m.smtpConfig.FQDN))
+
 	msg.Subject(job.Subject)
 	msg.SetBodyString(mail.TypeTextPlain, job.Body)
 

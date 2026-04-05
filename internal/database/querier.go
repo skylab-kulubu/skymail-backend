@@ -12,16 +12,23 @@ import (
 
 type Querier interface {
 	AddRecipientToMailingList(ctx context.Context, arg AddRecipientToMailingListParams) (AddRecipientToMailingListRow, error)
+	CountMailQueueItemsByTaskId(ctx context.Context, taskID uuid.UUID) (int64, error)
+	CountMailTasks(ctx context.Context) (int64, error)
 	CountMailingLists(ctx context.Context) (int64, error)
 	CountRecipients(ctx context.Context) (int64, error)
 	CountRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) (int64, error)
 	CountTemplates(ctx context.Context) (int64, error)
+	CreateMailQueueItems(ctx context.Context, arg []CreateMailQueueItemsParams) (int64, error)
+	CreateMailTask(ctx context.Context, arg CreateMailTaskParams) ([]CreateMailTaskRow, error)
 	CreateMailingList(ctx context.Context, name string) (MailingList, error)
 	CreateTemplate(ctx context.Context, arg CreateTemplateParams) (Template, error)
 	DeleteMailingList(ctx context.Context, id uuid.UUID) error
 	DeleteTemplate(ctx context.Context, id uuid.UUID) error
+	GetAllMailTasks(ctx context.Context, arg GetAllMailTasksParams) ([]GetAllMailTasksRow, error)
 	GetAllMailingLists(ctx context.Context, arg GetAllMailingListsParams) ([]MailingList, error)
 	GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams) ([]Template, error)
+	GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueueItemsByTaskIdParams) ([]GetMailQueueItemsByTaskIdRow, error)
+	GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTaskByIdRow, error)
 	GetMailingListById(ctx context.Context, id uuid.UUID) (MailingList, error)
 	GetRecipientByEmail(ctx context.Context, email string) (Recipient, error)
 	GetRecipients(ctx context.Context, arg GetRecipientsParams) ([]Recipient, error)
