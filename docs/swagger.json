@@ -16,6 +16,122 @@
                 },
                 "type": "object"
             },
+            "database.GetAllMailTasksRow": {
+                "properties": {
+                    "body_variables": {
+                        "items": {
+                            "type": "integer"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "mail_list_id": {
+                        "type": "string"
+                    },
+                    "mail_list_name": {
+                        "type": "string"
+                    },
+                    "sent_by": {
+                        "type": "string"
+                    },
+                    "template_id": {
+                        "type": "string"
+                    },
+                    "template_name": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "database.GetMailTaskByIdRow": {
+                "properties": {
+                    "body_variables": {
+                        "items": {
+                            "type": "integer"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "mail_list_id": {
+                        "type": "string"
+                    },
+                    "mail_list_name": {
+                        "type": "string"
+                    },
+                    "sent_by": {
+                        "type": "string"
+                    },
+                    "template_id": {
+                        "type": "string"
+                    },
+                    "template_name": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "database.MailQueue": {
+                "properties": {
+                    "body": {
+                        "type": "string"
+                    },
+                    "body_html": {
+                        "type": "string"
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "error": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "recipient_email": {
+                        "type": "string"
+                    },
+                    "recipient_full_name": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "$ref": "#/components/schemas/database.NullMailQueueStatus"
+                    },
+                    "subject": {
+                        "type": "string"
+                    },
+                    "task_id": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "database.MailQueueStatus": {
+                "enum": [
+                    "pending",
+                    "processing",
+                    "sent",
+                    "failed"
+                ],
+                "type": "string",
+                "x-enum-varnames": [
+                    "MailQueueStatusPending",
+                    "MailQueueStatusProcessing",
+                    "MailQueueStatusSent",
+                    "MailQueueStatusFailed"
+                ]
+            },
             "database.MailingList": {
                 "properties": {
                     "created_at": {
@@ -32,6 +148,18 @@
                     },
                     "updated_at": {
                         "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "database.NullMailQueueStatus": {
+                "properties": {
+                    "mail_queue_status": {
+                        "$ref": "#/components/schemas/database.MailQueueStatus"
+                    },
+                    "valid": {
+                        "description": "Valid is true if MailQueueStatus is not NULL",
+                        "type": "boolean"
                     }
                 },
                 "type": "object"
@@ -76,6 +204,9 @@
                     "react_email_content": {
                         "type": "string"
                     },
+                    "subject": {
+                        "type": "string"
+                    },
                     "updated_at": {
                         "type": "string"
                     }
@@ -94,6 +225,25 @@
                 "required": [
                     "email",
                     "full_name"
+                ],
+                "type": "object"
+            },
+            "requests.CreateMailTask": {
+                "properties": {
+                    "body_variables": {
+                        "additionalProperties": {},
+                        "type": "object"
+                    },
+                    "mail_list_id": {
+                        "type": "string"
+                    },
+                    "template_id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "mail_list_id",
+                    "template_id"
                 ],
                 "type": "object"
             },
@@ -121,13 +271,17 @@
                     },
                     "react_email_content": {
                         "type": "string"
+                    },
+                    "subject": {
+                        "type": "string"
                     }
                 },
                 "required": [
                     "html_content",
                     "name",
                     "plain_text_content",
-                    "react_email_content"
+                    "react_email_content",
+                    "subject"
                 ],
                 "type": "object"
             },
@@ -155,13 +309,17 @@
                     },
                     "react_email_content": {
                         "type": "string"
+                    },
+                    "subject": {
+                        "type": "string"
                     }
                 },
                 "required": [
                     "html_content",
                     "name",
                     "plain_text_content",
-                    "react_email_content"
+                    "react_email_content",
+                    "subject"
                 ],
                 "type": "object"
             }
@@ -182,6 +340,250 @@
         "url": ""
     },
     "paths": {
+        "/mail_tasks": {
+            "get": {
+                "description": "Get a list of all mail tasks with pagination.",
+                "parameters": [
+                    {
+                        "description": "Start index",
+                        "in": "query",
+                        "name": "_start",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "End index",
+                        "in": "query",
+                        "name": "_end",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "items": {
+                                        "$ref": "#/components/schemas/database.GetAllMailTasksRow"
+                                    },
+                                    "type": "array"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "List all mail tasks",
+                "tags": [
+                    "Mail"
+                ]
+            },
+            "post": {
+                "description": "Create a new mail task, process template variables, and queue emails for all recipients in the mailing list.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.CreateMailTask",
+                                        "summary": "task",
+                                        "description": "Mail task details"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "Mail task details",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object"
+                                }
+                            }
+                        },
+                        "description": "Created"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Create a new mail task",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
+        "/mail_tasks/{id}": {
+            "get": {
+                "description": "Get details of a specific mail task by its ID.",
+                "parameters": [
+                    {
+                        "description": "Task ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/database.GetMailTaskByIdRow"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Get a mail task by ID",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
+        "/mail_tasks/{id}/queue": {
+            "get": {
+                "description": "Get a list of mail queue items associated with a specific task ID, with pagination.",
+                "parameters": [
+                    {
+                        "description": "Task ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Start index",
+                        "in": "query",
+                        "name": "_start",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "End index",
+                        "in": "query",
+                        "name": "_end",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "items": {
+                                        "$ref": "#/components/schemas/database.MailQueue"
+                                    },
+                                    "type": "array"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Get mail queue items for a task",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
         "/mailing_lists": {
             "get": {
                 "description": "Get a list of all mailing lists with pagination.",

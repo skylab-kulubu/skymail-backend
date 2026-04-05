@@ -347,7 +347,7 @@ const docTemplate = `{
         "url": ""
     },
     "paths": {
-        "/mail/tasks": {
+        "/mail_tasks": {
             "get": {
                 "description": "Get a list of all mail tasks with pagination.",
                 "parameters": [
@@ -458,7 +458,7 @@ const docTemplate = `{
                 ]
             }
         },
-        "/mail/tasks/{id}": {
+        "/mail_tasks/{id}": {
             "get": {
                 "description": "Get details of a specific mail task by its ID.",
                 "parameters": [
@@ -520,7 +520,7 @@ const docTemplate = `{
                 ]
             }
         },
-        "/mail/tasks/{id}/queue": {
+        "/mail_tasks/{id}/queue": {
             "get": {
                 "description": "Get a list of mail queue items associated with a specific task ID, with pagination.",
                 "parameters": [
