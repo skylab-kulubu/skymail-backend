@@ -1,17 +1,18 @@
 CREATE TABLE mail_tasks
 (
-    id           UUID PRIMARY KEY,
-    sent_by      TEXT        NOT NULL,
-    template_id  UUID        REFERENCES templates (id) ON DELETE SET NULL,
-    mail_list_id UUID        REFERENCES mailing_lists (id) ON DELETE SET NULL,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    sent_by        TEXT        NOT NULL,
+    template_id    UUID        REFERENCES templates (id) ON DELETE SET NULL,
+    mail_list_id   UUID        REFERENCES mailing_lists (id) ON DELETE SET NULL,
+    body_variables JSONB       NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TYPE mail_queue_status AS ENUM ('pending', 'processing', 'sent', 'failed');
 
 CREATE TABLE mail_queue
 (
-    id                  UUID PRIMARY KEY,
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     task_id             UUID NOT NULL REFERENCES mail_tasks (id) ON DELETE CASCADE,
     recipient_full_name TEXT NOT NULL,
     recipient_email     TEXT NOT NULL,
