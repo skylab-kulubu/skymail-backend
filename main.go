@@ -17,6 +17,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/config"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
+	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 )
 
@@ -55,9 +56,18 @@ func main() {
 	defer conn.Close()
 
 	db := database.NewStore(conn)
+	mailerService := mailer.NewMailer(db, mailer.SMTPConfig{
+		FromEmail: cfg.SMTPFrom,
+		Host:      cfg.SMTPHost,
+		Port:      cfg.SMTPPort,
+		User:      cfg.SMTPUser,
+		Password:  cfg.SMTPPass,
+		FQDN:      cfg.SMTPFQDN,
+	})
 
 	templateHandler := handlers.NewTemplateHandler(db)
 	listHandler := handlers.NewListHandler(db)
+	mailHandler := handlers.NewMailHandler(db, mailerService)
 
 	app := fiber.New(fiber.Config{
 		StructValidator:    vld,
@@ -95,6 +105,14 @@ func main() {
 	lists.Post("/:id/recipients", listHandler.AddRecipient)
 	lists.Get("/:id/recipients", listHandler.GetRecipients)
 	lists.Delete("/:id/recipients/:recipientId", listHandler.RemoveRecipient)
+
+	tasks := api.Group("/mail_tasks")
+	tasks.Post("/", mailHandler.CreateTask)
+	tasks.Get("/", mailHandler.GetTasks)
+	tasks.Get("/:id", mailHandler.GetTask)
+	tasks.Get("/:id/queue", mailHandler.GetTaskQueueItems)
+
+	mailerService.Start(ctx, 3)
 
 	if err = app.Listen(":3000"); err != nil {
 		log.Fatal().Err(err).Msg("error starting server")
