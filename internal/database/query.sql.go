@@ -128,6 +128,31 @@ func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const createApplication = `-- name: CreateApplication :one
+INSERT INTO applications (name, owner_id)
+VALUES ($1, $2)
+RETURNING id, name, token_version, owner_id, created_at, updated_at
+`
+
+type CreateApplicationParams struct {
+	Name    string `json:"name"`
+	OwnerID string `json:"owner_id"`
+}
+
+func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationParams) (Application, error) {
+	row := q.db.QueryRow(ctx, createApplication, arg.Name, arg.OwnerID)
+	var i Application
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.TokenVersion,
+		&i.OwnerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 type CreateMailQueueItemsParams struct {
 	TaskID            uuid.UUID `json:"task_id"`
 	RecipientFullName string    `json:"recipient_full_name"`
@@ -262,6 +287,22 @@ func (q *Queries) CreateTemplate(ctx context.Context, arg CreateTemplateParams) 
 		&i.Subject,
 	)
 	return i, err
+}
+
+const deleteApplication = `-- name: DeleteApplication :exec
+DELETE
+FROM applications
+WHERE id = $1 AND owner_id = $2
+`
+
+type DeleteApplicationParams struct {
+	ID      uuid.UUID `json:"id"`
+	OwnerID string    `json:"owner_id"`
+}
+
+func (q *Queries) DeleteApplication(ctx context.Context, arg DeleteApplicationParams) error {
+	_, err := q.db.Exec(ctx, deleteApplication, arg.ID, arg.OwnerID)
+	return err
 }
 
 const deleteMailingList = `-- name: DeleteMailingList :exec
@@ -410,6 +451,98 @@ func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Subject,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getApplicationById = `-- name: GetApplicationById :one
+SELECT id, name, token_version, owner_id, created_at, updated_at
+FROM applications
+WHERE id = $1
+`
+
+func (q *Queries) GetApplicationById(ctx context.Context, id uuid.UUID) (Application, error) {
+	row := q.db.QueryRow(ctx, getApplicationById, id)
+	var i Application
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.TokenVersion,
+		&i.OwnerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getApplicationByIdAndOwner = `-- name: GetApplicationByIdAndOwner :one
+SELECT id, name, token_version, owner_id, created_at, updated_at
+FROM applications
+WHERE id = $1 AND owner_id = $2
+`
+
+type GetApplicationByIdAndOwnerParams struct {
+	ID      uuid.UUID `json:"id"`
+	OwnerID string    `json:"owner_id"`
+}
+
+func (q *Queries) GetApplicationByIdAndOwner(ctx context.Context, arg GetApplicationByIdAndOwnerParams) (Application, error) {
+	row := q.db.QueryRow(ctx, getApplicationByIdAndOwner, arg.ID, arg.OwnerID)
+	var i Application
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.TokenVersion,
+		&i.OwnerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getApplicationTokenVersion = `-- name: GetApplicationTokenVersion :one
+SELECT token_version
+FROM applications
+WHERE id = $1
+`
+
+func (q *Queries) GetApplicationTokenVersion(ctx context.Context, id uuid.UUID) (int, error) {
+	row := q.db.QueryRow(ctx, getApplicationTokenVersion, id)
+	var token_version int
+	err := row.Scan(&token_version)
+	return token_version, err
+}
+
+const getApplicationsByOwnerId = `-- name: GetApplicationsByOwnerId :many
+SELECT id, name, token_version, owner_id, created_at, updated_at
+FROM applications
+WHERE owner_id = $1
+ORDER BY created_at DESC
+`
+
+func (q *Queries) GetApplicationsByOwnerId(ctx context.Context, ownerID string) ([]Application, error) {
+	rows, err := q.db.Query(ctx, getApplicationsByOwnerId, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Application
+	for rows.Next() {
+		var i Application
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.TokenVersion,
+			&i.OwnerID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -706,6 +839,33 @@ func (q *Queries) RemoveRecipientFromMailingListByID(ctx context.Context, arg Re
 	return err
 }
 
+const rerollApplicationToken = `-- name: RerollApplicationToken :one
+UPDATE applications
+SET token_version = token_version + 1,
+    updated_at    = NOW()
+WHERE id = $1 AND owner_id = $2
+RETURNING id, name, token_version, owner_id, created_at, updated_at
+`
+
+type RerollApplicationTokenParams struct {
+	ID      uuid.UUID `json:"id"`
+	OwnerID string    `json:"owner_id"`
+}
+
+func (q *Queries) RerollApplicationToken(ctx context.Context, arg RerollApplicationTokenParams) (Application, error) {
+	row := q.db.QueryRow(ctx, rerollApplicationToken, arg.ID, arg.OwnerID)
+	var i Application
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.TokenVersion,
+		&i.OwnerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const resetDeadJobs = `-- name: ResetDeadJobs :exec
 UPDATE mail_queue
 SET status = 'pending'
@@ -744,6 +904,34 @@ WHERE id = $1
 func (q *Queries) SetMailQueueItemSent(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, setMailQueueItemSent, id)
 	return err
+}
+
+const updateApplication = `-- name: UpdateApplication :one
+UPDATE applications
+SET name       = $2,
+    updated_at = NOW()
+WHERE id = $1 AND owner_id = $3
+RETURNING id, name, token_version, owner_id, created_at, updated_at
+`
+
+type UpdateApplicationParams struct {
+	ID      uuid.UUID `json:"id"`
+	Name    string    `json:"name"`
+	OwnerID string    `json:"owner_id"`
+}
+
+func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationParams) (Application, error) {
+	row := q.db.QueryRow(ctx, updateApplication, arg.ID, arg.Name, arg.OwnerID)
+	var i Application
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.TokenVersion,
+		&i.OwnerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const updateMailingList = `-- name: UpdateMailingList :one

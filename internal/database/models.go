@@ -56,6 +56,15 @@ func (ns NullMailQueueStatus) Value() (driver.Value, error) {
 	return string(ns.MailQueueStatus), nil
 }
 
+type Application struct {
+	ID           uuid.UUID `json:"id"`
+	Name         string    `json:"name"`
+	TokenVersion int       `json:"token_version"`
+	OwnerID      string    `json:"owner_id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
 type MailQueue struct {
 	ID                uuid.UUID           `json:"id"`
 	TaskID            uuid.UUID           `json:"task_id"`

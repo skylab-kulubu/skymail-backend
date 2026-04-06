@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/bytedance/sonic"
-	jwtware "github.com/gofiber/contrib/v3/jwt"
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/cors"
 	"github.com/gofiber/fiber/v3/middleware/recover"
@@ -67,11 +66,12 @@ func main() {
 		FQDN:      cfg.SMTPFQDN,
 	})
 
-	authMiddleware := middlewares.NewAuthMiddleware("skymail", cfg.KeycloakRealmURL)
+	authMiddleware := middlewares.NewAuthMiddleware(db, cfg.AppSecret, "skymail", cfg.KeycloakRealmURL)
 
 	templateHandler := handlers.NewTemplateHandler(db)
 	listHandler := handlers.NewListHandler(db)
 	mailHandler := handlers.NewMailHandler(db, mailerService)
+	applicationHandler := handlers.NewApplicationHandler(db, cfg.AppSecret)
 
 	app := fiber.New(fiber.Config{
 		StructValidator:    vld,
@@ -91,10 +91,7 @@ func main() {
 		AllowCredentials: false,
 	}))
 
-	app.Use(jwtware.New(jwtware.Config{
-		JWKSetURLs: []string{cfg.KeycloakRealmURL + "/protocol/openid-connect/certs"},
-	}))
-	app.Use(authMiddleware.GetRoles)
+	app.Use(authMiddleware.Authenticate)
 	app.Use(authMiddleware.RequireAnyPermission("skymail:access"))
 
 	api := app.Group("/v1")
@@ -121,6 +118,14 @@ func main() {
 	tasks.Get("/", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTasks)
 	tasks.Get("/:id", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTask)
 	tasks.Get("/:id/queue", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTaskQueueItems)
+
+	apps := api.Group("/applications")
+	apps.Post("/", authMiddleware.RequireAnyPermission("skymail:apps:write"), applicationHandler.CreateApplication)
+	apps.Get("/", authMiddleware.RequireAnyPermission("skymail:apps:read"), applicationHandler.GetApplications)
+	apps.Get("/:id", authMiddleware.RequireAnyPermission("skymail:apps:read"), applicationHandler.GetApplication)
+	apps.Patch("/:id", authMiddleware.RequireAnyPermission("skymail:apps:write"), applicationHandler.UpdateApplication)
+	apps.Delete("/:id", authMiddleware.RequireAnyPermission("skymail:apps:write"), applicationHandler.DeleteApplication)
+	apps.Post("/:id/reroll", authMiddleware.RequireAnyPermission("skymail:apps:write"), applicationHandler.RerollToken)
 
 	mailerService.Start(ctx, 3)
 

@@ -23,6 +23,29 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
+            "database.Application": {
+                "properties": {
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "owner_id": {
+                        "type": "string"
+                    },
+                    "token_version": {
+                        "type": "integer"
+                    },
+                    "updated_at": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "database.GetAllMailTasksRow": {
                 "properties": {
                     "body_variables": {
@@ -220,6 +243,32 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
+            "handlers.ApplicationResponse": {
+                "properties": {
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "owner_id": {
+                        "type": "string"
+                    },
+                    "token": {
+                        "type": "string"
+                    },
+                    "token_version": {
+                        "type": "integer"
+                    },
+                    "updated_at": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "requests.AddRecipient": {
                 "properties": {
                     "email": {
@@ -232,6 +281,17 @@ const docTemplate = `{
                 "required": [
                     "email",
                     "full_name"
+                ],
+                "type": "object"
+            },
+            "requests.CreateApplication": {
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "name"
                 ],
                 "type": "object"
             },
@@ -292,6 +352,17 @@ const docTemplate = `{
                 ],
                 "type": "object"
             },
+            "requests.UpdateApplication": {
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "name"
+                ],
+                "type": "object"
+            },
             "requests.UpdateMailingList": {
                 "properties": {
                     "name": {
@@ -347,6 +418,416 @@ const docTemplate = `{
         "url": ""
     },
     "paths": {
+        "/applications": {
+            "get": {
+                "description": "Get a list of all applications for the authenticated user.",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "items": {
+                                        "$ref": "#/components/schemas/database.Application"
+                                    },
+                                    "type": "array"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "List all applications",
+                "tags": [
+                    "Applications"
+                ]
+            },
+            "post": {
+                "description": "Create a new application and returns it with a generated token.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.CreateApplication",
+                                        "summary": "application",
+                                        "description": "Application details"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "Application details",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.ApplicationResponse"
+                                }
+                            }
+                        },
+                        "description": "Created"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Create a new application",
+                "tags": [
+                    "Applications"
+                ]
+            }
+        },
+        "/applications/{id}": {
+            "delete": {
+                "description": "Delete an existing application.",
+                "parameters": [
+                    {
+                        "description": "Application ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Delete an application",
+                "tags": [
+                    "Applications"
+                ]
+            },
+            "get": {
+                "description": "Get details of a specific application by its ID.",
+                "parameters": [
+                    {
+                        "description": "Application ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/database.Application"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Get an application by ID",
+                "tags": [
+                    "Applications"
+                ]
+            },
+            "patch": {
+                "description": "Update an existing application.",
+                "parameters": [
+                    {
+                        "description": "Application ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.UpdateApplication",
+                                        "summary": "application",
+                                        "description": "Application details"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "Application details",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/database.Application"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Update an application",
+                "tags": [
+                    "Applications"
+                ]
+            }
+        },
+        "/applications/{id}/reroll": {
+            "post": {
+                "description": "Invalidate old tokens and generate a new one.",
+                "parameters": [
+                    {
+                        "description": "Application ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.ApplicationResponse"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Reroll application token",
+                "tags": [
+                    "Applications"
+                ]
+            }
+        },
         "/mail_tasks": {
             "get": {
                 "description": "Get a list of all mail tasks with pagination.",

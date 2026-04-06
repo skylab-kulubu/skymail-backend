@@ -210,3 +210,49 @@ LIMIT $2 OFFSET $3;
 SELECT count(*)
 FROM mail_queue
 WHERE task_id = $1;
+
+
+-- name: CreateApplication :one
+INSERT INTO applications (name, owner_id)
+VALUES ($1, $2)
+RETURNING *;
+
+-- name: GetApplicationById :one
+SELECT *
+FROM applications
+WHERE id = $1;
+
+-- name: GetApplicationTokenVersion :one
+SELECT token_version
+FROM applications
+WHERE id = $1;
+
+-- name: GetApplicationByIdAndOwner :one
+SELECT *
+FROM applications
+WHERE id = $1 AND owner_id = $2;
+
+-- name: GetApplicationsByOwnerId :many
+SELECT *
+FROM applications
+WHERE owner_id = $1
+ORDER BY created_at DESC;
+
+-- name: UpdateApplication :one
+UPDATE applications
+SET name       = $2,
+    updated_at = NOW()
+WHERE id = $1 AND owner_id = $3
+RETURNING *;
+
+-- name: DeleteApplication :exec
+DELETE
+FROM applications
+WHERE id = $1 AND owner_id = $2;
+
+-- name: RerollApplicationToken :one
+UPDATE applications
+SET token_version = token_version + 1,
+    updated_at    = NOW()
+WHERE id = $1 AND owner_id = $2
+RETURNING *;
