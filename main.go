@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/bytedance/sonic"
+	jwtware "github.com/gofiber/contrib/v3/jwt"
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/cors"
 	"github.com/gofiber/fiber/v3/middleware/recover"
@@ -18,6 +19,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 )
 
@@ -65,6 +67,8 @@ func main() {
 		FQDN:      cfg.SMTPFQDN,
 	})
 
+	authMiddleware := middlewares.NewAuthMiddleware("skymail", cfg.KeycloakRealmURL)
+
 	templateHandler := handlers.NewTemplateHandler(db)
 	listHandler := handlers.NewListHandler(db)
 	mailHandler := handlers.NewMailHandler(db, mailerService)
@@ -87,30 +91,36 @@ func main() {
 		AllowCredentials: false,
 	}))
 
+	app.Use(jwtware.New(jwtware.Config{
+		JWKSetURLs: []string{cfg.KeycloakRealmURL + "/protocol/openid-connect/certs"},
+	}))
+	app.Use(authMiddleware.GetRoles)
+	app.Use(authMiddleware.RequireAnyPermission("skymail:access"))
+
 	api := app.Group("/v1")
 
 	templates := api.Group("/templates")
-	templates.Post("/", templateHandler.CreateTemplate)
-	templates.Get("/", templateHandler.GetTemplates)
-	templates.Get("/:id", templateHandler.GetTemplate)
-	templates.Patch("/:id", templateHandler.UpdateTemplate)
-	templates.Delete("/:id", templateHandler.DeleteTemplate)
+	templates.Post("/", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.CreateTemplate)
+	templates.Get("/", authMiddleware.RequireAnyPermission("skymail:templates:read"), templateHandler.GetTemplates)
+	templates.Get("/:id", authMiddleware.RequireAnyPermission("skymail:templates:read"), templateHandler.GetTemplate)
+	templates.Patch("/:id", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.UpdateTemplate)
+	templates.Delete("/:id", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.DeleteTemplate)
 
 	lists := api.Group("/mailing_lists")
-	lists.Post("/", listHandler.CreateList)
-	lists.Get("/", listHandler.GetLists)
-	lists.Get("/:id", listHandler.GetList)
-	lists.Patch("/:id", listHandler.UpdateList)
-	lists.Delete("/:id", listHandler.DeleteList)
-	lists.Post("/:id/recipients", listHandler.AddRecipient)
-	lists.Get("/:id/recipients", listHandler.GetRecipients)
-	lists.Delete("/:id/recipients/:recipientId", listHandler.RemoveRecipient)
+	lists.Post("/", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.CreateList)
+	lists.Get("/", authMiddleware.RequireAnyPermission("skymail:lists:read"), listHandler.GetLists)
+	lists.Get("/:id", authMiddleware.RequireAnyPermission("skymail:lists:read"), listHandler.GetList)
+	lists.Patch("/:id", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.UpdateList)
+	lists.Delete("/:id", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.DeleteList)
+	lists.Post("/:id/recipients", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.AddRecipient)
+	lists.Get("/:id/recipients", authMiddleware.RequireAnyPermission("skymail:lists:read"), listHandler.GetRecipients)
+	lists.Delete("/:id/recipients/:recipientId", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.RemoveRecipient)
 
 	tasks := api.Group("/mail_tasks")
-	tasks.Post("/", mailHandler.CreateTask)
-	tasks.Get("/", mailHandler.GetTasks)
-	tasks.Get("/:id", mailHandler.GetTask)
-	tasks.Get("/:id/queue", mailHandler.GetTaskQueueItems)
+	tasks.Post("/", authMiddleware.RequireAnyPermission("skymail:mails:write"), mailHandler.CreateTask)
+	tasks.Get("/", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTasks)
+	tasks.Get("/:id", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTask)
+	tasks.Get("/:id/queue", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTaskQueueItems)
 
 	mailerService.Start(ctx, 3)
 

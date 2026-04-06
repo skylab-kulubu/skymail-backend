@@ -8,13 +8,14 @@ import (
 )
 
 type Config struct {
-	DatabaseURL string `mapstructure:"DATABASE_URL" validate:"required"`
-	SMTPFrom    string `mapstructure:"SMTP_FROM" validate:"required"`
-	SMTPHost    string `mapstructure:"SMTP_HOST" validate:"required"`
-	SMTPPort    int    `mapstructure:"SMTP_PORT" validate:"required"`
-	SMTPUser    string `mapstructure:"SMTP_USER" validate:"required"`
-	SMTPPass    string `mapstructure:"SMTP_PASS" validate:"required"`
-	SMTPFQDN    string `mapstructure:"SMTP_FQDN" validate:"required"`
+	DatabaseURL      string `mapstructure:"DATABASE_URL" validate:"required"`
+	SMTPFrom         string `mapstructure:"SMTP_FROM" validate:"required"`
+	SMTPHost         string `mapstructure:"SMTP_HOST" validate:"required"`
+	SMTPPort         int    `mapstructure:"SMTP_PORT" validate:"required"`
+	SMTPUser         string `mapstructure:"SMTP_USER" validate:"required"`
+	SMTPPass         string `mapstructure:"SMTP_PASS" validate:"required"`
+	SMTPFQDN         string `mapstructure:"SMTP_FQDN" validate:"required"`
+	KeycloakRealmURL string `mapstructure:"KEYCLOAK_REALM_URL" validate:"required"`
 }
 
 func LoadConfig(vld validator.StructValidator) (config Config, err error) {
