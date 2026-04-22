@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"reflect"
 
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 	"github.com/spf13/viper"
@@ -24,16 +25,18 @@ func LoadConfig(vld validator.StructValidator) (config Config, err error) {
 	viper.SetConfigName(".env")
 	viper.SetConfigType("env")
 
-	var notFoundError viper.ConfigFileNotFoundError
-
 	if err := viper.ReadInConfig(); err != nil {
-		if !errors.Is(err, &notFoundError) {
+		var configFileNotFoundError viper.ConfigFileNotFoundError
+		if !errors.As(err, &configFileNotFoundError) {
 			return config, err
 		}
 	}
 
-	viper.SetEnvPrefix("SKYMAIL")
 	viper.AutomaticEnv()
+
+	// Automatically bind environment variables for all fields in the struct.
+	// This is required for Unmarshal to work when the .env file is missing.
+	bindEnvs(reflect.TypeOf(config))
 
 	err = viper.Unmarshal(&config)
 	if err != nil {
@@ -45,4 +48,13 @@ func LoadConfig(vld validator.StructValidator) (config Config, err error) {
 	}
 
 	return config, err
+}
+
+func bindEnvs(t reflect.Type) {
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		if tagValue, ok := field.Tag.Lookup("mapstructure"); ok {
+			viper.BindEnv(tagValue)
+		}
+	}
 }
