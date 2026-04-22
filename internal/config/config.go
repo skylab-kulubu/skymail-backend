@@ -18,6 +18,9 @@ type Config struct {
 	SMTPFQDN         string `mapstructure:"SMTP_FQDN" validate:"required"`
 	KeycloakRealmURL string `mapstructure:"KEYCLOAK_REALM_URL" validate:"required"`
 	AppSecret        string `mapstructure:"APP_SECRET" validate:"required"`
+	EurekaServer     string `mapstructure:"EUREKA_SERVER"`
+	AppName          string `mapstructure:"APP_NAME"`
+	AppPort          int    `mapstructure:"APP_PORT"`
 }
 
 func LoadConfig(vld validator.StructValidator) (config Config, err error) {

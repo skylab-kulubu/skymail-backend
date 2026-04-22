@@ -16,6 +16,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/config"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skymail-backend/internal/discovery"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
@@ -72,6 +73,9 @@ func main() {
 	listHandler := handlers.NewListHandler(db)
 	mailHandler := handlers.NewMailHandler(db, mailerService)
 	applicationHandler := handlers.NewApplicationHandler(db, cfg.AppSecret)
+
+	eurekaClient := discovery.NewEurekaClient(cfg.EurekaServer, cfg.AppName, cfg.AppPort)
+	eurekaClient.Start()
 
 	app := fiber.New(fiber.Config{
 		StructValidator:    vld,
@@ -130,7 +134,12 @@ func main() {
 
 	mailerService.Start(ctx, 3)
 
-	if err = app.Listen(":3000"); err != nil {
+	addr := fmt.Sprintf(":%d", 3000)
+	if cfg.AppPort != 0 {
+		addr = fmt.Sprintf(":%d", cfg.AppPort)
+	}
+
+	if err = app.Listen(addr); err != nil {
 		log.Fatal().Err(err).Msg("error starting server")
 	}
 }
