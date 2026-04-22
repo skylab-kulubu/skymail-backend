@@ -22,6 +22,7 @@ type Querier interface {
 	CreateMailQueueItems(ctx context.Context, arg []CreateMailQueueItemsParams) (int64, error)
 	CreateMailTask(ctx context.Context, arg CreateMailTaskParams) ([]CreateMailTaskRow, error)
 	CreateMailingList(ctx context.Context, name string) (MailingList, error)
+	CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error)
 	CreateTemplate(ctx context.Context, arg CreateTemplateParams) (Template, error)
 	DeleteApplication(ctx context.Context, arg DeleteApplicationParams) error
 	DeleteMailingList(ctx context.Context, id uuid.UUID) error

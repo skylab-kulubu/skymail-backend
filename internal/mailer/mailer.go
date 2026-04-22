@@ -9,6 +9,7 @@ import (
 	textt "text/template"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
@@ -18,6 +19,7 @@ import (
 type Mailer interface {
 	Start(ctx context.Context, workerCount int)
 	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) error
+	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) error
 }
 
 type mailerImpl struct {
@@ -62,6 +64,16 @@ func (m *mailerImpl) Start(ctx context.Context, workerCount int) {
 	go m.startDispatcher(ctx)
 }
 
+type commonMailRow struct {
+	TaskID            uuid.UUID
+	BodyVariables     []byte
+	TemplateSubject   string
+	HtmlContent       string
+	PlainTextContent  string
+	RecipientFullName string
+	RecipientEmail    string
+}
+
 func (m *mailerImpl) Enqueue(ctx context.Context, arg database.CreateMailTaskParams) error {
 	rows, err := m.db.CreateMailTask(ctx, arg)
 	if err != nil {
@@ -71,6 +83,49 @@ func (m *mailerImpl) Enqueue(ctx context.Context, arg database.CreateMailTaskPar
 
 	if len(rows) == 0 {
 		m.logger.Warn().Msg("No mail queue items were created")
+		return nil
+	}
+
+	commonRows := make([]commonMailRow, len(rows))
+	for i, row := range rows {
+		commonRows[i] = commonMailRow{
+			TaskID:            row.TaskID,
+			BodyVariables:     row.BodyVariables,
+			TemplateSubject:   row.TemplateSubject,
+			HtmlContent:       row.HtmlContent,
+			PlainTextContent:  row.PlainTextContent,
+			RecipientFullName: row.RecipientFullName,
+			RecipientEmail:    row.RecipientEmail,
+		}
+	}
+
+	return m.renderAndQueue(ctx, commonRows)
+}
+
+func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) error {
+	row, err := m.db.CreateSingleMailTask(ctx, arg)
+	if err != nil {
+		m.logger.Err(err).Msg("Failed to enqueue single mail task")
+		return err
+	}
+
+	commonRows := []commonMailRow{
+		{
+			TaskID:            row.TaskID,
+			BodyVariables:     row.BodyVariables,
+			TemplateSubject:   row.TemplateSubject,
+			HtmlContent:       row.HtmlContent,
+			PlainTextContent:  row.PlainTextContent,
+			RecipientFullName: row.RecipientFullName,
+			RecipientEmail:    row.RecipientEmail,
+		},
+	}
+
+	return m.renderAndQueue(ctx, commonRows)
+}
+
+func (m *mailerImpl) renderAndQueue(ctx context.Context, rows []commonMailRow) error {
+	if len(rows) == 0 {
 		return nil
 	}
 

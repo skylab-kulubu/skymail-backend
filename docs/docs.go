@@ -352,6 +352,28 @@ const docTemplate = `{
                 ],
                 "type": "object"
             },
+            "requests.SendSingleMail": {
+                "properties": {
+                    "body_variables": {
+                        "additionalProperties": {},
+                        "type": "object"
+                    },
+                    "recipient_email": {
+                        "type": "string"
+                    },
+                    "recipient_full_name": {
+                        "type": "string"
+                    },
+                    "template_id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "recipient_email",
+                    "template_id"
+                ],
+                "type": "object"
+            },
             "requests.UpdateApplication": {
                 "properties": {
                     "name": {
@@ -934,6 +956,67 @@ const docTemplate = `{
                     }
                 },
                 "summary": "Create a new mail task",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
+        "/mail_tasks/single": {
+            "post": {
+                "description": "Send a single email to a specific recipient using a template.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.SendSingleMail",
+                                        "summary": "mail",
+                                        "description": "Mail details"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "Mail details",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object"
+                                }
+                            }
+                        },
+                        "description": "Created"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Send a single email",
                 "tags": [
                     "Mail"
                 ]

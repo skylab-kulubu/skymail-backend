@@ -253,6 +253,65 @@ func (q *Queries) CreateMailingList(ctx context.Context, name string) (MailingLi
 	return i, err
 }
 
+const createSingleMailTask = `-- name: CreateSingleMailTask :one
+WITH inserted_task AS (
+    INSERT INTO mail_tasks (sent_by, template_id, body_variables)
+        VALUES ($1, $2, $3)
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at
+)
+SELECT it.id               AS task_id,
+       it.body_variables,
+       t.name              AS template_name,
+       t.subject           AS template_subject,
+       t.html_content,
+       t.plain_text_content,
+       cast($4 as text)    AS recipient_full_name,
+       cast($5 as text)    AS recipient_email
+FROM inserted_task it
+         JOIN templates t ON it.template_id = t.id
+`
+
+type CreateSingleMailTaskParams struct {
+	SentBy        string     `json:"sent_by"`
+	TemplateID    *uuid.UUID `json:"template_id"`
+	BodyVariables []byte     `json:"body_variables"`
+	Column4       string     `json:"column_4"`
+	Column5       string     `json:"column_5"`
+}
+
+type CreateSingleMailTaskRow struct {
+	TaskID            uuid.UUID `json:"task_id"`
+	BodyVariables     []byte    `json:"body_variables"`
+	TemplateName      string    `json:"template_name"`
+	TemplateSubject   string    `json:"template_subject"`
+	HtmlContent       string    `json:"html_content"`
+	PlainTextContent  string    `json:"plain_text_content"`
+	RecipientFullName string    `json:"recipient_full_name"`
+	RecipientEmail    string    `json:"recipient_email"`
+}
+
+func (q *Queries) CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error) {
+	row := q.db.QueryRow(ctx, createSingleMailTask,
+		arg.SentBy,
+		arg.TemplateID,
+		arg.BodyVariables,
+		arg.Column4,
+		arg.Column5,
+	)
+	var i CreateSingleMailTaskRow
+	err := row.Scan(
+		&i.TaskID,
+		&i.BodyVariables,
+		&i.TemplateName,
+		&i.TemplateSubject,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.RecipientFullName,
+		&i.RecipientEmail,
+	)
+	return i, err
+}
+
 const createTemplate = `-- name: CreateTemplate :one
 INSERT INTO templates (name, subject, html_content, plain_text_content, react_email_content)
 VALUES ($1, $2, $3, $4, $5)

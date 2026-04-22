@@ -115,6 +115,7 @@ func main() {
 
 	tasks := api.Group("/mail_tasks")
 	tasks.Post("/", authMiddleware.RequireAnyPermission("skymail:mails:write"), mailHandler.CreateTask)
+	tasks.Post("/single", authMiddleware.RequireAnyPermission("skymail:mails:write"), mailHandler.SendSingle)
 	tasks.Get("/", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTasks)
 	tasks.Get("/:id", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTask)
 	tasks.Get("/:id/queue", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTaskQueueItems)

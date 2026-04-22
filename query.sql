@@ -256,3 +256,20 @@ SET token_version = token_version + 1,
     updated_at    = NOW()
 WHERE id = $1 AND owner_id = $2
 RETURNING *;
+
+-- name: CreateSingleMailTask :one
+WITH inserted_task AS (
+    INSERT INTO mail_tasks (sent_by, template_id, body_variables)
+        VALUES ($1, $2, $3)
+        RETURNING *
+)
+SELECT it.id               AS task_id,
+       it.body_variables,
+       t.name              AS template_name,
+       t.subject           AS template_subject,
+       t.html_content,
+       t.plain_text_content,
+       cast($4 as text)    AS recipient_full_name,
+       cast($5 as text)    AS recipient_email
+FROM inserted_task it
+         JOIN templates t ON it.template_id = t.id;

@@ -13,6 +13,7 @@ import (
 
 type MailHandler interface {
 	CreateTask(c fiber.Ctx) error
+	SendSingle(c fiber.Ctx) error
 	GetTasks(c fiber.Ctx) error
 	GetTask(c fiber.Ctx) error
 	GetTaskQueueItems(c fiber.Ctx) error
@@ -61,6 +62,46 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 		TemplateID:    &params.TemplateID,
 		MailListID:    &params.MailListID,
 		BodyVariables: bodyVarsJson,
+	})
+	if err != nil {
+		return err
+	}
+
+	return c.SendStatus(fiber.StatusCreated)
+}
+
+// SendSingle godoc
+//
+//	@Summary		Send a single email
+//	@Description	Send a single email to a specific recipient using a template.
+//	@Tags			Mail
+//	@Accept			json
+//	@Produce		json
+//	@Param			mail	body	requests.SendSingleMail	true	"Mail details"
+//	@Success		201		"Created"
+//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
+//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Router			/mail_tasks/single [post]
+func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
+	var params requests.SendSingleMail
+	if err := c.Bind().Body(&params); err != nil {
+		return err
+	}
+
+	bodyVarsJson, err := json.Marshal(params.BodyVariables)
+	if err != nil {
+		return err
+	}
+
+	// For now, we use a hardcoded sent_by since we don't have auth yet
+	sentBy := "admin"
+
+	err = h.mailer.EnqueueSingle(c.Context(), database.CreateSingleMailTaskParams{
+		SentBy:        sentBy,
+		TemplateID:    &params.TemplateID,
+		BodyVariables: bodyVarsJson,
+		Column4:       params.RecipientFullName,
+		Column5:       params.RecipientEmail,
 	})
 	if err != nil {
 		return err
