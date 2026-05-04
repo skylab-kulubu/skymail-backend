@@ -16,7 +16,7 @@ type Config struct {
 	SMTPUser         string `mapstructure:"SMTP_USER" validate:"required"`
 	SMTPPass         string `mapstructure:"SMTP_PASS" validate:"required"`
 	SMTPFQDN         string `mapstructure:"SMTP_FQDN" validate:"required"`
-	SMTPPlain        bool   `mapstructure:"SMTP_PLAIN" validate:"required"`
+	SMTPPlain        bool   `mapstructure:"SMTP_PLAIN"`
 	KeycloakRealmURL string `mapstructure:"KEYCLOAK_REALM_URL" validate:"required"`
 	AppSecret        string `mapstructure:"APP_SECRET" validate:"required"`
 	EurekaServer     string `mapstructure:"EUREKA_SERVER"`
