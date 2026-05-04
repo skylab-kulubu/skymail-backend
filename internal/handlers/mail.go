@@ -6,6 +6,7 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
+	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
@@ -54,8 +55,10 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 		return err
 	}
 
-	// For now, we use a hardcoded sent_by since we don't have auth yet
-	sentBy := "admin"
+	sentBy, ok := c.Locals("user_id").(string)
+	if !ok || sentBy == "" {
+		return apperrors.ErrForbidden
+	}
 
 	err = h.mailer.Enqueue(c.Context(), database.CreateMailTaskParams{
 		SentBy:        sentBy,
@@ -93,8 +96,10 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 		return err
 	}
 
-	// For now, we use a hardcoded sent_by since we don't have auth yet
-	sentBy := "admin"
+	sentBy, ok := c.Locals("user_id").(string)
+	if !ok || sentBy == "" {
+		return apperrors.ErrForbidden
+	}
 
 	err = h.mailer.EnqueueSingle(c.Context(), database.CreateSingleMailTaskParams{
 		SentBy:        sentBy,
