@@ -36,6 +36,7 @@ type SMTPConfig struct {
 	User      string
 	Password  string
 	FQDN      string
+	Plain     bool
 }
 
 func NewMailer(db *database.Store, smtpConfig SMTPConfig) Mailer {
@@ -233,9 +234,17 @@ func (m *mailerImpl) startDispatcher(ctx context.Context) {
 func (m *mailerImpl) startWorker(ctx context.Context, id int) {
 	logger := m.logger.With().Str("component", "worker").Int("worker_id", id).Logger()
 
+	var authType mail.SMTPAuthType
+
+	if m.smtpConfig.Plain {
+		authType = mail.SMTPAuthPlain
+	} else {
+		authType = mail.SMTPAuthLogin
+	}
+
 	client, err := mail.NewClient(m.smtpConfig.Host,
 		mail.WithPort(m.smtpConfig.Port),
-		mail.WithSMTPAuth(mail.SMTPAuthPlain),
+		mail.WithSMTPAuth(authType),
 		mail.WithUsername(m.smtpConfig.User),
 		mail.WithPassword(m.smtpConfig.Password),
 		mail.WithTLSPolicy(mail.TLSMandatory),

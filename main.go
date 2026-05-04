@@ -65,6 +65,7 @@ func main() {
 		User:      cfg.SMTPUser,
 		Password:  cfg.SMTPPass,
 		FQDN:      cfg.SMTPFQDN,
+		Plain:     cfg.SMTPPlain,
 	})
 
 	authMiddleware := middlewares.NewAuthMiddleware(db, cfg.AppSecret, "skymail", cfg.KeycloakRealmURL)
