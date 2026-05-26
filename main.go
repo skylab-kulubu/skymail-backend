@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
+	"github.com/skylab-kulubu/skymail-backend/docs"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/config"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
@@ -22,6 +23,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/yokeTH/gofiber-scalar/scalar/v3"
 )
 
 //	@title			Skymail
@@ -99,10 +101,17 @@ func main() {
 		AllowCredentials: false,
 	}))
 
-	app.Use(authMiddleware.Authenticate)
-	app.Use(authMiddleware.RequireAnyPermission("skymail:access"))
+	app.Group("/docs").
+		Use(scalar.New(scalar.Config{
+			FileContentString: docs.SwaggerInfo.ReadDoc(),
+			Path:              "",
+			Title:             "Skymail API Documentation",
+		}))
 
 	api := app.Group("/v1")
+
+	api.Use(authMiddleware.Authenticate)
+	api.Use(authMiddleware.RequireAnyPermission("skymail:access"))
 
 	templates := api.Group("/templates")
 	templates.Post("/", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.CreateTemplate)
