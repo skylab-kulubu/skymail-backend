@@ -31,9 +31,9 @@ type EnqueueWithRecipientsParams struct {
 
 type Mailer interface {
 	Start(ctx context.Context, workerCount int)
-	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) error
-	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) error
-	EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) error
+	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error)
+	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
+	EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error)
 }
 
 type mailerImpl struct {
@@ -89,16 +89,16 @@ type commonMailRow struct {
 	RecipientEmail    string
 }
 
-func (m *mailerImpl) Enqueue(ctx context.Context, arg database.CreateMailTaskParams) error {
+func (m *mailerImpl) Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error) {
 	rows, err := m.db.CreateMailTask(ctx, arg)
 	if err != nil {
 		m.logger.Err(err).Msg("Failed to enqueue mail task")
-		return err
+		return uuid.Nil, err
 	}
 
 	if len(rows) == 0 {
 		m.logger.Warn().Msg("No mail queue items were created")
-		return nil
+		return uuid.Nil, nil
 	}
 
 	commonRows := make([]commonMailRow, len(rows))
@@ -114,14 +114,14 @@ func (m *mailerImpl) Enqueue(ctx context.Context, arg database.CreateMailTaskPar
 		}
 	}
 
-	return m.renderAndQueue(ctx, commonRows)
+	return rows[0].TaskID, m.renderAndQueue(ctx, commonRows)
 }
 
-func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) error {
+func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
 	row, err := m.db.CreateSingleMailTask(ctx, arg)
 	if err != nil {
 		m.logger.Err(err).Msg("Failed to enqueue single mail task")
-		return err
+		return uuid.Nil, err
 	}
 
 	commonRows := []commonMailRow{
@@ -136,10 +136,10 @@ func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingl
 		},
 	}
 
-	return m.renderAndQueue(ctx, commonRows)
+	return row.TaskID, m.renderAndQueue(ctx, commonRows)
 }
 
-func (m *mailerImpl) EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) error {
+func (m *mailerImpl) EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error) {
 	task, err := m.db.InsertMailTask(ctx, database.InsertMailTaskParams{
 		SentBy:        params.SentBy,
 		TemplateID:    &params.TemplateID,
@@ -147,12 +147,12 @@ func (m *mailerImpl) EnqueueWithRecipients(ctx context.Context, params EnqueueWi
 		BodyVariables: params.BodyVariables,
 	})
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
 
 	tmpl, err := m.db.GetTemplateById(ctx, *task.TemplateID)
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
 
 	rows := make([]commonMailRow, 0, len(params.Recipients))
@@ -168,7 +168,7 @@ func (m *mailerImpl) EnqueueWithRecipients(ctx context.Context, params EnqueueWi
 		})
 	}
 
-	return m.renderAndQueue(ctx, rows)
+	return task.ID, m.renderAndQueue(ctx, rows)
 }
 
 func (m *mailerImpl) renderAndQueue(ctx context.Context, rows []commonMailRow) error {

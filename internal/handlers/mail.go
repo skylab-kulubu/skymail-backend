@@ -91,16 +91,20 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 		}
 
 		mailListID := params.MailListID
-		return h.mailer.EnqueueWithRecipients(c.Context(), mailer.EnqueueWithRecipientsParams{
+		taskID, err := h.mailer.EnqueueWithRecipients(c.Context(), mailer.EnqueueWithRecipientsParams{
 			SentBy:        sentBy,
 			TemplateID:    params.TemplateID,
 			MailListID:    &mailListID,
 			BodyVariables: bodyVarsJson,
 			Recipients:    recipients,
 		})
+		if err != nil {
+			return err
+		}
+		return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": taskID})
 	}
 
-	err = h.mailer.Enqueue(c.Context(), database.CreateMailTaskParams{
+	taskID, err := h.mailer.Enqueue(c.Context(), database.CreateMailTaskParams{
 		SentBy:        sentBy,
 		TemplateID:    &params.TemplateID,
 		MailListID:    &params.MailListID,
@@ -110,7 +114,7 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 		return err
 	}
 
-	return c.SendStatus(fiber.StatusCreated)
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": taskID})
 }
 
 // SendSingle godoc
@@ -141,7 +145,7 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 		return apperrors.ErrForbidden
 	}
 
-	err = h.mailer.EnqueueSingle(c.Context(), database.CreateSingleMailTaskParams{
+	taskID, err := h.mailer.EnqueueSingle(c.Context(), database.CreateSingleMailTaskParams{
 		SentBy:        sentBy,
 		TemplateID:    &params.TemplateID,
 		BodyVariables: bodyVarsJson,
@@ -152,7 +156,7 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 		return err
 	}
 
-	return c.SendStatus(fiber.StatusCreated)
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": taskID})
 }
 
 // GetTasks godoc
