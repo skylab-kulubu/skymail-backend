@@ -122,10 +122,10 @@ func (a *authMiddlewareImpl) handleAppAuth(c fiber.Ctx, tokenStr string) error {
 	return c.Next()
 }
 
-func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, token string) error {
+func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) error {
 	req := a.client.R()
 
-	req.AddHeader("Authorization", "Bearer "+token)
+	req.AddHeader("Authorization", "Bearer "+tokenStr)
 	req.SetURL(a.realmURL + "/protocol/openid-connect/userinfo")
 	req.SetMethod(fiber.MethodGet)
 
@@ -141,22 +141,54 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, token string) error
 		return err
 	}
 
-	if len(info.ResourceAccess) == 0 {
+	if info.ID == "" {
 		return apperrors.ErrForbidden
 	}
 
-	if _, ok := info.ResourceAccess[a.clientID]; !ok {
-		return apperrors.ErrForbidden
+	roles := info.ResourceAccess[a.clientID].Roles
+	if len(roles) == 0 {
+		roles = rolesFromJWT(tokenStr, a.clientID)
 	}
 
-	if len(info.ResourceAccess[a.clientID].Roles) == 0 {
+	if len(roles) == 0 {
 		return apperrors.ErrForbidden
 	}
 
 	c.Locals("user_id", info.ID)
-	c.Locals("roles", info.ResourceAccess[a.clientID].Roles)
+	c.Locals("roles", roles)
 	c.Locals("is_app", false)
 	return c.Next()
+}
+
+func rolesFromJWT(tokenStr, clientID string) []string {
+	parser := jwt.NewParser()
+	token, _, err := parser.ParseUnverified(tokenStr, jwt.MapClaims{})
+	if err != nil {
+		return nil
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil
+	}
+	ra, ok := claims["resource_access"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	ca, ok := ra[clientID].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	rolesRaw, ok := ca["roles"].([]interface{})
+	if !ok {
+		return nil
+	}
+	roles := make([]string, 0, len(rolesRaw))
+	for _, r := range rolesRaw {
+		if s, ok := r.(string); ok {
+			roles = append(roles, s)
+		}
+	}
+	return roles
 }
 
 func (a *authMiddlewareImpl) RequireAnyPermission(permissions ...string) func(c fiber.Ctx) error {
