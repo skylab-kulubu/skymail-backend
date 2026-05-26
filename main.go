@@ -94,12 +94,14 @@ func main() {
 
 	app.Use(recover.New())
 
+	/*
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
 		AllowHeaders:     []string{"*", "Authorization", "Retry-After"},
 		ExposeHeaders:    []string{"X-Total-Count"},
 		AllowCredentials: false,
 	}))
+	*/
 
 	app.Group("/docs").
 		Use(scalar.New(scalar.Config{
