@@ -269,6 +269,29 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
+            "handlers.MailingListItem": {
+                "properties": {
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "source": {
+                        "type": "string"
+                    },
+                    "updated_at": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "requests.AddRecipient": {
                 "properties": {
                     "email": {
@@ -902,7 +925,7 @@ const docTemplate = `{
                 ]
             },
             "post": {
-                "description": "Create a new mail task, process template variables, and queue emails for all recipients in the mailing list.",
+                "description": "Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -1157,7 +1180,7 @@ const docTemplate = `{
         },
         "/mailing_lists": {
             "get": {
-                "description": "Get a list of all mailing lists with pagination.",
+                "description": "Get a list of all mailing lists (internal + Keycloak groups) with pagination.",
                 "parameters": [
                     {
                         "description": "Start index",
@@ -1182,7 +1205,7 @@ const docTemplate = `{
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/database.MailingList"
+                                        "$ref": "#/components/schemas/handlers.MailingListItem"
                                     },
                                     "type": "array"
                                 }
@@ -1321,7 +1344,7 @@ const docTemplate = `{
                 ]
             },
             "get": {
-                "description": "Get details of a specific mailing list by its ID.",
+                "description": "Get details of a specific mailing list by its ID. Falls back to Keycloak groups.",
                 "parameters": [
                     {
                         "description": "List ID",
@@ -1338,7 +1361,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/database.MailingList"
+                                    "$ref": "#/components/schemas/handlers.MailingListItem"
                                 }
                             }
                         },
@@ -1463,7 +1486,7 @@ const docTemplate = `{
         },
         "/mailing_lists/{id}/recipients": {
             "get": {
-                "description": "Get a list of all recipients in a specific mailing list with pagination.",
+                "description": "Get all recipients in a mailing list or Keycloak group with pagination.",
                 "parameters": [
                     {
                         "description": "List ID",

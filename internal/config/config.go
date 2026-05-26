@@ -9,19 +9,21 @@ import (
 )
 
 type Config struct {
-	DatabaseURL      string `mapstructure:"DATABASE_URL" validate:"required"`
-	SMTPFrom         string `mapstructure:"SMTP_FROM" validate:"required"`
-	SMTPHost         string `mapstructure:"SMTP_HOST" validate:"required"`
-	SMTPPort         int    `mapstructure:"SMTP_PORT" validate:"required"`
-	SMTPUser         string `mapstructure:"SMTP_USER" validate:"required"`
-	SMTPPass         string `mapstructure:"SMTP_PASS" validate:"required"`
-	SMTPFQDN         string `mapstructure:"SMTP_FQDN" validate:"required"`
-	SMTPPlain        bool   `mapstructure:"SMTP_PLAIN"`
-	KeycloakRealmURL string `mapstructure:"KEYCLOAK_REALM_URL" validate:"required"`
-	AppSecret        string `mapstructure:"APP_SECRET" validate:"required"`
-	EurekaServer     string `mapstructure:"EUREKA_SERVER"`
-	AppName          string `mapstructure:"APP_NAME"`
-	AppPort          int    `mapstructure:"APP_PORT"`
+	DatabaseURL                 string `mapstructure:"DATABASE_URL" validate:"required"`
+	SMTPFrom                    string `mapstructure:"SMTP_FROM" validate:"required"`
+	SMTPHost                    string `mapstructure:"SMTP_HOST" validate:"required"`
+	SMTPPort                    int    `mapstructure:"SMTP_PORT" validate:"required"`
+	SMTPUser                    string `mapstructure:"SMTP_USER" validate:"required"`
+	SMTPPass                    string `mapstructure:"SMTP_PASS" validate:"required"`
+	SMTPFQDN                    string `mapstructure:"SMTP_FQDN" validate:"required"`
+	SMTPPlain                   bool   `mapstructure:"SMTP_PLAIN"`
+	KeycloakRealmURL            string `mapstructure:"KEYCLOAK_REALM_URL" validate:"required"`
+	KeycloakServiceClientID     string `mapstructure:"KEYCLOAK_SERVICE_CLIENT_ID" validate:"required"`
+	KeycloakServiceClientSecret string `mapstructure:"KEYCLOAK_SERVICE_CLIENT_SECRET" validate:"required"`
+	AppSecret                   string `mapstructure:"APP_SECRET" validate:"required"`
+	EurekaServer                string `mapstructure:"EUREKA_SERVER"`
+	AppName                     string `mapstructure:"APP_NAME"`
+	AppPort                     int    `mapstructure:"APP_PORT"`
 }
 
 func LoadConfig(vld validator.StructValidator) (config Config, err error) {

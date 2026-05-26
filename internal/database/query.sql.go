@@ -839,6 +839,38 @@ func (q *Queries) GetTemplateById(ctx context.Context, id uuid.UUID) (Template, 
 	return i, err
 }
 
+const insertMailTask = `-- name: InsertMailTask :one
+INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables)
+VALUES ($1, $2, $3, $4)
+RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at
+`
+
+type InsertMailTaskParams struct {
+	SentBy        string     `json:"sent_by"`
+	TemplateID    *uuid.UUID `json:"template_id"`
+	MailListID    *uuid.UUID `json:"mail_list_id"`
+	BodyVariables []byte     `json:"body_variables"`
+}
+
+func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (MailTask, error) {
+	row := q.db.QueryRow(ctx, insertMailTask,
+		arg.SentBy,
+		arg.TemplateID,
+		arg.MailListID,
+		arg.BodyVariables,
+	)
+	var i MailTask
+	err := row.Scan(
+		&i.ID,
+		&i.SentBy,
+		&i.TemplateID,
+		&i.MailListID,
+		&i.BodyVariables,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const processQueueItems = `-- name: ProcessQueueItems :many
 UPDATE mail_queue
 SET status = 'processing'

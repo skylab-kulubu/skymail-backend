@@ -1,13 +1,19 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"strconv"
+	"strings"
 
+	"github.com/Nerzal/gocloak/v13"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
 )
@@ -23,19 +29,17 @@ type MailHandler interface {
 type mailHandlerImpl struct {
 	db     *database.Store
 	mailer mailer.Mailer
+	kc     keycloak.Client
 }
 
-func NewMailHandler(db *database.Store, mailer mailer.Mailer) MailHandler {
-	return &mailHandlerImpl{
-		db:     db,
-		mailer: mailer,
-	}
+func NewMailHandler(db *database.Store, mailer mailer.Mailer, kc keycloak.Client) MailHandler {
+	return &mailHandlerImpl{db: db, mailer: mailer, kc: kc}
 }
 
 // CreateTask godoc
 //
 //	@Summary		Create a new mail task
-//	@Description	Create a new mail task, process template variables, and queue emails for all recipients in the mailing list.
+//	@Description	Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups.
 //	@Tags			Mail
 //	@Accept			json
 //	@Produce		json
@@ -58,6 +62,42 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 	sentBy, ok := c.Locals("user_id").(string)
 	if !ok || sentBy == "" {
 		return apperrors.ErrForbidden
+	}
+
+	_, err = h.db.GetMailingListById(c.Context(), params.MailListID)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+
+		members, err := h.kc.GetGroupMembers(c.Context(), params.MailListID.String())
+		if err != nil {
+			return err
+		}
+		if len(members) == 0 {
+			return fiber.ErrNotFound
+		}
+
+		recipients := make([]mailer.RecipientInfo, 0, len(members))
+		for _, m := range members {
+			if gocloak.PString(m.Email) == "" {
+				continue
+			}
+			name := strings.TrimSpace(gocloak.PString(m.FirstName) + " " + gocloak.PString(m.LastName))
+			if name == "" {
+				name = gocloak.PString(m.Username)
+			}
+			recipients = append(recipients, mailer.RecipientInfo{FullName: name, Email: gocloak.PString(m.Email)})
+		}
+
+		mailListID := params.MailListID
+		return h.mailer.EnqueueWithRecipients(c.Context(), mailer.EnqueueWithRecipientsParams{
+			SentBy:        sentBy,
+			TemplateID:    params.TemplateID,
+			MailListID:    &mailListID,
+			BodyVariables: bodyVarsJson,
+			Recipients:    recipients,
+		})
 	}
 
 	err = h.mailer.Enqueue(c.Context(), database.CreateMailTaskParams{
@@ -143,7 +183,6 @@ func (h *mailHandlerImpl) GetTasks(c fiber.Ctx) error {
 	}
 
 	c.Response().Header.Set("X-Total-Count", strconv.FormatInt(count, 10))
-
 	return c.JSON(tasks)
 }
 
@@ -209,6 +248,5 @@ func (h *mailHandlerImpl) GetTaskQueueItems(c fiber.Ctx) error {
 	}
 
 	c.Response().Header.Set("X-Total-Count", strconv.FormatInt(count, 10))
-
 	return c.JSON(items)
 }

@@ -257,6 +257,11 @@ SET token_version = token_version + 1,
 WHERE id = $1 AND owner_id = $2
 RETURNING *;
 
+-- name: InsertMailTask :one
+INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables)
+VALUES ($1, $2, $3, $4)
+RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at;
+
 -- name: CreateSingleMailTask :one
 WITH inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, body_variables)

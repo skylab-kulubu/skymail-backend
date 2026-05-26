@@ -16,10 +16,24 @@ import (
 	"github.com/wneessen/go-mail"
 )
 
+type RecipientInfo struct {
+	FullName string
+	Email    string
+}
+
+type EnqueueWithRecipientsParams struct {
+	SentBy        string
+	TemplateID    uuid.UUID
+	MailListID    *uuid.UUID
+	BodyVariables []byte
+	Recipients    []RecipientInfo
+}
+
 type Mailer interface {
 	Start(ctx context.Context, workerCount int)
 	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) error
 	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) error
+	EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) error
 }
 
 type mailerImpl struct {
@@ -123,6 +137,38 @@ func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingl
 	}
 
 	return m.renderAndQueue(ctx, commonRows)
+}
+
+func (m *mailerImpl) EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) error {
+	task, err := m.db.InsertMailTask(ctx, database.InsertMailTaskParams{
+		SentBy:        params.SentBy,
+		TemplateID:    &params.TemplateID,
+		MailListID:    params.MailListID,
+		BodyVariables: params.BodyVariables,
+	})
+	if err != nil {
+		return err
+	}
+
+	tmpl, err := m.db.GetTemplateById(ctx, *task.TemplateID)
+	if err != nil {
+		return err
+	}
+
+	rows := make([]commonMailRow, 0, len(params.Recipients))
+	for _, r := range params.Recipients {
+		rows = append(rows, commonMailRow{
+			TaskID:            task.ID,
+			BodyVariables:     params.BodyVariables,
+			TemplateSubject:   tmpl.Subject,
+			HtmlContent:       tmpl.HtmlContent,
+			PlainTextContent:  tmpl.PlainTextContent,
+			RecipientFullName: r.FullName,
+			RecipientEmail:    r.Email,
+		})
+	}
+
+	return m.renderAndQueue(ctx, rows)
 }
 
 func (m *mailerImpl) renderAndQueue(ctx context.Context, rows []commonMailRow) error {

@@ -41,6 +41,7 @@ type Querier interface {
 	GetRecipients(ctx context.Context, arg GetRecipientsParams) ([]Recipient, error)
 	GetRecipientsByMailingListId(ctx context.Context, arg GetRecipientsByMailingListIdParams) ([]Recipient, error)
 	GetTemplateById(ctx context.Context, id uuid.UUID) (Template, error)
+	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (MailTask, error)
 	ProcessQueueItems(ctx context.Context) ([]MailQueue, error)
 	RemoveRecipientFromMailingListByID(ctx context.Context, arg RemoveRecipientFromMailingListByIDParams) error
 	RerollApplicationToken(ctx context.Context, arg RerollApplicationTokenParams) (Application, error)

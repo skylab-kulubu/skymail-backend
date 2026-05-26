@@ -18,6 +18,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/discovery"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
+	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
@@ -70,9 +71,11 @@ func main() {
 
 	authMiddleware := middlewares.NewAuthMiddleware(db, cfg.AppSecret, "skymail", cfg.KeycloakRealmURL)
 
+	kcClient := keycloak.NewClient(cfg.KeycloakRealmURL, cfg.KeycloakServiceClientID, cfg.KeycloakServiceClientSecret)
+
 	templateHandler := handlers.NewTemplateHandler(db)
-	listHandler := handlers.NewListHandler(db)
-	mailHandler := handlers.NewMailHandler(db, mailerService)
+	listHandler := handlers.NewListHandler(db, kcClient)
+	mailHandler := handlers.NewMailHandler(db, mailerService, kcClient)
 	applicationHandler := handlers.NewApplicationHandler(db, cfg.AppSecret)
 
 	eurekaClient := discovery.NewEurekaClient(cfg.EurekaServer, cfg.AppName, cfg.AppPort)

@@ -1,0 +1,1 @@
+ALTER TABLE mail_tasks DROP CONSTRAINT mail_tasks_mail_list_id_fkey;
