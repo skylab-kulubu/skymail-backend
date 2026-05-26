@@ -102,6 +102,11 @@ func main() {
 	}))
 	*/
 
+	app.Get("/docs/openapi.json", func(c fiber.Ctx) error {
+		c.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSONCharsetUTF8)
+		return c.SendString(docs.SwaggerInfo.ReadDoc())
+	})
+
 	app.Group("/docs").
 		Use(scalar.New(scalar.Config{
 			FileContentString: docs.SwaggerInfo.ReadDoc(),
