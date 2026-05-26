@@ -26,5 +26,5 @@
   <img src="https://contrib.rocks/image?repo=skylab-kulubu/skymail-backend" />
 </a>
 
-[contrib.rocks](https://contrib.rocks) ile yapıldı.
+<sup><sub>[contrib.rocks](https://contrib.rocks) ile yapıldı.</sub></sup>
 
