@@ -16,6 +16,10 @@ import (
 	"github.com/wneessen/go-mail"
 )
 
+var mailFuncs = map[string]any{
+	"add1": func(i int) int { return i + 1 },
+}
+
 type RecipientInfo struct {
 	FullName string
 	Email    string
@@ -181,15 +185,15 @@ func (m *mailerImpl) renderAndQueue(ctx context.Context, rows []commonMailRow) e
 		return fmt.Errorf("invalid json variables: %w", err)
 	}
 
-	subjectTemplate, err := textt.New("subject").Parse(rows[0].TemplateSubject)
+	subjectTemplate, err := textt.New("subject").Funcs(mailFuncs).Parse(rows[0].TemplateSubject)
 	if err != nil {
 		m.logger.Err(err).Msg("Failed to parse subject template")
 	}
-	textTemplate, err := textt.New("text").Parse(rows[0].PlainTextContent)
+	textTemplate, err := textt.New("text").Funcs(mailFuncs).Parse(rows[0].PlainTextContent)
 	if err != nil {
 		return fmt.Errorf("invalid template: %w", err)
 	}
-	htmlTemplate, err := htmlt.New("html").Parse(rows[0].HtmlContent)
+	htmlTemplate, err := htmlt.New("html").Funcs(mailFuncs).Parse(rows[0].HtmlContent)
 	if err != nil {
 		return fmt.Errorf("invalid template: %w", err)
 	}
