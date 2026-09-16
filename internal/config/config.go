@@ -21,8 +21,6 @@ type Config struct {
 	KeycloakServiceClientID     string `mapstructure:"KEYCLOAK_SERVICE_CLIENT_ID" validate:"required"`
 	KeycloakServiceClientSecret string `mapstructure:"KEYCLOAK_SERVICE_CLIENT_SECRET" validate:"required"`
 	AppSecret                   string `mapstructure:"APP_SECRET" validate:"required"`
-	EurekaServer                string `mapstructure:"EUREKA_SERVER"`
-	AppName                     string `mapstructure:"APP_NAME"`
 	AppPort                     int    `mapstructure:"APP_PORT"`
 }
 

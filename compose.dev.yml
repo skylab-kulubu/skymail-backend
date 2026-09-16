@@ -1,15 +1,21 @@
 services:
-  postgres:
-    image: postgres:18
-    restart: no
+  skymail:
+    container_name: skymail
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
-      - "5432:5432"
+      - "3000:3000"
     environment:
-      POSTGRES_DB: skymail
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    volumes:
-      - postgres_data:/var/lib/postgresql
+      DATABASE_URL: postgres://skymail:${SKYMAIL_DB_PASSWORD:-postgres}@postgres:5432/skymail?sslmode=disable
+      APP_PORT: "3000"
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+    networks:
+      - skylab
 
-volumes:
-  postgres_data:
+networks:
+  skylab:
+    external: true
