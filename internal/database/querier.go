@@ -18,22 +18,16 @@ type Querier interface {
 	CountRecipients(ctx context.Context) (int64, error)
 	CountRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) (int64, error)
 	CountTemplates(ctx context.Context) (int64, error)
-	CreateApplication(ctx context.Context, arg CreateApplicationParams) (Application, error)
 	CreateMailQueueItems(ctx context.Context, arg []CreateMailQueueItemsParams) (int64, error)
 	CreateMailTask(ctx context.Context, arg CreateMailTaskParams) ([]CreateMailTaskRow, error)
 	CreateMailingList(ctx context.Context, name string) (MailingList, error)
 	CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error)
 	CreateTemplate(ctx context.Context, arg CreateTemplateParams) (Template, error)
-	DeleteApplication(ctx context.Context, arg DeleteApplicationParams) error
 	DeleteMailingList(ctx context.Context, id uuid.UUID) error
 	DeleteTemplate(ctx context.Context, id uuid.UUID) error
 	GetAllMailTasks(ctx context.Context, arg GetAllMailTasksParams) ([]GetAllMailTasksRow, error)
 	GetAllMailingLists(ctx context.Context, arg GetAllMailingListsParams) ([]MailingList, error)
 	GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams) ([]Template, error)
-	GetApplicationById(ctx context.Context, id uuid.UUID) (Application, error)
-	GetApplicationByIdAndOwner(ctx context.Context, arg GetApplicationByIdAndOwnerParams) (Application, error)
-	GetApplicationTokenVersion(ctx context.Context, id uuid.UUID) (int, error)
-	GetApplicationsByOwnerId(ctx context.Context, ownerID string) ([]Application, error)
 	GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueueItemsByTaskIdParams) ([]GetMailQueueItemsByTaskIdRow, error)
 	GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTaskByIdRow, error)
 	GetMailingListById(ctx context.Context, id uuid.UUID) (MailingList, error)
@@ -44,11 +38,9 @@ type Querier interface {
 	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (MailTask, error)
 	ProcessQueueItems(ctx context.Context) ([]MailQueue, error)
 	RemoveRecipientFromMailingListByID(ctx context.Context, arg RemoveRecipientFromMailingListByIDParams) error
-	RerollApplicationToken(ctx context.Context, arg RerollApplicationTokenParams) (Application, error)
 	ResetDeadJobs(ctx context.Context) error
 	SetMailQueueItemFailed(ctx context.Context, arg SetMailQueueItemFailedParams) error
 	SetMailQueueItemSent(ctx context.Context, id uuid.UUID) error
-	UpdateApplication(ctx context.Context, arg UpdateApplicationParams) (Application, error)
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
 	UpdateRecipient(ctx context.Context, arg UpdateRecipientParams) (Recipient, error)
 	UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) (Template, error)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ type Client interface {
 
 type clientImpl struct {
 	gc           *gocloak.GoCloak
+	base         string
 	clientID     string
 	clientSecret string
 	realm        string
@@ -38,6 +40,7 @@ func NewClient(realmURL, clientID, clientSecret string) Client {
 
 	return &clientImpl{
 		gc:           gocloak.NewClient(baseURL),
+		base:         baseURL,
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		realm:        realm,
@@ -68,7 +71,82 @@ func (c *clientImpl) ListGroups(ctx context.Context) ([]*gocloak.Group, error) {
 		return nil, err
 	}
 	max := 1000
-	return c.gc.GetGroups(ctx, token, c.realm, gocloak.GetGroupsParams{Max: &max})
+	full := true
+	tops, err := c.gc.GetGroups(ctx, token, c.realm, gocloak.GetGroupsParams{Max: &max, Full: &full})
+	if err != nil {
+		return nil, err
+	}
+	return c.collectGroups(ctx, token, tops)
+}
+
+func (c *clientImpl) collectGroups(ctx context.Context, token string, gs []*gocloak.Group) ([]*gocloak.Group, error) {
+	seen := map[string]struct{}{}
+	out := make([]*gocloak.Group, 0)
+	var walk func([]*gocloak.Group) error
+	walk = func(nodes []*gocloak.Group) error {
+		for _, g := range nodes {
+			if g == nil || g.ID == nil {
+				continue
+			}
+			if _, ok := seen[*g.ID]; ok {
+				continue
+			}
+			seen[*g.ID] = struct{}{}
+			out = append(out, g)
+			if g.SubGroups != nil {
+				nested := make([]*gocloak.Group, 0, len(*g.SubGroups))
+				for i := range *g.SubGroups {
+					nested = append(nested, &(*g.SubGroups)[i])
+				}
+				if err := walk(nested); err != nil {
+					return err
+				}
+			}
+			kids, err := c.children(ctx, token, *g.ID)
+			if err != nil {
+				return err
+			}
+			if err := walk(kids); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := walk(gs); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clientImpl) children(ctx context.Context, token, groupID string) ([]*gocloak.Group, error) {
+	out := make([]*gocloak.Group, 0)
+	first := 0
+	const pageSize = 100
+	for {
+		var page []*gocloak.Group
+		resp, err := c.gc.GetRequestWithBearerAuth(ctx, token).
+			SetResult(&page).
+			SetQueryParams(map[string]string{
+				"first":               strconv.Itoa(first),
+				"max":                 strconv.Itoa(pageSize),
+				"briefRepresentation": "false",
+			}).
+			Get(c.base + "/admin/realms/" + c.realm + "/groups/" + groupID + "/children")
+		if err != nil {
+			return nil, err
+		}
+		if resp.IsError() {
+			if resp.StatusCode() == 404 {
+				return []*gocloak.Group{}, nil
+			}
+			return nil, errors.New("keycloak: children failed")
+		}
+		out = append(out, page...)
+		if len(page) < pageSize {
+			return out, nil
+		}
+		first += len(page)
+	}
 }
 
 func (c *clientImpl) GetGroup(ctx context.Context, id string) (*gocloak.Group, error) {
@@ -93,6 +171,35 @@ func (c *clientImpl) GetGroupMembers(ctx context.Context, id string) ([]*gocloak
 	if err != nil {
 		return nil, err
 	}
+	root, err := c.gc.GetGroup(ctx, token, c.realm, id)
+	if err != nil {
+		return nil, err
+	}
+	groups, err := c.collectGroups(ctx, token, []*gocloak.Group{root})
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	out := make([]*gocloak.User, 0)
 	max := 10000
-	return c.gc.GetGroupMembers(ctx, token, c.realm, id, gocloak.GetGroupsParams{Max: &max})
+	for _, g := range groups {
+		if g == nil || g.ID == nil {
+			continue
+		}
+		members, err := c.gc.GetGroupMembers(ctx, token, c.realm, *g.ID, gocloak.GetGroupsParams{Max: &max})
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range members {
+			if m == nil || m.ID == nil {
+				continue
+			}
+			if _, ok := seen[*m.ID]; ok {
+				continue
+			}
+			seen[*m.ID] = struct{}{}
+			out = append(out, m)
+		}
+	}
+	return out, nil
 }

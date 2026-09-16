@@ -20,7 +20,6 @@ type Config struct {
 	KeycloakRealmURL            string `mapstructure:"KEYCLOAK_REALM_URL" validate:"required"`
 	KeycloakServiceClientID     string `mapstructure:"KEYCLOAK_SERVICE_CLIENT_ID" validate:"required"`
 	KeycloakServiceClientSecret string `mapstructure:"KEYCLOAK_SERVICE_CLIENT_SECRET" validate:"required"`
-	AppSecret                   string `mapstructure:"APP_SECRET" validate:"required"`
 	AppPort                     int    `mapstructure:"APP_PORT"`
 }
 
