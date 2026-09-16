@@ -69,14 +69,13 @@ func main() {
 		Plain:     cfg.SMTPPlain,
 	})
 
-	authMiddleware := middlewares.NewAuthMiddleware(db, cfg.AppSecret, "skymail", cfg.KeycloakRealmURL)
+	authMiddleware := middlewares.NewAuthMiddleware("skymail", cfg.KeycloakRealmURL)
 
 	kcClient := keycloak.NewClient(cfg.KeycloakRealmURL, cfg.KeycloakServiceClientID, cfg.KeycloakServiceClientSecret)
 
 	templateHandler := handlers.NewTemplateHandler(db)
 	listHandler := handlers.NewListHandler(db, kcClient)
 	mailHandler := handlers.NewMailHandler(db, mailerService, kcClient)
-	applicationHandler := handlers.NewApplicationHandler(db, cfg.AppSecret)
 
 	app := fiber.New(fiber.Config{
 		StructValidator:    vld,
@@ -138,14 +137,6 @@ func main() {
 	tasks.Get("/", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTasks)
 	tasks.Get("/:id", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTask)
 	tasks.Get("/:id/queue", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTaskQueueItems)
-
-	apps := api.Group("/applications")
-	apps.Post("/", authMiddleware.RequireAnyPermission("skymail:apps:write"), applicationHandler.CreateApplication)
-	apps.Get("/", authMiddleware.RequireAnyPermission("skymail:apps:read"), applicationHandler.GetApplications)
-	apps.Get("/:id", authMiddleware.RequireAnyPermission("skymail:apps:read"), applicationHandler.GetApplication)
-	apps.Patch("/:id", authMiddleware.RequireAnyPermission("skymail:apps:write"), applicationHandler.UpdateApplication)
-	apps.Delete("/:id", authMiddleware.RequireAnyPermission("skymail:apps:write"), applicationHandler.DeleteApplication)
-	apps.Post("/:id/reroll", authMiddleware.RequireAnyPermission("skymail:apps:write"), applicationHandler.RerollToken)
 
 	mailerService.Start(ctx, 3)
 
