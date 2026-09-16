@@ -16,7 +16,6 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/config"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/discovery"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
 	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
@@ -78,9 +77,6 @@ func main() {
 	listHandler := handlers.NewListHandler(db, kcClient)
 	mailHandler := handlers.NewMailHandler(db, mailerService, kcClient)
 	applicationHandler := handlers.NewApplicationHandler(db, cfg.AppSecret)
-
-	eurekaClient := discovery.NewEurekaClient(cfg.EurekaServer, cfg.AppName, cfg.AppPort)
-	eurekaClient.Start()
 
 	app := fiber.New(fiber.Config{
 		StructValidator:    vld,
