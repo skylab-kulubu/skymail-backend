@@ -54,6 +54,7 @@ jobs:
 
       - name: Notify Dokploy
         if: github.ref == 'refs/heads/production'
+        continue-on-error: true
         env:
           HOOK: ${{ secrets.DOKPLOY_DEPLOY_HOOK }}
         run: |
@@ -61,4 +62,6 @@ jobs:
             echo "DOKPLOY_DEPLOY_HOOK unset; skip"
             exit 0
           fi
-          curl -fsS -X POST "$HOOK"
+          code=$(curl -sS -o /tmp/hook.out -w '%{http_code}' -A 'DokployDeployHook/1.0' -X POST "$HOOK")
+          echo "hook HTTP $code"
+          test "$code" -ge 200 && test "$code" -lt 300
