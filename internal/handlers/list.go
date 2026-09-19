@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"strconv"
@@ -17,12 +18,14 @@ import (
 )
 
 type MailingListItem struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	Description *string   `json:"description"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	Source      string    `json:"source"`
+	ID          uuid.UUID  `json:"id"`
+	Name        string     `json:"name"`
+	Description *string    `json:"description"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	Source      string     `json:"source"`
+	ArchivedAt  *time.Time `json:"archived_at,omitempty"`
+	ArchivedBy  *string    `json:"archived_by,omitempty"`
 }
 
 type ListHandler interface {
@@ -31,6 +34,7 @@ type ListHandler interface {
 	GetList(c fiber.Ctx) error
 	UpdateList(c fiber.Ctx) error
 	DeleteList(c fiber.Ctx) error
+	RestoreList(c fiber.Ctx) error
 	AddRecipient(c fiber.Ctx) error
 	RemoveRecipient(c fiber.Ctx) error
 	GetRecipients(c fiber.Ctx) error
@@ -49,7 +53,7 @@ func dbListToItem(l database.MailingList) MailingListItem {
 	return MailingListItem{
 		ID: l.ID, Name: l.Name, Description: l.Description,
 		CreatedAt: l.CreatedAt, UpdatedAt: l.UpdatedAt,
-		Source: "internal",
+		Source: "internal", ArchivedAt: l.ArchivedAt, ArchivedBy: l.ArchivedBy,
 	}
 }
 
@@ -66,6 +70,20 @@ func kcGroupToItem(g *gocloak.Group) MailingListItem {
 
 func isNotFound(err error) bool {
 	return errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows)
+}
+
+func rejectArchivedInternalList(ctx context.Context, db *database.Store, id uuid.UUID) error {
+	list, err := db.GetMailingListByIdIncludingArchived(ctx, id)
+	if err == nil {
+		if list.ArchivedAt != nil {
+			return pgx.ErrNoRows
+		}
+		return nil
+	}
+	if isNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 func userFullName(u *gocloak.User) string {
@@ -109,30 +127,50 @@ func (h *listHandlerImpl) CreateList(c fiber.Ctx) error {
 //	@Description	Get a list of all mailing lists (internal + Keycloak groups) with pagination.
 //	@Tags			Lists
 //	@Produce		json
-//	@Param			_start	query		int	false	"Start index"
-//	@Param			_end	query		int	false	"End index"
-//	@Success		200		{array}		handlers.MailingListItem
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Param			_start		query		int		false	"Start index"
+//	@Param			_end		query		int		false	"End index"
+//	@Param			lifecycle	query		string	false	"Lifecycle filter: current, inactive, all"	Enums(current,inactive,all)	default(current)
+//	@Success		200			{array}		handlers.MailingListItem
+//	@Failure		400			{object}	apperrors.AppError	"Bad Request"
+//	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/mailing_lists [get]
 func (h *listHandlerImpl) GetLists(c fiber.Ctx) error {
 	limit, offset := getPaginationParams(c)
 
-	lists, err := h.db.GetAllMailingLists(c.Context(), database.GetAllMailingListsParams{
-		Limit:  limit,
-		Offset: offset,
-	})
+	lifecycle, err := parseLifecycleFilter(c.Query("lifecycle"))
 	if err != nil {
 		return err
 	}
 
-	dbCount, err := h.db.CountMailingLists(c.Context())
+	var lists []database.MailingList
+	var dbCount int64
+	switch lifecycle {
+	case lifecycleCurrent:
+		lists, err = h.db.GetAllMailingLists(c.Context(), database.GetAllMailingListsParams{Limit: limit, Offset: offset})
+		if err == nil {
+			dbCount, err = h.db.CountMailingLists(c.Context())
+		}
+	case lifecycleInactive:
+		lists, err = h.db.GetArchivedMailingLists(c.Context(), database.GetArchivedMailingListsParams{Limit: limit, Offset: offset})
+		if err == nil {
+			dbCount, err = h.db.CountArchivedMailingLists(c.Context())
+		}
+	case lifecycleAll:
+		lists, err = h.db.GetAllMailingListsIncludingArchived(c.Context(), database.GetAllMailingListsIncludingArchivedParams{Limit: limit, Offset: offset})
+		if err == nil {
+			dbCount, err = h.db.CountAllMailingListsIncludingArchived(c.Context())
+		}
+	}
 	if err != nil {
 		return err
 	}
 
-	groups, err := h.kc.ListGroups(c.Context())
-	if err != nil {
-		return err
+	groups := []*gocloak.Group{}
+	if lifecycle != lifecycleInactive {
+		groups, err = h.kc.ListGroups(c.Context())
+		if err != nil {
+			return err
+		}
 	}
 
 	items := make([]MailingListItem, 0, len(lists)+len(groups))
@@ -168,6 +206,9 @@ func (h *listHandlerImpl) GetList(c fiber.Ctx) error {
 	list, err := h.db.GetMailingListById(c.Context(), id)
 	if err != nil {
 		if !isNotFound(err) {
+			return err
+		}
+		if err := rejectArchivedInternalList(c.Context(), h.db, id); err != nil {
 			return err
 		}
 		group, err := h.kc.GetGroup(c.Context(), id.String())
@@ -221,8 +262,8 @@ func (h *listHandlerImpl) UpdateList(c fiber.Ctx) error {
 
 // DeleteList godoc
 //
-//	@Summary		Delete a mailing list
-//	@Description	Delete an existing mailing list by its ID.
+//	@Summary		Archive a mailing list
+//	@Description	Archive a mailing list without removing recipients or historical mail tasks. Repeating the request is safe.
 //	@Tags			Lists
 //	@Produce		json
 //	@Param			id	path	string	true	"List ID"
@@ -237,11 +278,37 @@ func (h *listHandlerImpl) DeleteList(c fiber.Ctx) error {
 		return err
 	}
 
-	if err := h.db.DeleteMailingList(c.Context(), id); err != nil {
+	if _, err := h.db.ArchiveMailingList(c.Context(), database.ArchiveMailingListParams{
+		ID: id, ArchivedBy: lifecycleActor(c.Locals("user_id")),
+	}); err != nil {
 		return err
 	}
 
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// RestoreList godoc
+//
+//	@Summary		Restore an archived mailing list
+//	@Description	Restore an archived internal mailing list. Repeating the request is safe.
+//	@Tags			Lists
+//	@Produce		json
+//	@Param			id	path		string	true	"List ID"
+//	@Success		200	{object}	handlers.MailingListItem
+//	@Failure		404	{object}	apperrors.AppError	"Not Found"
+//	@Failure		409	{object}	apperrors.AppError	"Conflict"
+//	@Router			/mailing_lists/{id}/restore [post]
+func (h *listHandlerImpl) RestoreList(c fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return err
+	}
+
+	list, err := h.db.RestoreMailingList(c.Context(), id)
+	if err != nil {
+		return err
+	}
+	return c.JSON(dbListToItem(list))
 }
 
 // AddRecipient godoc
@@ -336,6 +403,9 @@ func (h *listHandlerImpl) GetRecipients(c fiber.Ctx) error {
 	_, err = h.db.GetMailingListById(c.Context(), id)
 	if err != nil {
 		if !isNotFound(err) {
+			return err
+		}
+		if err := rejectArchivedInternalList(c.Context(), h.db, id); err != nil {
 			return err
 		}
 		return h.getKeycloakGroupRecipients(c, id.String())

@@ -6,15 +6,45 @@ RETURNING *;
 -- name: GetTemplateById :one
 SELECT *
 FROM templates
+WHERE id = $1
+  AND archived_at IS NULL;
+
+-- name: GetTemplateByIdIncludingArchived :one
+SELECT *
+FROM templates
 WHERE id = $1;
 
 -- name: GetAllTemplates :many
 SELECT *
 FROM templates
+WHERE archived_at IS NULL
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2;
 
 -- name: CountTemplates :one
+SELECT count(*)
+FROM templates
+WHERE archived_at IS NULL;
+
+-- name: GetArchivedTemplates :many
+SELECT *
+FROM templates
+WHERE archived_at IS NOT NULL
+ORDER BY archived_at DESC
+LIMIT $1 OFFSET $2;
+
+-- name: CountArchivedTemplates :one
+SELECT count(*)
+FROM templates
+WHERE archived_at IS NOT NULL;
+
+-- name: GetAllTemplatesIncludingArchived :many
+SELECT *
+FROM templates
+ORDER BY created_at DESC
+LIMIT $1 OFFSET $2;
+
+-- name: CountAllTemplatesIncludingArchived :one
 SELECT count(*)
 FROM templates;
 
@@ -27,12 +57,27 @@ SET name                = $2,
     react_email_content = $6,
     updated_at          = NOW()
 WHERE id = $1
+  AND archived_at IS NULL
 RETURNING *;
 
--- name: DeleteTemplate :exec
-DELETE
-FROM templates
-WHERE id = $1;
+-- name: ArchiveTemplate :one
+UPDATE templates
+SET archived_by = CASE
+                      WHEN archived_at IS NULL THEN sqlc.narg(archived_by)::text
+                      ELSE archived_by
+                  END,
+    archived_at = COALESCE(archived_at, NOW()),
+    updated_at = CASE WHEN archived_at IS NULL THEN NOW() ELSE updated_at END
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- name: RestoreTemplate :one
+UPDATE templates
+SET archived_at = NULL,
+    archived_by = NULL,
+    updated_at = CASE WHEN archived_at IS NULL THEN updated_at ELSE NOW() END
+WHERE id = $1
+RETURNING *;
 
 
 -- name: CreateMailingList :one
@@ -43,15 +88,45 @@ RETURNING *;
 -- name: GetMailingListById :one
 SELECT *
 FROM mailing_lists
+WHERE id = $1
+  AND archived_at IS NULL;
+
+-- name: GetMailingListByIdIncludingArchived :one
+SELECT *
+FROM mailing_lists
 WHERE id = $1;
 
 -- name: GetAllMailingLists :many
 SELECT *
 FROM mailing_lists
+WHERE archived_at IS NULL
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2;
 
 -- name: CountMailingLists :one
+SELECT count(*)
+FROM mailing_lists
+WHERE archived_at IS NULL;
+
+-- name: GetArchivedMailingLists :many
+SELECT *
+FROM mailing_lists
+WHERE archived_at IS NOT NULL
+ORDER BY archived_at DESC
+LIMIT $1 OFFSET $2;
+
+-- name: CountArchivedMailingLists :one
+SELECT count(*)
+FROM mailing_lists
+WHERE archived_at IS NOT NULL;
+
+-- name: GetAllMailingListsIncludingArchived :many
+SELECT *
+FROM mailing_lists
+ORDER BY created_at DESC
+LIMIT $1 OFFSET $2;
+
+-- name: CountAllMailingListsIncludingArchived :one
 SELECT count(*)
 FROM mailing_lists;
 
@@ -60,23 +135,43 @@ UPDATE mailing_lists
 SET name       = $2,
     updated_at = NOW()
 WHERE id = $1
+  AND archived_at IS NULL
 RETURNING *;
 
--- name: DeleteMailingList :exec
-DELETE
-FROM mailing_lists
-WHERE id = $1;
+-- name: ArchiveMailingList :one
+UPDATE mailing_lists
+SET archived_by = CASE
+                      WHEN archived_at IS NULL THEN sqlc.narg(archived_by)::text
+                      ELSE archived_by
+                  END,
+    archived_at = COALESCE(archived_at, NOW()),
+    updated_at = CASE WHEN archived_at IS NULL THEN NOW() ELSE updated_at END
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- name: RestoreMailingList :one
+UPDATE mailing_lists
+SET archived_at = NULL,
+    archived_by = NULL,
+    updated_at = CASE WHEN archived_at IS NULL THEN updated_at ELSE NOW() END
+WHERE id = $1
+RETURNING *;
 
 
 -- name: AddRecipientToMailingList :one
-WITH recipient AS (
+WITH target_list AS (
+    SELECT mailing_lists.id
+    FROM mailing_lists
+    WHERE mailing_lists.id = sqlc.arg(mail_list_id)
+      AND archived_at IS NULL
+), recipient AS (
     INSERT INTO recipients (full_name, email)
-        VALUES ($2, $3)
+        SELECT sqlc.arg(full_name), sqlc.arg(email) FROM target_list
         ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name
         RETURNING id, full_name, email, created_at, updated_at),
      association AS (
          INSERT INTO mailing_list_recipients (mail_list_id, recipient_id)
-             SELECT $1, id FROM recipient
+             SELECT sqlc.arg(mail_list_id), id FROM recipient
              ON CONFLICT DO NOTHING)
 SELECT *
 FROM recipient;
@@ -85,7 +180,9 @@ FROM recipient;
 SELECT r.*
 FROM recipients r
          JOIN mailing_list_recipients mlr ON r.id = mlr.recipient_id
+         JOIN mailing_lists ml ON ml.id = mlr.mail_list_id
 WHERE mlr.mail_list_id = $1
+  AND ml.archived_at IS NULL
 ORDER BY r.created_at DESC
 LIMIT $2 OFFSET $3;
 
@@ -93,7 +190,9 @@ LIMIT $2 OFFSET $3;
 SELECT count(*)
 FROM recipients r
          JOIN mailing_list_recipients mlr ON r.id = mlr.recipient_id
-WHERE mlr.mail_list_id = $1;
+         JOIN mailing_lists ml ON ml.id = mlr.mail_list_id
+WHERE mlr.mail_list_id = $1
+  AND ml.archived_at IS NULL;
 
 -- name: GetRecipients :many
 SELECT *
@@ -152,9 +251,16 @@ SET status    = 'failed',
 WHERE id = $1;
 
 -- name: CreateMailTask :many
-WITH inserted_task AS (
+WITH active_source AS (
+    SELECT t.id AS template_id, ml.id AS mail_list_id
+    FROM templates t
+             JOIN mailing_lists ml ON ml.id = sqlc.narg(mail_list_id)::uuid
+    WHERE t.id = sqlc.narg(template_id)::uuid
+      AND t.archived_at IS NULL
+      AND ml.archived_at IS NULL
+), inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables)
-        VALUES ($1, $2, $3, $4)
+        SELECT sqlc.arg(sent_by), template_id, mail_list_id, sqlc.arg(body_variables) FROM active_source
         RETURNING *
 )
 SELECT it.id               AS task_id,
@@ -214,13 +320,21 @@ WHERE task_id = $1;
 
 -- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables)
-VALUES ($1, $2, $3, $4)
-RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at;
+SELECT sqlc.arg(sent_by), sqlc.arg(template_id), sqlc.narg(mail_list_id), sqlc.arg(body_variables)
+FROM templates
+WHERE templates.id = sqlc.arg(template_id)
+  AND archived_at IS NULL
+RETURNING mail_tasks.id, sent_by, template_id, mail_list_id, body_variables, created_at;
 
 -- name: CreateSingleMailTask :one
-WITH inserted_task AS (
+WITH active_template AS (
+    SELECT templates.id
+    FROM templates
+    WHERE templates.id = sqlc.narg(template_id)::uuid
+      AND archived_at IS NULL
+), inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, body_variables)
-        VALUES ($1, $2, $3)
+        SELECT sqlc.arg(sent_by), id, sqlc.arg(body_variables) FROM active_template
         RETURNING *
 )
 SELECT it.id               AS task_id,
@@ -229,7 +343,7 @@ SELECT it.id               AS task_id,
        t.subject           AS template_subject,
        t.html_content,
        t.plain_text_content,
-       cast($4 as text)    AS recipient_full_name,
-       cast($5 as text)    AS recipient_email
+       sqlc.arg(recipient_full_name)::text AS recipient_full_name,
+       sqlc.arg(recipient_email)::text AS recipient_email
 FROM inserted_task it
          JOIN templates t ON it.template_id = t.id;
