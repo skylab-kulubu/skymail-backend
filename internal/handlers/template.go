@@ -15,6 +15,7 @@ type TemplateHandler interface {
 	GetTemplate(c fiber.Ctx) error
 	UpdateTemplate(c fiber.Ctx) error
 	DeleteTemplate(c fiber.Ctx) error
+	RestoreTemplate(c fiber.Ctx) error
 }
 
 type templateHandlerImpl struct {
@@ -83,23 +84,40 @@ func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
 //	@Description	Get a list of all email templates with pagination.
 //	@Tags			Templates
 //	@Produce		json
-//	@Param			_start	query		int	false	"Start index"
-//	@Param			_end	query		int	false	"End index"
-//	@Success		200		{array}		database.Template
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Param			_start		query		int		false	"Start index"
+//	@Param			_end		query		int		false	"End index"
+//	@Param			lifecycle	query		string	false	"Lifecycle filter: current, inactive, all"	Enums(current,inactive,all)	default(current)
+//	@Success		200			{array}		database.Template
+//	@Failure		400			{object}	apperrors.AppError	"Bad Request"
+//	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates [get]
 func (h *templateHandlerImpl) GetTemplates(c fiber.Ctx) error {
 	limit, offset := getPaginationParams(c)
 
-	templates, err := h.db.GetAllTemplates(c.Context(), database.GetAllTemplatesParams{
-		Limit:  limit,
-		Offset: offset,
-	})
+	lifecycle, err := parseLifecycleFilter(c.Query("lifecycle"))
 	if err != nil {
 		return err
 	}
 
-	count, err := h.db.CountTemplates(c.Context())
+	var templates []database.Template
+	var count int64
+	switch lifecycle {
+	case lifecycleCurrent:
+		templates, err = h.db.GetAllTemplates(c.Context(), database.GetAllTemplatesParams{Limit: limit, Offset: offset})
+		if err == nil {
+			count, err = h.db.CountTemplates(c.Context())
+		}
+	case lifecycleInactive:
+		templates, err = h.db.GetArchivedTemplates(c.Context(), database.GetArchivedTemplatesParams{Limit: limit, Offset: offset})
+		if err == nil {
+			count, err = h.db.CountArchivedTemplates(c.Context())
+		}
+	case lifecycleAll:
+		templates, err = h.db.GetAllTemplatesIncludingArchived(c.Context(), database.GetAllTemplatesIncludingArchivedParams{Limit: limit, Offset: offset})
+		if err == nil {
+			count, err = h.db.CountAllTemplatesIncludingArchived(c.Context())
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -177,8 +195,8 @@ func (h *templateHandlerImpl) UpdateTemplate(c fiber.Ctx) error {
 
 // DeleteTemplate godoc
 //
-//	@Summary		Delete an email template
-//	@Description	Delete an existing email template by its ID.
+//	@Summary		Archive an email template
+//	@Description	Archive an email template without removing historical mail tasks or queue items. Repeating the request is safe.
 //	@Tags			Templates
 //	@Produce		json
 //	@Param			id	path	string	true	"Template ID"
@@ -193,9 +211,35 @@ func (h *templateHandlerImpl) DeleteTemplate(c fiber.Ctx) error {
 		return err
 	}
 
-	if err := h.db.DeleteTemplate(c.Context(), id); err != nil {
+	if _, err := h.db.ArchiveTemplate(c.Context(), database.ArchiveTemplateParams{
+		ID: id, ArchivedBy: lifecycleActor(c.Locals("user_id")),
+	}); err != nil {
 		return err
 	}
 
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// RestoreTemplate godoc
+//
+//	@Summary		Restore an archived email template
+//	@Description	Restore an archived email template. Repeating the request is safe.
+//	@Tags			Templates
+//	@Produce		json
+//	@Param			id	path		string	true	"Template ID"
+//	@Success		200	{object}	database.Template
+//	@Failure		404	{object}	apperrors.AppError	"Not Found"
+//	@Failure		409	{object}	apperrors.AppError	"Conflict"
+//	@Router			/templates/{id}/restore [post]
+func (h *templateHandlerImpl) RestoreTemplate(c fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return err
+	}
+
+	template, err := h.db.RestoreTemplate(c.Context(), id)
+	if err != nil {
+		return err
+	}
+	return c.JSON(template)
 }

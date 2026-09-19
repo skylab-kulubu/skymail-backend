@@ -13,9 +13,14 @@ import (
 )
 
 const addRecipientToMailingList = `-- name: AddRecipientToMailingList :one
-WITH recipient AS (
+WITH target_list AS (
+    SELECT mailing_lists.id
+    FROM mailing_lists
+    WHERE mailing_lists.id = $1
+      AND archived_at IS NULL
+), recipient AS (
     INSERT INTO recipients (full_name, email)
-        VALUES ($2, $3)
+        SELECT $2, $3 FROM target_list
         ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name
         RETURNING id, full_name, email, created_at, updated_at),
      association AS (
@@ -53,6 +58,123 @@ func (q *Queries) AddRecipientToMailingList(ctx context.Context, arg AddRecipien
 	return i, err
 }
 
+const archiveMailingList = `-- name: ArchiveMailingList :one
+UPDATE mailing_lists
+SET archived_by = CASE
+                      WHEN archived_at IS NULL THEN $1::text
+                      ELSE archived_by
+                  END,
+    archived_at = COALESCE(archived_at, NOW()),
+    updated_at = CASE WHEN archived_at IS NULL THEN NOW() ELSE updated_at END
+WHERE id = $2
+RETURNING id, name, description, created_at, updated_at, archived_at, archived_by
+`
+
+type ArchiveMailingListParams struct {
+	ArchivedBy *string   `json:"archived_by"`
+	ID         uuid.UUID `json:"id"`
+}
+
+func (q *Queries) ArchiveMailingList(ctx context.Context, arg ArchiveMailingListParams) (MailingList, error) {
+	row := q.db.QueryRow(ctx, archiveMailingList, arg.ArchivedBy, arg.ID)
+	var i MailingList
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+	)
+	return i, err
+}
+
+const archiveTemplate = `-- name: ArchiveTemplate :one
+UPDATE templates
+SET archived_by = CASE
+                      WHEN archived_at IS NULL THEN $1::text
+                      ELSE archived_by
+                  END,
+    archived_at = COALESCE(archived_at, NOW()),
+    updated_at = CASE WHEN archived_at IS NULL THEN NOW() ELSE updated_at END
+WHERE id = $2
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by
+`
+
+type ArchiveTemplateParams struct {
+	ArchivedBy *string   `json:"archived_by"`
+	ID         uuid.UUID `json:"id"`
+}
+
+func (q *Queries) ArchiveTemplate(ctx context.Context, arg ArchiveTemplateParams) (Template, error) {
+	row := q.db.QueryRow(ctx, archiveTemplate, arg.ArchivedBy, arg.ID)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+	)
+	return i, err
+}
+
+const countAllMailingListsIncludingArchived = `-- name: CountAllMailingListsIncludingArchived :one
+SELECT count(*)
+FROM mailing_lists
+`
+
+func (q *Queries) CountAllMailingListsIncludingArchived(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countAllMailingListsIncludingArchived)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countAllTemplatesIncludingArchived = `-- name: CountAllTemplatesIncludingArchived :one
+SELECT count(*)
+FROM templates
+`
+
+func (q *Queries) CountAllTemplatesIncludingArchived(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countAllTemplatesIncludingArchived)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countArchivedMailingLists = `-- name: CountArchivedMailingLists :one
+SELECT count(*)
+FROM mailing_lists
+WHERE archived_at IS NOT NULL
+`
+
+func (q *Queries) CountArchivedMailingLists(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countArchivedMailingLists)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countArchivedTemplates = `-- name: CountArchivedTemplates :one
+SELECT count(*)
+FROM templates
+WHERE archived_at IS NOT NULL
+`
+
+func (q *Queries) CountArchivedTemplates(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countArchivedTemplates)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countMailQueueItemsByTaskId = `-- name: CountMailQueueItemsByTaskId :one
 SELECT count(*)
 FROM mail_queue
@@ -81,6 +203,7 @@ func (q *Queries) CountMailTasks(ctx context.Context) (int64, error) {
 const countMailingLists = `-- name: CountMailingLists :one
 SELECT count(*)
 FROM mailing_lists
+WHERE archived_at IS NULL
 `
 
 func (q *Queries) CountMailingLists(ctx context.Context) (int64, error) {
@@ -106,7 +229,9 @@ const countRecipientsByMailingListId = `-- name: CountRecipientsByMailingListId 
 SELECT count(*)
 FROM recipients r
          JOIN mailing_list_recipients mlr ON r.id = mlr.recipient_id
+         JOIN mailing_lists ml ON ml.id = mlr.mail_list_id
 WHERE mlr.mail_list_id = $1
+  AND ml.archived_at IS NULL
 `
 
 func (q *Queries) CountRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) (int64, error) {
@@ -119,6 +244,7 @@ func (q *Queries) CountRecipientsByMailingListId(ctx context.Context, mailListID
 const countTemplates = `-- name: CountTemplates :one
 SELECT count(*)
 FROM templates
+WHERE archived_at IS NULL
 `
 
 func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
@@ -138,9 +264,16 @@ type CreateMailQueueItemsParams struct {
 }
 
 const createMailTask = `-- name: CreateMailTask :many
-WITH inserted_task AS (
+WITH active_source AS (
+    SELECT t.id AS template_id, ml.id AS mail_list_id
+    FROM templates t
+             JOIN mailing_lists ml ON ml.id = $1::uuid
+    WHERE t.id = $2::uuid
+      AND t.archived_at IS NULL
+      AND ml.archived_at IS NULL
+), inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables)
-        VALUES ($1, $2, $3, $4)
+        SELECT $3, template_id, mail_list_id, $4 FROM active_source
         RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at
 )
 SELECT it.id               AS task_id,
@@ -158,9 +291,9 @@ FROM inserted_task it
 `
 
 type CreateMailTaskParams struct {
-	SentBy        string     `json:"sent_by"`
-	TemplateID    *uuid.UUID `json:"template_id"`
 	MailListID    *uuid.UUID `json:"mail_list_id"`
+	TemplateID    *uuid.UUID `json:"template_id"`
+	SentBy        string     `json:"sent_by"`
 	BodyVariables []byte     `json:"body_variables"`
 }
 
@@ -177,9 +310,9 @@ type CreateMailTaskRow struct {
 
 func (q *Queries) CreateMailTask(ctx context.Context, arg CreateMailTaskParams) ([]CreateMailTaskRow, error) {
 	rows, err := q.db.Query(ctx, createMailTask,
-		arg.SentBy,
-		arg.TemplateID,
 		arg.MailListID,
+		arg.TemplateID,
+		arg.SentBy,
 		arg.BodyVariables,
 	)
 	if err != nil {
@@ -212,7 +345,7 @@ func (q *Queries) CreateMailTask(ctx context.Context, arg CreateMailTaskParams) 
 const createMailingList = `-- name: CreateMailingList :one
 INSERT INTO mailing_lists (name)
 VALUES ($1)
-RETURNING id, name, description, created_at, updated_at
+RETURNING id, name, description, created_at, updated_at, archived_at, archived_by
 `
 
 func (q *Queries) CreateMailingList(ctx context.Context, name string) (MailingList, error) {
@@ -224,14 +357,21 @@ func (q *Queries) CreateMailingList(ctx context.Context, name string) (MailingLi
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
 	)
 	return i, err
 }
 
 const createSingleMailTask = `-- name: CreateSingleMailTask :one
-WITH inserted_task AS (
+WITH active_template AS (
+    SELECT templates.id
+    FROM templates
+    WHERE templates.id = $3::uuid
+      AND archived_at IS NULL
+), inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, body_variables)
-        VALUES ($1, $2, $3)
+        SELECT $4, id, $5 FROM active_template
         RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at
 )
 SELECT it.id               AS task_id,
@@ -240,18 +380,18 @@ SELECT it.id               AS task_id,
        t.subject           AS template_subject,
        t.html_content,
        t.plain_text_content,
-       cast($4 as text)    AS recipient_full_name,
-       cast($5 as text)    AS recipient_email
+       $1::text AS recipient_full_name,
+       $2::text AS recipient_email
 FROM inserted_task it
          JOIN templates t ON it.template_id = t.id
 `
 
 type CreateSingleMailTaskParams struct {
-	SentBy        string     `json:"sent_by"`
-	TemplateID    *uuid.UUID `json:"template_id"`
-	BodyVariables []byte     `json:"body_variables"`
-	Column4       string     `json:"column_4"`
-	Column5       string     `json:"column_5"`
+	RecipientFullName string     `json:"recipient_full_name"`
+	RecipientEmail    string     `json:"recipient_email"`
+	TemplateID        *uuid.UUID `json:"template_id"`
+	SentBy            string     `json:"sent_by"`
+	BodyVariables     []byte     `json:"body_variables"`
 }
 
 type CreateSingleMailTaskRow struct {
@@ -267,11 +407,11 @@ type CreateSingleMailTaskRow struct {
 
 func (q *Queries) CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error) {
 	row := q.db.QueryRow(ctx, createSingleMailTask,
-		arg.SentBy,
+		arg.RecipientFullName,
+		arg.RecipientEmail,
 		arg.TemplateID,
+		arg.SentBy,
 		arg.BodyVariables,
-		arg.Column4,
-		arg.Column5,
 	)
 	var i CreateSingleMailTaskRow
 	err := row.Scan(
@@ -290,7 +430,7 @@ func (q *Queries) CreateSingleMailTask(ctx context.Context, arg CreateSingleMail
 const createTemplate = `-- name: CreateTemplate :one
 INSERT INTO templates (name, subject, html_content, plain_text_content, react_email_content)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by
 `
 
 type CreateTemplateParams struct {
@@ -319,30 +459,10 @@ func (q *Queries) CreateTemplate(ctx context.Context, arg CreateTemplateParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
 	)
 	return i, err
-}
-
-const deleteMailingList = `-- name: DeleteMailingList :exec
-DELETE
-FROM mailing_lists
-WHERE id = $1
-`
-
-func (q *Queries) DeleteMailingList(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, deleteMailingList, id)
-	return err
-}
-
-const deleteTemplate = `-- name: DeleteTemplate :exec
-DELETE
-FROM templates
-WHERE id = $1
-`
-
-func (q *Queries) DeleteTemplate(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, deleteTemplate, id)
-	return err
 }
 
 const getAllMailTasks = `-- name: GetAllMailTasks :many
@@ -402,8 +522,9 @@ func (q *Queries) GetAllMailTasks(ctx context.Context, arg GetAllMailTasksParams
 }
 
 const getAllMailingLists = `-- name: GetAllMailingLists :many
-SELECT id, name, description, created_at, updated_at
+SELECT id, name, description, created_at, updated_at, archived_at, archived_by
 FROM mailing_lists
+WHERE archived_at IS NULL
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
@@ -428,6 +549,48 @@ func (q *Queries) GetAllMailingLists(ctx context.Context, arg GetAllMailingLists
 			&i.Description,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ArchivedAt,
+			&i.ArchivedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getAllMailingListsIncludingArchived = `-- name: GetAllMailingListsIncludingArchived :many
+SELECT id, name, description, created_at, updated_at, archived_at, archived_by
+FROM mailing_lists
+ORDER BY created_at DESC
+LIMIT $1 OFFSET $2
+`
+
+type GetAllMailingListsIncludingArchivedParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+func (q *Queries) GetAllMailingListsIncludingArchived(ctx context.Context, arg GetAllMailingListsIncludingArchivedParams) ([]MailingList, error) {
+	rows, err := q.db.Query(ctx, getAllMailingListsIncludingArchived, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MailingList
+	for rows.Next() {
+		var i MailingList
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ArchivedAt,
+			&i.ArchivedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -440,8 +603,9 @@ func (q *Queries) GetAllMailingLists(ctx context.Context, arg GetAllMailingLists
 }
 
 const getAllTemplates = `-- name: GetAllTemplates :many
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by
 FROM templates
+WHERE archived_at IS NULL
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
@@ -469,6 +633,136 @@ func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Subject,
+			&i.ArchivedAt,
+			&i.ArchivedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getAllTemplatesIncludingArchived = `-- name: GetAllTemplatesIncludingArchived :many
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by
+FROM templates
+ORDER BY created_at DESC
+LIMIT $1 OFFSET $2
+`
+
+type GetAllTemplatesIncludingArchivedParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+func (q *Queries) GetAllTemplatesIncludingArchived(ctx context.Context, arg GetAllTemplatesIncludingArchivedParams) ([]Template, error) {
+	rows, err := q.db.Query(ctx, getAllTemplatesIncludingArchived, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Template
+	for rows.Next() {
+		var i Template
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.HtmlContent,
+			&i.PlainTextContent,
+			&i.ReactEmailContent,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Subject,
+			&i.ArchivedAt,
+			&i.ArchivedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getArchivedMailingLists = `-- name: GetArchivedMailingLists :many
+SELECT id, name, description, created_at, updated_at, archived_at, archived_by
+FROM mailing_lists
+WHERE archived_at IS NOT NULL
+ORDER BY archived_at DESC
+LIMIT $1 OFFSET $2
+`
+
+type GetArchivedMailingListsParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+func (q *Queries) GetArchivedMailingLists(ctx context.Context, arg GetArchivedMailingListsParams) ([]MailingList, error) {
+	rows, err := q.db.Query(ctx, getArchivedMailingLists, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MailingList
+	for rows.Next() {
+		var i MailingList
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ArchivedAt,
+			&i.ArchivedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getArchivedTemplates = `-- name: GetArchivedTemplates :many
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by
+FROM templates
+WHERE archived_at IS NOT NULL
+ORDER BY archived_at DESC
+LIMIT $1 OFFSET $2
+`
+
+type GetArchivedTemplatesParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+func (q *Queries) GetArchivedTemplates(ctx context.Context, arg GetArchivedTemplatesParams) ([]Template, error) {
+	rows, err := q.db.Query(ctx, getArchivedTemplates, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Template
+	for rows.Next() {
+		var i Template
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.HtmlContent,
+			&i.PlainTextContent,
+			&i.ReactEmailContent,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Subject,
+			&i.ArchivedAt,
+			&i.ArchivedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -568,9 +862,10 @@ func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTas
 }
 
 const getMailingListById = `-- name: GetMailingListById :one
-SELECT id, name, description, created_at, updated_at
+SELECT id, name, description, created_at, updated_at, archived_at, archived_by
 FROM mailing_lists
 WHERE id = $1
+  AND archived_at IS NULL
 `
 
 func (q *Queries) GetMailingListById(ctx context.Context, id uuid.UUID) (MailingList, error) {
@@ -582,6 +877,29 @@ func (q *Queries) GetMailingListById(ctx context.Context, id uuid.UUID) (Mailing
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+	)
+	return i, err
+}
+
+const getMailingListByIdIncludingArchived = `-- name: GetMailingListByIdIncludingArchived :one
+SELECT id, name, description, created_at, updated_at, archived_at, archived_by
+FROM mailing_lists
+WHERE id = $1
+`
+
+func (q *Queries) GetMailingListByIdIncludingArchived(ctx context.Context, id uuid.UUID) (MailingList, error) {
+	row := q.db.QueryRow(ctx, getMailingListByIdIncludingArchived, id)
+	var i MailingList
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
 	)
 	return i, err
 }
@@ -647,7 +965,9 @@ const getRecipientsByMailingListId = `-- name: GetRecipientsByMailingListId :man
 SELECT r.id, r.full_name, r.email, r.created_at, r.updated_at
 FROM recipients r
          JOIN mailing_list_recipients mlr ON r.id = mlr.recipient_id
+         JOIN mailing_lists ml ON ml.id = mlr.mail_list_id
 WHERE mlr.mail_list_id = $1
+  AND ml.archived_at IS NULL
 ORDER BY r.created_at DESC
 LIMIT $2 OFFSET $3
 `
@@ -685,9 +1005,10 @@ func (q *Queries) GetRecipientsByMailingListId(ctx context.Context, arg GetRecip
 }
 
 const getTemplateById = `-- name: GetTemplateById :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by
 FROM templates
 WHERE id = $1
+  AND archived_at IS NULL
 `
 
 func (q *Queries) GetTemplateById(ctx context.Context, id uuid.UUID) (Template, error) {
@@ -702,14 +1023,43 @@ func (q *Queries) GetTemplateById(ctx context.Context, id uuid.UUID) (Template, 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+	)
+	return i, err
+}
+
+const getTemplateByIdIncludingArchived = `-- name: GetTemplateByIdIncludingArchived :one
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by
+FROM templates
+WHERE id = $1
+`
+
+func (q *Queries) GetTemplateByIdIncludingArchived(ctx context.Context, id uuid.UUID) (Template, error) {
+	row := q.db.QueryRow(ctx, getTemplateByIdIncludingArchived, id)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
 	)
 	return i, err
 }
 
 const insertMailTask = `-- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables)
-VALUES ($1, $2, $3, $4)
-RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at
+SELECT $1, $2, $3, $4
+FROM templates
+WHERE templates.id = $2
+  AND archived_at IS NULL
+RETURNING mail_tasks.id, sent_by, template_id, mail_list_id, body_variables, created_at
 `
 
 type InsertMailTaskParams struct {
@@ -808,6 +1158,57 @@ func (q *Queries) ResetDeadJobs(ctx context.Context) error {
 	return err
 }
 
+const restoreMailingList = `-- name: RestoreMailingList :one
+UPDATE mailing_lists
+SET archived_at = NULL,
+    archived_by = NULL,
+    updated_at = CASE WHEN archived_at IS NULL THEN updated_at ELSE NOW() END
+WHERE id = $1
+RETURNING id, name, description, created_at, updated_at, archived_at, archived_by
+`
+
+func (q *Queries) RestoreMailingList(ctx context.Context, id uuid.UUID) (MailingList, error) {
+	row := q.db.QueryRow(ctx, restoreMailingList, id)
+	var i MailingList
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+	)
+	return i, err
+}
+
+const restoreTemplate = `-- name: RestoreTemplate :one
+UPDATE templates
+SET archived_at = NULL,
+    archived_by = NULL,
+    updated_at = CASE WHEN archived_at IS NULL THEN updated_at ELSE NOW() END
+WHERE id = $1
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by
+`
+
+func (q *Queries) RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, error) {
+	row := q.db.QueryRow(ctx, restoreTemplate, id)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+	)
+	return i, err
+}
+
 const setMailQueueItemFailed = `-- name: SetMailQueueItemFailed :exec
 UPDATE mail_queue
 SET status    = 'failed',
@@ -842,7 +1243,8 @@ UPDATE mailing_lists
 SET name       = $2,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, name, description, created_at, updated_at
+  AND archived_at IS NULL
+RETURNING id, name, description, created_at, updated_at, archived_at, archived_by
 `
 
 type UpdateMailingListParams struct {
@@ -859,6 +1261,8 @@ func (q *Queries) UpdateMailingList(ctx context.Context, arg UpdateMailingListPa
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
 	)
 	return i, err
 }
@@ -900,7 +1304,8 @@ SET name                = $2,
     react_email_content = $6,
     updated_at          = NOW()
 WHERE id = $1
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject
+  AND archived_at IS NULL
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by
 `
 
 type UpdateTemplateParams struct {
@@ -931,6 +1336,8 @@ func (q *Queries) UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
 	)
 	return i, err
 }

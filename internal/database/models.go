@@ -79,11 +79,13 @@ type MailTask struct {
 }
 
 type MailingList struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	Description *string   `json:"description"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          uuid.UUID  `json:"id"`
+	Name        string     `json:"name"`
+	Description *string    `json:"description"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	ArchivedAt  *time.Time `json:"archived_at"`
+	ArchivedBy  *string    `json:"archived_by"`
 }
 
 type MailingListRecipient struct {
@@ -100,12 +102,14 @@ type Recipient struct {
 }
 
 type Template struct {
-	ID                uuid.UUID `json:"id"`
-	Name              string    `json:"name"`
-	HtmlContent       string    `json:"html_content"`
-	PlainTextContent  string    `json:"plain_text_content"`
-	ReactEmailContent string    `json:"react_email_content"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
-	Subject           string    `json:"subject"`
+	ID                uuid.UUID  `json:"id"`
+	Name              string     `json:"name"`
+	HtmlContent       string     `json:"html_content"`
+	PlainTextContent  string     `json:"plain_text_content"`
+	ReactEmailContent string     `json:"react_email_content"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	Subject           string     `json:"subject"`
+	ArchivedAt        *time.Time `json:"archived_at"`
+	ArchivedBy        *string    `json:"archived_by"`
 }
