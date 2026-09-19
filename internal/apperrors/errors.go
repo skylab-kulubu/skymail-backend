@@ -9,6 +9,7 @@ var (
 	ErrStatusTooManyRequests  = New("server.too_many_requests", "Too many requests have been made in a short period of time.", fiber.StatusTooManyRequests)
 	ErrStatusInternalServer   = New("server.internal_server_error", "An internal server error occurred.", fiber.StatusInternalServerError)
 	ErrUnknownError           = New("server.unknown_error", "An unknown error occurred.", fiber.StatusInternalServerError)
+	ErrConflict               = New("server.conflict", "The resource conflicts with existing data.", fiber.StatusConflict)
 )
 
 var (

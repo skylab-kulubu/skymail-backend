@@ -53,6 +53,9 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 	if err := c.Bind().Body(&params); err != nil {
 		return err
 	}
+	if _, err := h.db.GetTemplateById(c.Context(), params.TemplateID); err != nil {
+		return err
+	}
 
 	bodyVarsJson, err := json.Marshal(params.BodyVariables)
 	if err != nil {
@@ -67,6 +70,9 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 	_, err = h.db.GetMailingListById(c.Context(), params.MailListID)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err := rejectArchivedInternalList(c.Context(), h.db, params.MailListID); err != nil {
 			return err
 		}
 
@@ -146,11 +152,11 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	}
 
 	taskID, err := h.mailer.EnqueueSingle(c.Context(), database.CreateSingleMailTaskParams{
-		SentBy:        sentBy,
-		TemplateID:    &params.TemplateID,
-		BodyVariables: bodyVarsJson,
-		Column4:       params.RecipientFullName,
-		Column5:       params.RecipientEmail,
+		SentBy:            sentBy,
+		TemplateID:        &params.TemplateID,
+		BodyVariables:     bodyVarsJson,
+		RecipientFullName: params.RecipientFullName,
+		RecipientEmail:    params.RecipientEmail,
 	})
 	if err != nil {
 		return err

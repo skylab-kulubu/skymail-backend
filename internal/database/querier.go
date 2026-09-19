@@ -12,6 +12,12 @@ import (
 
 type Querier interface {
 	AddRecipientToMailingList(ctx context.Context, arg AddRecipientToMailingListParams) (AddRecipientToMailingListRow, error)
+	ArchiveMailingList(ctx context.Context, arg ArchiveMailingListParams) (MailingList, error)
+	ArchiveTemplate(ctx context.Context, arg ArchiveTemplateParams) (Template, error)
+	CountAllMailingListsIncludingArchived(ctx context.Context) (int64, error)
+	CountAllTemplatesIncludingArchived(ctx context.Context) (int64, error)
+	CountArchivedMailingLists(ctx context.Context) (int64, error)
+	CountArchivedTemplates(ctx context.Context) (int64, error)
 	CountMailQueueItemsByTaskId(ctx context.Context, taskID uuid.UUID) (int64, error)
 	CountMailTasks(ctx context.Context) (int64, error)
 	CountMailingLists(ctx context.Context) (int64, error)
@@ -23,22 +29,28 @@ type Querier interface {
 	CreateMailingList(ctx context.Context, name string) (MailingList, error)
 	CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error)
 	CreateTemplate(ctx context.Context, arg CreateTemplateParams) (Template, error)
-	DeleteMailingList(ctx context.Context, id uuid.UUID) error
-	DeleteTemplate(ctx context.Context, id uuid.UUID) error
 	GetAllMailTasks(ctx context.Context, arg GetAllMailTasksParams) ([]GetAllMailTasksRow, error)
 	GetAllMailingLists(ctx context.Context, arg GetAllMailingListsParams) ([]MailingList, error)
+	GetAllMailingListsIncludingArchived(ctx context.Context, arg GetAllMailingListsIncludingArchivedParams) ([]MailingList, error)
 	GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams) ([]Template, error)
+	GetAllTemplatesIncludingArchived(ctx context.Context, arg GetAllTemplatesIncludingArchivedParams) ([]Template, error)
+	GetArchivedMailingLists(ctx context.Context, arg GetArchivedMailingListsParams) ([]MailingList, error)
+	GetArchivedTemplates(ctx context.Context, arg GetArchivedTemplatesParams) ([]Template, error)
 	GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueueItemsByTaskIdParams) ([]GetMailQueueItemsByTaskIdRow, error)
 	GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTaskByIdRow, error)
 	GetMailingListById(ctx context.Context, id uuid.UUID) (MailingList, error)
+	GetMailingListByIdIncludingArchived(ctx context.Context, id uuid.UUID) (MailingList, error)
 	GetRecipientByEmail(ctx context.Context, email string) (Recipient, error)
 	GetRecipients(ctx context.Context, arg GetRecipientsParams) ([]Recipient, error)
 	GetRecipientsByMailingListId(ctx context.Context, arg GetRecipientsByMailingListIdParams) ([]Recipient, error)
 	GetTemplateById(ctx context.Context, id uuid.UUID) (Template, error)
+	GetTemplateByIdIncludingArchived(ctx context.Context, id uuid.UUID) (Template, error)
 	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (MailTask, error)
 	ProcessQueueItems(ctx context.Context) ([]MailQueue, error)
 	RemoveRecipientFromMailingListByID(ctx context.Context, arg RemoveRecipientFromMailingListByIDParams) error
 	ResetDeadJobs(ctx context.Context) error
+	RestoreMailingList(ctx context.Context, id uuid.UUID) (MailingList, error)
+	RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, error)
 	SetMailQueueItemFailed(ctx context.Context, arg SetMailQueueItemFailedParams) error
 	SetMailQueueItemSent(ctx context.Context, id uuid.UUID) error
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
