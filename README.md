@@ -27,6 +27,13 @@ API documentation under `/docs` remains public. See
 [`docs/account-access-gate.md`](docs/account-access-gate.md) for the deployment
 contract and required configuration.
 
+## Veritabanı migration'ları
+
+Uygulama bekleyen migration'ları servis trafiğe açılmadan önce çalıştırabilir.
+Mevcut sürümlendirilmemiş kurulumun güvenli baseline işlemi ve gerekli environment
+değerleri için [`docs/database-migrations.md`](docs/database-migrations.md)
+belgesine bakın.
+
 
 ## Katkıda Bulunanlar 🧙‍♂️
 

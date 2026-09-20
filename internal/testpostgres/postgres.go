@@ -12,9 +12,21 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// Database is a disposable PostgreSQL fixture and its connection URL.
+type Database struct {
+	Pool *pgxpool.Pool
+	URL  string
+}
+
 // Start launches PostgreSQL and registers all cleanup with t. Tests are skipped
 // when Docker is unavailable.
 func Start(t testing.TB) *pgxpool.Pool {
+	t.Helper()
+	return StartDatabase(t).Pool
+}
+
+// StartDatabase launches PostgreSQL and returns both its pool and URL.
+func StartDatabase(t testing.TB) Database {
 	t.Helper()
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
@@ -51,7 +63,7 @@ func Start(t testing.TB) *pgxpool.Pool {
 		}
 		if poolErr == nil {
 			t.Cleanup(pool.Close)
-			return pool
+			return Database{Pool: pool, URL: databaseURL}
 		}
 		if pool != nil {
 			pool.Close()
