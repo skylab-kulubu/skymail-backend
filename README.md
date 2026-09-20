@@ -19,6 +19,14 @@
 * **Şablonlar:** React ve Tailwind ile email şablonları oluşturun.
 * **Mail Listeleri:** Kolayca toplu mail gönderin.
 
+## Health endpoints
+
+`GET /health` is process-only liveness. `GET /ready` additionally verifies the
+exact shared account-access contract when the access gate is in `enforce` mode.
+API documentation under `/docs` remains public. See
+[`docs/account-access-gate.md`](docs/account-access-gate.md) for the deployment
+contract and required configuration.
+
 
 ## Katkıda Bulunanlar 🧙‍♂️
 
@@ -27,4 +35,3 @@
 </a>
 
 <sup><sub>[contrib.rocks](https://contrib.rocks) ile yapıldı.</sub></sup>
-

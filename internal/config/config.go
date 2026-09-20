@@ -61,3 +61,10 @@ func bindEnvs(t reflect.Type) {
 		}
 	}
 }
+
+// Value returns a feature-specific value from the same environment/.env source
+// initialized by LoadConfig. It lets strict optional feature parsers preserve
+// the application's existing local .env behavior.
+func Value(key string) string {
+	return viper.GetString(key)
+}
