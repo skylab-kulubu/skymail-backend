@@ -5,15 +5,18 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/bytedance/sonic"
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/recover"
+	"github.com/gofiber/fiber/v3/middleware/requestid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 	"github.com/skylab-kulubu/skymail-backend/docs"
+	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/config"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
@@ -21,9 +24,12 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 	"github.com/yokeTH/gofiber-scalar/scalar/v3"
 )
+
+var swaggerDocument = sync.OnceValue(docs.SwaggerInfo.ReadDoc)
 
 //	@title			Skymail
 //	@version		1.0
@@ -52,6 +58,19 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	migrationConfig, err := migrations.ConfigFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid database migration configuration")
+	}
+	if migrationConfig.Mode == migrations.ModeApply {
+		version, migrationErr := migrations.Run(ctx, cfg.DatabaseURL, migrationConfig.BaselineVersion)
+		if migrationErr != nil {
+			log.Fatal().Err(migrationErr).Msg("database migration failed")
+		}
+		log.Info().Uint("version", version).Msg("database migrations applied")
+	} else {
+		log.Warn().Msg("database migrations disabled: DATABASE_MIGRATIONS_MODE is not apply")
+	}
 
 	conn, err := pgxpool.New(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -71,6 +90,19 @@ func main() {
 	})
 
 	authMiddleware := middlewares.NewAuthMiddleware("skymail", cfg.KeycloakRealmURL)
+	gateConfig, err := accessgate.ConfigFromEnv(config.Value, cfg.KeycloakRealmURL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid account access gate configuration")
+	}
+	var accountAccessGate accessgate.Reader
+	if gateConfig.Mode == accessgate.ModeEnforce {
+		redisClient, redisErr := accessgate.NewRedisClient(gateConfig)
+		if redisErr != nil {
+			log.Fatal().Err(redisErr).Msg("error configuring account access gate")
+		}
+		defer redisClient.Close()
+		accountAccessGate = accessgate.NewRedisGate(redisClient, gateConfig.OperationTimeout)
+	}
 
 	kcClient := keycloak.NewClient(cfg.KeycloakRealmURL, cfg.KeycloakServiceClientID, cfg.KeycloakServiceClientSecret)
 
@@ -87,33 +119,21 @@ func main() {
 		EnableIPValidation: true,
 	})
 
+	app.Use(serverRequestID())
 	app.Use(recover.New())
 
 	/*
-	app.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"},
-		AllowHeaders:     []string{"*", "Authorization", "Retry-After"},
-		ExposeHeaders:    []string{"X-Total-Count"},
-		AllowCredentials: false,
-	}))
+		app.Use(cors.New(cors.Config{
+			AllowOrigins:     []string{"*"},
+			AllowHeaders:     []string{"*", "Authorization", "Retry-After"},
+			ExposeHeaders:    []string{"X-Total-Count"},
+			AllowCredentials: false,
+		}))
 	*/
 
-	app.Get("/docs/openapi.json", func(c fiber.Ctx) error {
-		c.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSONCharsetUTF8)
-		return c.SendString(docs.SwaggerInfo.ReadDoc())
-	})
+	registerPublicRoutes(app, accountAccessGate)
 
-	app.Group("/docs").
-		Use(scalar.New(scalar.Config{
-			FileContentString: docs.SwaggerInfo.ReadDoc(),
-			Path:              "",
-			Title:             "Skymail API Documentation",
-		}))
-
-	api := app.Group("/v1")
-
-	api.Use(authMiddleware.Authenticate)
-	api.Use(authMiddleware.RequireAnyPermission("skymail:access"))
+	api := protectedAPI(app, authMiddleware, accountAccessGate)
 
 	templates := api.Group("/templates")
 	templates.Post("/", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.CreateTemplate)
@@ -151,6 +171,55 @@ func main() {
 	if err = app.Listen(addr); err != nil {
 		log.Fatal().Err(err).Msg("error starting server")
 	}
+}
+
+func serverRequestID() fiber.Handler {
+	assign := requestid.New()
+	return func(c fiber.Ctx) error {
+		// Correlation IDs are logged by the access gate. Generate them locally so
+		// an untrusted header cannot inject identity data into security logs.
+		c.Request().Header.Del(fiber.HeaderXRequestID)
+		return assign(c)
+	}
+}
+
+func registerPublicRoutes(app *fiber.App, gate accessgate.Reader) {
+	document := swaggerDocument()
+	app.Get("/health", func(c fiber.Ctx) error {
+		return c.SendStatus(fiber.StatusNoContent)
+	})
+	app.Get("/ready", func(c fiber.Ctx) error {
+		if gate != nil {
+			if err := gate.Ready(c.Context()); err != nil {
+				return unavailable(c)
+			}
+		}
+		return c.SendStatus(fiber.StatusNoContent)
+	})
+	app.Get("/docs/openapi.json", func(c fiber.Ctx) error {
+		c.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSONCharsetUTF8)
+		return c.SendString(document)
+	})
+	app.Group("/docs").
+		Use(scalar.New(scalar.Config{
+			FileContentString: document,
+			Path:              "",
+			Title:             "Skymail API Documentation",
+		}))
+}
+
+func protectedAPI(app *fiber.App, auth middlewares.AuthMiddleware, gate accessgate.Reader) fiber.Router {
+	api := app.Group("/v1")
+	api.Use(auth.Authenticate)
+	api.Use(middlewares.AccountAccessGate(gate))
+	api.Use(auth.RequireAnyPermission("skymail:access"))
+	return api
+}
+
+func unavailable(c fiber.Ctx) error {
+	c.Set(fiber.HeaderCacheControl, "no-store")
+	c.Set(fiber.HeaderRetryAfter, "1")
+	return apperrors.ErrServiceUnavailable
 }
 
 func errorHandler(ctx fiber.Ctx, err error) error {
