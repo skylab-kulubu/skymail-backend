@@ -24,6 +24,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 	"github.com/yokeTH/gofiber-scalar/scalar/v3"
 )
@@ -56,6 +57,19 @@ func main() {
 	cfg, err := config.LoadConfig(vld)
 	if err != nil {
 		panic(err)
+	}
+	migrationConfig, err := migrations.ConfigFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid database migration configuration")
+	}
+	if migrationConfig.Mode == migrations.ModeApply {
+		version, migrationErr := migrations.Run(ctx, cfg.DatabaseURL, migrationConfig.BaselineVersion)
+		if migrationErr != nil {
+			log.Fatal().Err(migrationErr).Msg("database migration failed")
+		}
+		log.Info().Uint("version", version).Msg("database migrations applied")
+	} else {
+		log.Warn().Msg("database migrations disabled: DATABASE_MIGRATIONS_MODE is not apply")
 	}
 
 	conn, err := pgxpool.New(ctx, cfg.DatabaseURL)
