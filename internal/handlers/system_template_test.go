@@ -243,3 +243,45 @@ func TestUpsertByKeyIsIdempotentAndUnarchives(t *testing.T) {
 		t.Fatalf("reseed left the template archived: %v", err)
 	}
 }
+
+// core sends welcome and certificate mail by uuid and never looks at the
+// response — internal/mail/mail.go and certificate.go both discard it — so if
+// the template that SKYMAIL_WELCOME_TEMPLATE_ID or SKYMAIL_CERTIFICATE_TEMPLATE_ID
+// points at is archived, the mail stops with nothing to see. This pins what the
+// real mailer does in that case: it refuses and writes no task.
+func TestEnqueueSingleRefusesArchivedTemplate(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	ctx := context.Background()
+
+	template, err := db.CreateTemplate(ctx, database.CreateTemplateParams{
+		Name: "Katılım Sertifikası", Subject: "Katılım sertifikan hazır",
+		HtmlContent: "<p>{{.EventName}}</p>", PlainTextContent: "{{.EventName}}", ReactEmailContent: "{}",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ArchiveTemplate(ctx, database.ArchiveTemplateParams{ID: template.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	realMailer := mailer.NewMailer(db, mailer.SMTPConfig{})
+	taskID, err := realMailer.EnqueueSingle(ctx, database.CreateSingleMailTaskParams{
+		SentBy:            "31ef736f-72da-4a40-8791-d523199cf9f0",
+		TemplateID:        &template.ID,
+		BodyVariables:     []byte(`{"EventName":"GECEKODU 2026"}`),
+		RecipientFullName: "SKY LAB Üyesi",
+		RecipientEmail:    "uye@yildizskylab.com",
+	})
+	if err == nil {
+		t.Fatalf("archived template enqueued a send (task %s)", taskID)
+	}
+
+	var tasks int64
+	tasks, err = db.CountMailTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tasks != 0 {
+		t.Fatalf("mail_tasks = %d, want 0", tasks)
+	}
+}
