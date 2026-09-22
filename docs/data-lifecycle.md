@@ -25,6 +25,11 @@ not physically remove them.
 Archive metadata is recorded as `archived_at` and `archived_by`. The actor is
 the authenticated Keycloak subject when available.
 
+Every write to a template's content records a Mail template version
+(`template_versions`), and versions are never deleted. Archiving and restoring
+a template changes only the row; its versions stay readable through
+`GET /v1/templates/{id}/versions` whether it is archived or not.
+
 ## Retention boundaries
 
 Archiving a template or list preserves `mail_tasks`, `mail_queue`, and mailing

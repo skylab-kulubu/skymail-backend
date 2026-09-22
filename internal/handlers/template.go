@@ -44,6 +44,8 @@ type TemplateHandler interface {
 	RestoreTemplate(c fiber.Ctx) error
 	GetTemplateByKey(c fiber.Ctx) error
 	UpsertTemplateByKey(c fiber.Ctx) error
+	ListTemplateVersions(c fiber.Ctx) error
+	GetTemplateVersion(c fiber.Ctx) error
 }
 
 type templateHandlerImpl struct {
@@ -76,7 +78,7 @@ func getPaginationParams(c fiber.Ctx) (int32, int32) {
 // CreateTemplate godoc
 //
 //	@Summary		Create a new email template
-//	@Description	Create a new email template with the provided name, HTML content, and plain text content.
+//	@Description	Create a new email template with the provided name, HTML content, and plain text content. Records the content as the template's first version: an operator's, published at once.
 //	@Tags			Templates
 //	@Accept			json
 //	@Produce		json
@@ -92,13 +94,15 @@ func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
 		return err
 	}
 
-	template, err := h.db.CreateTemplate(c.Context(), database.CreateTemplateParams{
-		Name:              params.Name,
-		Subject:           params.Subject,
-		HtmlContent:       params.HTMLContent,
-		PlainTextContent:  params.PlainTextContent,
-		ReactEmailContent: params.ReactEmailContent,
-		Key:               params.Key,
+	template, err := h.db.PublishTemplateWrite(c.Context(), versionAuthor(c, database.TemplateAuthorKindOperator), func(q *database.Queries) (database.Template, error) {
+		return q.CreateTemplate(c.Context(), database.CreateTemplateParams{
+			Name:              params.Name,
+			Subject:           params.Subject,
+			HtmlContent:       params.HTMLContent,
+			PlainTextContent:  params.PlainTextContent,
+			ReactEmailContent: params.ReactEmailContent,
+			Key:               params.Key,
+		})
 	})
 	if err != nil {
 		return err
@@ -185,7 +189,7 @@ func (h *templateHandlerImpl) GetTemplate(c fiber.Ctx) error {
 // UpdateTemplate godoc
 //
 //	@Summary		Update an email template
-//	@Description	Update an existing email template with the provided ID and details.
+//	@Description	Update an existing email template with the provided ID and details. Records the content the template ends up with as an operator's version, published at once.
 //	@Tags			Templates
 //	@Accept			json
 //	@Produce		json
@@ -222,14 +226,18 @@ func (h *templateHandlerImpl) UpdateTemplate(c fiber.Ctx) error {
 		key = existing.Key
 	}
 
-	template, err := h.db.UpdateTemplate(c.Context(), database.UpdateTemplateParams{
-		ID:                id,
-		Name:              params.Name,
-		Subject:           params.Subject,
-		HtmlContent:       params.HTMLContent,
-		PlainTextContent:  params.PlainTextContent,
-		ReactEmailContent: params.ReactEmailContent,
-		Key:               key,
+	// The old panel has no drafts: its edit is an operator's version, published
+	// at once, as its saves always went straight to live mail.
+	template, err := h.db.PublishTemplateWrite(c.Context(), versionAuthor(c, database.TemplateAuthorKindOperator), func(q *database.Queries) (database.Template, error) {
+		return q.UpdateTemplate(c.Context(), database.UpdateTemplateParams{
+			ID:                id,
+			Name:              params.Name,
+			Subject:           params.Subject,
+			HtmlContent:       params.HTMLContent,
+			PlainTextContent:  params.PlainTextContent,
+			ReactEmailContent: params.ReactEmailContent,
+			Key:               key,
+		})
 	})
 	if err != nil {
 		return err
@@ -297,6 +305,16 @@ func (h *templateHandlerImpl) RestoreTemplate(c fiber.Ctx) error {
 	return c.JSON(template)
 }
 
+// versionAuthor is who a request writes a Mail template version as: the
+// subject and name of its token, under the kind of writer the route serves.
+func versionAuthor(c fiber.Ctx, kind database.TemplateAuthorKind) database.VersionAuthor {
+	return database.VersionAuthor{
+		Kind: kind,
+		Sub:  lifecycleActor(c.Locals("user_id")),
+		Name: lifecycleActor(c.Locals("user_name")),
+	}
+}
+
 func sameKey(a, b *string) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -331,7 +349,7 @@ func (h *templateHandlerImpl) GetTemplateByKey(c fiber.Ctx) error {
 // UpsertTemplateByKey godoc
 //
 //	@Summary		Create or replace a template addressed by key
-//	@Description	Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind.
+//	@Description	Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once.
 //	@Tags			Templates
 //	@Accept			json
 //	@Produce		json
@@ -355,14 +373,18 @@ func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 		return err
 	}
 
-	template, err := h.db.UpsertTemplateByKey(c.Context(), database.UpsertTemplateByKeyParams{
-		Key:               key,
-		Name:              params.Name,
-		Subject:           params.Subject,
-		HtmlContent:       params.HTMLContent,
-		PlainTextContent:  params.PlainTextContent,
-		ReactEmailContent: params.ReactEmailContent,
-		System:            params.System,
+	// A Template seed's version is published at once. It is taken from the row
+	// the upsert leaves, so a subject the upsert kept is the subject recorded.
+	template, err := h.db.PublishTemplateWrite(c.Context(), versionAuthor(c, database.TemplateAuthorKindTemplateSeed), func(q *database.Queries) (database.Template, error) {
+		return q.UpsertTemplateByKey(c.Context(), database.UpsertTemplateByKeyParams{
+			Key:               key,
+			Name:              params.Name,
+			Subject:           params.Subject,
+			HtmlContent:       params.HTMLContent,
+			PlainTextContent:  params.PlainTextContent,
+			ReactEmailContent: params.ReactEmailContent,
+			System:            params.System,
+		})
 	})
 	if err != nil {
 		return err

@@ -149,15 +149,7 @@ func main() {
 
 	api := protectedAPI(app, authMiddleware, accountAccessGate)
 
-	templates := api.Group("/templates")
-	templates.Post("/", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.CreateTemplate)
-	templates.Get("/", authMiddleware.RequireAnyPermission("skymail:templates:read"), templateHandler.GetTemplates)
-	templates.Get("/:id", authMiddleware.RequireAnyPermission("skymail:templates:read"), templateHandler.GetTemplate)
-	templates.Patch("/:id", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.UpdateTemplate)
-	templates.Delete("/:id", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.DeleteTemplate)
-	templates.Get("/by-key/:key", authMiddleware.RequireAnyPermission("skymail:templates:read"), templateHandler.GetTemplateByKey)
-	templates.Put("/by-key/:key", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.UpsertTemplateByKey)
-	templates.Post("/:id/restore", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.RestoreTemplate)
+	registerTemplateRoutes(api, authMiddleware, templateHandler)
 
 	lists := api.Group("/mailing_lists")
 	lists.Post("/", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.CreateList)
@@ -182,6 +174,20 @@ func main() {
 	if err = app.Listen(addr); err != nil {
 		log.Fatal().Err(err).Msg("error starting server")
 	}
+}
+
+func registerTemplateRoutes(api fiber.Router, auth middlewares.AuthMiddleware, template handlers.TemplateHandler) {
+	templates := api.Group("/templates")
+	templates.Post("/", auth.RequireAnyPermission("skymail:templates:write"), template.CreateTemplate)
+	templates.Get("/", auth.RequireAnyPermission("skymail:templates:read"), template.GetTemplates)
+	templates.Get("/:id", auth.RequireAnyPermission("skymail:templates:read"), template.GetTemplate)
+	templates.Patch("/:id", auth.RequireAnyPermission("skymail:templates:write"), template.UpdateTemplate)
+	templates.Delete("/:id", auth.RequireAnyPermission("skymail:templates:write"), template.DeleteTemplate)
+	templates.Get("/by-key/:key", auth.RequireAnyPermission("skymail:templates:read"), template.GetTemplateByKey)
+	templates.Put("/by-key/:key", auth.RequireAnyPermission("skymail:templates:write"), template.UpsertTemplateByKey)
+	templates.Post("/:id/restore", auth.RequireAnyPermission("skymail:templates:write"), template.RestoreTemplate)
+	templates.Get("/:id/versions", auth.RequireAnyPermission("skymail:templates:read"), template.ListTemplateVersions)
+	templates.Get("/:id/versions/:versionId", auth.RequireAnyPermission("skymail:templates:read"), template.GetTemplateVersion)
 }
 
 func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, mail handlers.MailHandler) {

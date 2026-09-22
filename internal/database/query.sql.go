@@ -100,7 +100,7 @@ SET archived_by = CASE
     updated_at = CASE WHEN archived_at IS NULL THEN NOW() ELSE updated_at END
 WHERE id = $2
   AND system = false
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
 `
 
 type ArchiveTemplateParams struct {
@@ -124,6 +124,7 @@ func (q *Queries) ArchiveTemplate(ctx context.Context, arg ArchiveTemplateParams
 		&i.ArchivedBy,
 		&i.Key,
 		&i.System,
+		&i.PublishedVersionID,
 	)
 	return i, err
 }
@@ -306,6 +307,19 @@ WHERE mlr.mail_list_id = $1
 
 func (q *Queries) CountRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, countRecipientsByMailingListId, mailListID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countTemplateVersions = `-- name: CountTemplateVersions :one
+SELECT count(*)
+FROM template_versions
+WHERE template_id = $1
+`
+
+func (q *Queries) CountTemplateVersions(ctx context.Context, templateID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countTemplateVersions, templateID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -500,7 +514,7 @@ func (q *Queries) CreateSingleMailTask(ctx context.Context, arg CreateSingleMail
 const createTemplate = `-- name: CreateTemplate :one
 INSERT INTO templates (name, subject, html_content, plain_text_content, react_email_content, key)
 VALUES ($1, $2, $3, $4, $5, $6::text)
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
 `
 
 type CreateTemplateParams struct {
@@ -535,6 +549,7 @@ func (q *Queries) CreateTemplate(ctx context.Context, arg CreateTemplateParams) 
 		&i.ArchivedBy,
 		&i.Key,
 		&i.System,
+		&i.PublishedVersionID,
 	)
 	return i, err
 }
@@ -621,7 +636,7 @@ func (q *Queries) GetAllMailingListsIncludingArchived(ctx context.Context, arg G
 }
 
 const getAllTemplates = `-- name: GetAllTemplates :many
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
 FROM templates
 WHERE archived_at IS NULL
 ORDER BY created_at DESC
@@ -655,6 +670,7 @@ func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams
 			&i.ArchivedBy,
 			&i.Key,
 			&i.System,
+			&i.PublishedVersionID,
 		); err != nil {
 			return nil, err
 		}
@@ -667,7 +683,7 @@ func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams
 }
 
 const getAllTemplatesIncludingArchived = `-- name: GetAllTemplatesIncludingArchived :many
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
 FROM templates
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
@@ -700,6 +716,7 @@ func (q *Queries) GetAllTemplatesIncludingArchived(ctx context.Context, arg GetA
 			&i.ArchivedBy,
 			&i.Key,
 			&i.System,
+			&i.PublishedVersionID,
 		); err != nil {
 			return nil, err
 		}
@@ -753,7 +770,7 @@ func (q *Queries) GetArchivedMailingLists(ctx context.Context, arg GetArchivedMa
 }
 
 const getArchivedTemplates = `-- name: GetArchivedTemplates :many
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
 FROM templates
 WHERE archived_at IS NOT NULL
 ORDER BY archived_at DESC
@@ -787,6 +804,7 @@ func (q *Queries) GetArchivedTemplates(ctx context.Context, arg GetArchivedTempl
 			&i.ArchivedBy,
 			&i.Key,
 			&i.System,
+			&i.PublishedVersionID,
 		); err != nil {
 			return nil, err
 		}
@@ -1098,7 +1116,7 @@ func (q *Queries) GetRecipientsByMailingListId(ctx context.Context, arg GetRecip
 }
 
 const getTemplateById = `-- name: GetTemplateById :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
 FROM templates
 WHERE id = $1
   AND archived_at IS NULL
@@ -1120,12 +1138,13 @@ func (q *Queries) GetTemplateById(ctx context.Context, id uuid.UUID) (Template, 
 		&i.ArchivedBy,
 		&i.Key,
 		&i.System,
+		&i.PublishedVersionID,
 	)
 	return i, err
 }
 
 const getTemplateByIdIncludingArchived = `-- name: GetTemplateByIdIncludingArchived :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
 FROM templates
 WHERE id = $1
 `
@@ -1146,12 +1165,13 @@ func (q *Queries) GetTemplateByIdIncludingArchived(ctx context.Context, id uuid.
 		&i.ArchivedBy,
 		&i.Key,
 		&i.System,
+		&i.PublishedVersionID,
 	)
 	return i, err
 }
 
 const getTemplateByKey = `-- name: GetTemplateByKey :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
 FROM templates
 WHERE key = $1
   AND archived_at IS NULL
@@ -1173,6 +1193,83 @@ func (q *Queries) GetTemplateByKey(ctx context.Context, key *string) (Template, 
 		&i.ArchivedBy,
 		&i.Key,
 		&i.System,
+		&i.PublishedVersionID,
+	)
+	return i, err
+}
+
+const getTemplateVersion = `-- name: GetTemplateVersion :one
+SELECT v.id,
+       v.template_id,
+       v.seq,
+       v.subject,
+       v.jsx_source,
+       v.visual_source,
+       v.html_source,
+       v.main_mode,
+       v.html_content,
+       v.plain_text_content,
+       v.author_kind,
+       v.author_sub,
+       v.author_name,
+       v.created_at,
+       v.published_at,
+       v.base_version_id,
+       COALESCE(v.id = t.published_version_id, false)::boolean AS is_current
+FROM template_versions v
+         JOIN templates t ON t.id = v.template_id
+WHERE v.template_id = $1
+  AND v.id = $2
+`
+
+type GetTemplateVersionParams struct {
+	TemplateID uuid.UUID `json:"template_id"`
+	ID         uuid.UUID `json:"id"`
+}
+
+type GetTemplateVersionRow struct {
+	ID               uuid.UUID          `json:"id"`
+	TemplateID       uuid.UUID          `json:"template_id"`
+	Seq              int                `json:"seq"`
+	Subject          string             `json:"subject"`
+	JsxSource        *string            `json:"jsx_source"`
+	VisualSource     []byte             `json:"visual_source"`
+	HtmlSource       *string            `json:"html_source"`
+	MainMode         AuthoringMode      `json:"main_mode"`
+	HtmlContent      string             `json:"html_content"`
+	PlainTextContent string             `json:"plain_text_content"`
+	AuthorKind       TemplateAuthorKind `json:"author_kind"`
+	AuthorSub        *string            `json:"author_sub"`
+	AuthorName       *string            `json:"author_name"`
+	CreatedAt        time.Time          `json:"created_at"`
+	PublishedAt      *time.Time         `json:"published_at"`
+	BaseVersionID    *uuid.UUID         `json:"base_version_id"`
+	IsCurrent        bool               `json:"is_current"`
+}
+
+// One version of one template, whole. A version of another template is not
+// found here.
+func (q *Queries) GetTemplateVersion(ctx context.Context, arg GetTemplateVersionParams) (GetTemplateVersionRow, error) {
+	row := q.db.QueryRow(ctx, getTemplateVersion, arg.TemplateID, arg.ID)
+	var i GetTemplateVersionRow
+	err := row.Scan(
+		&i.ID,
+		&i.TemplateID,
+		&i.Seq,
+		&i.Subject,
+		&i.JsxSource,
+		&i.VisualSource,
+		&i.HtmlSource,
+		&i.MainMode,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.AuthorKind,
+		&i.AuthorSub,
+		&i.AuthorName,
+		&i.CreatedAt,
+		&i.PublishedAt,
+		&i.BaseVersionID,
+		&i.IsCurrent,
 	)
 	return i, err
 }
@@ -1331,6 +1428,82 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 	return items, nil
 }
 
+const listTemplateVersions = `-- name: ListTemplateVersions :many
+SELECT v.id,
+       v.template_id,
+       v.seq,
+       v.subject,
+       v.main_mode,
+       v.author_kind,
+       v.author_sub,
+       v.author_name,
+       v.created_at,
+       v.published_at,
+       v.base_version_id,
+       COALESCE(v.id = t.published_version_id, false)::boolean AS is_current
+FROM template_versions v
+         JOIN templates t ON t.id = v.template_id
+WHERE v.template_id = $1
+ORDER BY v.seq DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListTemplateVersionsParams struct {
+	TemplateID uuid.UUID `json:"template_id"`
+	Limit      int32     `json:"limit"`
+	Offset     int32     `json:"offset"`
+}
+
+type ListTemplateVersionsRow struct {
+	ID            uuid.UUID          `json:"id"`
+	TemplateID    uuid.UUID          `json:"template_id"`
+	Seq           int                `json:"seq"`
+	Subject       string             `json:"subject"`
+	MainMode      AuthoringMode      `json:"main_mode"`
+	AuthorKind    TemplateAuthorKind `json:"author_kind"`
+	AuthorSub     *string            `json:"author_sub"`
+	AuthorName    *string            `json:"author_name"`
+	CreatedAt     time.Time          `json:"created_at"`
+	PublishedAt   *time.Time         `json:"published_at"`
+	BaseVersionID *uuid.UUID         `json:"base_version_id"`
+	IsCurrent     bool               `json:"is_current"`
+}
+
+// A template's Mail template versions, newest first, without their sources or
+// render. is_current marks the one the row is a copy of, the one being sent.
+func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]ListTemplateVersionsRow, error) {
+	rows, err := q.db.Query(ctx, listTemplateVersions, arg.TemplateID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTemplateVersionsRow
+	for rows.Next() {
+		var i ListTemplateVersionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TemplateID,
+			&i.Seq,
+			&i.Subject,
+			&i.MainMode,
+			&i.AuthorKind,
+			&i.AuthorSub,
+			&i.AuthorName,
+			&i.CreatedAt,
+			&i.PublishedAt,
+			&i.BaseVersionID,
+			&i.IsCurrent,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const processQueueItems = `-- name: ProcessQueueItems :many
 UPDATE mail_queue
 SET status = 'processing'
@@ -1374,6 +1547,87 @@ func (q *Queries) ProcessQueueItems(ctx context.Context) ([]MailQueue, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const publishTemplateRowAsVersion = `-- name: PublishTemplateRowAsVersion :one
+WITH row_content AS (SELECT t.id,
+                            t.subject,
+                            t.html_content,
+                            t.plain_text_content,
+                            t.published_version_id,
+                            template_jsx_source(t.react_email_content) AS jsx_source
+                     FROM templates t
+                     WHERE t.id = $1),
+     version AS (
+         INSERT INTO template_versions (template_id, seq, subject, jsx_source, html_source, main_mode,
+                                        html_content, plain_text_content, author_kind, author_sub, author_name,
+                                        published_at, base_version_id)
+             SELECT r.id,
+                    COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = r.id), 0) + 1,
+                    r.subject,
+                    r.jsx_source,
+                    CASE WHEN r.jsx_source IS NULL THEN r.html_content END,
+                    CASE WHEN r.jsx_source IS NULL THEN 'html' ELSE 'jsx' END::authoring_mode,
+                    r.html_content,
+                    r.plain_text_content,
+                    $2::template_author_kind,
+                    $3::text,
+                    $4::text,
+                    NOW(),
+                    r.published_version_id
+             FROM row_content r
+             RETURNING id, template_id)
+UPDATE templates t
+SET published_version_id = version.id
+FROM version
+WHERE t.id = version.template_id
+RETURNING t.id, t.name, t.html_content, t.plain_text_content, t.react_email_content, t.created_at, t.updated_at, t.subject, t.archived_at, t.archived_by, t.key, t.system, t.published_version_id
+`
+
+type PublishTemplateRowAsVersionParams struct {
+	TemplateID uuid.UUID          `json:"template_id"`
+	AuthorKind TemplateAuthorKind `json:"author_kind"`
+	AuthorSub  *string            `json:"author_sub"`
+	AuthorName *string            `json:"author_name"`
+}
+
+// Records the content a template row now holds as a new Mail template version,
+// published at once, and makes the row a copy of it. This is the expand step
+// for the writers that still write the row directly — the old panel's create
+// and edit, and the Template seed's by-key upsert: each runs this after its
+// row write, in the same transaction, so the version is what the row ended up
+// with (a subject the upsert kept included), not what the request asked for.
+//
+// Those writers send one body, JSX in react_email_content. template_jsx_source
+// decides whether that is a JSX source; when it is not — the seed's pointer
+// comment, or nothing — the Main source is HTML and it is html_content. The
+// version is numbered after the template's last one; the row write before it
+// holds the row's lock, so two writers cannot take the same number. Its base
+// is the version the row was a copy of until now.
+func (q *Queries) PublishTemplateRowAsVersion(ctx context.Context, arg PublishTemplateRowAsVersionParams) (Template, error) {
+	row := q.db.QueryRow(ctx, publishTemplateRowAsVersion,
+		arg.TemplateID,
+		arg.AuthorKind,
+		arg.AuthorSub,
+		arg.AuthorName,
+	)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.Key,
+		&i.System,
+		&i.PublishedVersionID,
+	)
+	return i, err
 }
 
 const removeRecipientFromMailingListByID = `-- name: RemoveRecipientFromMailingListByID :exec
@@ -1457,7 +1711,7 @@ SET archived_at = NULL,
     archived_by = NULL,
     updated_at = CASE WHEN archived_at IS NULL THEN updated_at ELSE NOW() END
 WHERE id = $1
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
 `
 
 func (q *Queries) RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, error) {
@@ -1476,6 +1730,7 @@ func (q *Queries) RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, 
 		&i.ArchivedBy,
 		&i.Key,
 		&i.System,
+		&i.PublishedVersionID,
 	)
 	return i, err
 }
@@ -1578,7 +1833,7 @@ SET name                = $2,
     updated_at          = NOW()
 WHERE id = $1
   AND archived_at IS NULL
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
 `
 
 type UpdateTemplateParams struct {
@@ -1615,6 +1870,7 @@ func (q *Queries) UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) 
 		&i.ArchivedBy,
 		&i.Key,
 		&i.System,
+		&i.PublishedVersionID,
 	)
 	return i, err
 }
@@ -1637,7 +1893,7 @@ ON CONFLICT (key) DO UPDATE
         archived_at         = NULL,
         archived_by         = NULL,
         updated_at          = NOW()
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
 `
 
 type UpsertTemplateByKeyParams struct {
@@ -1680,6 +1936,7 @@ func (q *Queries) UpsertTemplateByKey(ctx context.Context, arg UpsertTemplateByK
 		&i.ArchivedBy,
 		&i.Key,
 		&i.System,
+		&i.PublishedVersionID,
 	)
 	return i, err
 }

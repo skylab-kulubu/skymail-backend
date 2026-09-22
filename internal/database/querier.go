@@ -28,6 +28,7 @@ type Querier interface {
 	CountMailingLists(ctx context.Context) (int64, error)
 	CountRecipients(ctx context.Context) (int64, error)
 	CountRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) (int64, error)
+	CountTemplateVersions(ctx context.Context, templateID uuid.UUID) (int64, error)
 	CountTemplates(ctx context.Context) (int64, error)
 	CreateMailQueueItems(ctx context.Context, arg []CreateMailQueueItemsParams) (int64, error)
 	CreateMailTask(ctx context.Context, arg CreateMailTaskParams) ([]CreateMailTaskRow, error)
@@ -62,6 +63,9 @@ type Querier interface {
 	GetTemplateById(ctx context.Context, id uuid.UUID) (Template, error)
 	GetTemplateByIdIncludingArchived(ctx context.Context, id uuid.UUID) (Template, error)
 	GetTemplateByKey(ctx context.Context, key *string) (Template, error)
+	// One version of one template, whole. A version of another template is not
+	// found here.
+	GetTemplateVersion(ctx context.Context, arg GetTemplateVersionParams) (GetTemplateVersionRow, error)
 	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (MailTask, error)
 	// A send as every screen shows it — the home screen, the send list and a
 	// send's own page: the task, the template it used, who it went to, its status
@@ -69,7 +73,24 @@ type Querier interface {
 	// lists every send and a NULL status every status. The page is cut first so
 	// only its rows are counted.
 	ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error)
+	// A template's Mail template versions, newest first, without their sources or
+	// render. is_current marks the one the row is a copy of, the one being sent.
+	ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]ListTemplateVersionsRow, error)
 	ProcessQueueItems(ctx context.Context) ([]MailQueue, error)
+	// Records the content a template row now holds as a new Mail template version,
+	// published at once, and makes the row a copy of it. This is the expand step
+	// for the writers that still write the row directly — the old panel's create
+	// and edit, and the Template seed's by-key upsert: each runs this after its
+	// row write, in the same transaction, so the version is what the row ended up
+	// with (a subject the upsert kept included), not what the request asked for.
+	//
+	// Those writers send one body, JSX in react_email_content. template_jsx_source
+	// decides whether that is a JSX source; when it is not — the seed's pointer
+	// comment, or nothing — the Main source is HTML and it is html_content. The
+	// version is numbered after the template's last one; the row write before it
+	// holds the row's lock, so two writers cannot take the same number. Its base
+	// is the version the row was a copy of until now.
+	PublishTemplateRowAsVersion(ctx context.Context, arg PublishTemplateRowAsVersionParams) (Template, error)
 	RemoveRecipientFromMailingListByID(ctx context.Context, arg RemoveRecipientFromMailingListByIDParams) error
 	RescheduleMailQueueItem(ctx context.Context, arg RescheduleMailQueueItemParams) (int, error)
 	ResetDeadJobs(ctx context.Context) error

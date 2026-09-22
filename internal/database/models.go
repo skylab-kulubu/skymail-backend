@@ -12,6 +12,49 @@ import (
 	"github.com/google/uuid"
 )
 
+type AuthoringMode string
+
+const (
+	AuthoringModeJsx    AuthoringMode = "jsx"
+	AuthoringModeVisual AuthoringMode = "visual"
+	AuthoringModeHtml   AuthoringMode = "html"
+)
+
+func (e *AuthoringMode) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = AuthoringMode(s)
+	case string:
+		*e = AuthoringMode(s)
+	default:
+		return fmt.Errorf("unsupported scan type for AuthoringMode: %T", src)
+	}
+	return nil
+}
+
+type NullAuthoringMode struct {
+	AuthoringMode AuthoringMode `json:"authoring_mode"`
+	Valid         bool          `json:"valid"` // Valid is true if AuthoringMode is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullAuthoringMode) Scan(value interface{}) error {
+	if value == nil {
+		ns.AuthoringMode, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.AuthoringMode.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullAuthoringMode) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.AuthoringMode), nil
+}
+
 type MailQueueStatus string
 
 const (
@@ -54,6 +97,48 @@ func (ns NullMailQueueStatus) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.MailQueueStatus), nil
+}
+
+type TemplateAuthorKind string
+
+const (
+	TemplateAuthorKindOperator     TemplateAuthorKind = "operator"
+	TemplateAuthorKindTemplateSeed TemplateAuthorKind = "template_seed"
+)
+
+func (e *TemplateAuthorKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TemplateAuthorKind(s)
+	case string:
+		*e = TemplateAuthorKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TemplateAuthorKind: %T", src)
+	}
+	return nil
+}
+
+type NullTemplateAuthorKind struct {
+	TemplateAuthorKind TemplateAuthorKind `json:"template_author_kind"`
+	Valid              bool               `json:"valid"` // Valid is true if TemplateAuthorKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTemplateAuthorKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.TemplateAuthorKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TemplateAuthorKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTemplateAuthorKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TemplateAuthorKind), nil
 }
 
 type MailQueue struct {
@@ -104,16 +189,36 @@ type Recipient struct {
 }
 
 type Template struct {
-	ID                uuid.UUID  `json:"id"`
-	Name              string     `json:"name"`
-	HtmlContent       string     `json:"html_content"`
-	PlainTextContent  string     `json:"plain_text_content"`
-	ReactEmailContent string     `json:"react_email_content"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
-	Subject           string     `json:"subject"`
-	ArchivedAt        *time.Time `json:"archived_at"`
-	ArchivedBy        *string    `json:"archived_by"`
-	Key               *string    `json:"key"`
-	System            bool       `json:"system"`
+	ID                 uuid.UUID  `json:"id"`
+	Name               string     `json:"name"`
+	HtmlContent        string     `json:"html_content"`
+	PlainTextContent   string     `json:"plain_text_content"`
+	ReactEmailContent  string     `json:"react_email_content"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	Subject            string     `json:"subject"`
+	ArchivedAt         *time.Time `json:"archived_at"`
+	ArchivedBy         *string    `json:"archived_by"`
+	Key                *string    `json:"key"`
+	System             bool       `json:"system"`
+	PublishedVersionID *uuid.UUID `json:"-"`
+}
+
+type TemplateVersion struct {
+	ID               uuid.UUID          `json:"id"`
+	TemplateID       uuid.UUID          `json:"template_id"`
+	Seq              int                `json:"seq"`
+	Subject          string             `json:"subject"`
+	JsxSource        *string            `json:"jsx_source"`
+	VisualSource     []byte             `json:"visual_source"`
+	HtmlSource       *string            `json:"html_source"`
+	MainMode         AuthoringMode      `json:"main_mode"`
+	HtmlContent      string             `json:"html_content"`
+	PlainTextContent string             `json:"plain_text_content"`
+	AuthorKind       TemplateAuthorKind `json:"author_kind"`
+	AuthorSub        *string            `json:"author_sub"`
+	AuthorName       *string            `json:"author_name"`
+	CreatedAt        time.Time          `json:"created_at"`
+	PublishedAt      *time.Time         `json:"published_at"`
+	BaseVersionID    *uuid.UUID         `json:"base_version_id"`
 }

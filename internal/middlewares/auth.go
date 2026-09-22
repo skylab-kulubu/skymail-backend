@@ -24,8 +24,10 @@ type authMiddlewareImpl struct {
 }
 
 type userInfo struct {
-	ID             string `json:"sub"`
-	ResourceAccess map[string]struct {
+	ID                string `json:"sub"`
+	Name              string `json:"name"`
+	PreferredUsername string `json:"preferred_username"`
+	ResourceAccess    map[string]struct {
 		Roles []string `json:"roles"`
 	} `json:"resource_access"`
 }
@@ -105,7 +107,21 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) er
 
 	c.Locals("user_id", info.ID)
 	c.Locals("roles", roles)
+	if name := info.displayName(); name != "" {
+		c.Locals("user_name", name)
+	}
 	return c.Next()
+}
+
+// displayName is what a record written now calls the caller: a Mail template
+// version keeps it beside the subject, since there is no user directory to look
+// a subject up in later. A person's token carries their name; a service
+// account's — the Template seed's client — carries only its username.
+func (info userInfo) displayName() string {
+	if name := strings.TrimSpace(info.Name); name != "" {
+		return name
+	}
+	return strings.TrimSpace(info.PreferredUsername)
 }
 
 func rolesFromJWT(tokenStr, clientID string) []string {

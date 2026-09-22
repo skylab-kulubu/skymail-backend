@@ -114,6 +114,104 @@ WHERE id = $1
 RETURNING *;
 
 
+-- Records the content a template row now holds as a new Mail template version,
+-- published at once, and makes the row a copy of it. This is the expand step
+-- for the writers that still write the row directly — the old panel's create
+-- and edit, and the Template seed's by-key upsert: each runs this after its
+-- row write, in the same transaction, so the version is what the row ended up
+-- with (a subject the upsert kept included), not what the request asked for.
+--
+-- Those writers send one body, JSX in react_email_content. template_jsx_source
+-- decides whether that is a JSX source; when it is not — the seed's pointer
+-- comment, or nothing — the Main source is HTML and it is html_content. The
+-- version is numbered after the template's last one; the row write before it
+-- holds the row's lock, so two writers cannot take the same number. Its base
+-- is the version the row was a copy of until now.
+-- name: PublishTemplateRowAsVersion :one
+WITH row_content AS (SELECT t.id,
+                            t.subject,
+                            t.html_content,
+                            t.plain_text_content,
+                            t.published_version_id,
+                            template_jsx_source(t.react_email_content) AS jsx_source
+                     FROM templates t
+                     WHERE t.id = sqlc.arg(template_id)),
+     version AS (
+         INSERT INTO template_versions (template_id, seq, subject, jsx_source, html_source, main_mode,
+                                        html_content, plain_text_content, author_kind, author_sub, author_name,
+                                        published_at, base_version_id)
+             SELECT r.id,
+                    COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = r.id), 0) + 1,
+                    r.subject,
+                    r.jsx_source,
+                    CASE WHEN r.jsx_source IS NULL THEN r.html_content END,
+                    CASE WHEN r.jsx_source IS NULL THEN 'html' ELSE 'jsx' END::authoring_mode,
+                    r.html_content,
+                    r.plain_text_content,
+                    sqlc.arg(author_kind)::template_author_kind,
+                    sqlc.narg(author_sub)::text,
+                    sqlc.narg(author_name)::text,
+                    NOW(),
+                    r.published_version_id
+             FROM row_content r
+             RETURNING id, template_id)
+UPDATE templates t
+SET published_version_id = version.id
+FROM version
+WHERE t.id = version.template_id
+RETURNING t.*;
+
+-- A template's Mail template versions, newest first, without their sources or
+-- render. is_current marks the one the row is a copy of, the one being sent.
+-- name: ListTemplateVersions :many
+SELECT v.id,
+       v.template_id,
+       v.seq,
+       v.subject,
+       v.main_mode,
+       v.author_kind,
+       v.author_sub,
+       v.author_name,
+       v.created_at,
+       v.published_at,
+       v.base_version_id,
+       COALESCE(v.id = t.published_version_id, false)::boolean AS is_current
+FROM template_versions v
+         JOIN templates t ON t.id = v.template_id
+WHERE v.template_id = $1
+ORDER BY v.seq DESC
+LIMIT $2 OFFSET $3;
+
+-- name: CountTemplateVersions :one
+SELECT count(*)
+FROM template_versions
+WHERE template_id = $1;
+
+-- One version of one template, whole. A version of another template is not
+-- found here.
+-- name: GetTemplateVersion :one
+SELECT v.id,
+       v.template_id,
+       v.seq,
+       v.subject,
+       v.jsx_source,
+       v.visual_source,
+       v.html_source,
+       v.main_mode,
+       v.html_content,
+       v.plain_text_content,
+       v.author_kind,
+       v.author_sub,
+       v.author_name,
+       v.created_at,
+       v.published_at,
+       v.base_version_id,
+       COALESCE(v.id = t.published_version_id, false)::boolean AS is_current
+FROM template_versions v
+         JOIN templates t ON t.id = v.template_id
+WHERE v.template_id = sqlc.arg(template_id)
+  AND v.id = sqlc.arg(id);
+
 -- name: CreateMailingList :one
 INSERT INTO mailing_lists (name)
 VALUES ($1)
