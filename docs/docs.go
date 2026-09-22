@@ -133,6 +133,14 @@ const docTemplate = `{
                     "archived_by": {
                         "type": "string"
                     },
+                    "contract_required_variables": {
+                        "description": "Required variables from the sending service's contract, sorted. Written only by the Template seed; locked in the panel.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
                     "created_at": {
                         "type": "string"
                     },
@@ -147,6 +155,14 @@ const docTemplate = `{
                     },
                     "name": {
                         "type": "string"
+                    },
+                    "operator_required_variables": {
+                        "description": "Required variables operators marked, sorted. Never shares a name with contract_required_variables.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
                     },
                     "plain_text_content": {
                         "type": "string"
@@ -513,6 +529,19 @@ const docTemplate = `{
                 ],
                 "type": "object"
             },
+            "requests.AddRequiredVariable": {
+                "properties": {
+                    "name": {
+                        "description": "The variable, as the body reaches it with .Name.",
+                        "example": "EventUrl",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "name"
+                ],
+                "type": "object"
+            },
             "requests.CreateMailTask": {
                 "properties": {
                     "body_variables": {
@@ -640,6 +669,18 @@ const docTemplate = `{
             },
             "requests.UpsertTemplateByKey": {
                 "properties": {
+                    "contract_required_variables": {
+                        "description": "The Required variables the sending service's contract declares, which the body must keep referencing. They replace the template's contract set; a name among them leaves the operators' set. Leave the field out (or null) to keep the set the template has; send [] to clear it.",
+                        "example": [
+                            "link"
+                        ],
+                        "items": {
+                            "type": "string"
+                        },
+                        "maxItems": 50,
+                        "type": "array",
+                        "uniqueItems": false
+                    },
                     "html_content": {
                         "type": "string"
                     },
@@ -1797,7 +1838,7 @@ const docTemplate = `{
                 ]
             },
             "post": {
-                "description": "Create a new email template with the provided name, HTML content, and plain text content. Records the content as the template's first version: an operator's, published at once.",
+                "description": "Create a new email template with the provided name, HTML content, and plain text content. Records the content as the template's first version: an operator's, published at once. The HTML content must parse as a Go template the way the mailer parses it.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -1838,6 +1879,16 @@ const docTemplate = `{
                             }
                         },
                         "description": "Bad Request"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The HTML content does not parse (template.body_unparseable)"
                     },
                     "500": {
                         "content": {
@@ -1898,7 +1949,7 @@ const docTemplate = `{
                 ]
             },
             "put": {
-                "description": "Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once.",
+                "description": "Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once. Writes the contract Required variables when sent, and keeps them when not. The HTML content must parse as a Go template and reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.",
                 "parameters": [
                     {
                         "description": "Template key",
@@ -1950,6 +2001,16 @@ const docTemplate = `{
                             }
                         },
                         "description": "Bad Request"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The HTML content does not parse (template.body_unparseable) or drops a Required variable (template.required_variables_missing, params.missing names each with its set)"
                     },
                     "500": {
                         "content": {
@@ -2083,7 +2144,7 @@ const docTemplate = `{
                 ]
             },
             "patch": {
-                "description": "Update an existing email template with the provided ID and details. Records the content the template ends up with as an operator's version, published at once.",
+                "description": "Update an existing email template with the provided ID and details. Records the content the template ends up with as an operator's version, published at once. The HTML content must parse as a Go template and reference every Required variable of the template, or nothing is written.",
                 "parameters": [
                     {
                         "description": "Template ID",
@@ -2146,6 +2207,16 @@ const docTemplate = `{
                         },
                         "description": "Not Found"
                     },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The HTML content does not parse (template.body_unparseable) or drops a Required variable (template.required_variables_missing, params.missing names each with its set)"
+                    },
                     "500": {
                         "content": {
                             "application/json": {
@@ -2158,6 +2229,199 @@ const docTemplate = `{
                     }
                 },
                 "summary": "Update an email template",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/{id}/required-variables": {
+            "post": {
+                "description": "Adds a variable to the template's operator Required variables: from then on every save and publish must keep referencing it. The published body must reference it already — a Required variable is a promise about the mail being sent — counted as the save check counts (inside a conditional section counts; a comment, plain text, a range or with element's field, or index . do not). A variable the contract set holds is required already and stays the contract's; asking for one, or for one operators marked, changes nothing. Changes no version.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.AddRequiredVariable",
+                                        "summary": "variable",
+                                        "description": "The variable to require"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The variable to require",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/database.Template"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The name is not a variable name (validation.error)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such template in use: unknown or archived"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The published body does not reference the variable (template.required_variables_missing) or does not parse (template.body_unparseable)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Mark a variable of a template required",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/{id}/required-variables/{name}": {
+            "delete": {
+                "description": "Removes a variable from the template's operator Required variables. A contract variable — the sending service's, written by the Template seed — cannot be released here. Releasing a variable that is not required changes nothing. Changes no version.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Variable name",
+                        "in": "path",
+                        "name": "name",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/database.Template"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The name is not a variable name (template.invalid_variable_name)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such template in use: unknown or archived"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The variable is in the contract set (template.required_variable_in_contract, params.name)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Release a variable operators marked required",
                 "tags": [
                     "Templates"
                 ]

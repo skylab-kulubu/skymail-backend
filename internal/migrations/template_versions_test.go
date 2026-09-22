@@ -9,13 +9,16 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	dbmigrations "github.com/skylab-kulubu/skymail-backend/db/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
 	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
 )
 
 // The schema the template-version migration finds in production: every
 // migration before it.
 const beforeTemplateVersions = uint(20260922235000)
+
+// The template-version migration itself. The test goes up to it and down from
+// it by number, so migrations after it do not change what it looks at.
+const templateVersions = uint(20260923120000)
 
 // The seed's pointer comment, exactly as scripts/seed-templates.ts in
 // skymail-frontend writes it into react_email_content instead of the .tsx
@@ -151,7 +154,7 @@ func TestTemplateVersionMigrationGivesEveryTemplateOnePublishedFirstVersion(t *t
 	}
 	rowsBefore := templateRows(t, database)
 
-	if _, err := migrations.Run(ctx, database.URL, 0); err != nil {
+	if err := runner.Migrate(templateVersions); err != nil {
 		t.Fatal(err)
 	}
 
@@ -163,7 +166,7 @@ func TestTemplateVersionMigrationGivesEveryTemplateOnePublishedFirstVersion(t *t
 
 	// Down puts the schema back and leaves every row — the published copy the
 	// send path reads — as it was.
-	if err := runner.Steps(-1); err != nil {
+	if err := runner.Migrate(beforeTemplateVersions); err != nil {
 		t.Fatalf("down: %v", err)
 	}
 	for _, leftover := range []string{
@@ -186,7 +189,7 @@ func TestTemplateVersionMigrationGivesEveryTemplateOnePublishedFirstVersion(t *t
 	}
 
 	// And up again arrives at the same history.
-	if _, err := migrations.Run(ctx, database.URL, 0); err != nil {
+	if err := runner.Migrate(templateVersions); err != nil {
 		t.Fatalf("up again: %v", err)
 	}
 	assertOneFirstVersionPerTemplate(t, database)

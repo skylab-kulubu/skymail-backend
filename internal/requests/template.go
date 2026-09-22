@@ -27,4 +27,12 @@ type UpsertTemplateByKey struct {
 	PlainTextContent  string `json:"plain_text_content" validate:"required"`
 	ReactEmailContent string `json:"react_email_content" validate:"required"`
 	System            bool   `json:"system"`
+	// The Required variables the sending service's contract declares, which the body must keep referencing. They replace the template's contract set; a name among them leaves the operators' set. Leave the field out (or null) to keep the set the template has; send [] to clear it.
+	ContractRequiredVariables *[]string `json:"contract_required_variables" validate:"omitempty,max=50,dive,variablename" example:"link"`
+}
+
+// AddRequiredVariable is a variable an operator marks required.
+type AddRequiredVariable struct {
+	// The variable, as the body reaches it with .Name.
+	Name string `json:"name" validate:"required,variablename" example:"EventUrl"`
 }

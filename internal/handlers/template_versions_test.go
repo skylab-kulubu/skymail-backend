@@ -152,11 +152,13 @@ func storedVersions(t *testing.T, db *database.Store, templateID uuid.UUID) ([]s
 }
 
 // The fields a template is served with: the ones the old panel and core have
-// always read, and published_version_id beside them — the version the row is a
-// copy of, which the old panel ignores and the new editor starts a draft from.
+// always read, and beside them published_version_id — the version the row is a
+// copy of, which the old panel ignores and the new editor starts a draft from —
+// and the two Required variable sets, which the editor's panel shows.
 var templateFields = []string{
-	"archived_at", "archived_by", "created_at", "html_content", "id", "key", "name",
-	"plain_text_content", "published_version_id", "react_email_content", "subject", "system", "updated_at",
+	"archived_at", "archived_by", "contract_required_variables", "created_at", "html_content", "id", "key", "name",
+	"operator_required_variables", "plain_text_content", "published_version_id", "react_email_content", "subject",
+	"system", "updated_at",
 }
 
 func assertTemplateShape(t *testing.T, body []byte) {

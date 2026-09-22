@@ -18,7 +18,7 @@ import (
 // migrations.LegacyBaselineVersion, which is the one older schema a running
 // database may be adopted at — the two were the same number until templates
 // grew keys, and conflating them hid what each test was actually asserting.
-const latestMigrationVersion = uint(20260923120000)
+const latestMigrationVersion = uint(20260923200000)
 
 func TestRunAppliesAllMigrationsToFreshDatabase(t *testing.T) {
 	database := testpostgres.StartDatabase(t)

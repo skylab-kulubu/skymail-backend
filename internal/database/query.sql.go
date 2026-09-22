@@ -12,6 +12,52 @@ import (
 	"github.com/google/uuid"
 )
 
+const addOperatorRequiredVariable = `-- name: AddOperatorRequiredVariable :one
+UPDATE templates
+SET operator_required_variables = CASE
+                                      WHEN $1::text = ANY (contract_required_variables)
+                                          THEN operator_required_variables
+                                      ELSE ARRAY(SELECT DISTINCT n
+                                                 FROM unnest(array_append(operator_required_variables, $1::text)) AS n
+                                                 ORDER BY n)
+    END
+WHERE id = $2
+  AND archived_at IS NULL
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables
+`
+
+type AddOperatorRequiredVariableParams struct {
+	Name string    `json:"name"`
+	ID   uuid.UUID `json:"id"`
+}
+
+// Marks a variable of a template in use as required by operators. A name
+// already in either set changes nothing: one the contract declares is required
+// already, and stays the contract's. Takes the row's lock, so the caller can
+// check the body against the sets it returns before committing.
+func (q *Queries) AddOperatorRequiredVariable(ctx context.Context, arg AddOperatorRequiredVariableParams) (Template, error) {
+	row := q.db.QueryRow(ctx, addOperatorRequiredVariable, arg.Name, arg.ID)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.Key,
+		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+	)
+	return i, err
+}
+
 const addRecipientToMailingList = `-- name: AddRecipientToMailingList :one
 WITH target_list AS (
     SELECT mailing_lists.id
@@ -100,7 +146,7 @@ SET archived_by = CASE
     updated_at = CASE WHEN archived_at IS NULL THEN NOW() ELSE updated_at END
 WHERE id = $2
   AND system = false
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables
 `
 
 type ArchiveTemplateParams struct {
@@ -125,6 +171,8 @@ func (q *Queries) ArchiveTemplate(ctx context.Context, arg ArchiveTemplateParams
 		&i.Key,
 		&i.System,
 		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
 	)
 	return i, err
 }
@@ -514,7 +562,7 @@ func (q *Queries) CreateSingleMailTask(ctx context.Context, arg CreateSingleMail
 const createTemplate = `-- name: CreateTemplate :one
 INSERT INTO templates (name, subject, html_content, plain_text_content, react_email_content, key)
 VALUES ($1, $2, $3, $4, $5, $6::text)
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables
 `
 
 type CreateTemplateParams struct {
@@ -550,6 +598,8 @@ func (q *Queries) CreateTemplate(ctx context.Context, arg CreateTemplateParams) 
 		&i.Key,
 		&i.System,
 		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
 	)
 	return i, err
 }
@@ -636,7 +686,7 @@ func (q *Queries) GetAllMailingListsIncludingArchived(ctx context.Context, arg G
 }
 
 const getAllTemplates = `-- name: GetAllTemplates :many
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables
 FROM templates
 WHERE archived_at IS NULL
 ORDER BY created_at DESC
@@ -671,6 +721,8 @@ func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams
 			&i.Key,
 			&i.System,
 			&i.PublishedVersionID,
+			&i.ContractRequiredVariables,
+			&i.OperatorRequiredVariables,
 		); err != nil {
 			return nil, err
 		}
@@ -683,7 +735,7 @@ func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams
 }
 
 const getAllTemplatesIncludingArchived = `-- name: GetAllTemplatesIncludingArchived :many
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables
 FROM templates
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
@@ -717,6 +769,8 @@ func (q *Queries) GetAllTemplatesIncludingArchived(ctx context.Context, arg GetA
 			&i.Key,
 			&i.System,
 			&i.PublishedVersionID,
+			&i.ContractRequiredVariables,
+			&i.OperatorRequiredVariables,
 		); err != nil {
 			return nil, err
 		}
@@ -770,7 +824,7 @@ func (q *Queries) GetArchivedMailingLists(ctx context.Context, arg GetArchivedMa
 }
 
 const getArchivedTemplates = `-- name: GetArchivedTemplates :many
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables
 FROM templates
 WHERE archived_at IS NOT NULL
 ORDER BY archived_at DESC
@@ -805,6 +859,8 @@ func (q *Queries) GetArchivedTemplates(ctx context.Context, arg GetArchivedTempl
 			&i.Key,
 			&i.System,
 			&i.PublishedVersionID,
+			&i.ContractRequiredVariables,
+			&i.OperatorRequiredVariables,
 		); err != nil {
 			return nil, err
 		}
@@ -1116,7 +1172,7 @@ func (q *Queries) GetRecipientsByMailingListId(ctx context.Context, arg GetRecip
 }
 
 const getTemplateById = `-- name: GetTemplateById :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables
 FROM templates
 WHERE id = $1
   AND archived_at IS NULL
@@ -1139,12 +1195,14 @@ func (q *Queries) GetTemplateById(ctx context.Context, id uuid.UUID) (Template, 
 		&i.Key,
 		&i.System,
 		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
 	)
 	return i, err
 }
 
 const getTemplateByIdIncludingArchived = `-- name: GetTemplateByIdIncludingArchived :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables
 FROM templates
 WHERE id = $1
 `
@@ -1166,12 +1224,14 @@ func (q *Queries) GetTemplateByIdIncludingArchived(ctx context.Context, id uuid.
 		&i.Key,
 		&i.System,
 		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
 	)
 	return i, err
 }
 
 const getTemplateByKey = `-- name: GetTemplateByKey :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables
 FROM templates
 WHERE key = $1
   AND archived_at IS NULL
@@ -1194,6 +1254,8 @@ func (q *Queries) GetTemplateByKey(ctx context.Context, key *string) (Template, 
 		&i.Key,
 		&i.System,
 		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
 	)
 	return i, err
 }
@@ -1618,6 +1680,45 @@ func (q *Queries) RecordTemplateRowAsVersion(ctx context.Context, arg RecordTemp
 	return result.RowsAffected(), nil
 }
 
+const removeOperatorRequiredVariable = `-- name: RemoveOperatorRequiredVariable :one
+UPDATE templates
+SET operator_required_variables = array_remove(operator_required_variables, $1::text)
+WHERE id = $2
+  AND archived_at IS NULL
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables
+`
+
+type RemoveOperatorRequiredVariableParams struct {
+	Name string    `json:"name"`
+	ID   uuid.UUID `json:"id"`
+}
+
+// Releases a variable operators marked. It cannot release a contract one: the
+// sets never share a name, so a contract name is simply not in the operators'
+// set, and the caller sees it in the contract set it returns.
+func (q *Queries) RemoveOperatorRequiredVariable(ctx context.Context, arg RemoveOperatorRequiredVariableParams) (Template, error) {
+	row := q.db.QueryRow(ctx, removeOperatorRequiredVariable, arg.Name, arg.ID)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.Key,
+		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+	)
+	return i, err
+}
+
 const removeRecipientFromMailingListByID = `-- name: RemoveRecipientFromMailingListByID :exec
 DELETE
 FROM mailing_list_recipients
@@ -1699,7 +1800,7 @@ SET archived_at = NULL,
     archived_by = NULL,
     updated_at = CASE WHEN archived_at IS NULL THEN updated_at ELSE NOW() END
 WHERE id = $1
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables
 `
 
 func (q *Queries) RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, error) {
@@ -1719,6 +1820,8 @@ func (q *Queries) RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, 
 		&i.Key,
 		&i.System,
 		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
 	)
 	return i, err
 }
@@ -1821,7 +1924,7 @@ SET name                = $2,
     updated_at          = NOW()
 WHERE id = $1
   AND archived_at IS NULL
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables
 `
 
 type UpdateTemplateParams struct {
@@ -1859,39 +1962,55 @@ func (q *Queries) UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) 
 		&i.Key,
 		&i.System,
 		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
 	)
 	return i, err
 }
 
 const upsertTemplateByKey = `-- name: UpsertTemplateByKey :one
-INSERT INTO templates (key, name, subject, html_content, plain_text_content, react_email_content, system)
+INSERT INTO templates (key, name, subject, html_content, plain_text_content, react_email_content, system,
+                       contract_required_variables)
 VALUES ($1::text,
         $2::text,
         $3::text,
         $4::text,
         $5::text,
         $6::text,
-        $7::boolean)
+        $7::boolean,
+        COALESCE($8::text[], '{}'))
 ON CONFLICT (key) DO UPDATE
     SET name                = EXCLUDED.name,
         html_content        = EXCLUDED.html_content,
         plain_text_content  = EXCLUDED.plain_text_content,
         react_email_content = EXCLUDED.react_email_content,
         system              = EXCLUDED.system,
+        -- The contract set is the seed's, like the key: a seed that sends one
+        -- replaces it, a seed that sends none (NULL) leaves it. A name the
+        -- contract now declares leaves the operators' set, so the two never
+        -- share one and it shows as locked.
+        contract_required_variables = COALESCE($8::text[],
+                                               templates.contract_required_variables),
+        operator_required_variables = ARRAY(SELECT name
+                                            FROM unnest(templates.operator_required_variables) AS name
+                                            WHERE name <> ALL (COALESCE($8::text[],
+                                                                        templates.contract_required_variables))
+                                            ORDER BY name),
         archived_at         = NULL,
         archived_by         = NULL,
         updated_at          = NOW()
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables
 `
 
 type UpsertTemplateByKeyParams struct {
-	Key               string `json:"key"`
-	Name              string `json:"name"`
-	Subject           string `json:"subject"`
-	HtmlContent       string `json:"html_content"`
-	PlainTextContent  string `json:"plain_text_content"`
-	ReactEmailContent string `json:"react_email_content"`
-	System            bool   `json:"system"`
+	Key                       string   `json:"key"`
+	Name                      string   `json:"name"`
+	Subject                   string   `json:"subject"`
+	HtmlContent               string   `json:"html_content"`
+	PlainTextContent          string   `json:"plain_text_content"`
+	ReactEmailContent         string   `json:"react_email_content"`
+	System                    bool     `json:"system"`
+	ContractRequiredVariables []string `json:"contract_required_variables"`
 }
 
 // The seed owns a template's structure; an operator owns its subject. The repo
@@ -1909,6 +2028,7 @@ func (q *Queries) UpsertTemplateByKey(ctx context.Context, arg UpsertTemplateByK
 		arg.PlainTextContent,
 		arg.ReactEmailContent,
 		arg.System,
+		arg.ContractRequiredVariables,
 	)
 	var i Template
 	err := row.Scan(
@@ -1925,6 +2045,8 @@ func (q *Queries) UpsertTemplateByKey(ctx context.Context, arg UpsertTemplateByK
 		&i.Key,
 		&i.System,
 		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
 	)
 	return i, err
 }

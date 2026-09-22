@@ -188,6 +188,8 @@ func registerTemplateRoutes(api fiber.Router, auth middlewares.AuthMiddleware, t
 	templates.Post("/:id/restore", auth.RequireAnyPermission("skymail:templates:write"), template.RestoreTemplate)
 	templates.Get("/:id/versions", auth.RequireAnyPermission("skymail:templates:read"), template.ListTemplateVersions)
 	templates.Get("/:id/versions/:versionId", auth.RequireAnyPermission("skymail:templates:read"), template.GetTemplateVersion)
+	templates.Post("/:id/required-variables", auth.RequireAnyPermission("skymail:templates:write"), template.AddRequiredVariable)
+	templates.Delete("/:id/required-variables/:name", auth.RequireAnyPermission("skymail:templates:write"), template.RemoveRequiredVariable)
 }
 
 func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, mail handlers.MailHandler) {

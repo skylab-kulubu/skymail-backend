@@ -23,6 +23,17 @@ func IsTemplateKey(key string) bool {
 	return templateKeyPattern.MatchString(key)
 }
 
+// A Required variable is named as a body reaches it with .Name: letters,
+// digits and underscores, not starting with a digit. The
+// templates_required_variable_names check constraint holds the same shape;
+// this one makes a bad name a 400 rather than a 500.
+var variableNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+
+// IsVariableName reports whether a Required variable's name is well formed.
+func IsVariableName(name string) bool {
+	return variableNamePattern.MatchString(name)
+}
+
 type StructValidator interface {
 	Validate(out any) error
 }
@@ -44,6 +55,10 @@ func NewStructValidator() StructValidator {
 
 	_ = vld.RegisterValidation("templatekey", func(fl validator.FieldLevel) bool {
 		return IsTemplateKey(fl.Field().String())
+	})
+
+	_ = vld.RegisterValidation("variablename", func(fl validator.FieldLevel) bool {
+		return IsVariableName(fl.Field().String())
 	})
 
 	vld.RegisterTagNameFunc(func(fld reflect.StructField) string {
@@ -88,6 +103,8 @@ func getErrorCode(e validator.FieldError) string {
 		return "max_length"
 	case "templatekey":
 		return "invalid_template_key"
+	case "variablename":
+		return "invalid_variable_name"
 	default:
 		return "invalid"
 	}
