@@ -273,3 +273,66 @@ func TestReadinessIsProcessOnlyWhenGateIsOff(t *testing.T) {
 		t.Fatalf("response=%v err=%v", response, err)
 	}
 }
+
+func TestTrustedProxyRanges(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		raw     string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name: "unset falls back to the container network space",
+			want: strings.Split(defaultTrustedProxyRanges, ","),
+		},
+		{
+			name: "an explicit list is taken verbatim",
+			raw:  " 10.0.1.0/24 ,, ::1/128 ",
+			want: []string{"10.0.1.0/24", "::1/128"},
+		},
+		{
+			name: "a bare address is a single host",
+			raw:  "10.0.1.109",
+			want: []string{"10.0.1.109"},
+		},
+		{
+			name:    "a typo stops startup instead of being skipped",
+			raw:     "10.0.0.0/8,10.0.0/8",
+			wantErr: true,
+		},
+		{
+			name:    "a hostname is not a range",
+			raw:     "traefik",
+			wantErr: true,
+		},
+		{
+			name:    "a list with nothing in it trusts nobody by accident",
+			raw:     " , ",
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := trustedProxyRanges(func(key string) string {
+				if key != "TRUSTED_PROXY_RANGES" {
+					t.Fatalf("read %q", key)
+				}
+				return tc.raw
+			})
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("trustedProxyRanges(%q) = %v, want an error", tc.raw, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("trustedProxyRanges(%q) = %v, want %v", tc.raw, got, tc.want)
+			}
+		})
+	}
+}

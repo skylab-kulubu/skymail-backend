@@ -36,6 +36,33 @@ func NewMailHandler(db *database.Store, mailer mailer.Mailer, kc keycloak.Client
 	return &mailHandlerImpl{db: db, mailer: mailer, kc: kc}
 }
 
+var errTemplateTargetMissing = apperrors.New(
+	"mail.template_target_missing",
+	"Either template_id or template_key is required.",
+	fiber.StatusBadRequest,
+)
+
+// resolveTemplate turns whichever handle the caller used into a template id.
+// core passes the uuid it holds in SKYMAIL_WELCOME_TEMPLATE_ID; the Keycloak
+// mail provider passes a key so a reseed cannot strand it (ADR-0045).
+func (h *mailHandlerImpl) resolveTemplate(c fiber.Ctx, params requests.SendSingleMail) (uuid.UUID, error) {
+	if params.TemplateID != uuid.Nil {
+		return params.TemplateID, nil
+	}
+
+	if params.TemplateKey == "" {
+		return uuid.Nil, errTemplateTargetMissing
+	}
+
+	key := params.TemplateKey
+	template, err := h.db.GetTemplateByKey(c.Context(), &key)
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	return template.ID, nil
+}
+
 // CreateTask godoc
 //
 //	@Summary		Create a new mail task
@@ -141,6 +168,11 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 		return err
 	}
 
+	templateID, err := h.resolveTemplate(c, params)
+	if err != nil {
+		return err
+	}
+
 	bodyVarsJson, err := json.Marshal(params.BodyVariables)
 	if err != nil {
 		return err
@@ -153,7 +185,7 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 
 	taskID, err := h.mailer.EnqueueSingle(c.Context(), database.CreateSingleMailTaskParams{
 		SentBy:            sentBy,
-		TemplateID:        &params.TemplateID,
+		TemplateID:        &templateID,
 		BodyVariables:     bodyVarsJson,
 		RecipientFullName: params.RecipientFullName,
 		RecipientEmail:    params.RecipientEmail,

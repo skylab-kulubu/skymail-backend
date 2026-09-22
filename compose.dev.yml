@@ -9,6 +9,7 @@ services:
     environment:
       DATABASE_URL: postgres://skymail:${SKYMAIL_DB_PASSWORD:-postgres}@postgres:5432/skymail?sslmode=disable
       APP_PORT: "3000"
+      TRUSTED_PROXY_RANGES: ${TRUSTED_PROXY_RANGES:-}
     env_file:
       - path: .env
         required: false
