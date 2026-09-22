@@ -72,6 +72,12 @@ ALTER TABLE templates
 -- comment-only content, the seed's pointer among them, is not one; anything
 -- with code in it is, whatever comments or URLs surround the code.
 --
+-- Both kinds come out in one left-to-right pass, so whichever starts first
+-- wins, as in JavaScript: "// eski /*" is a line comment, "/* // */" a block.
+-- The block pattern cannot run past its first */ by construction. A lazy .*?
+-- would not do: in PostgreSQL a pattern with a top-level | is greedy as a
+-- whole, and "/* a */ code /* b */" would lose its code.
+--
 -- The rows written before versioning are read through it below, and so are the
 -- rows the old panel and the by-key upsert write until they send each
 -- Authoring mode's source themselves.
@@ -82,9 +88,7 @@ CREATE FUNCTION template_jsx_source(react_email_content TEXT) RETURNS TEXT
 AS
 $$
 SELECT CASE
-           WHEN regexp_replace(
-                        regexp_replace(react_email_content, '/\*([^*]|\*+[^*/])*\*+/', '', 'g'),
-                        '//[^\n]*', '', 'g') ~ '\S'
+           WHEN regexp_replace(react_email_content, '/\*([^*]|\*+[^*/])*\*+/|//[^\n]*', '', 'g') ~ '\S'
                THEN react_email_content
            END
 $$;

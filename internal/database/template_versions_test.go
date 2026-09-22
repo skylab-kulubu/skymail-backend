@@ -33,6 +33,12 @@ func TestTemplateJSXSourceRule(t *testing.T) {
 		"a URL is not a comment":          {`<a href="https://yildizskylab.com">x</a>`, true},
 		"code after a block comment":      {"/* not */ export default () => null", true},
 		"anything with code":              {"{}", true},
+		// Whichever comment starts first wins, as in JavaScript: a line comment
+		// swallows a block opener to the end of its line, a block comment a //.
+		"a line comment holding a block opener":  {"// eski /*\nexport default () => null\n// */", true},
+		"a block comment holding a line comment": {"/* eski // */\n", false},
+		"code between two block comments":        {"/* a */ export default () => null /* b */", true},
+		"an unclosed block comment":              {"/* yarım\nexport default () => null", true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var source *string
