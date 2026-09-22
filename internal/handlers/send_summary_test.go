@@ -701,3 +701,58 @@ func TestSendSummaryCountsSendsAsTheListFiltersThem(t *testing.T) {
 		t.Errorf("queue_counts.failed = %d, want 3", summary.QueueCounts.Failed)
 	}
 }
+
+// hangingKeycloakStub answers a group lookup only when the caller gives up, or
+// after ten seconds so a missing deadline fails the test instead of hanging it.
+type hangingKeycloakStub struct {
+	lifecycleKeycloakStub
+}
+
+func (hangingKeycloakStub) GetGroup(ctx context.Context, id string) (*gocloak.Group, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(10 * time.Second):
+		name := "too late"
+		return &gocloak.Group{ID: &id, Name: &name}, nil
+	}
+}
+
+func TestSendSummaryDoesNotWaitOnAHungKeycloak(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	now := istanbulTime(2026, time.September, 22, 12, 0, 0)
+	for i := 1; i <= 3; i++ {
+		group := uuid.New()
+		seedSend(t, db, seededSend{createdAt: now.Add(-time.Duration(i) * time.Hour), mailListID: &group,
+			recipients: recipientsWith(database.MailQueueStatusSent, 1)})
+	}
+	app := sendSummaryApp(t, db, now, hangingKeycloakStub{})
+
+	// Three groups to name share one short budget; a deadline per lookup would
+	// still keep the home screen waiting three times as long.
+	started := time.Now()
+	response, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/mail_tasks/summary", nil),
+		fiber.TestConfig{Timeout: 30 * time.Second, FailOnTimeout: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(started)
+	var summary summaryResponse
+	if err := json.NewDecoder(response.Body).Decode(&summary); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != fiber.StatusOK {
+		t.Fatalf("status = %d, want 200", response.StatusCode)
+	}
+	if elapsed > 4*time.Second {
+		t.Fatalf("summary took %s with Keycloak hung, want the group names given up within about 2s", elapsed)
+	}
+	if len(summary.RecentSends) != 3 {
+		t.Fatalf("recent_sends has %d sends, want 3", len(summary.RecentSends))
+	}
+	for _, send := range summary.RecentSends {
+		if a := send.Audience; a.Name != nil || stringValue(a.Source) != "keycloak" || a.MailListID == nil {
+			t.Errorf("audience = %+v, want the group id with no name", a)
+		}
+	}
+}

@@ -28,6 +28,10 @@ const (
 	maxSummaryRecent     = 20
 )
 
+// keycloakGroupNameBudget is all the time the summary gives Keycloak to name the
+// groups among the recent sends, however many there are.
+const keycloakGroupNameBudget = 2 * time.Second
+
 // SendStatus is a send's status. A mail task has none of its own; the database
 // function mail_task_status derives it from the task's recipients, and it is
 // the only definition — the summary shows it and the send list filters by it.
@@ -54,16 +58,16 @@ const (
 )
 
 // boundedQueryInt reads an optional whole-number query parameter between 1 and
-// max, falling back to fallback when it is absent.
-func boundedQueryInt(c fiber.Ctx, name string, fallback, max int) (int, error) {
+// upper, falling back to fallback when it is absent.
+func boundedQueryInt(c fiber.Ctx, name string, fallback, upper int) (int, error) {
 	raw := strings.TrimSpace(c.Query(name))
 	if raw == "" {
 		return fallback, nil
 	}
 	value, err := strconv.Atoi(raw)
-	if err != nil || value < 1 || value > max {
+	if err != nil || value < 1 || value > upper {
 		return 0, apperrors.ErrValidation.WithParams(map[string]interface{}{
-			name: fmt.Sprintf("must be a whole number from 1 to %d", max),
+			name: fmt.Sprintf("must be a whole number from 1 to %d", upper),
 		})
 	}
 	return value, nil
@@ -258,10 +262,17 @@ func sendAudience(send database.ListMailTaskSendsRow, groupNames map[uuid.UUID]*
 
 // keycloakGroupNames names the Keycloak groups among the sends. A name is a
 // nicety on the home screen, so a group Keycloak cannot name — gone, or
-// Keycloak unreachable — is left unnamed rather than failing the summary.
+// Keycloak unreachable or too slow — is left unnamed rather than failing or
+// holding up the summary.
 func (h *mailHandlerImpl) keycloakGroupNames(ctx context.Context, sends []database.ListMailTaskSendsRow) map[uuid.UUID]*string {
+	ctx, cancel := context.WithTimeout(ctx, keycloakGroupNameBudget)
+	defer cancel()
+
 	names := map[uuid.UUID]*string{}
 	for _, send := range sends {
+		if ctx.Err() != nil {
+			break
+		}
 		if send.MailListID == nil || send.InternalMailList {
 			continue
 		}

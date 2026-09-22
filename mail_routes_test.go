@@ -122,15 +122,15 @@ func TestSendSummaryIsServedWithMailsRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var problem struct {
+	var apiError struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	}
-	if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+	if err := json.NewDecoder(response.Body).Decode(&apiError); err != nil {
 		t.Fatal(err)
 	}
-	if response.StatusCode != fiber.StatusBadRequest || problem.Code != "validation.error" || problem.Message == "" {
-		t.Fatalf("GET /v1/mail_tasks?status=bogus = %d %+v", response.StatusCode, problem)
+	if response.StatusCode != fiber.StatusBadRequest || apiError.Code != "validation.error" || apiError.Message == "" {
+		t.Fatalf("GET /v1/mail_tasks?status=bogus = %d %+v", response.StatusCode, apiError)
 	}
 }
 
