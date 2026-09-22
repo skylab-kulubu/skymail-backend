@@ -45,13 +45,13 @@ func StartDatabase(t testing.TB) Database {
 	}
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
 
-	portOut, err := exec.Command("docker", "port", name, "5432/tcp").CombinedOutput()
+	portCtx, cancelPort := context.WithTimeout(context.Background(), 30*time.Second)
+	hostport, err := waitForPublishedPort(portCtx, 100*time.Millisecond, func() ([]byte, error) {
+		return exec.Command("docker", "port", name, "5432/tcp").CombinedOutput()
+	})
+	cancelPort()
 	if err != nil {
-		t.Fatalf("docker port: %v %s", err, portOut)
-	}
-	hostport := strings.Split(strings.TrimSpace(string(portOut)), "\n")[0]
-	if i := strings.LastIndex(hostport, "://"); i >= 0 {
-		hostport = hostport[i+3:]
+		t.Fatal(err)
 	}
 
 	databaseURL := fmt.Sprintf("postgres://postgres:postgres@%s/skymailtest?sslmode=disable", hostport)
@@ -73,4 +73,52 @@ func StartDatabase(t testing.TB) Database {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+// waitForPublishedPort polls lookup until Docker reports the published host
+// port. Docker returns success with empty output while the mapping is still
+// pending, so a single call can yield an empty host:port and a connection URL
+// that silently falls back to a unix socket.
+func waitForPublishedPort(ctx context.Context, retryInterval time.Duration, lookup func() ([]byte, error)) (string, error) {
+	var lastErr error
+	for {
+		out, err := lookup()
+		if err == nil {
+			if hostport := parsePublishedPort(out); hostport != "" {
+				return hostport, nil
+			}
+			lastErr = fmt.Errorf("docker port returned empty output")
+		} else {
+			detail := strings.TrimSpace(string(out))
+			if detail == "" {
+				lastErr = fmt.Errorf("docker port: %w", err)
+			} else {
+				lastErr = fmt.Errorf("docker port: %w: %s", err, detail)
+			}
+		}
+
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", fmt.Errorf("docker port was not published before timeout: %v: %w", lastErr, ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func parsePublishedPort(out []byte) string {
+	for _, line := range strings.Split(string(out), "\n") {
+		hostport := strings.TrimSpace(line)
+		if hostport == "" {
+			continue
+		}
+		if i := strings.LastIndex(hostport, "://"); i >= 0 {
+			hostport = hostport[i+3:]
+		}
+		if hostport != "" {
+			return hostport
+		}
+	}
+	return ""
 }
