@@ -1,6 +1,33 @@
 -- name: CreateTemplate :one
-INSERT INTO templates (name, subject, html_content, plain_text_content, react_email_content)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO templates (name, subject, html_content, plain_text_content, react_email_content, key)
+VALUES ($1, $2, $3, $4, $5, sqlc.narg(key)::text)
+RETURNING *;
+
+-- name: GetTemplateByKey :one
+SELECT *
+FROM templates
+WHERE key = $1
+  AND archived_at IS NULL;
+
+-- name: UpsertTemplateByKey :one
+INSERT INTO templates (key, name, subject, html_content, plain_text_content, react_email_content, system)
+VALUES (sqlc.arg(key)::text,
+        sqlc.arg(name)::text,
+        sqlc.arg(subject)::text,
+        sqlc.arg(html_content)::text,
+        sqlc.arg(plain_text_content)::text,
+        sqlc.arg(react_email_content)::text,
+        sqlc.arg(system)::boolean)
+ON CONFLICT (key) DO UPDATE
+    SET name                = EXCLUDED.name,
+        subject             = EXCLUDED.subject,
+        html_content        = EXCLUDED.html_content,
+        plain_text_content  = EXCLUDED.plain_text_content,
+        react_email_content = EXCLUDED.react_email_content,
+        system              = EXCLUDED.system,
+        archived_at         = NULL,
+        archived_by         = NULL,
+        updated_at          = NOW()
 RETURNING *;
 
 -- name: GetTemplateById :one
@@ -55,6 +82,7 @@ SET name                = $2,
     html_content        = $4,
     plain_text_content  = $5,
     react_email_content = $6,
+    key                 = sqlc.narg(key)::text,
     updated_at          = NOW()
 WHERE id = $1
   AND archived_at IS NULL
@@ -69,6 +97,7 @@ SET archived_by = CASE
     archived_at = COALESCE(archived_at, NOW()),
     updated_at = CASE WHEN archived_at IS NULL THEN NOW() ELSE updated_at END
 WHERE id = sqlc.arg(id)
+  AND system = false
 RETURNING *;
 
 -- name: RestoreTemplate :one
@@ -229,7 +258,8 @@ SET status = 'processing'
 WHERE id IN (SELECT id
              FROM mail_queue
              WHERE status = 'pending'
-             ORDER BY created_at
+               AND next_attempt_at <= NOW()
+             ORDER BY next_attempt_at, created_at
              LIMIT 100 FOR UPDATE SKIP LOCKED)
 RETURNING *;
 
@@ -247,8 +277,18 @@ WHERE id = $1;
 -- name: SetMailQueueItemFailed :exec
 UPDATE mail_queue
 SET status    = 'failed',
+    attempts  = attempts + 1,
     error     = $2
 WHERE id = $1;
+
+-- name: RescheduleMailQueueItem :one
+UPDATE mail_queue
+SET status          = 'pending',
+    attempts        = attempts + 1,
+    error           = sqlc.narg(error)::text,
+    next_attempt_at = NOW() + (sqlc.arg(delay_seconds)::int * INTERVAL '1 second')
+WHERE id = sqlc.arg(id)
+RETURNING attempts;
 
 -- name: CreateMailTask :many
 WITH active_source AS (
@@ -306,7 +346,7 @@ SELECT count(*)
 FROM mail_tasks;
 
 -- name: GetMailQueueItemsByTaskId :many
-SELECT id, recipient_full_name, recipient_email, status, error, created_at
+SELECT id, recipient_full_name, recipient_email, status, error, attempts, next_attempt_at, created_at
 FROM mail_queue
 WHERE task_id = $1
 ORDER BY created_at DESC

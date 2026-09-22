@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	htmlt "html/template"
 	textt "text/template"
@@ -18,6 +19,40 @@ import (
 
 var mailFuncs = map[string]any{
 	"add1": func(i int) int { return i + 1 },
+	// safeHTML lets a template interpolate markup instead of escaping it.
+	// html/template escapes every variable by default, which is what we want
+	// everywhere except the free-form template, whose body is rich text the
+	// sender wrote. That body is sanitised against an allowlist before it is
+	// ever stored, so what reaches here is already narrowed markup.
+	"safeHTML": func(v any) htmlt.HTML {
+		switch value := v.(type) {
+		case nil:
+			return ""
+		case htmlt.HTML:
+			return value
+		case string:
+			return htmlt.HTML(sanitizeEmailHTML(value))
+		default:
+			return htmlt.HTML(sanitizeEmailHTML(fmt.Sprint(value)))
+		}
+	},
+}
+
+const (
+	// A transient SMTP failure (greylisting, a dropped connection, a rate limit)
+	// should not lose the mail. Five tries over ~8 minutes covers the usual
+	// hiccup; past that the address or the relay is the problem, not the moment.
+	maxSendAttempts = 5
+	baseRetryDelay  = 30 * time.Second
+)
+
+// retryDelay backs off 30s, 60s, 2m, 4m.
+func retryDelay(attempts int) time.Duration {
+	delay := baseRetryDelay << attempts
+	if max := 10 * time.Minute; delay > max {
+		delay = max
+	}
+	return delay
 }
 
 type RecipientInfo struct {
@@ -43,6 +78,7 @@ type Mailer interface {
 type mailerImpl struct {
 	db         *database.Store
 	jobs       chan database.MailQueue
+	nudge      chan struct{}
 	logger     *zerolog.Logger
 	smtpConfig SMTPConfig
 }
@@ -63,6 +99,7 @@ func NewMailer(db *database.Store, smtpConfig SMTPConfig) Mailer {
 	return &mailerImpl{
 		db:         db,
 		jobs:       make(chan database.MailQueue, 100),
+		nudge:      make(chan struct{}, 1),
 		logger:     &logger,
 		smtpConfig: smtpConfig,
 	}
@@ -240,8 +277,12 @@ func (m *mailerImpl) renderAndQueue(ctx context.Context, rows []commonMailRow) e
 		}
 	}
 
-	_, err = m.db.CreateMailQueueItems(ctx, queueItems)
-	return err
+	if _, err = m.db.CreateMailQueueItems(ctx, queueItems); err != nil {
+		return err
+	}
+
+	m.wake()
+	return nil
 }
 
 func (m *mailerImpl) startDispatcher(ctx context.Context) {
@@ -259,25 +300,49 @@ func (m *mailerImpl) startDispatcher(ctx context.Context) {
 			return
 
 		case <-ticker.C:
-			items, err := m.db.ProcessQueueItems(ctx)
-			if err != nil {
-				logger.Err(err).Msg("Failed to process queue items")
+			if !m.drainQueue(ctx, &logger) {
+				return
 			}
 
-			if len(items) > 0 {
-				logger.Debug().Int("count", len(items)).Msg("Pulled pending jobs from database")
-			}
-
-			for _, item := range items {
-				select {
-				case m.jobs <- item:
-					logger.Debug().Str("job_id", item.ID.String()).Msg("Dispatched job to worker channel")
-				case <-ctx.Done():
-					logger.Info().Msg("Shutting down")
-					return
-				}
+		case <-m.nudge:
+			// A single send should not wait out the tick: Keycloak's password
+			// reset and verification mails are the ones a person is staring at.
+			if !m.drainQueue(ctx, &logger) {
+				return
 			}
 		}
+	}
+}
+
+func (m *mailerImpl) drainQueue(ctx context.Context, logger *zerolog.Logger) bool {
+	items, err := m.db.ProcessQueueItems(ctx)
+	if err != nil {
+		logger.Err(err).Msg("Failed to process queue items")
+	}
+
+	if len(items) > 0 {
+		logger.Debug().Int("count", len(items)).Msg("Pulled pending jobs from database")
+	}
+
+	for _, item := range items {
+		select {
+		case m.jobs <- item:
+			logger.Debug().Str("job_id", item.ID.String()).Msg("Dispatched job to worker channel")
+		case <-ctx.Done():
+			logger.Info().Msg("Shutting down")
+			return false
+		}
+	}
+
+	return true
+}
+
+// wake asks the dispatcher to look at the queue now. It never blocks: a nudge
+// already waiting is as good as a second one.
+func (m *mailerImpl) wake() {
+	select {
+	case m.nudge <- struct{}{}:
+	default:
 	}
 }
 
@@ -316,16 +381,7 @@ func (m *mailerImpl) startWorker(ctx context.Context, id int) {
 
 			err := m.sendEmail(ctx, client, job)
 			if err != nil {
-				logger.Err(err).Str("job_id", job.ID.String()).Msg("Failed to send email")
-				e := err.Error()
-
-				err := m.db.SetMailQueueItemFailed(ctx, database.SetMailQueueItemFailedParams{
-					ID:    job.ID,
-					Error: &e,
-				})
-				if err != nil {
-					logger.Err(err).Str("job_id", job.ID.String()).Msg("Failed to set mail queue item")
-				}
+				m.recordSendFailure(ctx, &logger, job, err)
 			} else {
 				logger.Debug().Str("job_id", job.ID.String()).Msg("Sent email")
 
@@ -338,13 +394,59 @@ func (m *mailerImpl) startWorker(ctx context.Context, id int) {
 	}
 }
 
+// permanentError marks a failure that retrying cannot fix — a malformed address
+// will be just as malformed in four minutes.
+type permanentError struct{ err error }
+
+func (e permanentError) Error() string { return e.err.Error() }
+func (e permanentError) Unwrap() error { return e.err }
+
+func (m *mailerImpl) recordSendFailure(ctx context.Context, logger *zerolog.Logger, job database.MailQueue, sendErr error) {
+	reason := sendErr.Error()
+
+	var permanent permanentError
+	givingUp := errors.As(sendErr, &permanent) || job.Attempts+1 >= maxSendAttempts
+
+	if givingUp {
+		logger.Err(sendErr).
+			Str("job_id", job.ID.String()).
+			Int("attempts", job.Attempts+1).
+			Msg("Giving up on email")
+
+		if err := m.db.SetMailQueueItemFailed(ctx, database.SetMailQueueItemFailedParams{
+			ID:    job.ID,
+			Error: &reason,
+		}); err != nil {
+			logger.Err(err).Str("job_id", job.ID.String()).Msg("Failed to set mail queue item")
+		}
+		return
+	}
+
+	delay := retryDelay(job.Attempts)
+	attempts, err := m.db.RescheduleMailQueueItem(ctx, database.RescheduleMailQueueItemParams{
+		ID:           job.ID,
+		Error:        &reason,
+		DelaySeconds: int(delay.Seconds()),
+	})
+	if err != nil {
+		logger.Err(err).Str("job_id", job.ID.String()).Msg("Failed to reschedule mail queue item")
+		return
+	}
+
+	logger.Warn().Err(sendErr).
+		Str("job_id", job.ID.String()).
+		Int("attempts", attempts).
+		Dur("retry_in", delay).
+		Msg("Retrying email")
+}
+
 func (m *mailerImpl) sendEmail(ctx context.Context, client *mail.Client, job database.MailQueue) error {
 	msg := mail.NewMsg()
 	if err := msg.From(m.smtpConfig.FromEmail); err != nil {
-		return fmt.Errorf("invalid from email: %w", err)
+		return permanentError{fmt.Errorf("invalid from email: %w", err)}
 	}
 	if err := msg.To(fmt.Sprintf("%s <%s>", job.RecipientFullName, job.RecipientEmail)); err != nil {
-		return fmt.Errorf("invalid recipient: %w", err)
+		return permanentError{fmt.Errorf("invalid recipient: %w", err)}
 	}
 
 	msg.SetGenHeader(mail.HeaderMessageID, fmt.Sprintf("<%s@%s>", job.ID.String(), m.smtpConfig.FQDN))
