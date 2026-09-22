@@ -224,7 +224,7 @@ type MailTaskListItem struct {
 //	@Produce		json
 //	@Param			_start	query		int		false	"Start index"
 //	@Param			_end	query		int		false	"End index"
-//	@Param			status	query		string	false	"Derived send status: failed (at least one recipient failed), sending (none failed, some pending or processing), sent (none failed or queued, some sent), empty (no recipients)"	Enums(failed,sending,sent,empty)
+//	@Param			status	query		string	false	"Derived send status: failed (a recipient failed, or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent)"	Enums(failed,sending,sent)
 //	@Success		200		{array}		handlers.MailTaskListItem
 //	@Header			200		{integer}	X-Total-Count		"Number of sends matching the filter"
 //	@Failure		400		{object}	apperrors.AppError	"Bad Request"

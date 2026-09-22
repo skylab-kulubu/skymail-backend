@@ -242,6 +242,28 @@ func (q *Queries) CountMailTasks(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countMailTasksByStatus = `-- name: CountMailTasksByStatus :one
+SELECT count(*) FILTER (WHERE s.status = 'failed')  AS failed,
+       count(*) FILTER (WHERE s.status = 'sending') AS sending,
+       count(*) FILTER (WHERE s.status = 'sent')    AS sent
+FROM (SELECT mail_task_status(mt.id) AS status FROM mail_tasks mt) s
+`
+
+type CountMailTasksByStatusRow struct {
+	Failed  int64 `json:"failed"`
+	Sending int64 `json:"sending"`
+	Sent    int64 `json:"sent"`
+}
+
+// Sends by the status mail_task_status derives, over every send: the same
+// numbers CountMailTaskSends gives for each status filter.
+func (q *Queries) CountMailTasksByStatus(ctx context.Context) (CountMailTasksByStatusRow, error) {
+	row := q.db.QueryRow(ctx, countMailTasksByStatus)
+	var i CountMailTasksByStatusRow
+	err := row.Scan(&i.Failed, &i.Sending, &i.Sent)
+	return i, err
+}
+
 const countMailingLists = `-- name: CountMailingLists :one
 SELECT count(*)
 FROM mailing_lists

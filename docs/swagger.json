@@ -364,19 +364,31 @@
                 },
                 "type": "object"
             },
+            "handlers.SendCounts": {
+                "properties": {
+                    "failed": {
+                        "type": "integer"
+                    },
+                    "sending": {
+                        "type": "integer"
+                    },
+                    "sent": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
             "handlers.SendStatus": {
                 "enum": [
                     "failed",
                     "sending",
-                    "sent",
-                    "empty"
+                    "sent"
                 ],
                 "type": "string",
                 "x-enum-varnames": [
                     "SendStatusFailed",
                     "SendStatusSending",
-                    "SendStatusSent",
-                    "SendStatusEmpty"
+                    "SendStatusSent"
                 ]
             },
             "handlers.SendSummary": {
@@ -397,6 +409,9 @@
                         },
                         "type": "array",
                         "uniqueItems": false
+                    },
+                    "send_counts": {
+                        "$ref": "#/components/schemas/handlers.SendCounts"
                     },
                     "time_zone": {
                         "example": "Europe/Istanbul",
@@ -613,15 +628,14 @@
                         }
                     },
                     {
-                        "description": "Derived send status: failed (at least one recipient failed), sending (none failed, some pending or processing), sent (none failed or queued, some sent), empty (no recipients)",
+                        "description": "Derived send status: failed (a recipient failed, or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent)",
                         "in": "query",
                         "name": "status",
                         "schema": {
                             "enum": [
                                 "failed",
                                 "sending",
-                                "sent",
-                                "empty"
+                                "sent"
                             ],
                             "type": "string"
                         }
@@ -808,7 +822,7 @@
         },
         "/mail_tasks/summary": {
             "get": {
-                "description": "Queue rows (one per recipient) by status, mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today), and the latest sends with their derived status: failed (at least one recipient failed), sending (none failed, some pending or processing), sent (none failed or queued, some sent), empty (no recipients).",
+                "description": "Queue rows (one per recipient) by status; sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).",
                 "parameters": [
                     {
                         "description": "Days in the daily series, ending today in Europe/Istanbul (1-90)",

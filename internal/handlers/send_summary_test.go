@@ -161,9 +161,16 @@ type summarySend struct {
 	RecipientCounts summaryCounts   `json:"recipient_counts"`
 }
 
+type sendCounts struct {
+	Failed  int64 `json:"failed"`
+	Sending int64 `json:"sending"`
+	Sent    int64 `json:"sent"`
+}
+
 type summaryResponse struct {
 	TimeZone    string        `json:"time_zone"`
 	QueueCounts summaryCounts `json:"queue_counts"`
+	SendCounts  sendCounts    `json:"send_counts"`
 	DailySent   []summaryDay  `json:"daily_sent"`
 	RecentSends []summarySend `json:"recent_sends"`
 }
@@ -325,6 +332,8 @@ func TestSendSummaryListsRecentSendsWithDerivedStatus(t *testing.T) {
 		recipients: append(append(recipientsWith(database.MailQueueStatusSent, 2),
 			recipientsWith(database.MailQueueStatusPending, 1)...),
 			recipientsWith(database.MailQueueStatusProcessing, 1)...)})
+	// Queued no one — the enqueue failed after the task was written, or the list
+	// was empty — and it is long past the moment its rows would have appeared.
 	nobody := seedSend(t, db, seededSend{createdAt: now.Add(-2 * time.Hour), templateID: &bulletin.ID, mailListID: &webLab.ID})
 	allSent := seedSend(t, db, seededSend{createdAt: now.Add(-1 * time.Hour), templateID: &bulletin.ID, mailListID: &webLab.ID,
 		recipients: recipientsWith(database.MailQueueStatusSent, 2)})
@@ -354,7 +363,7 @@ func TestSendSummaryListsRecentSendsWithDerivedStatus(t *testing.T) {
 		counts summaryCounts
 	}{
 		{"every recipient sent", allSent, "sent", summaryCounts{Sent: 2}},
-		{"no recipients at all", nobody, "empty", summaryCounts{}},
+		{"no recipients queued", nobody, "failed", summaryCounts{}},
 		{"some still queued", stillGoing, "sending", summaryCounts{Pending: 1, Processing: 1, Sent: 2}},
 		{"one failed among sent", oneFailed, "failed", summaryCounts{Sent: 3, Failed: 1}},
 		{"single recipient sent", single, "sent", summaryCounts{Sent: 1}},
@@ -457,7 +466,7 @@ func TestSendListFiltersByDerivedStatus(t *testing.T) {
 		recipientsWith(database.MailQueueStatusSent, 1), recipientsWith(database.MailQueueStatusPending, 1)...)})
 	allFailed := seedSend(t, db, seededSend{createdAt: at(3), recipients: recipientsWith(database.MailQueueStatusFailed, 2)})
 	processing := seedSend(t, db, seededSend{createdAt: at(2), recipients: recipientsWith(database.MailQueueStatusProcessing, 1)})
-	empty := seedSend(t, db, seededSend{createdAt: at(1)})
+	queuedNobody := seedSend(t, db, seededSend{createdAt: at(1)})
 
 	app := sendSummaryApp(t, db, now, lifecycleKeycloakStub{})
 
@@ -465,11 +474,10 @@ func TestSendListFiltersByDerivedStatus(t *testing.T) {
 		status string
 		want   []uuid.UUID
 	}{
-		{"failed", []uuid.UUID{allFailed, failedWhileQueued, oneFailed}},
+		{"failed", []uuid.UUID{queuedNobody, allFailed, failedWhileQueued, oneFailed}},
 		{"sending", []uuid.UUID{processing, pending}},
 		{"sent", []uuid.UUID{allSent}},
-		{"empty", []uuid.UUID{empty}},
-		{"FAILED", []uuid.UUID{allFailed, failedWhileQueued, oneFailed}},
+		{"FAILED", []uuid.UUID{queuedNobody, allFailed, failedWhileQueued, oneFailed}},
 	} {
 		sends, total := listSends(t, app, "/mail_tasks?status="+tc.status)
 		if fmt.Sprint(sendIDs(sends)) != fmt.Sprint(tc.want) || total != fmt.Sprint(len(tc.want)) {
@@ -483,16 +491,16 @@ func TestSendListFiltersByDerivedStatus(t *testing.T) {
 	}
 
 	// Pages are cut from the filtered sends, and the total counts all of them.
-	firstPage, total := listSends(t, app, "/mail_tasks?status=failed&_start=0&_end=2")
-	if fmt.Sprint(sendIDs(firstPage)) != fmt.Sprint([]uuid.UUID{allFailed, failedWhileQueued}) || total != "3" {
+	firstPage, total := listSends(t, app, "/mail_tasks?status=failed&_start=0&_end=3")
+	if fmt.Sprint(sendIDs(firstPage)) != fmt.Sprint([]uuid.UUID{queuedNobody, allFailed, failedWhileQueued}) || total != "4" {
 		t.Errorf("failed page 1 = %v total=%s", sendIDs(firstPage), total)
 	}
-	secondPage, total := listSends(t, app, "/mail_tasks?status=failed&_start=2&_end=4")
-	if fmt.Sprint(sendIDs(secondPage)) != fmt.Sprint([]uuid.UUID{oneFailed}) || total != "3" {
+	secondPage, total := listSends(t, app, "/mail_tasks?status=failed&_start=3&_end=6")
+	if fmt.Sprint(sendIDs(secondPage)) != fmt.Sprint([]uuid.UUID{oneFailed}) || total != "4" {
 		t.Errorf("failed page 2 = %v total=%s", sendIDs(secondPage), total)
 	}
 	pastTheEnd, total := listSends(t, app, "/mail_tasks?status=failed&_start=10&_end=20")
-	if len(pastTheEnd) != 0 || total != "3" {
+	if len(pastTheEnd) != 0 || total != "4" {
 		t.Errorf("failed past the end = %v total=%s", sendIDs(pastTheEnd), total)
 	}
 
@@ -578,6 +586,7 @@ func TestSendSummaryAndListRejectBadInput(t *testing.T) {
 		{"/mail_tasks/summary?recent=21", "recent"},
 		{"/mail_tasks/summary?recent=five", "recent"},
 		{"/mail_tasks?status=deleted", "status"},
+		{"/mail_tasks?status=empty", "status"},
 		{"/mail_tasks?status=pending", "status"},
 		{"/mail_tasks?status=processing", "status"},
 	} {
@@ -606,5 +615,89 @@ func TestSendSummaryAndListRejectBadInput(t *testing.T) {
 	} {
 		var out any
 		getJSON(t, app, path, &out)
+	}
+}
+
+// seedTaskWithoutRecipients writes only the task row, aged by the database's own
+// clock: the grace period is measured against the database's now().
+func seedTaskWithoutRecipients(t *testing.T, db *database.Store, age time.Duration) uuid.UUID {
+	t.Helper()
+	var taskID uuid.UUID
+	if err := db.Conn.QueryRow(context.Background(), `
+		INSERT INTO mail_tasks (sent_by, body_variables, created_at)
+		VALUES ('31ef736f-72da-4a40-8791-d523199cf9f0', '{}', now() - make_interval(secs => $1))
+		RETURNING id`, age.Seconds(),
+	).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	return taskID
+}
+
+func TestSendThatQueuedNobodyIsFailedOnceItsRowsAreOverdue(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	// The mailer writes the task first and its queue rows after; a template
+	// that does not parse, or a failed insert, leaves the task with none. A
+	// minute is far more than that gap, so by then nothing is coming.
+	overdue := seedTaskWithoutRecipients(t, db, 5*time.Minute)
+	fresh := seedTaskWithoutRecipients(t, db, 0)
+	app := sendSummaryApp(t, db, time.Now(), lifecycleKeycloakStub{})
+
+	failed, total := listSends(t, app, "/mail_tasks?status=failed")
+	if fmt.Sprint(sendIDs(failed)) != fmt.Sprint([]uuid.UUID{overdue}) || total != "1" {
+		t.Errorf("status=failed = %v total=%s, want only the overdue send", sendIDs(failed), total)
+	}
+	sending, total := listSends(t, app, "/mail_tasks?status=sending")
+	if fmt.Sprint(sendIDs(sending)) != fmt.Sprint([]uuid.UUID{fresh}) || total != "1" {
+		t.Errorf("status=sending = %v total=%s, want only the fresh send", sendIDs(sending), total)
+	}
+
+	var summary summaryResponse
+	getJSON(t, app, "/mail_tasks/summary", &summary)
+	statuses := map[uuid.UUID]string{}
+	for _, send := range summary.RecentSends {
+		statuses[send.ID] = send.Status
+	}
+	if statuses[overdue] != "failed" || statuses[fresh] != "sending" {
+		t.Errorf("recent_sends statuses = %v, want overdue failed and fresh sending", statuses)
+	}
+	if summary.SendCounts != (sendCounts{Failed: 1, Sending: 1}) {
+		t.Errorf("send_counts = %+v, want one failed and one sending", summary.SendCounts)
+	}
+}
+
+func TestSendSummaryCountsSendsAsTheListFiltersThem(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	now := istanbulTime(2026, time.September, 22, 12, 0, 0)
+	at := func(hoursAgo int) time.Time { return now.Add(-time.Duration(hoursAgo) * time.Hour) }
+
+	seedSend(t, db, seededSend{createdAt: at(9), recipients: append(
+		recipientsWith(database.MailQueueStatusSent, 3), recipientsWith(database.MailQueueStatusFailed, 1)...)})
+	seedSend(t, db, seededSend{createdAt: at(8), recipients: recipientsWith(database.MailQueueStatusFailed, 2)})
+	seedSend(t, db, seededSend{createdAt: at(7)})
+	seedSend(t, db, seededSend{createdAt: at(6), recipients: recipientsWith(database.MailQueueStatusPending, 2)})
+	seedSend(t, db, seededSend{createdAt: at(5), recipients: recipientsWith(database.MailQueueStatusSent, 4)})
+	seedSend(t, db, seededSend{createdAt: at(4), recipients: recipientsWith(database.MailQueueStatusSent, 1)})
+	app := sendSummaryApp(t, db, now, lifecycleKeycloakStub{})
+
+	var summary summaryResponse
+	getJSON(t, app, "/mail_tasks/summary", &summary)
+	if summary.SendCounts != (sendCounts{Failed: 3, Sending: 1, Sent: 2}) {
+		t.Fatalf("send_counts = %+v, want 3 failed, 1 sending, 2 sent", summary.SendCounts)
+	}
+	// The home screen's failed tile opens ?status=failed; the number on the
+	// tile and the length of that list are the same number.
+	for status, count := range map[string]int64{
+		"failed":  summary.SendCounts.Failed,
+		"sending": summary.SendCounts.Sending,
+		"sent":    summary.SendCounts.Sent,
+	} {
+		_, total := listSends(t, app, "/mail_tasks?status="+status)
+		if total != fmt.Sprint(count) {
+			t.Errorf("send_counts.%s = %d, but ?status=%s has X-Total-Count %s", status, count, status, total)
+		}
+	}
+	// Recipients are still counted separately: five failed mails in three sends.
+	if summary.QueueCounts.Failed != 3 {
+		t.Errorf("queue_counts.failed = %d, want 3", summary.QueueCounts.Failed)
 	}
 }

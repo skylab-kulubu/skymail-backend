@@ -453,6 +453,14 @@ FROM page
                                    LIMIT 1)
 ORDER BY mt.created_at DESC, mt.id DESC;
 
+-- Sends by the status mail_task_status derives, over every send: the same
+-- numbers CountMailTaskSends gives for each status filter.
+-- name: CountMailTasksByStatus :one
+SELECT count(*) FILTER (WHERE s.status = 'failed')  AS failed,
+       count(*) FILTER (WHERE s.status = 'sending') AS sending,
+       count(*) FILTER (WHERE s.status = 'sent')    AS sent
+FROM (SELECT mail_task_status(mt.id) AS status FROM mail_tasks mt) s;
+
 -- name: CountMailTaskSends :one
 SELECT count(*)
 FROM mail_tasks mt

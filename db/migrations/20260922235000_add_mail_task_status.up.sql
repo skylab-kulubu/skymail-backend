@@ -3,8 +3,12 @@
 -- by, so the home screen and the send list can never disagree:
 --   failed   at least one recipient failed, whatever the others did;
 --   sending  otherwise, at least one recipient is still pending or processing;
---   sent     otherwise, at least one recipient was sent;
---   empty    the task has no recipient rows at all.
+--   sent     otherwise, at least one recipient was sent.
+-- A task with no queue rows delivered nothing. The mailer writes the task and
+-- then its rows, outside one transaction, so for a moment every task has none:
+-- within a minute of its creation such a task is sending, after that it is
+-- failed — a template that would not parse, a failed insert, or an audience
+-- with no one in it. now() keeps the function STABLE.
 CREATE FUNCTION mail_task_status(for_task UUID) RETURNS TEXT
     LANGUAGE sql
     STABLE
@@ -17,7 +21,9 @@ SELECT CASE
                THEN 'sending'
            WHEN EXISTS (SELECT 1 FROM mail_queue WHERE task_id = for_task AND status = 'sent')
                THEN 'sent'
-           ELSE 'empty'
+           WHEN (SELECT created_at FROM mail_tasks WHERE id = for_task) > now() - INTERVAL '1 minute'
+               THEN 'sending'
+           ELSE 'failed'
            END
 $$;
 

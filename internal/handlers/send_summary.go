@@ -34,14 +34,14 @@ const (
 type SendStatus string
 
 const (
-	// SendStatusFailed: at least one recipient failed, whatever the others did.
+	// SendStatusFailed: at least one recipient failed, whatever the others did;
+	// or no recipient was queued and a minute has passed since the send.
 	SendStatusFailed SendStatus = "failed"
-	// SendStatusSending: none failed and at least one is pending or processing.
+	// SendStatusSending: none failed and at least one is pending or processing;
+	// or no recipient is queued yet, within a minute of the send.
 	SendStatusSending SendStatus = "sending"
 	// SendStatusSent: none failed, none queued, at least one sent.
 	SendStatusSent SendStatus = "sent"
-	// SendStatusEmpty: the task has no recipient rows at all.
-	SendStatusEmpty SendStatus = "empty"
 )
 
 const (
@@ -76,12 +76,12 @@ func parseSendStatusFilter(raw string) (*string, error) {
 	switch status {
 	case "":
 		return nil, nil
-	case SendStatusFailed, SendStatusSending, SendStatusSent, SendStatusEmpty:
+	case SendStatusFailed, SendStatusSending, SendStatusSent:
 		value := string(status)
 		return &value, nil
 	default:
 		return nil, apperrors.ErrValidation.WithParams(map[string]interface{}{
-			"status": "must be one of failed, sending, sent, empty",
+			"status": "must be one of failed, sending, sent",
 		})
 	}
 }
@@ -93,6 +93,14 @@ type QueueCounts struct {
 	Processing int64 `json:"processing"`
 	Sent       int64 `json:"sent"`
 	Failed     int64 `json:"failed"`
+}
+
+// SendCounts counts sends by their derived status. Each number equals the
+// X-Total-Count of the send list filtered by that status.
+type SendCounts struct {
+	Failed  int64 `json:"failed"`
+	Sending int64 `json:"sending"`
+	Sent    int64 `json:"sent"`
 }
 
 // DailySent is the mail sent on one calendar day in the summary's time zone.
@@ -126,11 +134,12 @@ type RecentSend struct {
 	RecipientCounts QueueCounts  `json:"recipient_counts"`
 }
 
-// SendSummary is what the home screen shows: the queue as it stands, the mail
-// sent per day, and the latest sends.
+// SendSummary is what the home screen shows: the queue as it stands, sends by
+// status, the mail sent per day, and the latest sends.
 type SendSummary struct {
 	TimeZone    string       `json:"time_zone" example:"Europe/Istanbul"`
 	QueueCounts QueueCounts  `json:"queue_counts"`
+	SendCounts  SendCounts   `json:"send_counts"`
 	DailySent   []DailySent  `json:"daily_sent"`
 	RecentSends []RecentSend `json:"recent_sends"`
 }
@@ -138,7 +147,7 @@ type SendSummary struct {
 // GetSummary godoc
 //
 //	@Summary		Summarise mail sends
-//	@Description	Queue rows (one per recipient) by status, mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today), and the latest sends with their derived status: failed (at least one recipient failed), sending (none failed, some pending or processing), sent (none failed or queued, some sent), empty (no recipients).
+//	@Description	Queue rows (one per recipient) by status; sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			days	query		int	false	"Days in the daily series, ending today in Europe/Istanbul (1-90)"	default(30)
@@ -159,6 +168,11 @@ func (h *mailHandlerImpl) GetSummary(c fiber.Ctx) error {
 	}
 
 	counts, err := h.db.CountMailQueueByStatus(c.Context())
+	if err != nil {
+		return err
+	}
+
+	sendCounts, err := h.db.CountMailTasksByStatus(c.Context())
 	if err != nil {
 		return err
 	}
@@ -205,6 +219,11 @@ func (h *mailHandlerImpl) GetSummary(c fiber.Ctx) error {
 			Processing: counts.Processing,
 			Sent:       counts.Sent,
 			Failed:     counts.Failed,
+		},
+		SendCounts: SendCounts{
+			Failed:  sendCounts.Failed,
+			Sending: sendCounts.Sending,
+			Sent:    sendCounts.Sent,
 		},
 		DailySent:   dailySent,
 		RecentSends: recentSends,

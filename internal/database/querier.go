@@ -22,6 +22,9 @@ type Querier interface {
 	CountMailQueueItemsByTaskId(ctx context.Context, taskID uuid.UUID) (int64, error)
 	CountMailTaskSends(ctx context.Context, status *string) (int64, error)
 	CountMailTasks(ctx context.Context) (int64, error)
+	// Sends by the status mail_task_status derives, over every send: the same
+	// numbers CountMailTaskSends gives for each status filter.
+	CountMailTasksByStatus(ctx context.Context) (CountMailTasksByStatusRow, error)
 	CountMailingLists(ctx context.Context) (int64, error)
 	CountRecipients(ctx context.Context) (int64, error)
 	CountRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) (int64, error)
