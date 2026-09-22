@@ -84,6 +84,9 @@
             },
             "database.MailQueue": {
                 "properties": {
+                    "attempts": {
+                        "type": "integer"
+                    },
                     "body": {
                         "type": "string"
                     },
@@ -97,6 +100,9 @@
                         "type": "string"
                     },
                     "id": {
+                        "type": "string"
+                    },
+                    "next_attempt_at": {
                         "type": "string"
                     },
                     "recipient_email": {
@@ -207,6 +213,9 @@
                     "id": {
                         "type": "string"
                     },
+                    "key": {
+                        "type": "string"
+                    },
                     "name": {
                         "type": "string"
                     },
@@ -218,6 +227,9 @@
                     },
                     "subject": {
                         "type": "string"
+                    },
+                    "system": {
+                        "type": "boolean"
                     },
                     "updated_at": {
                         "type": "string"
@@ -304,6 +316,9 @@
                     "html_content": {
                         "type": "string"
                     },
+                    "key": {
+                        "type": "string"
+                    },
                     "name": {
                         "type": "string"
                     },
@@ -340,11 +355,13 @@
                     },
                     "template_id": {
                         "type": "string"
+                    },
+                    "template_key": {
+                        "type": "string"
                     }
                 },
                 "required": [
-                    "recipient_email",
-                    "template_id"
+                    "recipient_email"
                 ],
                 "type": "object"
             },
@@ -364,6 +381,9 @@
                     "html_content": {
                         "type": "string"
                     },
+                    "key": {
+                        "type": "string"
+                    },
                     "name": {
                         "type": "string"
                     },
@@ -375,6 +395,36 @@
                     },
                     "subject": {
                         "type": "string"
+                    }
+                },
+                "required": [
+                    "html_content",
+                    "name",
+                    "plain_text_content",
+                    "react_email_content",
+                    "subject"
+                ],
+                "type": "object"
+            },
+            "requests.UpsertTemplateByKey": {
+                "properties": {
+                    "html_content": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "plain_text_content": {
+                        "type": "string"
+                    },
+                    "react_email_content": {
+                        "type": "string"
+                    },
+                    "subject": {
+                        "type": "string"
+                    },
+                    "system": {
+                        "type": "boolean"
                     }
                 },
                 "required": [
@@ -1415,6 +1465,118 @@
                     }
                 },
                 "summary": "Create a new email template",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/by-key/{key}": {
+            "get": {
+                "description": "Get a template by its stable key (for example keycloak.verify-email).",
+                "parameters": [
+                    {
+                        "description": "Template key",
+                        "in": "path",
+                        "name": "key",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/database.Template"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    }
+                },
+                "summary": "Get an email template by key",
+                "tags": [
+                    "Templates"
+                ]
+            },
+            "put": {
+                "description": "Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind.",
+                "parameters": [
+                    {
+                        "description": "Template key",
+                        "in": "path",
+                        "name": "key",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.UpsertTemplateByKey",
+                                        "summary": "template",
+                                        "description": "Template details"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "Template details",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/database.Template"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Create or replace a template addressed by key",
                 "tags": [
                     "Templates"
                 ]
