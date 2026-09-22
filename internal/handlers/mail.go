@@ -200,32 +200,35 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": taskID})
 }
 
-// MailTaskListItem is a row of the send list. The fields up to mail_list_name
-// are the ones the list has always returned; status and recipient_counts were
-// added beside them.
-type MailTaskListItem struct {
-	ID              uuid.UUID   `json:"id"`
-	SentBy          string      `json:"sent_by"`
-	TemplateID      *uuid.UUID  `json:"template_id"`
-	MailListID      *uuid.UUID  `json:"mail_list_id"`
-	BodyVariables   []byte      `json:"body_variables"`
-	CreatedAt       time.Time   `json:"created_at"`
-	TemplateName    *string     `json:"template_name"`
-	MailListName    *string     `json:"mail_list_name"`
-	Status          SendStatus  `json:"status"`
-	RecipientCounts QueueCounts `json:"recipient_counts"`
+// MailTaskItem is a send as the send list, a send's own page and the home
+// screen's recent sends all return it, so a send reads the same on every
+// screen. The fields up to mail_list_name are the ones the list and the detail
+// have always returned; the rest were added beside them.
+type MailTaskItem struct {
+	ID              uuid.UUID    `json:"id"`
+	SentBy          string       `json:"sent_by"`
+	TemplateID      *uuid.UUID   `json:"template_id"`
+	MailListID      *uuid.UUID   `json:"mail_list_id"`
+	BodyVariables   []byte       `json:"body_variables"`
+	CreatedAt       time.Time    `json:"created_at"`
+	TemplateName    *string      `json:"template_name"`
+	MailListName    *string      `json:"mail_list_name"`
+	TemplateKey     *string      `json:"template_key"`
+	Status          SendStatus   `json:"status"`
+	RecipientCounts QueueCounts  `json:"recipient_counts"`
+	Audience        SendAudience `json:"audience"`
 }
 
 // GetTasks godoc
 //
 //	@Summary		List all mail tasks
-//	@Description	Get a list of all mail tasks with pagination, newest first, each with its derived status and recipients by status. The status filter keeps only sends with that derived status; X-Total-Count counts the filtered sends.
+//	@Description	Get a list of all mail tasks with pagination, newest first, each with its derived status, recipients by status and audience. The status filter keeps only sends with that derived status; X-Total-Count counts the filtered sends. Keycloak group names are looked up within 2 seconds for the whole page and are null past that.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			_start	query		int		false	"Start index"
 //	@Param			_end	query		int		false	"End index"
 //	@Param			status	query		string	false	"Derived send status: failed (a recipient failed, or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent)"	Enums(failed,sending,sent)
-//	@Success		200		{array}		handlers.MailTaskListItem
+//	@Success		200		{array}		handlers.MailTaskItem
 //	@Header			200		{integer}	X-Total-Count		"Number of sends matching the filter"
 //	@Failure		400		{object}	apperrors.AppError	"Bad Request"
 //	@Failure		403		{object}	apperrors.AppError	"Forbidden"
@@ -253,35 +256,20 @@ func (h *mailHandlerImpl) GetTasks(c fiber.Ctx) error {
 		return err
 	}
 
-	items := make([]MailTaskListItem, len(sends))
-	for i, send := range sends {
-		items[i] = MailTaskListItem{
-			ID:              send.ID,
-			SentBy:          send.SentBy,
-			TemplateID:      send.TemplateID,
-			MailListID:      send.MailListID,
-			BodyVariables:   send.BodyVariables,
-			CreatedAt:       send.CreatedAt,
-			TemplateName:    send.TemplateName,
-			MailListName:    send.MailListName,
-			Status:          SendStatus(send.Status),
-			RecipientCounts: recipientCounts(send),
-		}
-	}
-
 	c.Response().Header.Set("X-Total-Count", strconv.FormatInt(count, 10))
-	return c.JSON(items)
+	return c.JSON(h.mailTaskItems(c.Context(), sends))
 }
 
 // GetTask godoc
 //
 //	@Summary		Get a mail task by ID
-//	@Description	Get details of a specific mail task by its ID.
+//	@Description	Get details of a specific mail task by its ID, with its derived status, recipients by status and audience, as the send list shows it.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id	path		string	true	"Task ID"
-//	@Success		200	{object}	database.GetMailTaskByIdRow
+//	@Success		200	{object}	handlers.MailTaskItem
 //	@Failure		400	{object}	apperrors.AppError	"Bad Request"
+//	@Failure		403	{object}	apperrors.AppError	"Forbidden"
 //	@Failure		404	{object}	apperrors.AppError	"Not Found"
 //	@Failure		500	{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/mail_tasks/{id} [get]
@@ -291,29 +279,43 @@ func (h *mailHandlerImpl) GetTask(c fiber.Ctx) error {
 		return err
 	}
 
-	task, err := h.db.GetMailTaskById(c.Context(), id)
+	sends, err := h.db.ListMailTaskSends(c.Context(), database.ListMailTaskSendsParams{
+		TaskID: &id,
+		Limit:  1,
+	})
 	if err != nil {
 		return err
 	}
+	if len(sends) == 0 {
+		return pgx.ErrNoRows
+	}
 
-	return c.JSON(task)
+	return c.JSON(h.mailTaskItems(c.Context(), sends)[0])
 }
 
 // GetTaskQueueItems godoc
 //
 //	@Summary		Get mail queue items for a task
-//	@Description	Get a list of mail queue items associated with a specific task ID, with pagination.
+//	@Description	Get a send's recipients, one queue row each, newest first with the row id breaking ties so pages neither repeat nor skip a recipient. The status filter keeps only recipients in that queue status; X-Total-Count counts the filtered recipients.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id		path		string	true	"Task ID"
 //	@Param			_start	query		int		false	"Start index"
 //	@Param			_end	query		int		false	"End index"
-//	@Success		200		{array}		database.MailQueue
+//	@Param			status	query		string	false	"Recipient queue status"	Enums(pending,processing,sent,failed)
+//	@Success		200		{array}		database.GetMailQueueItemsByTaskIdRow
+//	@Header			200		{integer}	X-Total-Count		"Number of recipients matching the filter"
 //	@Failure		400		{object}	apperrors.AppError	"Bad Request"
+//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
 //	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/mail_tasks/{id}/queue [get]
 func (h *mailHandlerImpl) GetTaskQueueItems(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return err
+	}
+
+	status, err := parseRecipientStatusFilter(c.Query("status"))
 	if err != nil {
 		return err
 	}
@@ -324,12 +326,16 @@ func (h *mailHandlerImpl) GetTaskQueueItems(c fiber.Ctx) error {
 		TaskID: id,
 		Limit:  limit,
 		Offset: offset,
+		Status: status,
 	})
 	if err != nil {
 		return err
 	}
 
-	count, err := h.db.CountMailQueueItemsByTaskId(c.Context(), id)
+	count, err := h.db.CountMailQueueItemsByTaskId(c.Context(), database.CountMailQueueItemsByTaskIdParams{
+		TaskID: id,
+		Status: status,
+	})
 	if err != nil {
 		return err
 	}

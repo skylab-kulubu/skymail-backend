@@ -23,49 +23,10 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
-            "database.GetMailTaskByIdRow": {
-                "properties": {
-                    "body_variables": {
-                        "items": {
-                            "type": "integer"
-                        },
-                        "type": "array",
-                        "uniqueItems": false
-                    },
-                    "created_at": {
-                        "type": "string"
-                    },
-                    "id": {
-                        "type": "string"
-                    },
-                    "mail_list_id": {
-                        "type": "string"
-                    },
-                    "mail_list_name": {
-                        "type": "string"
-                    },
-                    "sent_by": {
-                        "type": "string"
-                    },
-                    "template_id": {
-                        "type": "string"
-                    },
-                    "template_name": {
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
-            "database.MailQueue": {
+            "database.GetMailQueueItemsByTaskIdRow": {
                 "properties": {
                     "attempts": {
                         "type": "integer"
-                    },
-                    "body": {
-                        "type": "string"
-                    },
-                    "body_html": {
-                        "type": "string"
                     },
                     "created_at": {
                         "type": "string"
@@ -87,12 +48,6 @@ const docTemplate = `{
                     },
                     "status": {
                         "$ref": "#/components/schemas/database.NullMailQueueStatus"
-                    },
-                    "subject": {
-                        "type": "string"
-                    },
-                    "task_id": {
-                        "type": "string"
                     }
                 },
                 "type": "object"
@@ -223,8 +178,11 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
-            "handlers.MailTaskListItem": {
+            "handlers.MailTaskItem": {
                 "properties": {
+                    "audience": {
+                        "$ref": "#/components/schemas/handlers.SendAudience"
+                    },
                     "body_variables": {
                         "items": {
                             "type": "integer"
@@ -254,6 +212,9 @@ const docTemplate = `{
                         "$ref": "#/components/schemas/handlers.SendStatus"
                     },
                     "template_id": {
+                        "type": "string"
+                    },
+                    "template_key": {
                         "type": "string"
                     },
                     "template_name": {
@@ -304,38 +265,6 @@ const docTemplate = `{
                     },
                     "sent": {
                         "type": "integer"
-                    }
-                },
-                "type": "object"
-            },
-            "handlers.RecentSend": {
-                "properties": {
-                    "audience": {
-                        "$ref": "#/components/schemas/handlers.SendAudience"
-                    },
-                    "created_at": {
-                        "type": "string"
-                    },
-                    "id": {
-                        "type": "string"
-                    },
-                    "recipient_counts": {
-                        "$ref": "#/components/schemas/handlers.QueueCounts"
-                    },
-                    "sent_by": {
-                        "type": "string"
-                    },
-                    "status": {
-                        "$ref": "#/components/schemas/handlers.SendStatus"
-                    },
-                    "template_id": {
-                        "type": "string"
-                    },
-                    "template_key": {
-                        "type": "string"
-                    },
-                    "template_name": {
-                        "type": "string"
                     }
                 },
                 "type": "object"
@@ -412,7 +341,7 @@ const docTemplate = `{
                     },
                     "recent_sends": {
                         "items": {
-                            "$ref": "#/components/schemas/handlers.RecentSend"
+                            "$ref": "#/components/schemas/handlers.MailTaskItem"
                         },
                         "type": "array",
                         "uniqueItems": false
@@ -616,7 +545,7 @@ const docTemplate = `{
     "paths": {
         "/mail_tasks": {
             "get": {
-                "description": "Get a list of all mail tasks with pagination, newest first, each with its derived status and recipients by status. The status filter keeps only sends with that derived status; X-Total-Count counts the filtered sends.",
+                "description": "Get a list of all mail tasks with pagination, newest first, each with its derived status, recipients by status and audience. The status filter keeps only sends with that derived status; X-Total-Count counts the filtered sends. Keycloak group names are looked up within 2 seconds for the whole page and are null past that.",
                 "parameters": [
                     {
                         "description": "Start index",
@@ -654,7 +583,7 @@ const docTemplate = `{
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/handlers.MailTaskListItem"
+                                        "$ref": "#/components/schemas/handlers.MailTaskItem"
                                     },
                                     "type": "array"
                                 }
@@ -900,7 +829,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}": {
             "get": {
-                "description": "Get details of a specific mail task by its ID.",
+                "description": "Get details of a specific mail task by its ID, with its derived status, recipients by status and audience, as the send list shows it.",
                 "parameters": [
                     {
                         "description": "Task ID",
@@ -917,7 +846,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/database.GetMailTaskByIdRow"
+                                    "$ref": "#/components/schemas/handlers.MailTaskItem"
                                 }
                             }
                         },
@@ -932,6 +861,16 @@ const docTemplate = `{
                             }
                         },
                         "description": "Bad Request"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
                     },
                     "404": {
                         "content": {
@@ -962,7 +901,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/queue": {
             "get": {
-                "description": "Get a list of mail queue items associated with a specific task ID, with pagination.",
+                "description": "Get a send's recipients, one queue row each, newest first with the row id breaking ties so pages neither repeat nor skip a recipient. The status filter keeps only recipients in that queue status; X-Total-Count counts the filtered recipients.",
                 "parameters": [
                     {
                         "description": "Task ID",
@@ -988,6 +927,20 @@ const docTemplate = `{
                         "schema": {
                             "type": "integer"
                         }
+                    },
+                    {
+                        "description": "Recipient queue status",
+                        "in": "query",
+                        "name": "status",
+                        "schema": {
+                            "enum": [
+                                "pending",
+                                "processing",
+                                "sent",
+                                "failed"
+                            ],
+                            "type": "string"
+                        }
                     }
                 ],
                 "responses": {
@@ -996,13 +949,21 @@ const docTemplate = `{
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/database.MailQueue"
+                                        "$ref": "#/components/schemas/database.GetMailQueueItemsByTaskIdRow"
                                     },
                                     "type": "array"
                                 }
                             }
                         },
-                        "description": "OK"
+                        "description": "OK",
+                        "headers": {
+                            "X-Total-Count": {
+                                "description": "Number of recipients matching the filter",
+                                "schema": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
                     },
                     "400": {
                         "content": {
@@ -1013,6 +974,16 @@ const docTemplate = `{
                             }
                         },
                         "description": "Bad Request"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
                     },
                     "500": {
                         "content": {

@@ -19,7 +19,7 @@ type Querier interface {
 	CountArchivedMailingLists(ctx context.Context) (int64, error)
 	CountArchivedTemplates(ctx context.Context) (int64, error)
 	CountMailQueueByStatus(ctx context.Context) (CountMailQueueByStatusRow, error)
-	CountMailQueueItemsByTaskId(ctx context.Context, taskID uuid.UUID) (int64, error)
+	CountMailQueueItemsByTaskId(ctx context.Context, arg CountMailQueueItemsByTaskIdParams) (int64, error)
 	CountMailTaskSends(ctx context.Context, status *string) (int64, error)
 	CountMailTasks(ctx context.Context) (int64, error)
 	// Sends by the status mail_task_status derives, over every send: the same
@@ -49,6 +49,9 @@ type Querier interface {
 	// Days are calendar days in time_zone; the series ends on as_of's day and has
 	// one row per day, zero-filled.
 	GetDailySentCounts(ctx context.Context, arg GetDailySentCountsParams) ([]GetDailySentCountsRow, error)
+	// A send's recipients, newest first. A list send's rows come from one insert
+	// and share a created_at, so the id breaks the tie: pages neither repeat nor
+	// skip a recipient. A NULL status lists every recipient.
 	GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueueItemsByTaskIdParams) ([]GetMailQueueItemsByTaskIdRow, error)
 	GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTaskByIdRow, error)
 	GetMailingListById(ctx context.Context, id uuid.UUID) (MailingList, error)
@@ -60,10 +63,11 @@ type Querier interface {
 	GetTemplateByIdIncludingArchived(ctx context.Context, id uuid.UUID) (Template, error)
 	GetTemplateByKey(ctx context.Context, key *string) (Template, error)
 	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (MailTask, error)
-	// A send as the send list and the home screen show it: the task, the template
-	// it used, who it went to, its status as mail_task_status derives it, and its
-	// recipients by status. A NULL status lists every send. The page is cut first
-	// so only its rows are counted.
+	// A send as every screen shows it — the home screen, the send list and a
+	// send's own page: the task, the template it used, who it went to, its status
+	// as mail_task_status derives it, and its recipients by status. A NULL task_id
+	// lists every send and a NULL status every status. The page is cut first so
+	// only its rows are counted.
 	ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error)
 	ProcessQueueItems(ctx context.Context) ([]MailQueue, error)
 	RemoveRecipientFromMailingListByID(ctx context.Context, arg RemoveRecipientFromMailingListByIDParams) error

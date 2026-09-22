@@ -335,17 +335,22 @@ WHERE mt.id = $1;
 SELECT count(*)
 FROM mail_tasks;
 
+-- A send's recipients, newest first. A list send's rows come from one insert
+-- and share a created_at, so the id breaks the tie: pages neither repeat nor
+-- skip a recipient. A NULL status lists every recipient.
 -- name: GetMailQueueItemsByTaskId :many
 SELECT id, recipient_full_name, recipient_email, status, error, attempts, next_attempt_at, created_at
 FROM mail_queue
 WHERE task_id = $1
-ORDER BY created_at DESC
+  AND (sqlc.narg(status)::mail_queue_status IS NULL OR status = sqlc.narg(status)::mail_queue_status)
+ORDER BY created_at DESC, id DESC
 LIMIT $2 OFFSET $3;
 
 -- name: CountMailQueueItemsByTaskId :one
 SELECT count(*)
 FROM mail_queue
-WHERE task_id = $1;
+WHERE task_id = $1
+  AND (sqlc.narg(status)::mail_queue_status IS NULL OR status = sqlc.narg(status)::mail_queue_status);
 
 
 -- name: InsertMailTask :one
@@ -407,14 +412,16 @@ FROM days d
 GROUP BY d.day
 ORDER BY d.day;
 
--- A send as the send list and the home screen show it: the task, the template
--- it used, who it went to, its status as mail_task_status derives it, and its
--- recipients by status. A NULL status lists every send. The page is cut first
--- so only its rows are counted.
+-- A send as every screen shows it — the home screen, the send list and a
+-- send's own page: the task, the template it used, who it went to, its status
+-- as mail_task_status derives it, and its recipients by status. A NULL task_id
+-- lists every send and a NULL status every status. The page is cut first so
+-- only its rows are counted.
 -- name: ListMailTaskSends :many
 WITH page AS (SELECT mt.id
               FROM mail_tasks mt
-              WHERE (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(status)::text)
+              WHERE (sqlc.narg(task_id)::uuid IS NULL OR mt.id = sqlc.narg(task_id)::uuid)
+                AND (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(status)::text)
               ORDER BY mt.created_at DESC, mt.id DESC
               LIMIT $1 OFFSET $2)
 SELECT mt.id,

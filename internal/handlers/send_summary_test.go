@@ -106,6 +106,8 @@ func sendSummaryApp(t *testing.T, db *database.Store, now time.Time, kc keycloak
 	}})
 	app.Get("/mail_tasks/summary", handler.GetSummary)
 	app.Get("/mail_tasks", handler.GetTasks)
+	app.Get("/mail_tasks/:id", handler.GetTask)
+	app.Get("/mail_tasks/:id/queue", handler.GetTaskQueueItems)
 	return app
 }
 
@@ -516,7 +518,7 @@ func TestSendListFiltersByDerivedStatus(t *testing.T) {
 	}
 }
 
-func TestSendListKeepsTheFieldsTheOldPanelReads(t *testing.T) {
+func TestSendListAndDetailKeepTheFieldsTheOldPanelReads(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	ctx := context.Background()
 	now := istanbulTime(2026, time.September, 22, 12, 0, 0)
@@ -533,12 +535,16 @@ func TestSendListKeepsTheFieldsTheOldPanelReads(t *testing.T) {
 	id := seedSend(t, db, seededSend{createdAt: now.Add(-time.Hour), templateID: &template.ID, mailListID: &list.ID,
 		recipients: recipientsWith(database.MailQueueStatusSent, 1)})
 
+	app := sendSummaryApp(t, db, now, lifecycleKeycloakStub{})
 	var rows []map[string]any
-	response := getJSON(t, sendSummaryApp(t, db, now, lifecycleKeycloakStub{}), "/mail_tasks", &rows)
+	response := getJSON(t, app, "/mail_tasks", &rows)
 	if response.Header.Get("X-Total-Count") != "1" || len(rows) != 1 {
 		t.Fatalf("list = %v total=%s", rows, response.Header.Get("X-Total-Count"))
 	}
-	row := rows[0]
+	var detail map[string]any
+	getJSON(t, app, "/mail_tasks/"+id.String(), &detail)
+
+	// The old panel's list and detail pages read these, exactly so.
 	want := map[string]any{
 		"id":             id.String(),
 		"sent_by":        "31ef736f-72da-4a40-8791-d523199cf9f0",
@@ -548,23 +554,25 @@ func TestSendListKeepsTheFieldsTheOldPanelReads(t *testing.T) {
 		"mail_list_name": "WebLab",
 		"body_variables": "e30=", // the JSONB {} as bytes, exactly as it has always been encoded
 	}
-	for field, value := range want {
-		if row[field] != value {
-			t.Errorf("%s = %#v, want %#v", field, row[field], value)
-		}
-	}
-	createdAt, err := time.Parse(time.RFC3339Nano, fmt.Sprint(row["created_at"]))
-	if err != nil || !createdAt.Equal(now.Add(-time.Hour)) {
-		t.Errorf("created_at = %v, want %s", row["created_at"], now.Add(-time.Hour))
-	}
-	// Only additions: the old panel ignores what it does not know.
-	known := map[string]bool{"created_at": true, "status": true, "recipient_counts": true}
+	// Only additions besides them: the old panel ignores what it does not know.
+	known := map[string]bool{"created_at": true, "status": true, "recipient_counts": true, "template_key": true, "audience": true}
 	for field := range want {
 		known[field] = true
 	}
-	for field := range row {
-		if !known[field] {
-			t.Errorf("unexpected field %q", field)
+	for name, row := range map[string]map[string]any{"list row": rows[0], "detail": detail} {
+		for field, value := range want {
+			if row[field] != value {
+				t.Errorf("%s: %s = %#v, want %#v", name, field, row[field], value)
+			}
+		}
+		createdAt, err := time.Parse(time.RFC3339Nano, fmt.Sprint(row["created_at"]))
+		if err != nil || !createdAt.Equal(now.Add(-time.Hour)) {
+			t.Errorf("%s: created_at = %v, want %s", name, row["created_at"], now.Add(-time.Hour))
+		}
+		for field := range row {
+			if !known[field] {
+				t.Errorf("%s: unexpected field %q", name, field)
+			}
 		}
 	}
 }

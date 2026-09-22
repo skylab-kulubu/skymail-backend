@@ -28,8 +28,8 @@ const (
 	maxSummaryRecent     = 20
 )
 
-// keycloakGroupNameBudget is all the time the summary gives Keycloak to name the
-// groups among the recent sends, however many there are.
+// keycloakGroupNameBudget is all the time a response gives Keycloak to name the
+// groups among its sends, however many there are.
 const keycloakGroupNameBudget = 2 * time.Second
 
 // SendStatus is a send's status. A mail task has none of its own; the database
@@ -90,6 +90,23 @@ func parseSendStatusFilter(raw string) (*string, error) {
 	}
 }
 
+// parseRecipientStatusFilter reads a send's recipient filter: a queue status,
+// not a send's derived one. An empty value lists every recipient.
+func parseRecipientStatusFilter(raw string) (database.NullMailQueueStatus, error) {
+	status := database.MailQueueStatus(strings.ToLower(strings.TrimSpace(raw)))
+	switch status {
+	case "":
+		return database.NullMailQueueStatus{}, nil
+	case database.MailQueueStatusPending, database.MailQueueStatusProcessing,
+		database.MailQueueStatusSent, database.MailQueueStatusFailed:
+		return database.NullMailQueueStatus{MailQueueStatus: status, Valid: true}, nil
+	default:
+		return database.NullMailQueueStatus{}, apperrors.ErrValidation.WithParams(map[string]interface{}{
+			"status": "must be one of pending, processing, sent, failed",
+		})
+	}
+}
+
 // QueueCounts counts queue rows — one per recipient of a send — by the status
 // the mailer left them in.
 type QueueCounts struct {
@@ -125,27 +142,14 @@ type SendAudience struct {
 	RecipientEmail    *string    `json:"recipient_email"`
 }
 
-// RecentSend is one of the latest sends on the home screen.
-type RecentSend struct {
-	ID              uuid.UUID    `json:"id"`
-	CreatedAt       time.Time    `json:"created_at"`
-	SentBy          string       `json:"sent_by"`
-	TemplateID      *uuid.UUID   `json:"template_id"`
-	TemplateName    *string      `json:"template_name"`
-	TemplateKey     *string      `json:"template_key"`
-	Audience        SendAudience `json:"audience"`
-	Status          SendStatus   `json:"status"`
-	RecipientCounts QueueCounts  `json:"recipient_counts"`
-}
-
 // SendSummary is what the home screen shows: the queue as it stands, sends by
 // status, the mail sent per day, and the latest sends.
 type SendSummary struct {
-	TimeZone    string       `json:"time_zone" example:"Europe/Istanbul"`
-	QueueCounts QueueCounts  `json:"queue_counts"`
-	SendCounts  SendCounts   `json:"send_counts"`
-	DailySent   []DailySent  `json:"daily_sent"`
-	RecentSends []RecentSend `json:"recent_sends"`
+	TimeZone    string         `json:"time_zone" example:"Europe/Istanbul"`
+	QueueCounts QueueCounts    `json:"queue_counts"`
+	SendCounts  SendCounts     `json:"send_counts"`
+	DailySent   []DailySent    `json:"daily_sent"`
+	RecentSends []MailTaskItem `json:"recent_sends"`
 }
 
 // GetSummary godoc
@@ -200,21 +204,6 @@ func (h *mailHandlerImpl) GetSummary(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	groupNames := h.keycloakGroupNames(c.Context(), sends)
-	recentSends := make([]RecentSend, len(sends))
-	for i, send := range sends {
-		recentSends[i] = RecentSend{
-			ID:              send.ID,
-			CreatedAt:       send.CreatedAt,
-			SentBy:          send.SentBy,
-			TemplateID:      send.TemplateID,
-			TemplateName:    send.TemplateName,
-			TemplateKey:     send.TemplateKey,
-			Audience:        sendAudience(send, groupNames),
-			Status:          SendStatus(send.Status),
-			RecipientCounts: recipientCounts(send),
-		}
-	}
 
 	return c.JSON(SendSummary{
 		TimeZone: summaryTimeZone,
@@ -230,8 +219,32 @@ func (h *mailHandlerImpl) GetSummary(c fiber.Ctx) error {
 			Sent:    sendCounts.Sent,
 		},
 		DailySent:   dailySent,
-		RecentSends: recentSends,
+		RecentSends: h.mailTaskItems(c.Context(), sends),
 	})
+}
+
+// mailTaskItems shapes sends the one way every screen shows them, naming the
+// Keycloak groups among them in one bounded lookup.
+func (h *mailHandlerImpl) mailTaskItems(ctx context.Context, sends []database.ListMailTaskSendsRow) []MailTaskItem {
+	groupNames := h.keycloakGroupNames(ctx, sends)
+	items := make([]MailTaskItem, len(sends))
+	for i, send := range sends {
+		items[i] = MailTaskItem{
+			ID:              send.ID,
+			SentBy:          send.SentBy,
+			TemplateID:      send.TemplateID,
+			MailListID:      send.MailListID,
+			BodyVariables:   send.BodyVariables,
+			CreatedAt:       send.CreatedAt,
+			TemplateName:    send.TemplateName,
+			MailListName:    send.MailListName,
+			TemplateKey:     send.TemplateKey,
+			Status:          SendStatus(send.Status),
+			RecipientCounts: recipientCounts(send),
+			Audience:        sendAudience(send, groupNames),
+		}
+	}
+	return items
 }
 
 func recipientCounts(send database.ListMailTaskSendsRow) QueueCounts {
@@ -260,10 +273,10 @@ func sendAudience(send database.ListMailTaskSendsRow, groupNames map[uuid.UUID]*
 	}
 }
 
-// keycloakGroupNames names the Keycloak groups among the sends. A name is a
-// nicety on the home screen, so a group Keycloak cannot name — gone, or
+// keycloakGroupNames names the Keycloak groups among the sends, asking once
+// per group. A name is a nicety, so a group Keycloak cannot name — gone, or
 // Keycloak unreachable or too slow — is left unnamed rather than failing or
-// holding up the summary.
+// holding up the response.
 func (h *mailHandlerImpl) keycloakGroupNames(ctx context.Context, sends []database.ListMailTaskSendsRow) map[uuid.UUID]*string {
 	ctx, cancel := context.WithTimeout(ctx, keycloakGroupNameBudget)
 	defer cancel()

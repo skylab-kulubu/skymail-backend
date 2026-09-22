@@ -208,10 +208,16 @@ const countMailQueueItemsByTaskId = `-- name: CountMailQueueItemsByTaskId :one
 SELECT count(*)
 FROM mail_queue
 WHERE task_id = $1
+  AND ($2::mail_queue_status IS NULL OR status = $2::mail_queue_status)
 `
 
-func (q *Queries) CountMailQueueItemsByTaskId(ctx context.Context, taskID uuid.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countMailQueueItemsByTaskId, taskID)
+type CountMailQueueItemsByTaskIdParams struct {
+	TaskID uuid.UUID           `json:"task_id"`
+	Status NullMailQueueStatus `json:"status"`
+}
+
+func (q *Queries) CountMailQueueItemsByTaskId(ctx context.Context, arg CountMailQueueItemsByTaskIdParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countMailQueueItemsByTaskId, arg.TaskID, arg.Status)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -851,14 +857,16 @@ const getMailQueueItemsByTaskId = `-- name: GetMailQueueItemsByTaskId :many
 SELECT id, recipient_full_name, recipient_email, status, error, attempts, next_attempt_at, created_at
 FROM mail_queue
 WHERE task_id = $1
-ORDER BY created_at DESC
+  AND ($4::mail_queue_status IS NULL OR status = $4::mail_queue_status)
+ORDER BY created_at DESC, id DESC
 LIMIT $2 OFFSET $3
 `
 
 type GetMailQueueItemsByTaskIdParams struct {
-	TaskID uuid.UUID `json:"task_id"`
-	Limit  int32     `json:"limit"`
-	Offset int32     `json:"offset"`
+	TaskID uuid.UUID           `json:"task_id"`
+	Limit  int32               `json:"limit"`
+	Offset int32               `json:"offset"`
+	Status NullMailQueueStatus `json:"status"`
 }
 
 type GetMailQueueItemsByTaskIdRow struct {
@@ -872,8 +880,16 @@ type GetMailQueueItemsByTaskIdRow struct {
 	CreatedAt         *time.Time          `json:"created_at"`
 }
 
+// A send's recipients, newest first. A list send's rows come from one insert
+// and share a created_at, so the id breaks the tie: pages neither repeat nor
+// skip a recipient. A NULL status lists every recipient.
 func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueueItemsByTaskIdParams) ([]GetMailQueueItemsByTaskIdRow, error) {
-	rows, err := q.db.Query(ctx, getMailQueueItemsByTaskId, arg.TaskID, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, getMailQueueItemsByTaskId,
+		arg.TaskID,
+		arg.Limit,
+		arg.Offset,
+		arg.Status,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1199,7 +1215,8 @@ func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) 
 const listMailTaskSends = `-- name: ListMailTaskSends :many
 WITH page AS (SELECT mt.id
               FROM mail_tasks mt
-              WHERE ($3::text IS NULL OR mail_task_status(mt.id) = $3::text)
+              WHERE ($3::uuid IS NULL OR mt.id = $3::uuid)
+                AND ($4::text IS NULL OR mail_task_status(mt.id) = $4::text)
               ORDER BY mt.created_at DESC, mt.id DESC
               LIMIT $1 OFFSET $2)
 SELECT mt.id,
@@ -1240,9 +1257,10 @@ ORDER BY mt.created_at DESC, mt.id DESC
 `
 
 type ListMailTaskSendsParams struct {
-	Limit  int32   `json:"limit"`
-	Offset int32   `json:"offset"`
-	Status *string `json:"status"`
+	Limit  int32      `json:"limit"`
+	Offset int32      `json:"offset"`
+	TaskID *uuid.UUID `json:"task_id"`
+	Status *string    `json:"status"`
 }
 
 type ListMailTaskSendsRow struct {
@@ -1265,12 +1283,18 @@ type ListMailTaskSendsRow struct {
 	SingleRecipientEmail    *string    `json:"single_recipient_email"`
 }
 
-// A send as the send list and the home screen show it: the task, the template
-// it used, who it went to, its status as mail_task_status derives it, and its
-// recipients by status. A NULL status lists every send. The page is cut first
-// so only its rows are counted.
+// A send as every screen shows it — the home screen, the send list and a
+// send's own page: the task, the template it used, who it went to, its status
+// as mail_task_status derives it, and its recipients by status. A NULL task_id
+// lists every send and a NULL status every status. The page is cut first so
+// only its rows are counted.
 func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error) {
-	rows, err := q.db.Query(ctx, listMailTaskSends, arg.Limit, arg.Offset, arg.Status)
+	rows, err := q.db.Query(ctx, listMailTaskSends,
+		arg.Limit,
+		arg.Offset,
+		arg.TaskID,
+		arg.Status,
+	)
 	if err != nil {
 		return nil, err
 	}
