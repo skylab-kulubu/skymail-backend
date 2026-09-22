@@ -8,6 +8,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
+	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 )
 
 // A system template is addressed by key by another service (the Keycloak mail
@@ -23,6 +24,15 @@ var errSystemTemplateKey = apperrors.New(
 	"template.system_key_immutable",
 	"The key of a system template cannot be changed.",
 	fiber.StatusConflict,
+)
+
+// A key arriving in the path skips the struct tag that validates one in a body,
+// so without this a malformed key reached the database and came back as a check
+// constraint violation — a 500 for what is the caller's mistake.
+var errInvalidTemplateKey = apperrors.New(
+	"template.invalid_key",
+	"A template key is 3–64 characters of lowercase letters, digits, dots and hyphens, starting and ending with a letter or digit.",
+	fiber.StatusBadRequest,
 )
 
 type TemplateHandler interface {
@@ -335,6 +345,9 @@ func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 	key := c.Params("key")
 	if key == "" {
 		return apperrors.ErrStatusNotFound
+	}
+	if !validator.IsTemplateKey(key) {
+		return errInvalidTemplateKey
 	}
 
 	var params requests.UpsertTemplateByKey
