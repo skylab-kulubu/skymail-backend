@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -13,6 +14,10 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
 )
 
+// The newest migration in db/migrations. Distinct from
+// migrations.LegacyBaselineVersion, which is the one older schema a running
+// database may be adopted at — the two were the same number until templates
+// grew keys, and conflating them hid what each test was actually asserting.
 const latestMigrationVersion = uint(20260922170100)
 
 func TestRunAppliesAllMigrationsToFreshDatabase(t *testing.T) {
@@ -75,10 +80,12 @@ func TestRunBaselinesExistingSchemaWithoutReplayingOldMigrations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	version, err := migrations.Run(context.Background(), database.URL, latestMigrationVersion)
+	version, err := migrations.Run(context.Background(), database.URL, migrations.LegacyBaselineVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Adopted at the baseline, then carried forward: the migrations newer than
+	// the baseline still run, the ones it already has do not.
 	if version != latestMigrationVersion {
 		t.Fatalf("version = %d, want %d", version, latestMigrationVersion)
 	}
@@ -98,7 +105,7 @@ func TestRunRejectsBaselineWhenLegacySchemaDoesNotMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := migrations.Run(context.Background(), database.URL, latestMigrationVersion)
+	_, err := migrations.Run(context.Background(), database.URL, migrations.LegacyBaselineVersion)
 	if err == nil {
 		t.Fatal("mismatched legacy schema unexpectedly accepted")
 	}
@@ -107,6 +114,9 @@ func TestRunRejectsBaselineWhenLegacySchemaDoesNotMatch(t *testing.T) {
 	}
 }
 
+// applyLegacySchema builds the database as it stood at the verified baseline —
+// migrations newer than the baseline are deliberately left out, because the
+// point of adopting a legacy database is that those still have to run.
 func applyLegacySchema(t *testing.T, database testpostgres.Database) {
 	t.Helper()
 	_, filename, _, ok := runtime.Caller(0)
@@ -120,6 +130,11 @@ func applyLegacySchema(t *testing.T, database testpostgres.Database) {
 	}
 	sort.Strings(files)
 	for _, file := range files {
+		version := migrationVersion(t, file)
+		if version > migrations.LegacyBaselineVersion {
+			continue
+		}
+
 		migration, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
@@ -128,4 +143,15 @@ func applyLegacySchema(t *testing.T, database testpostgres.Database) {
 			t.Fatalf("apply %s: %v", filepath.Base(file), err)
 		}
 	}
+}
+
+func migrationVersion(t *testing.T, path string) uint {
+	t.Helper()
+	name := filepath.Base(path)
+	digits := strings.SplitN(name, "_", 2)[0]
+	version, err := strconv.ParseUint(digits, 10, 64)
+	if err != nil {
+		t.Fatalf("parse migration version from %s: %v", name, err)
+	}
+	return uint(version)
 }
