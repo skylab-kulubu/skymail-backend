@@ -1,0 +1,135 @@
+{
+  "about": [
+    "Which variables a Mail template body references: the rule the Required variable check applies.",
+    "A reference is a field of the data the mailer passes (the send's variables, Email, FullName) used in a Go action:",
+    ".X and $.X, in plain actions, if and else if conditions, function arguments and pipelines. Inside range and with",
+    "bodies .X is the element's field and does not count, $.X does. index . \"X\", a comment, a string and the text",
+    "around the actions do not count. Nothing inside a define counts; a block given dot reads like the text around it.",
+    "The same file, byte for byte, is read by skymail-backend (internal/mailer/testdata/referenced-variables.json,",
+    "which checks what the server refuses) and skymail-frontend (src/lib/mail-render/testdata/referenced-variables.json,",
+    "which checks what the panel shows). Change both copies together."
+  ],
+  "cases": [
+    { "name": "a plain field", "source": "<p>Merhaba {{.FirstName}}</p>", "expect": ["FirstName"] },
+    {
+      "name": "a field inside an if, and the if's own",
+      "source": "{{if .ResetLink}}<a href=\"{{.ResetLink}}\">Sıfırla</a>{{end}}",
+      "expect": ["ResetLink"]
+    },
+    {
+      "name": "a field only inside a conditional section",
+      "source": "<p>{{if .Show}}<a href=\"{{.link}}\">Bağlantı</a>{{end}}</p>",
+      "expect": ["Show", "link"]
+    },
+    {
+      "name": "a comparison and an else if",
+      "source": "{{if eq .Decision `approved`}}Onay{{else if .Reason}}{{.Reason}}{{end}}",
+      "expect": ["Decision", "Reason"]
+    },
+    { "name": "a field only in an else branch", "source": "{{if .A}}x{{else}}{{.B}}{{end}}", "expect": ["A", "B"] },
+    {
+      "name": "function arguments and pipes",
+      "source": "{{safeHTML .BodyHtml}} {{printf \"%s %s\" .First .Last}} {{.Team | html}}",
+      "expect": ["BodyHtml", "First", "Last", "Team"]
+    },
+    { "name": "trim markers", "source": "{{- .A -}} {{- if .B -}}x{{- end -}}", "expect": ["A", "B"] },
+    { "name": "the first field of a chain", "source": "{{.Event.Title}}", "expect": ["Event"] },
+    {
+      "name": "a field kept in a variable, not the variable's own fields",
+      "source": "{{$event := .Event}}{{$event.Title}}",
+      "expect": ["Event"]
+    },
+    {
+      "name": "a range's list, and $ inside it, but not the element's fields",
+      "source": "<ul>{{range .Items}}<li>{{.Title}} · {{$.EventName}}</li>{{end}}</ul>",
+      "expect": ["EventName", "Items"]
+    },
+    {
+      "name": "a range with its own variables",
+      "source": "{{range $i, $e := .Items}}{{$i}}. {{$e.Title}}{{end}}",
+      "expect": ["Items"]
+    },
+    {
+      "name": "a range's else, which runs with the outer dot",
+      "source": "{{range .Items}}{{.Title}}{{else}}{{.EmptyNote}}{{end}}",
+      "expect": ["EmptyNote", "Items"]
+    },
+    {
+      "name": "a with's value and its else branch",
+      "source": "{{with .Organizer}}{{.Name}}{{else}}{{.FallbackName}}{{end}}",
+      "expect": ["FallbackName", "Organizer"]
+    },
+    {
+      "name": "an else with, whose value counts and whose body is its own",
+      "source": "{{with .A}}{{.X}}{{else with .B}}{{.Y}}{{else}}{{.Z}}{{end}}",
+      "expect": ["A", "B", "Z"]
+    },
+    {
+      "name": "$ inside a with",
+      "source": "{{with .Org}}{{.Name}} <a href=\"{{$.link}}\">Git</a>{{end}}",
+      "expect": ["Org", "link"]
+    },
+    {
+      "name": "$ inside a with inside a range, and nothing else there",
+      "source": "{{range .Days}}{{with .Slot}}{{$.Venue}} {{.Room}}{{end}}{{if .Note}}{{.Note}}{{end}}{{end}}",
+      "expect": ["Days", "Venue"]
+    },
+    { "name": "nothing from index of dot", "source": "<a href=\"{{index . \"link\"}}\">Git</a>", "expect": [] },
+    {
+      "name": "a call's argument, not a field of its result",
+      "source": "{{(index .Links 0).URL}}",
+      "expect": ["Links"]
+    },
+    { "name": "neither dot nor a function", "source": "{{printf \"%v\" .}} {{add1 2}}", "expect": [] },
+    {
+      "name": "nothing inside a define, whose data its caller decides",
+      "source": "{{define \"footer\"}}{{.Team}} {{$.Year}}{{end}}{{.Name}}",
+      "expect": ["Name"]
+    },
+    {
+      "name": "a template call's argument, not the body it calls",
+      "source": "{{define \"x\"}}{{.Inner}}{{end}}{{template \"x\" .Data}}",
+      "expect": ["Data"]
+    },
+    {
+      "name": "nothing from the define a template call runs, even given dot",
+      "source": "{{define \"x\"}}{{.Inner}}{{end}}{{template \"x\" .}}",
+      "expect": []
+    },
+    {
+      "name": "a block given dot, read like the text around it",
+      "source": "{{block \"footer\" .}}{{.Team}}{{end}}{{block \"other\" .Org}}{{.Inner}} {{$.Year}}{{end}}",
+      "expect": ["Org", "Team"]
+    },
+    {
+      "name": "nothing inside a block given dot where dot is an element",
+      "source": "{{range .Items}}{{block \"row\" .}}{{.Title}} {{$.Year}}{{end}}{{end}}",
+      "expect": ["Items"]
+    },
+    {
+      "name": "each name once, sorted",
+      "source": "{{.Name}} {{.Email}} {{if .Name}}{{.Name}}{{end}}",
+      "expect": ["Email", "Name"]
+    },
+    {
+      "name": "nothing from a comment",
+      "source": "<p>{{/* .Secret buraya gelecek */}}Merhaba{{- /* .Other */ -}}</p>",
+      "expect": []
+    },
+    {
+      "name": "nothing from a comment that holds actions",
+      "source": "{{/* {{if .X}}{{.Y}}{{end}} */}}<p>{{.Z}}</p>",
+      "expect": ["Z"]
+    },
+    {
+      "name": "nothing from the text around the actions",
+      "source": "<p>Dosya adı .Name, tek parantez {.Link}, {{.Real}}</p>",
+      "expect": ["Real"]
+    },
+    {
+      "name": "nothing from a string or a number",
+      "source": "{{if eq .Kind \".Other\"}}x{{end}}{{if gt .Count .5}}y{{end}}",
+      "expect": ["Count", "Kind"]
+    }
+  ]
+}
