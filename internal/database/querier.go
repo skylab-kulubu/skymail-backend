@@ -67,16 +67,46 @@ type Querier interface {
 	// found here.
 	GetTemplateVersion(ctx context.Context, arg GetTemplateVersionParams) (GetTemplateVersionRow, error)
 	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (MailTask, error)
+	// Writes an operator's draft, numbered after the template's last version. The
+	// caller holds the template row's lock (LockTemplate).
+	InsertTemplateDraft(ctx context.Context, arg InsertTemplateDraftParams) (uuid.UUID, error)
+	// Whether text is a JSX source by the rule the migration and the old panel's
+	// writes read react_email_content with: something other than whitespace and
+	// comments is left in it.
+	IsJSXSource(ctx context.Context, content string) (bool, error)
 	// A send as every screen shows it — the home screen, the send list and a
 	// send's own page: the task, the template it used, who it went to, its status
 	// as mail_task_status derives it, and its recipients by status. A NULL task_id
 	// lists every send and a NULL status every status. The page is cut first so
 	// only its rows are counted.
 	ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error)
+	// The Authoring mode of each template's Main source as it is sent: its
+	// published version's.
+	ListPublishedMainModes(ctx context.Context, templateIds []uuid.UUID) ([]ListPublishedMainModesRow, error)
+	// Each operator's draft in progress on the given templates, newest first: the
+	// newest version an operator wrote of a template, when it is not published.
+	// An operator's later version supersedes their earlier drafts, so those are
+	// not listed; a draft that someone else's publish made stale still is, until
+	// its author writes again.
+	ListTemplateDrafts(ctx context.Context, templateIds []uuid.UUID) ([]TemplateVersionSummary, error)
 	// A template's Mail template versions, newest first, without their sources or
 	// render.
 	ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]TemplateVersionSummary, error)
+	// Takes a template row's lock, archived or not, for a write that does not
+	// change the row first — saving a draft, restoring a version, publishing. A
+	// version is numbered after the lock is taken, and the old panel's and the
+	// seed's writes take the same lock by updating the row, so every writer of one
+	// template numbers its version in turn.
+	LockTemplate(ctx context.Context, id uuid.UUID) (Template, error)
 	ProcessQueueItems(ctx context.Context) ([]MailQueue, error)
+	// Publishes a draft: marks it published and copies it onto the template row,
+	// which the send path reads — its subject and render, and its JSX source (an
+	// empty string when it has none) as react_email_content. The old panel edits
+	// that column and the expand step reads it back through template_jsx_source,
+	// so it must hold the published version's JSX source or nothing. The caller
+	// holds the row's lock and has checked that the version is a draft of this
+	// template.
+	PublishTemplateDraft(ctx context.Context, arg PublishTemplateDraftParams) (Template, error)
 	// Records what a template row now holds as a new Mail template version,
 	// published at once, and makes the row a copy of it. This is the expand step
 	// for the writers that still write the row directly — the old panel's create
@@ -115,6 +145,9 @@ type Querier interface {
 	RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, error)
 	SetMailQueueItemFailed(ctx context.Context, arg SetMailQueueItemFailedParams) error
 	SetMailQueueItemSent(ctx context.Context, id uuid.UUID) error
+	// Whether a version holds exactly this content: subject, every source, Main
+	// source and render. A Visual document compares as JSON, not as text.
+	TemplateVersionHoldsContent(ctx context.Context, arg TemplateVersionHoldsContentParams) (bool, error)
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
 	UpdateRecipient(ctx context.Context, arg UpdateRecipientParams) (Recipient, error)
 	UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) (Template, error)

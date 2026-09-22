@@ -234,6 +234,105 @@ FROM template_version_summaries s
 WHERE s.template_id = sqlc.arg(template_id)
   AND s.id = sqlc.arg(id);
 
+-- Takes a template row's lock, archived or not, for a write that does not
+-- change the row first — saving a draft, restoring a version, publishing. A
+-- version is numbered after the lock is taken, and the old panel's and the
+-- seed's writes take the same lock by updating the row, so every writer of one
+-- template numbers its version in turn.
+-- name: LockTemplate :one
+SELECT *
+FROM templates
+WHERE id = $1
+    FOR UPDATE;
+
+-- Each operator's draft in progress on the given templates, newest first: the
+-- newest version an operator wrote of a template, when it is not published.
+-- An operator's later version supersedes their earlier drafts, so those are
+-- not listed; a draft that someone else's publish made stale still is, until
+-- its author writes again.
+-- name: ListTemplateDrafts :many
+SELECT *
+FROM template_version_summaries s
+WHERE s.id IN (SELECT DISTINCT ON (v.template_id, v.author_sub) v.id
+               FROM template_versions v
+               WHERE v.template_id = ANY (sqlc.arg(template_ids)::uuid[])
+                 AND v.author_kind = 'operator'
+               ORDER BY v.template_id, v.author_sub, v.seq DESC)
+  AND s.published_at IS NULL
+ORDER BY s.template_id, s.seq DESC;
+
+-- The Authoring mode of each template's Main source as it is sent: its
+-- published version's.
+-- name: ListPublishedMainModes :many
+SELECT t.id AS template_id, v.main_mode
+FROM templates t
+         JOIN template_versions v ON v.id = t.published_version_id
+WHERE t.id = ANY (sqlc.arg(template_ids)::uuid[]);
+
+-- Whether a version holds exactly this content: subject, every source, Main
+-- source and render. A Visual document compares as JSON, not as text.
+-- name: TemplateVersionHoldsContent :one
+SELECT ((v.subject, v.jsx_source, v.visual_source, v.html_source, v.main_mode, v.html_content, v.plain_text_content)
+    IS NOT DISTINCT FROM
+        (sqlc.arg(subject)::text, sqlc.narg(jsx_source)::text, sqlc.narg(visual_source)::jsonb,
+         sqlc.narg(html_source)::text, sqlc.arg(main_mode)::authoring_mode, sqlc.arg(html_content)::text,
+         sqlc.arg(plain_text_content)::text))::boolean AS holds
+FROM template_versions v
+WHERE v.id = sqlc.arg(id);
+
+-- Whether text is a JSX source by the rule the migration and the old panel's
+-- writes read react_email_content with: something other than whitespace and
+-- comments is left in it.
+-- name: IsJSXSource :one
+SELECT (template_jsx_source(sqlc.arg(content)::text) IS NOT NULL)::boolean AS is_source;
+
+-- Writes an operator's draft, numbered after the template's last version. The
+-- caller holds the template row's lock (LockTemplate).
+-- name: InsertTemplateDraft :one
+INSERT INTO template_versions (template_id, seq, subject, jsx_source, visual_source, html_source, main_mode,
+                               html_content, plain_text_content, author_kind, author_sub, author_name,
+                               base_version_id)
+VALUES (sqlc.arg(template_id),
+        COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = sqlc.arg(template_id)), 0) + 1,
+        sqlc.arg(subject),
+        sqlc.narg(jsx_source),
+        sqlc.narg(visual_source),
+        sqlc.narg(html_source),
+        sqlc.arg(main_mode),
+        sqlc.arg(html_content),
+        sqlc.arg(plain_text_content),
+        'operator',
+        sqlc.narg(author_sub),
+        sqlc.narg(author_name),
+        sqlc.narg(base_version_id))
+RETURNING id;
+
+-- Publishes a draft: marks it published and copies it onto the template row,
+-- which the send path reads — its subject and render, and its JSX source (an
+-- empty string when it has none) as react_email_content. The old panel edits
+-- that column and the expand step reads it back through template_jsx_source,
+-- so it must hold the published version's JSX source or nothing. The caller
+-- holds the row's lock and has checked that the version is a draft of this
+-- template.
+-- name: PublishTemplateDraft :one
+WITH published AS (
+    UPDATE template_versions v
+        SET published_at = NOW()
+        WHERE v.id = sqlc.arg(version_id)
+            AND v.template_id = sqlc.arg(template_id)
+            AND v.published_at IS NULL
+        RETURNING v.id, v.template_id, v.subject, v.jsx_source, v.html_content, v.plain_text_content)
+UPDATE templates t
+SET subject              = p.subject,
+    html_content         = p.html_content,
+    plain_text_content   = p.plain_text_content,
+    react_email_content  = COALESCE(p.jsx_source, ''),
+    published_version_id = p.id,
+    updated_at           = NOW()
+FROM published p
+WHERE t.id = p.template_id
+RETURNING t.*;
+
 -- name: CreateMailingList :one
 INSERT INTO mailing_lists (name)
 VALUES ($1)

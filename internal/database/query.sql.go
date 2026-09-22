@@ -1288,6 +1288,75 @@ func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) 
 	return i, err
 }
 
+const insertTemplateDraft = `-- name: InsertTemplateDraft :one
+INSERT INTO template_versions (template_id, seq, subject, jsx_source, visual_source, html_source, main_mode,
+                               html_content, plain_text_content, author_kind, author_sub, author_name,
+                               base_version_id)
+VALUES ($1,
+        COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = $1), 0) + 1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        'operator',
+        $9,
+        $10,
+        $11)
+RETURNING id
+`
+
+type InsertTemplateDraftParams struct {
+	TemplateID       uuid.UUID     `json:"template_id"`
+	Subject          string        `json:"subject"`
+	JsxSource        *string       `json:"jsx_source"`
+	VisualSource     []byte        `json:"visual_source"`
+	HtmlSource       *string       `json:"html_source"`
+	MainMode         AuthoringMode `json:"main_mode"`
+	HtmlContent      string        `json:"html_content"`
+	PlainTextContent string        `json:"plain_text_content"`
+	AuthorSub        *string       `json:"author_sub"`
+	AuthorName       *string       `json:"author_name"`
+	BaseVersionID    *uuid.UUID    `json:"base_version_id"`
+}
+
+// Writes an operator's draft, numbered after the template's last version. The
+// caller holds the template row's lock (LockTemplate).
+func (q *Queries) InsertTemplateDraft(ctx context.Context, arg InsertTemplateDraftParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, insertTemplateDraft,
+		arg.TemplateID,
+		arg.Subject,
+		arg.JsxSource,
+		arg.VisualSource,
+		arg.HtmlSource,
+		arg.MainMode,
+		arg.HtmlContent,
+		arg.PlainTextContent,
+		arg.AuthorSub,
+		arg.AuthorName,
+		arg.BaseVersionID,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const isJSXSource = `-- name: IsJSXSource :one
+SELECT (template_jsx_source($1::text) IS NOT NULL)::boolean AS is_source
+`
+
+// Whether text is a JSX source by the rule the migration and the old panel's
+// writes read react_email_content with: something other than whitespace and
+// comments is left in it.
+func (q *Queries) IsJSXSource(ctx context.Context, content string) (bool, error) {
+	row := q.db.QueryRow(ctx, isJSXSource, content)
+	var is_source bool
+	err := row.Scan(&is_source)
+	return is_source, err
+}
+
 const listMailTaskSends = `-- name: ListMailTaskSends :many
 WITH page AS (SELECT mt.id
               FROM mail_tasks mt
@@ -1407,6 +1476,91 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 	return items, nil
 }
 
+const listPublishedMainModes = `-- name: ListPublishedMainModes :many
+SELECT t.id AS template_id, v.main_mode
+FROM templates t
+         JOIN template_versions v ON v.id = t.published_version_id
+WHERE t.id = ANY ($1::uuid[])
+`
+
+type ListPublishedMainModesRow struct {
+	TemplateID uuid.UUID     `json:"template_id"`
+	MainMode   AuthoringMode `json:"main_mode"`
+}
+
+// The Authoring mode of each template's Main source as it is sent: its
+// published version's.
+func (q *Queries) ListPublishedMainModes(ctx context.Context, templateIds []uuid.UUID) ([]ListPublishedMainModesRow, error) {
+	rows, err := q.db.Query(ctx, listPublishedMainModes, templateIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPublishedMainModesRow
+	for rows.Next() {
+		var i ListPublishedMainModesRow
+		if err := rows.Scan(&i.TemplateID, &i.MainMode); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTemplateDrafts = `-- name: ListTemplateDrafts :many
+SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current
+FROM template_version_summaries s
+WHERE s.id IN (SELECT DISTINCT ON (v.template_id, v.author_sub) v.id
+               FROM template_versions v
+               WHERE v.template_id = ANY ($1::uuid[])
+                 AND v.author_kind = 'operator'
+               ORDER BY v.template_id, v.author_sub, v.seq DESC)
+  AND s.published_at IS NULL
+ORDER BY s.template_id, s.seq DESC
+`
+
+// Each operator's draft in progress on the given templates, newest first: the
+// newest version an operator wrote of a template, when it is not published.
+// An operator's later version supersedes their earlier drafts, so those are
+// not listed; a draft that someone else's publish made stale still is, until
+// its author writes again.
+func (q *Queries) ListTemplateDrafts(ctx context.Context, templateIds []uuid.UUID) ([]TemplateVersionSummary, error) {
+	rows, err := q.db.Query(ctx, listTemplateDrafts, templateIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TemplateVersionSummary
+	for rows.Next() {
+		var i TemplateVersionSummary
+		if err := rows.Scan(
+			&i.ID,
+			&i.TemplateID,
+			&i.Seq,
+			&i.Subject,
+			&i.RequestedSubject,
+			&i.MainMode,
+			&i.AuthorKind,
+			&i.AuthorSub,
+			&i.AuthorName,
+			&i.CreatedAt,
+			&i.PublishedAt,
+			&i.BaseVersionID,
+			&i.IsCurrent,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTemplateVersions = `-- name: ListTemplateVersions :many
 SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current
 FROM template_version_summaries
@@ -1457,6 +1611,39 @@ func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVers
 	return items, nil
 }
 
+const lockTemplate = `-- name: LockTemplate :one
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
+FROM templates
+WHERE id = $1
+    FOR UPDATE
+`
+
+// Takes a template row's lock, archived or not, for a write that does not
+// change the row first — saving a draft, restoring a version, publishing. A
+// version is numbered after the lock is taken, and the old panel's and the
+// seed's writes take the same lock by updating the row, so every writer of one
+// template numbers its version in turn.
+func (q *Queries) LockTemplate(ctx context.Context, id uuid.UUID) (Template, error) {
+	row := q.db.QueryRow(ctx, lockTemplate, id)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.Key,
+		&i.System,
+		&i.PublishedVersionID,
+	)
+	return i, err
+}
+
 const processQueueItems = `-- name: ProcessQueueItems :many
 UPDATE mail_queue
 SET status = 'processing'
@@ -1500,6 +1687,59 @@ func (q *Queries) ProcessQueueItems(ctx context.Context) ([]MailQueue, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const publishTemplateDraft = `-- name: PublishTemplateDraft :one
+WITH published AS (
+    UPDATE template_versions v
+        SET published_at = NOW()
+        WHERE v.id = $1
+            AND v.template_id = $2
+            AND v.published_at IS NULL
+        RETURNING v.id, v.template_id, v.subject, v.jsx_source, v.html_content, v.plain_text_content)
+UPDATE templates t
+SET subject              = p.subject,
+    html_content         = p.html_content,
+    plain_text_content   = p.plain_text_content,
+    react_email_content  = COALESCE(p.jsx_source, ''),
+    published_version_id = p.id,
+    updated_at           = NOW()
+FROM published p
+WHERE t.id = p.template_id
+RETURNING t.id, t.name, t.html_content, t.plain_text_content, t.react_email_content, t.created_at, t.updated_at, t.subject, t.archived_at, t.archived_by, t.key, t.system, t.published_version_id
+`
+
+type PublishTemplateDraftParams struct {
+	VersionID  uuid.UUID `json:"version_id"`
+	TemplateID uuid.UUID `json:"template_id"`
+}
+
+// Publishes a draft: marks it published and copies it onto the template row,
+// which the send path reads — its subject and render, and its JSX source (an
+// empty string when it has none) as react_email_content. The old panel edits
+// that column and the expand step reads it back through template_jsx_source,
+// so it must hold the published version's JSX source or nothing. The caller
+// holds the row's lock and has checked that the version is a draft of this
+// template.
+func (q *Queries) PublishTemplateDraft(ctx context.Context, arg PublishTemplateDraftParams) (Template, error) {
+	row := q.db.QueryRow(ctx, publishTemplateDraft, arg.VersionID, arg.TemplateID)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.Key,
+		&i.System,
+		&i.PublishedVersionID,
+	)
+	return i, err
 }
 
 const recordTemplateRowAsVersion = `-- name: RecordTemplateRowAsVersion :execrows
@@ -1751,6 +1991,45 @@ WHERE id = $1
 func (q *Queries) SetMailQueueItemSent(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, setMailQueueItemSent, id)
 	return err
+}
+
+const templateVersionHoldsContent = `-- name: TemplateVersionHoldsContent :one
+SELECT ((v.subject, v.jsx_source, v.visual_source, v.html_source, v.main_mode, v.html_content, v.plain_text_content)
+    IS NOT DISTINCT FROM
+        ($1::text, $2::text, $3::jsonb,
+         $4::text, $5::authoring_mode, $6::text,
+         $7::text))::boolean AS holds
+FROM template_versions v
+WHERE v.id = $8
+`
+
+type TemplateVersionHoldsContentParams struct {
+	Subject          string        `json:"subject"`
+	JsxSource        *string       `json:"jsx_source"`
+	VisualSource     []byte        `json:"visual_source"`
+	HtmlSource       *string       `json:"html_source"`
+	MainMode         AuthoringMode `json:"main_mode"`
+	HtmlContent      string        `json:"html_content"`
+	PlainTextContent string        `json:"plain_text_content"`
+	ID               uuid.UUID     `json:"id"`
+}
+
+// Whether a version holds exactly this content: subject, every source, Main
+// source and render. A Visual document compares as JSON, not as text.
+func (q *Queries) TemplateVersionHoldsContent(ctx context.Context, arg TemplateVersionHoldsContentParams) (bool, error) {
+	row := q.db.QueryRow(ctx, templateVersionHoldsContent,
+		arg.Subject,
+		arg.JsxSource,
+		arg.VisualSource,
+		arg.HtmlSource,
+		arg.MainMode,
+		arg.HtmlContent,
+		arg.PlainTextContent,
+		arg.ID,
+	)
+	var holds bool
+	err := row.Scan(&holds)
+	return holds, err
 }
 
 const updateMailingList = `-- name: UpdateMailingList :one

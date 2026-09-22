@@ -141,12 +141,17 @@ func (h *templateHandlerImpl) GetTemplateVersion(c fiber.Ctx) error {
 		return err
 	}
 
-	return c.JSON(TemplateVersion{
+	return c.JSON(templateVersion(row))
+}
+
+// templateVersion is one version whole as the version routes serve it.
+func templateVersion(row database.GetTemplateVersionRow) TemplateVersion {
+	return TemplateVersion{
 		TemplateVersionSummary: versionSummary(row.TemplateVersionSummary),
 		JSXSource:              row.JsxSource,
 		VisualSource:           row.VisualSource,
 		HTMLSource:             row.HtmlSource,
 		HTMLContent:            row.HtmlContent,
 		PlainTextContent:       row.PlainTextContent,
-	})
+	}
 }

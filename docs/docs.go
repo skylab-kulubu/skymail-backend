@@ -125,50 +125,6 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
-            "database.Template": {
-                "properties": {
-                    "archived_at": {
-                        "type": "string"
-                    },
-                    "archived_by": {
-                        "type": "string"
-                    },
-                    "created_at": {
-                        "type": "string"
-                    },
-                    "html_content": {
-                        "type": "string"
-                    },
-                    "id": {
-                        "type": "string"
-                    },
-                    "key": {
-                        "type": "string"
-                    },
-                    "name": {
-                        "type": "string"
-                    },
-                    "plain_text_content": {
-                        "type": "string"
-                    },
-                    "published_version_id": {
-                        "type": "string"
-                    },
-                    "react_email_content": {
-                        "type": "string"
-                    },
-                    "subject": {
-                        "type": "string"
-                    },
-                    "system": {
-                        "type": "boolean"
-                    },
-                    "updated_at": {
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
             "database.VersionAuthor": {
                 "properties": {
                     "kind": {
@@ -380,6 +336,67 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
+            "handlers.Template": {
+                "properties": {
+                    "archived_at": {
+                        "type": "string"
+                    },
+                    "archived_by": {
+                        "type": "string"
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "drafts": {
+                        "description": "Each operator's draft in progress, newest first: the newest version an operator wrote of the template, while it is unpublished. An operator's earlier drafts are superseded and not listed. A draft whose base_version_id is not published_version_id is stale: a newer version was published after it was started, and publishing it takes force.",
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.TemplateVersionSummary"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "html_content": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "key": {
+                        "type": "string"
+                    },
+                    "main_mode": {
+                        "description": "The Authoring mode of the Main source the template sends: its published version's. Null for a template with no published version.",
+                        "enum": [
+                            "jsx",
+                            "visual",
+                            "html"
+                        ],
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "plain_text_content": {
+                        "type": "string"
+                    },
+                    "published_version_id": {
+                        "type": "string"
+                    },
+                    "react_email_content": {
+                        "type": "string"
+                    },
+                    "subject": {
+                        "type": "string"
+                    },
+                    "system": {
+                        "type": "boolean"
+                    },
+                    "updated_at": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "handlers.TemplateVersion": {
                 "properties": {
                     "author": {
@@ -569,6 +586,62 @@ const docTemplate = `{
                     "name",
                     "plain_text_content",
                     "react_email_content",
+                    "subject"
+                ],
+                "type": "object"
+            },
+            "requests.PublishTemplateVersion": {
+                "properties": {
+                    "force": {
+                        "description": "Publish even though a newer version was published after the draft was started, replacing it. The replaced version stays in the history.",
+                        "type": "boolean"
+                    }
+                },
+                "type": "object"
+            },
+            "requests.SaveTemplateDraft": {
+                "properties": {
+                    "base_version_id": {
+                        "description": "The published version the draft started from: the template's published_version_id when the editor opened it. Null only for a template that has no published version.",
+                        "type": "string"
+                    },
+                    "html_content": {
+                        "description": "The Main source rendered as HTML, with its Go template actions intact for the mailer to fill per send.",
+                        "type": "string"
+                    },
+                    "html_source": {
+                        "description": "The HTML source. Left out or null: kept as it is.",
+                        "type": "string"
+                    },
+                    "jsx_source": {
+                        "description": "The JSX source, React Email code. Left out or null: kept as it is.",
+                        "type": "string"
+                    },
+                    "main_mode": {
+                        "description": "The Authoring mode whose source is the Main source: html_content and plain_text_content are its render.",
+                        "enum": [
+                            "jsx",
+                            "visual",
+                            "html"
+                        ],
+                        "type": "string"
+                    },
+                    "plain_text_content": {
+                        "description": "The Main source rendered as plain text.",
+                        "type": "string"
+                    },
+                    "subject": {
+                        "type": "string"
+                    },
+                    "visual_source": {
+                        "description": "The Visual source, the block editor's document: a JSON object. Left out or null: kept as it is.",
+                        "type": "object"
+                    }
+                },
+                "required": [
+                    "html_content",
+                    "main_mode",
+                    "plain_text_content",
                     "subject"
                 ],
                 "type": "object"
@@ -1762,7 +1835,7 @@ const docTemplate = `{
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/database.Template"
+                                        "$ref": "#/components/schemas/handlers.Template"
                                     },
                                     "type": "array"
                                 }
@@ -1823,7 +1896,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/database.Template"
+                                    "$ref": "#/components/schemas/handlers.Template"
                                 }
                             }
                         },
@@ -1875,7 +1948,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/database.Template"
+                                    "$ref": "#/components/schemas/handlers.Template"
                                 }
                             }
                         },
@@ -1935,7 +2008,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/database.Template"
+                                    "$ref": "#/components/schemas/handlers.Template"
                                 }
                             }
                         },
@@ -2040,7 +2113,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/database.Template"
+                                    "$ref": "#/components/schemas/handlers.Template"
                                 }
                             }
                         },
@@ -2120,7 +2193,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/database.Template"
+                                    "$ref": "#/components/schemas/handlers.Template"
                                 }
                             }
                         },
@@ -2163,6 +2236,118 @@ const docTemplate = `{
                 ]
             }
         },
+        "/templates/{id}/drafts": {
+            "post": {
+                "description": "Records an operator's draft of a Mail template: a version that is sent to nobody until it is published. The template row, which is what is sent, does not change. Changing which source is the Main source is a save too: send the new main_mode and the render its source gives.\n\nThe editor renders the Main source; the server stores the render it is given. It checks what it can without rendering: the fields are there and not blank, the Main source's Authoring mode holds a source, the base is a published version of this template, a Visual source is a JSON object, a JSX source has code in it, and the subject, plain text and HTML parse as the mailer's Go templates.\n\nEach save is a new version; an operator's newest version, while unpublished, is their draft in progress. A save continues it when it started from the same base, or else starts from the base. Sources left out, or null, are kept from the version the save continues, so a save never drops a source. A save that changes nothing records nothing and answers 200 with the version it would have repeated: the draft in progress, or with none the base.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.SaveTemplateDraft",
+                                        "summary": "draft",
+                                        "description": "The draft"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The draft",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.TemplateVersion"
+                                }
+                            }
+                        },
+                        "description": "Nothing changed: the version the save would have repeated"
+                    },
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.TemplateVersion"
+                                }
+                            }
+                        },
+                        "description": "The draft, written"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error, template.invalid_base, template.main_source_missing or template.invalid_body (params.field names the part)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "template.archived"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Save a draft of a template",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
         "/templates/{id}/restore": {
             "post": {
                 "description": "Restore an archived email template. Repeating the request is safe.",
@@ -2182,7 +2367,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/database.Template"
+                                    "$ref": "#/components/schemas/handlers.Template"
                                 }
                             }
                         },
@@ -2370,6 +2555,207 @@ const docTemplate = `{
                     }
                 },
                 "summary": "Read one version of a template",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/{id}/versions/{versionId}/publish": {
+            "post": {
+                "description": "Makes a draft the version the template sends: the draft is marked published and copied onto the template row — subject, HTML, plain text, and its JSX source (or an empty string) as react_email_content — in one transaction. Answers with the template as publishing left it. Publishing the version the template already sends changes nothing and answers the same way.\n\nA draft is stale when its base_version_id is not the template's published_version_id: someone published after it was started, and publishing it would quietly revert their version. That is refused with 409 template.stale_base, whose params name version_id (the draft), base_version_id (what it started from) and published_version_id (what is sent now), so both can be shown side by side. {\"force\": true} publishes it anyway; the replaced version stays in the history.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Version ID of the draft",
+                        "in": "path",
+                        "name": "versionId",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.PublishTemplateVersion",
+                                        "summary": "publish",
+                                        "description": "Whether to publish over a newer version"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "Whether to publish over a newer version"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.Template"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error or template.invalid_body"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "template.stale_base, template.not_a_draft or template.archived"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Publish a draft",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/{id}/versions/{versionId}/restore": {
+            "post": {
+                "description": "Copies any version of the template — its subject, sources, Main source and render — into a new draft by the caller, started from the version published now. Nothing that is sent changes; the draft is published like any other. Another operator's draft can be restored too. When the copy would repeat the caller's draft in progress, or with none the published version, nothing is recorded and that version is answered with 200.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Version ID",
+                        "in": "path",
+                        "name": "versionId",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.TemplateVersion"
+                                }
+                            }
+                        },
+                        "description": "Nothing changed: the version the copy would have repeated"
+                    },
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.TemplateVersion"
+                                }
+                            }
+                        },
+                        "description": "The draft, written"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "template.archived"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Restore a version as a draft",
                 "tags": [
                     "Templates"
                 ]

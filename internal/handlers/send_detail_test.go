@@ -277,11 +277,18 @@ func TestSendListDoesNotWaitOnAHungKeycloak(t *testing.T) {
 // GET response: an object's properties, or an array item's.
 func documentedFields(t *testing.T, path string) []string {
 	t.Helper()
+	return documentedResponseFields(t, "get", path, "200")
+}
+
+// documentedResponseFields reads the top-level fields /docs/openapi.json
+// promises for one response of one operation.
+func documentedResponseFields(t *testing.T, method, path, status string) []string {
+	t.Helper()
 	var document map[string]any
 	if err := json.Unmarshal([]byte(docs.SwaggerInfo.ReadDoc()), &document); err != nil {
 		t.Fatal(err)
 	}
-	schema := dig(t, document, "paths", path, "get", "responses", "200", "content", "application/json", "schema")
+	schema := dig(t, document, "paths", path, method, "responses", status, "content", "application/json", "schema")
 	if items, ok := schema["items"].(map[string]any); ok {
 		schema = items
 	}

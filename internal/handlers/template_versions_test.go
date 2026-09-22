@@ -19,6 +19,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 )
 
 // The operator every request in these tests comes from: the Keycloak subject
@@ -47,14 +48,24 @@ func seedPointerComment(key string) string {
 }
 
 // templateVersionsApp serves the template routes and a single send the way
-// the old panel, the Template seed and a sending service reach them, with the
-// real mailer queueing into the test database.
+// the old panel, the new editor, the Template seed and a sending service reach
+// them, with the real mailer queueing into the test database and request
+// bodies validated as production validates them.
+//
+// Requests come from operatorSub unless they carry X-Operator-Sub (and
+// X-Operator-Name): another operator's token.
 func templateVersionsApp(t *testing.T, db *database.Store) *fiber.App {
 	t.Helper()
-	app := fiber.New(fiber.Config{ErrorHandler: func(c fiber.Ctx, err error) error {
+	app := fiber.New(fiber.Config{StructValidator: validator.NewStructValidator(), ErrorHandler: func(c fiber.Ctx, err error) error {
 		var appErr *apperrors.AppError
 		if errors.As(err, &appErr) {
 			return c.Status(appErr.Status).JSON(appErr)
+		}
+		var invalid validator.ValidationErrors
+		if errors.As(err, &invalid) {
+			return c.Status(fiber.StatusBadRequest).JSON(apperrors.ErrValidation.WithParams(map[string]interface{}{
+				"errors": validator.ParseValidationErrors(invalid),
+			}))
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			return c.SendStatus(fiber.StatusNotFound)
@@ -64,17 +75,27 @@ func templateVersionsApp(t *testing.T, db *database.Store) *fiber.App {
 	app.Use(func(c fiber.Ctx) error {
 		c.Locals("user_id", operatorSub)
 		c.Locals("user_name", operatorName)
+		if sub := c.Get("X-Operator-Sub"); sub != "" {
+			c.Locals("user_id", sub)
+			c.Locals("user_name", c.Get("X-Operator-Name"))
+		}
 		return c.Next()
 	})
 
 	templates := NewTemplateHandler(db)
 	app.Post("/templates", templates.CreateTemplate)
+	app.Get("/templates", templates.GetTemplates)
 	app.Get("/templates/:id", templates.GetTemplate)
 	app.Patch("/templates/:id", templates.UpdateTemplate)
 	app.Delete("/templates/:id", templates.DeleteTemplate)
+	app.Post("/templates/:id/restore", templates.RestoreTemplate)
+	app.Get("/templates/by-key/:key", templates.GetTemplateByKey)
 	app.Put("/templates/by-key/:key", templates.UpsertTemplateByKey)
 	app.Get("/templates/:id/versions", templates.ListTemplateVersions)
 	app.Get("/templates/:id/versions/:versionId", templates.GetTemplateVersion)
+	app.Post("/templates/:id/drafts", templates.SaveTemplateDraft)
+	app.Post("/templates/:id/versions/:versionId/publish", templates.PublishTemplateVersion)
+	app.Post("/templates/:id/versions/:versionId/restore", templates.RestoreTemplateVersion)
 
 	mails := NewMailHandler(db, mailer.NewMailer(db, mailer.SMTPConfig{}), lifecycleKeycloakStub{})
 	app.Post("/mail_tasks/single", mails.SendSingle)
@@ -152,10 +173,12 @@ func storedVersions(t *testing.T, db *database.Store, templateID uuid.UUID) ([]s
 }
 
 // The fields a template is served with: the ones the old panel and core have
-// always read, and published_version_id beside them — the version the row is a
-// copy of, which the old panel ignores and the new editor starts a draft from.
+// always read, and beside them, all ignored by the old panel,
+// published_version_id — the version the row is a copy of, which the new
+// editor starts a draft from — main_mode, the Authoring mode of the Main
+// source it sends, and drafts, each operator's draft in progress.
 var templateFields = []string{
-	"archived_at", "archived_by", "created_at", "html_content", "id", "key", "name",
+	"archived_at", "archived_by", "created_at", "drafts", "html_content", "id", "key", "main_mode", "name",
 	"plain_text_content", "published_version_id", "react_email_content", "subject", "system", "updated_at",
 }
 
