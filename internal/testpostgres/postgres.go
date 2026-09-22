@@ -43,7 +43,11 @@ func StartDatabase(t testing.TB) Database {
 	if err != nil {
 		t.Skipf("docker run postgres: %v %s", err, out)
 	}
-	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
+	// -v matters: --rm only discards the anonymous volume when the container
+	// exits on its own. Forcing it out from the outside leaves the volume behind
+	// for postgres's VOLUME /var/lib/postgresql/data, so every test run used to
+	// leak one and they accumulated until the disk filled.
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "-v", name).Run() })
 
 	portCtx, cancelPort := context.WithTimeout(context.Background(), 30*time.Second)
 	hostport, err := waitForPublishedPort(portCtx, 100*time.Millisecond, func() ([]byte, error) {

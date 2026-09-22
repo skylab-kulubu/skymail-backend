@@ -80,6 +80,12 @@ type Querier interface {
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
 	UpdateRecipient(ctx context.Context, arg UpdateRecipientParams) (Recipient, error)
 	UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) (Template, error)
+	// The seed owns a template's structure; an operator owns its subject. The repo
+	// seeds the subject once, on insert, and never writes over it again: ADR-0045
+	// moved Keycloak's system mail here so a wording change would stop costing a
+	// release, and re-seeding is frequent enough that overwriting the subject took
+	// that back silently. A subject fix made in the repo therefore does not reach a
+	// key that already exists; someone has to make it in SkyMail too.
 	UpsertTemplateByKey(ctx context.Context, arg UpsertTemplateByKeyParams) (Template, error)
 }
 
