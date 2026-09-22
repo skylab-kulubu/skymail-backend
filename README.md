@@ -27,6 +27,22 @@ API documentation under `/docs` remains public. See
 [`docs/account-access-gate.md`](docs/account-access-gate.md) for the deployment
 contract and required configuration.
 
+## Ters proxy ve istemci IP'si
+
+Skymail bir ters proxy'nin arkasında çalışır. Proxy, çağıranın gönderdiği
+`X-Forwarded-For` başlığını atar ve kendi başlığını yazar; bu yüzden başlık
+yalnızca bağlantı o proxy'lerden birinden geldiğinde okunur. Diğer tüm
+çağıranlar için `ctx.IP()` soket adresini döndürür.
+
+- `TRUSTED_PROXY_RANGES` — virgülle ayrılmış CIDR aralıkları; tek bir adres o
+  tek makine anlamına gelir. Varsayılan:
+  `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1/128,fc00::/7`.
+
+Liste servis trafiğe açılmadan önce doğrulanır: CIDR aralığı ya da adres
+olmayan bir girdi atlanmak yerine başlatmayı durdurur. Proxy bir konteyner
+olduğu ve ağ içindeki adresi her yeniden oluşturulduğunda değiştiği için tek
+bir adres yazılmaz, paylaşılan ağın aralığı yazılır.
+
 ## Veritabanı migration'ları
 
 Uygulama bekleyen migration'ları servis trafiğe açılmadan önce çalıştırabilir.

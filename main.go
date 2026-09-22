@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
+	"strings"
 	"sync"
 
 	"github.com/bytedance/sonic"
@@ -104,17 +106,29 @@ func main() {
 		accountAccessGate = accessgate.NewRedisGate(redisClient, gateConfig.OperationTimeout)
 	}
 
+	trustedProxies, err := trustedProxyRanges(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid trusted proxy configuration")
+	}
+	log.Info().Str("ranges", strings.Join(trustedProxies, ",")).Msg("trusted proxy ranges")
+
 	kcClient := keycloak.NewClient(cfg.KeycloakRealmURL, cfg.KeycloakServiceClientID, cfg.KeycloakServiceClientSecret)
 
 	templateHandler := handlers.NewTemplateHandler(db)
 	listHandler := handlers.NewListHandler(db, kcClient)
 	mailHandler := handlers.NewMailHandler(db, mailerService, kcClient)
 
+	// The reverse proxy in front of Skymail discards a caller-supplied
+	// X-Forwarded-For and writes its own, so ProxyHeader is only safe to read
+	// when the connection came from one of those proxies. Without TrustProxy
+	// Fiber ignores the header entirely and ctx.IP() reports the proxy.
 	app := fiber.New(fiber.Config{
 		StructValidator:    vld,
 		JSONDecoder:        sonic.Unmarshal,
 		JSONEncoder:        sonic.Marshal,
 		ErrorHandler:       errorHandler,
+		TrustProxy:         true,
+		TrustProxyConfig:   fiber.TrustProxyConfig{Proxies: trustedProxies},
 		ProxyHeader:        fiber.HeaderXForwardedFor,
 		EnableIPValidation: true,
 	})
@@ -171,6 +185,38 @@ func main() {
 	if err = app.Listen(addr); err != nil {
 		log.Fatal().Err(err).Msg("error starting server")
 	}
+}
+
+// defaultTrustedProxyRanges covers the private and loopback space a container
+// network hands out. The proxy in front of Skymail is itself a container whose
+// address inside that network is reassigned whenever it is recreated, so trust
+// is expressed as ranges and never as one address.
+const defaultTrustedProxyRanges = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1/128,fc00::/7"
+
+// trustedProxyRanges reads TRUSTED_PROXY_RANGES as a comma-separated list of
+// CIDR ranges; a bare address means that single host. An entry that is neither
+// stops startup rather than being skipped, because a typo would quietly either
+// trust a spoofable header or stop trusting the real proxy.
+func trustedProxyRanges(getenv func(string) string) ([]string, error) {
+	raw := strings.TrimSpace(getenv("TRUSTED_PROXY_RANGES"))
+	if raw == "" {
+		raw = defaultTrustedProxyRanges
+	}
+	var ranges []string
+	for _, field := range strings.Split(raw, ",") {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(field); err != nil && net.ParseIP(field) == nil {
+			return nil, fmt.Errorf("TRUSTED_PROXY_RANGES: %q is neither a CIDR range nor an IP address", field)
+		}
+		ranges = append(ranges, field)
+	}
+	if len(ranges) == 0 {
+		return nil, errors.New("TRUSTED_PROXY_RANGES must list at least one CIDR range")
+	}
+	return ranges, nil
 }
 
 func serverRequestID() fiber.Handler {
