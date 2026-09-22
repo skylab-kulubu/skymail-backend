@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v3"
@@ -283,5 +284,78 @@ func TestEnqueueSingleRefusesArchivedTemplate(t *testing.T) {
 	}
 	if tasks != 0 {
 		t.Fatalf("mail_tasks = %d, want 0", tasks)
+	}
+}
+
+// A key in the path skips the struct tag that validates one in a body. Without
+// a check here it reached the database and came back as a check constraint
+// violation — a 500 for what is the caller's mistake.
+func TestUpsertByKeyRejectsMalformedKey(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := systemTemplateApp(t, db, &recordingMailerStub{})
+
+	payload, _ := json.Marshal(map[string]any{
+		"name": "Şablon", "subject": "Konu",
+		"html_content": "<p>x</p>", "plain_text_content": "x", "react_email_content": "{}",
+	})
+
+	malformed := []string{
+		"Keycloak.Verify", // uppercase
+		"ab",              // shorter than three characters
+		"-leading",        // starts with a hyphen
+		"trailing-",       // ends with a hyphen
+		"has_underscore",  // underscore is not in the alphabet
+		strings.Repeat("a", 65),
+	}
+
+	for _, key := range malformed {
+		t.Run(key, func(t *testing.T) {
+			request := httptest.NewRequest(fiber.MethodPut, "/templates/by-key/"+key, bytes.NewReader(payload))
+			request.Header.Set("Content-Type", "application/json")
+
+			response, err := app.Test(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != fiber.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", response.StatusCode)
+			}
+		})
+	}
+
+	// Nothing was written on the way to rejecting them.
+	templates, err := db.GetAllTemplates(context.Background(), database.GetAllTemplatesParams{Limit: 10, Offset: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(templates) != 0 {
+		t.Fatalf("templates = %d, want none", len(templates))
+	}
+}
+
+func TestUpsertByKeyAcceptsTheKeysWeSeed(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := systemTemplateApp(t, db, &recordingMailerStub{})
+
+	payload, _ := json.Marshal(map[string]any{
+		"name": "Şablon", "subject": "Konu",
+		"html_content": "<p>x</p>", "plain_text_content": "x", "react_email_content": "{}",
+	})
+
+	// The shapes the catalogue actually uses: a dotted namespace, a hyphenated
+	// name, and both together.
+	for _, key := range []string{"free.basic", "keycloak.personal-email-confirm", "core.welcome", "ops.send-failed"} {
+		t.Run(key, func(t *testing.T) {
+			request := httptest.NewRequest(fiber.MethodPut, "/templates/by-key/"+key, bytes.NewReader(payload))
+			request.Header.Set("Content-Type", "application/json")
+
+			response, err := app.Test(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != fiber.StatusOK {
+				t.Fatalf("status = %d, want 200", response.StatusCode)
+			}
+		})
 	}
 }
