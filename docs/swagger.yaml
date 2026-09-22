@@ -10,28 +10,6 @@ components:
           additionalProperties: {}
           type: object
       type: object
-    database.GetAllMailTasksRow:
-      properties:
-        body_variables:
-          items:
-            type: integer
-          type: array
-          uniqueItems: false
-        created_at:
-          type: string
-        id:
-          type: string
-        mail_list_id:
-          type: string
-        mail_list_name:
-          type: string
-        sent_by:
-          type: string
-        template_id:
-          type: string
-        template_name:
-          type: string
-      type: object
     database.GetMailTaskByIdRow:
       properties:
         body_variables:
@@ -158,6 +136,40 @@ components:
         updated_at:
           type: string
       type: object
+    handlers.DailySent:
+      properties:
+        date:
+          example: "2026-09-22"
+          type: string
+        sent:
+          type: integer
+      type: object
+    handlers.MailTaskListItem:
+      properties:
+        body_variables:
+          items:
+            type: integer
+          type: array
+          uniqueItems: false
+        created_at:
+          type: string
+        id:
+          type: string
+        mail_list_id:
+          type: string
+        mail_list_name:
+          type: string
+        recipient_counts:
+          $ref: '#/components/schemas/handlers.QueueCounts'
+        sent_by:
+          type: string
+        status:
+          $ref: '#/components/schemas/handlers.SendStatus'
+        template_id:
+          type: string
+        template_name:
+          type: string
+      type: object
     handlers.MailingListItem:
       properties:
         archived_at:
@@ -175,6 +187,89 @@ components:
         source:
           type: string
         updated_at:
+          type: string
+      type: object
+    handlers.QueueCounts:
+      properties:
+        failed:
+          type: integer
+        pending:
+          type: integer
+        processing:
+          type: integer
+        sent:
+          type: integer
+      type: object
+    handlers.RecentSend:
+      properties:
+        audience:
+          $ref: '#/components/schemas/handlers.SendAudience'
+        created_at:
+          type: string
+        id:
+          type: string
+        recipient_counts:
+          $ref: '#/components/schemas/handlers.QueueCounts'
+        sent_by:
+          type: string
+        status:
+          $ref: '#/components/schemas/handlers.SendStatus'
+        template_id:
+          type: string
+        template_key:
+          type: string
+        template_name:
+          type: string
+      type: object
+    handlers.SendAudience:
+      properties:
+        kind:
+          enum:
+          - mailing_list
+          - single
+          type: string
+        mail_list_id:
+          type: string
+        name:
+          type: string
+        recipient_email:
+          type: string
+        recipient_full_name:
+          type: string
+        source:
+          enum:
+          - internal
+          - keycloak
+          type: string
+      type: object
+    handlers.SendStatus:
+      enum:
+      - failed
+      - sending
+      - sent
+      - empty
+      type: string
+      x-enum-varnames:
+      - SendStatusFailed
+      - SendStatusSending
+      - SendStatusSent
+      - SendStatusEmpty
+    handlers.SendSummary:
+      properties:
+        daily_sent:
+          items:
+            $ref: '#/components/schemas/handlers.DailySent'
+          type: array
+          uniqueItems: false
+        queue_counts:
+          $ref: '#/components/schemas/handlers.QueueCounts'
+        recent_sends:
+          items:
+            $ref: '#/components/schemas/handlers.RecentSend'
+          type: array
+          uniqueItems: false
+        time_zone:
+          example: Europe/Istanbul
           type: string
       type: object
     requests.AddRecipient:
@@ -308,7 +403,9 @@ openapi: 3.1.0
 paths:
   /mail_tasks:
     get:
-      description: Get a list of all mail tasks with pagination.
+      description: Get a list of all mail tasks with pagination, newest first, each
+        with its derived status and recipients by status. The status filter keeps
+        only sends with that derived status; X-Total-Count counts the filtered sends.
       parameters:
       - description: Start index
         in: query
@@ -320,15 +417,44 @@ paths:
         name: _end
         schema:
           type: integer
+      - description: 'Derived send status: failed (at least one recipient failed),
+          sending (none failed, some pending or processing), sent (none failed or
+          queued, some sent), empty (no recipients)'
+        in: query
+        name: status
+        schema:
+          enum:
+          - failed
+          - sending
+          - sent
+          - empty
+          type: string
       responses:
         "200":
           content:
             application/json:
               schema:
                 items:
-                  $ref: '#/components/schemas/database.GetAllMailTasksRow'
+                  $ref: '#/components/schemas/handlers.MailTaskListItem'
                 type: array
           description: OK
+          headers:
+            X-Total-Count:
+              description: Number of sends matching the filter
+              schema:
+                type: integer
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
         "500":
           content:
             application/json:
@@ -491,6 +617,54 @@ paths:
                 $ref: '#/components/schemas/apperrors.AppError'
           description: Internal Server Error
       summary: Send a single email
+      tags:
+      - Mail
+  /mail_tasks/summary:
+    get:
+      description: 'Queue rows (one per recipient) by status, mail sent per Europe/Istanbul
+        day over the last days (zero-filled, oldest first, ending today), and the
+        latest sends with their derived status: failed (at least one recipient failed),
+        sending (none failed, some pending or processing), sent (none failed or queued,
+        some sent), empty (no recipients).'
+      parameters:
+      - description: Days in the daily series, ending today in Europe/Istanbul (1-90)
+        in: query
+        name: days
+        schema:
+          default: 30
+          type: integer
+      - description: Latest sends to list, newest first (1-20)
+        in: query
+        name: recent
+        schema:
+          default: 5
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.SendSummary'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Internal Server Error
+      summary: Summarise mail sends
       tags:
       - Mail
   /mailing_lists:

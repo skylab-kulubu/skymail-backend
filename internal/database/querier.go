@@ -18,7 +18,9 @@ type Querier interface {
 	CountAllTemplatesIncludingArchived(ctx context.Context) (int64, error)
 	CountArchivedMailingLists(ctx context.Context) (int64, error)
 	CountArchivedTemplates(ctx context.Context) (int64, error)
+	CountMailQueueByStatus(ctx context.Context) (CountMailQueueByStatusRow, error)
 	CountMailQueueItemsByTaskId(ctx context.Context, taskID uuid.UUID) (int64, error)
+	CountMailTaskSends(ctx context.Context, status *string) (int64, error)
 	CountMailTasks(ctx context.Context) (int64, error)
 	CountMailingLists(ctx context.Context) (int64, error)
 	CountRecipients(ctx context.Context) (int64, error)
@@ -29,13 +31,21 @@ type Querier interface {
 	CreateMailingList(ctx context.Context, name string) (MailingList, error)
 	CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error)
 	CreateTemplate(ctx context.Context, arg CreateTemplateParams) (Template, error)
-	GetAllMailTasks(ctx context.Context, arg GetAllMailTasksParams) ([]GetAllMailTasksRow, error)
 	GetAllMailingLists(ctx context.Context, arg GetAllMailingListsParams) ([]MailingList, error)
 	GetAllMailingListsIncludingArchived(ctx context.Context, arg GetAllMailingListsIncludingArchivedParams) ([]MailingList, error)
 	GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams) ([]Template, error)
 	GetAllTemplatesIncludingArchived(ctx context.Context, arg GetAllTemplatesIncludingArchivedParams) ([]Template, error)
 	GetArchivedMailingLists(ctx context.Context, arg GetArchivedMailingListsParams) ([]MailingList, error)
 	GetArchivedTemplates(ctx context.Context, arg GetArchivedTemplatesParams) ([]Template, error)
+	// A queue row has no sent time of its own. created_at — when that recipient's
+	// mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
+	// mail that goes through on its first attempt leaves within seconds, and only a
+	// retried one (the ladder tops out under eight minutes) can land later.
+	// next_attempt_at is not used: every row older than the retry migration holds
+	// that migration's timestamp in it.
+	// Days are calendar days in time_zone; the series ends on as_of's day and has
+	// one row per day, zero-filled.
+	GetDailySentCounts(ctx context.Context, arg GetDailySentCountsParams) ([]GetDailySentCountsRow, error)
 	GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueueItemsByTaskIdParams) ([]GetMailQueueItemsByTaskIdRow, error)
 	GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTaskByIdRow, error)
 	GetMailingListById(ctx context.Context, id uuid.UUID) (MailingList, error)
@@ -47,6 +57,11 @@ type Querier interface {
 	GetTemplateByIdIncludingArchived(ctx context.Context, id uuid.UUID) (Template, error)
 	GetTemplateByKey(ctx context.Context, key *string) (Template, error)
 	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (MailTask, error)
+	// A send as the send list and the home screen show it: the task, the template
+	// it used, who it went to, its status as mail_task_status derives it, and its
+	// recipients by status. A NULL status lists every send. The page is cut first
+	// so only its rows are counted.
+	ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error)
 	ProcessQueueItems(ctx context.Context) ([]MailQueue, error)
 	RemoveRecipientFromMailingListByID(ctx context.Context, arg RemoveRecipientFromMailingListByIDParams) error
 	RescheduleMailQueueItem(ctx context.Context, arg RescheduleMailQueueItemParams) (int, error)

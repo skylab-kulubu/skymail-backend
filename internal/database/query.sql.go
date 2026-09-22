@@ -178,6 +178,32 @@ func (q *Queries) CountArchivedTemplates(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countMailQueueByStatus = `-- name: CountMailQueueByStatus :one
+SELECT (SELECT count(*) FROM mail_queue WHERE status = 'pending')    AS pending,
+       (SELECT count(*) FROM mail_queue WHERE status = 'processing') AS processing,
+       (SELECT count(*) FROM mail_queue WHERE status = 'sent')       AS sent,
+       (SELECT count(*) FROM mail_queue WHERE status = 'failed')     AS failed
+`
+
+type CountMailQueueByStatusRow struct {
+	Pending    int64 `json:"pending"`
+	Processing int64 `json:"processing"`
+	Sent       int64 `json:"sent"`
+	Failed     int64 `json:"failed"`
+}
+
+func (q *Queries) CountMailQueueByStatus(ctx context.Context) (CountMailQueueByStatusRow, error) {
+	row := q.db.QueryRow(ctx, countMailQueueByStatus)
+	var i CountMailQueueByStatusRow
+	err := row.Scan(
+		&i.Pending,
+		&i.Processing,
+		&i.Sent,
+		&i.Failed,
+	)
+	return i, err
+}
+
 const countMailQueueItemsByTaskId = `-- name: CountMailQueueItemsByTaskId :one
 SELECT count(*)
 FROM mail_queue
@@ -186,6 +212,19 @@ WHERE task_id = $1
 
 func (q *Queries) CountMailQueueItemsByTaskId(ctx context.Context, taskID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, countMailQueueItemsByTaskId, taskID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countMailTaskSends = `-- name: CountMailTaskSends :one
+SELECT count(*)
+FROM mail_tasks mt
+WHERE ($1::text IS NULL OR mail_task_status(mt.id) = $1::text)
+`
+
+func (q *Queries) CountMailTaskSends(ctx context.Context, status *string) (int64, error) {
+	row := q.db.QueryRow(ctx, countMailTaskSends, status)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -472,62 +511,6 @@ func (q *Queries) CreateTemplate(ctx context.Context, arg CreateTemplateParams) 
 	return i, err
 }
 
-const getAllMailTasks = `-- name: GetAllMailTasks :many
-SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at,
-       t.name  AS template_name,
-       ml.name AS mail_list_name
-FROM mail_tasks mt
-         LEFT JOIN templates t ON mt.template_id = t.id
-         LEFT JOIN mailing_lists ml ON mt.mail_list_id = ml.id
-ORDER BY mt.created_at DESC
-LIMIT $1 OFFSET $2
-`
-
-type GetAllMailTasksParams struct {
-	Limit  int32 `json:"limit"`
-	Offset int32 `json:"offset"`
-}
-
-type GetAllMailTasksRow struct {
-	ID            uuid.UUID  `json:"id"`
-	SentBy        string     `json:"sent_by"`
-	TemplateID    *uuid.UUID `json:"template_id"`
-	MailListID    *uuid.UUID `json:"mail_list_id"`
-	BodyVariables []byte     `json:"body_variables"`
-	CreatedAt     time.Time  `json:"created_at"`
-	TemplateName  *string    `json:"template_name"`
-	MailListName  *string    `json:"mail_list_name"`
-}
-
-func (q *Queries) GetAllMailTasks(ctx context.Context, arg GetAllMailTasksParams) ([]GetAllMailTasksRow, error) {
-	rows, err := q.db.Query(ctx, getAllMailTasks, arg.Limit, arg.Offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []GetAllMailTasksRow
-	for rows.Next() {
-		var i GetAllMailTasksRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.SentBy,
-			&i.TemplateID,
-			&i.MailListID,
-			&i.BodyVariables,
-			&i.CreatedAt,
-			&i.TemplateName,
-			&i.MailListName,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const getAllMailingLists = `-- name: GetAllMailingLists :many
 SELECT id, name, description, created_at, updated_at, archived_at, archived_by
 FROM mailing_lists
@@ -777,6 +760,61 @@ func (q *Queries) GetArchivedTemplates(ctx context.Context, arg GetArchivedTempl
 			&i.Key,
 			&i.System,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getDailySentCounts = `-- name: GetDailySentCounts :many
+WITH today AS (SELECT ($2::timestamptz AT TIME ZONE $1::text)::date AS day),
+     days AS (SELECT today.day - back AS day
+              FROM today,
+                   generate_series(0, $3::int - 1) AS back)
+SELECT d.day::date        AS day,
+       count(q.created_at) AS sent
+FROM days d
+         LEFT JOIN mail_queue q
+                   ON q.status = 'sent'
+                       AND q.created_at >= (d.day::timestamp AT TIME ZONE $1::text)
+                       AND q.created_at < ((d.day + 1)::timestamp AT TIME ZONE $1::text)
+GROUP BY d.day
+ORDER BY d.day
+`
+
+type GetDailySentCountsParams struct {
+	TimeZone string    `json:"time_zone"`
+	AsOf     time.Time `json:"as_of"`
+	Days     int       `json:"days"`
+}
+
+type GetDailySentCountsRow struct {
+	Day  time.Time `json:"day"`
+	Sent int64     `json:"sent"`
+}
+
+// A queue row has no sent time of its own. created_at — when that recipient's
+// mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
+// mail that goes through on its first attempt leaves within seconds, and only a
+// retried one (the ladder tops out under eight minutes) can land later.
+// next_attempt_at is not used: every row older than the retry migration holds
+// that migration's timestamp in it.
+// Days are calendar days in time_zone; the series ends on as_of's day and has
+// one row per day, zero-filled.
+func (q *Queries) GetDailySentCounts(ctx context.Context, arg GetDailySentCountsParams) ([]GetDailySentCountsRow, error) {
+	rows, err := q.db.Query(ctx, getDailySentCounts, arg.TimeZone, arg.AsOf, arg.Days)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetDailySentCountsRow
+	for rows.Next() {
+		var i GetDailySentCountsRow
+		if err := rows.Scan(&i.Day, &i.Sent); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1134,6 +1172,117 @@ func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) 
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const listMailTaskSends = `-- name: ListMailTaskSends :many
+WITH page AS (SELECT mt.id
+              FROM mail_tasks mt
+              WHERE ($3::text IS NULL OR mail_task_status(mt.id) = $3::text)
+              ORDER BY mt.created_at DESC, mt.id DESC
+              LIMIT $1 OFFSET $2)
+SELECT mt.id,
+       mt.sent_by,
+       mt.template_id,
+       mt.mail_list_id,
+       mt.body_variables,
+       mt.created_at,
+       t.name                       AS template_name,
+       t.key                        AS template_key,
+       ml.name                      AS mail_list_name,
+       (ml.id IS NOT NULL)::boolean AS internal_mail_list,
+       mail_task_status(mt.id)      AS status,
+       rc.pending,
+       rc.processing,
+       rc.sent,
+       rc.failed,
+       single.recipient_full_name   AS single_recipient_full_name,
+       single.recipient_email       AS single_recipient_email
+FROM page
+         JOIN mail_tasks mt ON mt.id = page.id
+         LEFT JOIN templates t ON mt.template_id = t.id
+         LEFT JOIN mailing_lists ml ON mt.mail_list_id = ml.id
+         CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE q.status = 'pending')    AS pending,
+                                    count(*) FILTER (WHERE q.status = 'processing') AS processing,
+                                    count(*) FILTER (WHERE q.status = 'sent')       AS sent,
+                                    count(*) FILTER (WHERE q.status = 'failed')     AS failed
+                             FROM mail_queue q
+                             WHERE q.task_id = mt.id) rc
+         LEFT JOIN mail_queue single
+                   ON single.id = (SELECT q.id
+                                   FROM mail_queue q
+                                   WHERE mt.mail_list_id IS NULL
+                                     AND q.task_id = mt.id
+                                   ORDER BY q.created_at, q.id
+                                   LIMIT 1)
+ORDER BY mt.created_at DESC, mt.id DESC
+`
+
+type ListMailTaskSendsParams struct {
+	Limit  int32   `json:"limit"`
+	Offset int32   `json:"offset"`
+	Status *string `json:"status"`
+}
+
+type ListMailTaskSendsRow struct {
+	ID                      uuid.UUID  `json:"id"`
+	SentBy                  string     `json:"sent_by"`
+	TemplateID              *uuid.UUID `json:"template_id"`
+	MailListID              *uuid.UUID `json:"mail_list_id"`
+	BodyVariables           []byte     `json:"body_variables"`
+	CreatedAt               time.Time  `json:"created_at"`
+	TemplateName            *string    `json:"template_name"`
+	TemplateKey             *string    `json:"template_key"`
+	MailListName            *string    `json:"mail_list_name"`
+	InternalMailList        bool       `json:"internal_mail_list"`
+	Status                  string     `json:"status"`
+	Pending                 int64      `json:"pending"`
+	Processing              int64      `json:"processing"`
+	Sent                    int64      `json:"sent"`
+	Failed                  int64      `json:"failed"`
+	SingleRecipientFullName *string    `json:"single_recipient_full_name"`
+	SingleRecipientEmail    *string    `json:"single_recipient_email"`
+}
+
+// A send as the send list and the home screen show it: the task, the template
+// it used, who it went to, its status as mail_task_status derives it, and its
+// recipients by status. A NULL status lists every send. The page is cut first
+// so only its rows are counted.
+func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error) {
+	rows, err := q.db.Query(ctx, listMailTaskSends, arg.Limit, arg.Offset, arg.Status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMailTaskSendsRow
+	for rows.Next() {
+		var i ListMailTaskSendsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SentBy,
+			&i.TemplateID,
+			&i.MailListID,
+			&i.BodyVariables,
+			&i.CreatedAt,
+			&i.TemplateName,
+			&i.TemplateKey,
+			&i.MailListName,
+			&i.InternalMailList,
+			&i.Status,
+			&i.Pending,
+			&i.Processing,
+			&i.Sent,
+			&i.Failed,
+			&i.SingleRecipientFullName,
+			&i.SingleRecipientEmail,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const processQueueItems = `-- name: ProcessQueueItems :many
