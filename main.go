@@ -155,6 +155,8 @@ func main() {
 	templates.Get("/:id", authMiddleware.RequireAnyPermission("skymail:templates:read"), templateHandler.GetTemplate)
 	templates.Patch("/:id", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.UpdateTemplate)
 	templates.Delete("/:id", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.DeleteTemplate)
+	templates.Get("/by-key/:key", authMiddleware.RequireAnyPermission("skymail:templates:read"), templateHandler.GetTemplateByKey)
+	templates.Put("/by-key/:key", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.UpsertTemplateByKey)
 	templates.Post("/:id/restore", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.RestoreTemplate)
 
 	lists := api.Group("/mailing_lists")
@@ -170,7 +172,7 @@ func main() {
 
 	tasks := api.Group("/mail_tasks")
 	tasks.Post("/", authMiddleware.RequireAnyPermission("skymail:mails:write"), mailHandler.CreateTask)
-	tasks.Post("/single", authMiddleware.RequireAnyPermission("skymail:mails:write"), mailHandler.SendSingle)
+	tasks.Post("/single", authMiddleware.RequireAnyPermission("skymail:mails:send", "skymail:mails:write"), mailHandler.SendSingle)
 	tasks.Get("/", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTasks)
 	tasks.Get("/:id", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTask)
 	tasks.Get("/:id/queue", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTaskQueueItems)

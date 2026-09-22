@@ -2,10 +2,16 @@ package validator
 
 import (
 	"reflect"
+	"regexp"
 	"strings"
 
 	"github.com/go-playground/validator/v10"
 )
+
+// A template key is the stable handle a service addresses a system template by
+// (keycloak.verify-email, core.welcome). Lowercase so it is safe to compare and
+// to put in a URL, bounded so it stays readable in the admin list.
+var templateKeyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,62}[a-z0-9]$`)
 
 type StructValidator interface {
 	Validate(out any) error
@@ -25,6 +31,10 @@ type ValidationErrors = validator.ValidationErrors
 
 func NewStructValidator() StructValidator {
 	vld := validator.New()
+
+	_ = vld.RegisterValidation("templatekey", func(fl validator.FieldLevel) bool {
+		return templateKeyPattern.MatchString(fl.Field().String())
+	})
 
 	vld.RegisterTagNameFunc(func(fld reflect.StructField) string {
 		name := strings.SplitN(fld.Tag.Get("json"), ",", 2)[0]
@@ -66,6 +76,8 @@ func getErrorCode(e validator.FieldError) string {
 		return "min_length"
 	case "max":
 		return "max_length"
+	case "templatekey":
+		return "invalid_template_key"
 	default:
 		return "invalid"
 	}

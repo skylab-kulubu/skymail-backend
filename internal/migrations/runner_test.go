@@ -13,7 +13,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
 )
 
-const latestMigrationVersion = uint(20260919180000)
+const latestMigrationVersion = uint(20260922170100)
 
 func TestRunAppliesAllMigrationsToFreshDatabase(t *testing.T) {
 	database := testpostgres.StartDatabase(t)
