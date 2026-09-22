@@ -113,10 +113,9 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) er
 	return c.Next()
 }
 
-// displayName is what a record written now calls the caller: a Mail template
-// version keeps it beside the subject, since there is no user directory to look
-// a subject up in later. A person's token carries their name; a service
-// account's — the Template seed's client — carries only its username.
+// displayName is what the caller is called: a person's token carries their
+// name, a service account's only its username. Handlers read it as the
+// "user_name" local beside "user_id".
 func (info userInfo) displayName() string {
 	if name := strings.TrimSpace(info.Name); name != "" {
 		return name

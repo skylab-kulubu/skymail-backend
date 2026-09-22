@@ -169,6 +169,27 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
+            "database.VersionAuthor": {
+                "properties": {
+                    "kind": {
+                        "description": "operator: written in SkyMail; template_seed: written by the Template seed from the repo.",
+                        "enum": [
+                            "operator",
+                            "template_seed"
+                        ],
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "The name the writer's token carried when the version was written. Null when not known.",
+                        "type": "string"
+                    },
+                    "sub": {
+                        "description": "The Keycloak subject of the token that wrote the version. Null when not known: the first versions, made from templates written before versions were kept.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "handlers.DailySent": {
                 "properties": {
                     "date": {
@@ -362,7 +383,7 @@ const docTemplate = `{
             "handlers.TemplateVersion": {
                 "properties": {
                     "author": {
-                        "$ref": "#/components/schemas/handlers.TemplateVersionAuthor"
+                        "$ref": "#/components/schemas/database.VersionAuthor"
                     },
                     "base_version_id": {
                         "description": "The published version a draft started from; null for a template's first version.",
@@ -407,6 +428,10 @@ const docTemplate = `{
                         "description": "When the version was published; null for a draft.",
                         "type": "string"
                     },
+                    "requested_subject": {
+                        "description": "The subject the Template seed sent for its version. It can differ from subject: until the seed's conflict rule, the seed keeps the subject a template already has. Null on an operator's version and on the first versions, made from templates written before versions were kept.",
+                        "type": "string"
+                    },
                     "seq": {
                         "description": "1, 2, 3… within the template, in the order versions were written.",
                         "type": "integer"
@@ -424,31 +449,10 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
-            "handlers.TemplateVersionAuthor": {
-                "properties": {
-                    "kind": {
-                        "description": "operator: written in SkyMail; template_seed: written by the Template seed from the repo.",
-                        "enum": [
-                            "operator",
-                            "template_seed"
-                        ],
-                        "type": "string"
-                    },
-                    "name": {
-                        "description": "The name the writer's token carried when the version was written. Null when not known.",
-                        "type": "string"
-                    },
-                    "sub": {
-                        "description": "The Keycloak subject of the token that wrote the version. Null when not known: the first versions, made from templates written before versions were kept.",
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
             "handlers.TemplateVersionSummary": {
                 "properties": {
                     "author": {
-                        "$ref": "#/components/schemas/handlers.TemplateVersionAuthor"
+                        "$ref": "#/components/schemas/database.VersionAuthor"
                     },
                     "base_version_id": {
                         "description": "The published version a draft started from; null for a template's first version.",
@@ -475,6 +479,10 @@ const docTemplate = `{
                     },
                     "published_at": {
                         "description": "When the version was published; null for a draft.",
+                        "type": "string"
+                    },
+                    "requested_subject": {
+                        "description": "The subject the Template seed sent for its version. It can differ from subject: until the seed's conflict rule, the seed keeps the subject a template already has. Null on an operator's version and on the first versions, made from templates written before versions were kept.",
                         "type": "string"
                     },
                     "seq": {

@@ -8,11 +8,20 @@ import (
 
 // VersionAuthor is who wrote a Mail template version: an operator or a
 // Template seed, with the Keycloak subject of the token and the name it
-// carried at the time. Either may be missing when the token did not say.
+// carried at the time. It is what a version is written with and what the
+// version routes serve.
 type VersionAuthor struct {
-	Kind TemplateAuthorKind
-	Sub  *string
-	Name *string
+	// operator: written in SkyMail; template_seed: written by the Template seed from the repo.
+	Kind TemplateAuthorKind `json:"kind" enums:"operator,template_seed" swaggertype:"string"`
+	// The Keycloak subject of the token that wrote the version. Null when not known: the first versions, made from templates written before versions were kept.
+	Sub *string `json:"sub"`
+	// The name the writer's token carried when the version was written. Null when not known.
+	Name *string `json:"name"`
+}
+
+// Author is who wrote the version the summary describes.
+func (s TemplateVersionSummary) Author() VersionAuthor {
+	return VersionAuthor{Kind: s.AuthorKind, Sub: s.AuthorSub, Name: s.AuthorName}
 }
 
 // PublishTemplateWrite runs write — a statement that writes a template row

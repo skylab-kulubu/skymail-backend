@@ -70,6 +70,26 @@ ALTER TABLE templates
     ADD CONSTRAINT templates_published_version_same_template
         FOREIGN KEY (id, published_version_id) REFERENCES template_versions (template_id, id);
 
+-- A version as a template's history lists it: everything but its sources and
+-- render, and whether it is the one the row is a copy of — the one sent. The
+-- one definition of "current", for the list and for reading one version.
+CREATE VIEW template_version_summaries AS
+SELECT v.id,
+       v.template_id,
+       v.seq,
+       v.subject,
+       v.requested_subject,
+       v.main_mode,
+       v.author_kind,
+       v.author_sub,
+       v.author_name,
+       v.created_at,
+       v.published_at,
+       v.base_version_id,
+       COALESCE(v.id = t.published_version_id, false)::boolean AS is_current
+FROM template_versions v
+         JOIN templates t ON t.id = v.template_id;
+
 -- The JSX source react_email_content holds, or NULL when it holds none. The
 -- Template seed writes a pointer comment there instead of the .tsx source —
 -- "// Kaynak: skymail-frontend/emails/<key>.tsx — burada düzenlersen …" — and a

@@ -207,24 +207,12 @@ FROM version
 WHERE t.id = version.template_id;
 
 -- A template's Mail template versions, newest first, without their sources or
--- render. is_current marks the one the row is a copy of, the one being sent.
+-- render.
 -- name: ListTemplateVersions :many
-SELECT v.id,
-       v.template_id,
-       v.seq,
-       v.subject,
-       v.main_mode,
-       v.author_kind,
-       v.author_sub,
-       v.author_name,
-       v.created_at,
-       v.published_at,
-       v.base_version_id,
-       COALESCE(v.id = t.published_version_id, false)::boolean AS is_current
-FROM template_versions v
-         JOIN templates t ON t.id = v.template_id
-WHERE v.template_id = $1
-ORDER BY v.seq DESC
+SELECT *
+FROM template_version_summaries
+WHERE template_id = $1
+ORDER BY seq DESC
 LIMIT $2 OFFSET $3;
 
 -- name: CountTemplateVersions :one
@@ -235,27 +223,16 @@ WHERE template_id = $1;
 -- One version of one template, whole. A version of another template is not
 -- found here.
 -- name: GetTemplateVersion :one
-SELECT v.id,
-       v.template_id,
-       v.seq,
-       v.subject,
+SELECT sqlc.embed(s),
        v.jsx_source,
        v.visual_source,
        v.html_source,
-       v.main_mode,
        v.html_content,
-       v.plain_text_content,
-       v.author_kind,
-       v.author_sub,
-       v.author_name,
-       v.created_at,
-       v.published_at,
-       v.base_version_id,
-       COALESCE(v.id = t.published_version_id, false)::boolean AS is_current
-FROM template_versions v
-         JOIN templates t ON t.id = v.template_id
-WHERE v.template_id = sqlc.arg(template_id)
-  AND v.id = sqlc.arg(id);
+       v.plain_text_content
+FROM template_version_summaries s
+         JOIN template_versions v ON v.id = s.id
+WHERE s.template_id = sqlc.arg(template_id)
+  AND s.id = sqlc.arg(id);
 
 -- name: CreateMailingList :one
 INSERT INTO mailing_lists (name)

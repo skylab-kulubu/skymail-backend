@@ -168,6 +168,7 @@ func TestTemplateVersionMigrationGivesEveryTemplateOnePublishedFirstVersion(t *t
 	}
 	for _, leftover := range []string{
 		`SELECT to_regclass('public.template_versions') IS NOT NULL`,
+		`SELECT to_regclass('public.template_version_summaries') IS NOT NULL`,
 		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'templates' AND column_name = 'published_version_id')`,
 		`SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname IN ('authoring_mode', 'template_author_kind'))`,
 		`SELECT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'template_jsx_source')`,

@@ -273,7 +273,7 @@ func (h *templateHandlerImpl) DeleteTemplate(c fiber.Ctx) error {
 	}
 
 	if _, err := h.db.ArchiveTemplate(c.Context(), database.ArchiveTemplateParams{
-		ID: id, ArchivedBy: lifecycleActor(c.Locals("user_id")),
+		ID: id, ArchivedBy: localText(c, "user_id"),
 	}); err != nil {
 		return err
 	}
@@ -310,8 +310,8 @@ func (h *templateHandlerImpl) RestoreTemplate(c fiber.Ctx) error {
 func versionAuthor(c fiber.Ctx, kind database.TemplateAuthorKind) database.VersionAuthor {
 	return database.VersionAuthor{
 		Kind: kind,
-		Sub:  lifecycleActor(c.Locals("user_id")),
-		Name: lifecycleActor(c.Locals("user_name")),
+		Sub:  localText(c, "user_id"),
+		Name: localText(c, "user_name"),
 	}
 }
 

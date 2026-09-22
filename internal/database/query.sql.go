@@ -1199,27 +1199,16 @@ func (q *Queries) GetTemplateByKey(ctx context.Context, key *string) (Template, 
 }
 
 const getTemplateVersion = `-- name: GetTemplateVersion :one
-SELECT v.id,
-       v.template_id,
-       v.seq,
-       v.subject,
+SELECT s.id, s.template_id, s.seq, s.subject, s.requested_subject, s.main_mode, s.author_kind, s.author_sub, s.author_name, s.created_at, s.published_at, s.base_version_id, s.is_current,
        v.jsx_source,
        v.visual_source,
        v.html_source,
-       v.main_mode,
        v.html_content,
-       v.plain_text_content,
-       v.author_kind,
-       v.author_sub,
-       v.author_name,
-       v.created_at,
-       v.published_at,
-       v.base_version_id,
-       COALESCE(v.id = t.published_version_id, false)::boolean AS is_current
-FROM template_versions v
-         JOIN templates t ON t.id = v.template_id
-WHERE v.template_id = $1
-  AND v.id = $2
+       v.plain_text_content
+FROM template_version_summaries s
+         JOIN template_versions v ON v.id = s.id
+WHERE s.template_id = $1
+  AND s.id = $2
 `
 
 type GetTemplateVersionParams struct {
@@ -1228,23 +1217,12 @@ type GetTemplateVersionParams struct {
 }
 
 type GetTemplateVersionRow struct {
-	ID               uuid.UUID          `json:"id"`
-	TemplateID       uuid.UUID          `json:"template_id"`
-	Seq              int                `json:"seq"`
-	Subject          string             `json:"subject"`
-	JsxSource        *string            `json:"jsx_source"`
-	VisualSource     []byte             `json:"visual_source"`
-	HtmlSource       *string            `json:"html_source"`
-	MainMode         AuthoringMode      `json:"main_mode"`
-	HtmlContent      string             `json:"html_content"`
-	PlainTextContent string             `json:"plain_text_content"`
-	AuthorKind       TemplateAuthorKind `json:"author_kind"`
-	AuthorSub        *string            `json:"author_sub"`
-	AuthorName       *string            `json:"author_name"`
-	CreatedAt        time.Time          `json:"created_at"`
-	PublishedAt      *time.Time         `json:"published_at"`
-	BaseVersionID    *uuid.UUID         `json:"base_version_id"`
-	IsCurrent        bool               `json:"is_current"`
+	TemplateVersionSummary TemplateVersionSummary `json:"template_version_summary"`
+	JsxSource              *string                `json:"jsx_source"`
+	VisualSource           []byte                 `json:"visual_source"`
+	HtmlSource             *string                `json:"html_source"`
+	HtmlContent            string                 `json:"html_content"`
+	PlainTextContent       string                 `json:"plain_text_content"`
 }
 
 // One version of one template, whole. A version of another template is not
@@ -1253,23 +1231,24 @@ func (q *Queries) GetTemplateVersion(ctx context.Context, arg GetTemplateVersion
 	row := q.db.QueryRow(ctx, getTemplateVersion, arg.TemplateID, arg.ID)
 	var i GetTemplateVersionRow
 	err := row.Scan(
-		&i.ID,
-		&i.TemplateID,
-		&i.Seq,
-		&i.Subject,
+		&i.TemplateVersionSummary.ID,
+		&i.TemplateVersionSummary.TemplateID,
+		&i.TemplateVersionSummary.Seq,
+		&i.TemplateVersionSummary.Subject,
+		&i.TemplateVersionSummary.RequestedSubject,
+		&i.TemplateVersionSummary.MainMode,
+		&i.TemplateVersionSummary.AuthorKind,
+		&i.TemplateVersionSummary.AuthorSub,
+		&i.TemplateVersionSummary.AuthorName,
+		&i.TemplateVersionSummary.CreatedAt,
+		&i.TemplateVersionSummary.PublishedAt,
+		&i.TemplateVersionSummary.BaseVersionID,
+		&i.TemplateVersionSummary.IsCurrent,
 		&i.JsxSource,
 		&i.VisualSource,
 		&i.HtmlSource,
-		&i.MainMode,
 		&i.HtmlContent,
 		&i.PlainTextContent,
-		&i.AuthorKind,
-		&i.AuthorSub,
-		&i.AuthorName,
-		&i.CreatedAt,
-		&i.PublishedAt,
-		&i.BaseVersionID,
-		&i.IsCurrent,
 	)
 	return i, err
 }
@@ -1429,22 +1408,10 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 }
 
 const listTemplateVersions = `-- name: ListTemplateVersions :many
-SELECT v.id,
-       v.template_id,
-       v.seq,
-       v.subject,
-       v.main_mode,
-       v.author_kind,
-       v.author_sub,
-       v.author_name,
-       v.created_at,
-       v.published_at,
-       v.base_version_id,
-       COALESCE(v.id = t.published_version_id, false)::boolean AS is_current
-FROM template_versions v
-         JOIN templates t ON t.id = v.template_id
-WHERE v.template_id = $1
-ORDER BY v.seq DESC
+SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current
+FROM template_version_summaries
+WHERE template_id = $1
+ORDER BY seq DESC
 LIMIT $2 OFFSET $3
 `
 
@@ -1454,37 +1421,23 @@ type ListTemplateVersionsParams struct {
 	Offset     int32     `json:"offset"`
 }
 
-type ListTemplateVersionsRow struct {
-	ID            uuid.UUID          `json:"id"`
-	TemplateID    uuid.UUID          `json:"template_id"`
-	Seq           int                `json:"seq"`
-	Subject       string             `json:"subject"`
-	MainMode      AuthoringMode      `json:"main_mode"`
-	AuthorKind    TemplateAuthorKind `json:"author_kind"`
-	AuthorSub     *string            `json:"author_sub"`
-	AuthorName    *string            `json:"author_name"`
-	CreatedAt     time.Time          `json:"created_at"`
-	PublishedAt   *time.Time         `json:"published_at"`
-	BaseVersionID *uuid.UUID         `json:"base_version_id"`
-	IsCurrent     bool               `json:"is_current"`
-}
-
 // A template's Mail template versions, newest first, without their sources or
-// render. is_current marks the one the row is a copy of, the one being sent.
-func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]ListTemplateVersionsRow, error) {
+// render.
+func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]TemplateVersionSummary, error) {
 	rows, err := q.db.Query(ctx, listTemplateVersions, arg.TemplateID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListTemplateVersionsRow
+	var items []TemplateVersionSummary
 	for rows.Next() {
-		var i ListTemplateVersionsRow
+		var i TemplateVersionSummary
 		if err := rows.Scan(
 			&i.ID,
 			&i.TemplateID,
 			&i.Seq,
 			&i.Subject,
+			&i.RequestedSubject,
 			&i.MainMode,
 			&i.AuthorKind,
 			&i.AuthorSub,

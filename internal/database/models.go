@@ -223,3 +223,19 @@ type TemplateVersion struct {
 	PublishedAt      *time.Time         `json:"published_at"`
 	BaseVersionID    *uuid.UUID         `json:"base_version_id"`
 }
+
+type TemplateVersionSummary struct {
+	ID               uuid.UUID          `json:"id"`
+	TemplateID       uuid.UUID          `json:"template_id"`
+	Seq              int                `json:"seq"`
+	Subject          string             `json:"subject"`
+	RequestedSubject *string            `json:"requested_subject"`
+	MainMode         AuthoringMode      `json:"main_mode"`
+	AuthorKind       TemplateAuthorKind `json:"author_kind"`
+	AuthorSub        *string            `json:"author_sub"`
+	AuthorName       *string            `json:"author_name"`
+	CreatedAt        time.Time          `json:"created_at"`
+	PublishedAt      *time.Time         `json:"published_at"`
+	BaseVersionID    *uuid.UUID         `json:"base_version_id"`
+	IsCurrent        bool               `json:"is_current"`
+}

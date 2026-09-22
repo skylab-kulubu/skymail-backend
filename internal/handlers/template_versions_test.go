@@ -594,12 +594,13 @@ func TestSendAfterVersionedWritesQueuesThePublishedCopyNotADraft(t *testing.T) {
 
 // servedVersion is a version as the version routes serve it.
 type servedVersion struct {
-	ID         uuid.UUID `json:"id"`
-	TemplateID uuid.UUID `json:"template_id"`
-	Seq        int       `json:"seq"`
-	Subject    string    `json:"subject"`
-	MainMode   string    `json:"main_mode"`
-	Author     struct {
+	ID               uuid.UUID `json:"id"`
+	TemplateID       uuid.UUID `json:"template_id"`
+	Seq              int       `json:"seq"`
+	Subject          string    `json:"subject"`
+	RequestedSubject *string   `json:"requested_subject"`
+	MainMode         string    `json:"main_mode"`
+	Author           struct {
 		Kind string  `json:"kind"`
 		Sub  *string `json:"sub"`
 		Name *string `json:"name"`
@@ -698,7 +699,8 @@ func TestListTemplateVersionsNewestFirst(t *testing.T) {
 		edit.BaseVersionID == nil || *edit.BaseVersionID != seed.ID {
 		t.Errorf("edit = %+v, want the operator's published JSX version, the one being sent", edit)
 	}
-	if seed.PublishedAt == nil || seed.Current || seed.MainMode != "html" || seed.Author.Kind != "template_seed" || seed.BaseVersionID != nil {
+	if seed.PublishedAt == nil || seed.Current || seed.MainMode != "html" || seed.Author.Kind != "template_seed" || seed.BaseVersionID != nil ||
+		!sameString(seed.RequestedSubject, "Katılım sertifikan hazır") || edit.RequestedSubject != nil {
 		t.Errorf("seed = %+v, want the Template seed's published HTML version, no longer sent", seed)
 	}
 
@@ -784,7 +786,8 @@ func TestReadOneTemplateVersion(t *testing.T) {
 	if seed["seq"] != float64(1) || seed["main_mode"] != "html" || seed["current"] != false || author["kind"] != "template_seed" ||
 		seed["jsx_source"] != nil || seed["visual_source"] != nil || seed["html_source"] != `<a href="{{.VerifyURL}}">Doğrula</a>` ||
 		seed["html_content"] != `<a href="{{.VerifyURL}}">Doğrula</a>` || seed["plain_text_content"] != "Doğrula: {{.VerifyURL}}" ||
-		seed["subject"] != "Katılım sertifikan hazır" || seed["published_at"] == nil || seed["base_version_id"] != nil {
+		seed["subject"] != "Katılım sertifikan hazır" || seed["requested_subject"] != "Katılım sertifikan hazır" ||
+		seed["published_at"] == nil || seed["base_version_id"] != nil {
 		t.Errorf("seed version = %v", seed)
 	}
 

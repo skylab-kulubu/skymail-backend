@@ -74,8 +74,8 @@ type Querier interface {
 	// only its rows are counted.
 	ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error)
 	// A template's Mail template versions, newest first, without their sources or
-	// render. is_current marks the one the row is a copy of, the one being sent.
-	ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]ListTemplateVersionsRow, error)
+	// render.
+	ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]TemplateVersionSummary, error)
 	ProcessQueueItems(ctx context.Context) ([]MailQueue, error)
 	// Records what a template row now holds as a new Mail template version,
 	// published at once, and makes the row a copy of it. This is the expand step

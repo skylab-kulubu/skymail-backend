@@ -11,16 +11,6 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 )
 
-// TemplateVersionAuthor is who wrote a Mail template version.
-type TemplateVersionAuthor struct {
-	// operator: written in SkyMail; template_seed: written by the Template seed from the repo.
-	Kind string `json:"kind" enums:"operator,template_seed"`
-	// The Keycloak subject of the token that wrote the version. Null when not known: the first versions, made from templates written before versions were kept.
-	Sub *string `json:"sub"`
-	// The name the writer's token carried when the version was written. Null when not known.
-	Name *string `json:"name"`
-}
-
 // TemplateVersionSummary is one entry of a Mail template's version history,
 // without its sources or render.
 type TemplateVersionSummary struct {
@@ -29,10 +19,12 @@ type TemplateVersionSummary struct {
 	// 1, 2, 3… within the template, in the order versions were written.
 	Seq     int    `json:"seq"`
 	Subject string `json:"subject"`
+	// The subject the Template seed sent for its version. It can differ from subject: until the seed's conflict rule, the seed keeps the subject a template already has. Null on an operator's version and on the first versions, made from templates written before versions were kept.
+	RequestedSubject *string `json:"requested_subject"`
 	// The Authoring mode whose source is the Main source: its render is what the version sends.
-	MainMode  string                `json:"main_mode" enums:"jsx,visual,html"`
-	Author    TemplateVersionAuthor `json:"author"`
-	CreatedAt time.Time             `json:"created_at"`
+	MainMode  string                 `json:"main_mode" enums:"jsx,visual,html"`
+	Author    database.VersionAuthor `json:"author"`
+	CreatedAt time.Time              `json:"created_at"`
 	// When the version was published; null for a draft.
 	PublishedAt *time.Time `json:"published_at"`
 	// The published version a draft started from; null for a template's first version.
@@ -55,6 +47,23 @@ type TemplateVersion struct {
 	HTMLContent string `json:"html_content"`
 	// The Main source rendered as plain text.
 	PlainTextContent string `json:"plain_text_content"`
+}
+
+// versionSummary is a version as the version routes serve it.
+func versionSummary(s database.TemplateVersionSummary) TemplateVersionSummary {
+	return TemplateVersionSummary{
+		ID:               s.ID,
+		TemplateID:       s.TemplateID,
+		Seq:              s.Seq,
+		Subject:          s.Subject,
+		RequestedSubject: s.RequestedSubject,
+		MainMode:         string(s.MainMode),
+		Author:           s.Author(),
+		CreatedAt:        s.CreatedAt,
+		PublishedAt:      s.PublishedAt,
+		BaseVersionID:    s.BaseVersionID,
+		Current:          s.IsCurrent,
+	}
 }
 
 // ListTemplateVersions godoc
@@ -95,20 +104,7 @@ func (h *templateHandlerImpl) ListTemplateVersions(c fiber.Ctx) error {
 
 	versions := make([]TemplateVersionSummary, 0, len(rows))
 	for _, row := range rows {
-		versions = append(versions, TemplateVersionSummary{
-			ID:         row.ID,
-			TemplateID: row.TemplateID,
-			Seq:        row.Seq,
-			Subject:    row.Subject,
-			MainMode:   string(row.MainMode),
-			Author: TemplateVersionAuthor{
-				Kind: string(row.AuthorKind), Sub: row.AuthorSub, Name: row.AuthorName,
-			},
-			CreatedAt:     row.CreatedAt,
-			PublishedAt:   row.PublishedAt,
-			BaseVersionID: row.BaseVersionID,
-			Current:       row.IsCurrent,
-		})
+		versions = append(versions, versionSummary(row))
 	}
 
 	c.Response().Header.Set("X-Total-Count", strconv.FormatInt(count, 10))
@@ -146,24 +142,11 @@ func (h *templateHandlerImpl) GetTemplateVersion(c fiber.Ctx) error {
 	}
 
 	return c.JSON(TemplateVersion{
-		TemplateVersionSummary: TemplateVersionSummary{
-			ID:         row.ID,
-			TemplateID: row.TemplateID,
-			Seq:        row.Seq,
-			Subject:    row.Subject,
-			MainMode:   string(row.MainMode),
-			Author: TemplateVersionAuthor{
-				Kind: string(row.AuthorKind), Sub: row.AuthorSub, Name: row.AuthorName,
-			},
-			CreatedAt:     row.CreatedAt,
-			PublishedAt:   row.PublishedAt,
-			BaseVersionID: row.BaseVersionID,
-			Current:       row.IsCurrent,
-		},
-		JSXSource:        row.JsxSource,
-		VisualSource:     row.VisualSource,
-		HTMLSource:       row.HtmlSource,
-		HTMLContent:      row.HtmlContent,
-		PlainTextContent: row.PlainTextContent,
+		TemplateVersionSummary: versionSummary(row.TemplateVersionSummary),
+		JSXSource:              row.JsxSource,
+		VisualSource:           row.VisualSource,
+		HTMLSource:             row.HtmlSource,
+		HTMLContent:            row.HtmlContent,
+		PlainTextContent:       row.PlainTextContent,
 	})
 }
