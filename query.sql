@@ -336,31 +336,26 @@ FROM mail_tasks mt
          LEFT JOIN mailing_lists ml ON mt.mail_list_id = ml.id
 WHERE mt.id = $1;
 
--- name: GetAllMailTasks :many
-SELECT mt.*,
-       t.name  AS template_name,
-       ml.name AS mail_list_name
-FROM mail_tasks mt
-         LEFT JOIN templates t ON mt.template_id = t.id
-         LEFT JOIN mailing_lists ml ON mt.mail_list_id = ml.id
-ORDER BY mt.created_at DESC
-LIMIT $1 OFFSET $2;
-
 -- name: CountMailTasks :one
 SELECT count(*)
 FROM mail_tasks;
 
+-- A send's recipients, newest first. A list send's rows come from one insert
+-- and share a created_at, so the id breaks the tie: pages neither repeat nor
+-- skip a recipient. A NULL status lists every recipient.
 -- name: GetMailQueueItemsByTaskId :many
 SELECT id, recipient_full_name, recipient_email, status, error, attempts, next_attempt_at, created_at
 FROM mail_queue
 WHERE task_id = $1
-ORDER BY created_at DESC
+  AND (sqlc.narg(status)::mail_queue_status IS NULL OR status = sqlc.narg(status)::mail_queue_status)
+ORDER BY created_at DESC, id DESC
 LIMIT $2 OFFSET $3;
 
 -- name: CountMailQueueItemsByTaskId :one
 SELECT count(*)
 FROM mail_queue
-WHERE task_id = $1;
+WHERE task_id = $1
+  AND (sqlc.narg(status)::mail_queue_status IS NULL OR status = sqlc.narg(status)::mail_queue_status);
 
 
 -- name: InsertMailTask :one
@@ -392,3 +387,93 @@ SELECT it.id               AS task_id,
        sqlc.arg(recipient_email)::text AS recipient_email
 FROM inserted_task it
          JOIN templates t ON it.template_id = t.id;
+
+-- name: CountMailQueueByStatus :one
+SELECT (SELECT count(*) FROM mail_queue WHERE status = 'pending')    AS pending,
+       (SELECT count(*) FROM mail_queue WHERE status = 'processing') AS processing,
+       (SELECT count(*) FROM mail_queue WHERE status = 'sent')       AS sent,
+       (SELECT count(*) FROM mail_queue WHERE status = 'failed')     AS failed;
+
+-- A queue row has no sent time of its own. created_at — when that recipient's
+-- mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
+-- mail that goes through on its first attempt leaves within seconds, and only a
+-- retried one (the ladder tops out under eight minutes) can land later.
+-- next_attempt_at is not used: every row older than the retry migration holds
+-- that migration's timestamp in it.
+-- Days are calendar days in time_zone; the series ends on as_of's day and has
+-- one row per day, zero-filled.
+-- name: GetDailySentCounts :many
+WITH today AS (SELECT (sqlc.arg(as_of)::timestamptz AT TIME ZONE sqlc.arg(time_zone)::text)::date AS day),
+     days AS (SELECT today.day - back AS day
+              FROM today,
+                   generate_series(0, sqlc.arg(days)::int - 1) AS back)
+SELECT d.day::date        AS day,
+       count(q.created_at) AS sent
+FROM days d
+         LEFT JOIN mail_queue q
+                   ON q.status = 'sent'
+                       AND q.created_at >= (d.day::timestamp AT TIME ZONE sqlc.arg(time_zone)::text)
+                       AND q.created_at < ((d.day + 1)::timestamp AT TIME ZONE sqlc.arg(time_zone)::text)
+GROUP BY d.day
+ORDER BY d.day;
+
+-- A send as every screen shows it — the home screen, the send list and a
+-- send's own page: the task, the template it used, who it went to, its status
+-- as mail_task_status derives it, and its recipients by status. A NULL task_id
+-- lists every send and a NULL status every status. The page is cut first so
+-- only its rows are counted.
+-- name: ListMailTaskSends :many
+WITH page AS (SELECT mt.id
+              FROM mail_tasks mt
+              WHERE (sqlc.narg(task_id)::uuid IS NULL OR mt.id = sqlc.narg(task_id)::uuid)
+                AND (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(status)::text)
+              ORDER BY mt.created_at DESC, mt.id DESC
+              LIMIT $1 OFFSET $2)
+SELECT mt.id,
+       mt.sent_by,
+       mt.template_id,
+       mt.mail_list_id,
+       mt.body_variables,
+       mt.created_at,
+       t.name                       AS template_name,
+       t.key                        AS template_key,
+       ml.name                      AS mail_list_name,
+       (ml.id IS NOT NULL)::boolean AS internal_mail_list,
+       mail_task_status(mt.id)      AS status,
+       rc.pending,
+       rc.processing,
+       rc.sent,
+       rc.failed,
+       single.recipient_full_name   AS single_recipient_full_name,
+       single.recipient_email       AS single_recipient_email
+FROM page
+         JOIN mail_tasks mt ON mt.id = page.id
+         LEFT JOIN templates t ON mt.template_id = t.id
+         LEFT JOIN mailing_lists ml ON mt.mail_list_id = ml.id
+         CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE q.status = 'pending')    AS pending,
+                                    count(*) FILTER (WHERE q.status = 'processing') AS processing,
+                                    count(*) FILTER (WHERE q.status = 'sent')       AS sent,
+                                    count(*) FILTER (WHERE q.status = 'failed')     AS failed
+                             FROM mail_queue q
+                             WHERE q.task_id = mt.id) rc
+         LEFT JOIN mail_queue single
+                   ON single.id = (SELECT q.id
+                                   FROM mail_queue q
+                                   WHERE mt.mail_list_id IS NULL
+                                     AND q.task_id = mt.id
+                                   ORDER BY q.created_at, q.id
+                                   LIMIT 1)
+ORDER BY mt.created_at DESC, mt.id DESC;
+
+-- Sends by the status mail_task_status derives, over every send: the same
+-- numbers CountMailTaskSends gives for each status filter.
+-- name: CountMailTasksByStatus :one
+SELECT count(*) FILTER (WHERE s.status = 'failed')  AS failed,
+       count(*) FILTER (WHERE s.status = 'sending') AS sending,
+       count(*) FILTER (WHERE s.status = 'sent')    AS sent
+FROM (SELECT mail_task_status(mt.id) AS status FROM mail_tasks mt) s;
+
+-- name: CountMailTaskSends :one
+SELECT count(*)
+FROM mail_tasks mt
+WHERE (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(status)::text);

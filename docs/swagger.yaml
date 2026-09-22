@@ -10,61 +10,17 @@ components:
           additionalProperties: {}
           type: object
       type: object
-    database.GetAllMailTasksRow:
+    database.GetMailQueueItemsByTaskIdRow:
       properties:
-        body_variables:
-          items:
-            type: integer
-          type: array
-          uniqueItems: false
-        created_at:
-          type: string
-        id:
-          type: string
-        mail_list_id:
-          type: string
-        mail_list_name:
-          type: string
-        sent_by:
-          type: string
-        template_id:
-          type: string
-        template_name:
-          type: string
-      type: object
-    database.GetMailTaskByIdRow:
-      properties:
-        body_variables:
-          items:
-            type: integer
-          type: array
-          uniqueItems: false
-        created_at:
-          type: string
-        id:
-          type: string
-        mail_list_id:
-          type: string
-        mail_list_name:
-          type: string
-        sent_by:
-          type: string
-        template_id:
-          type: string
-        template_name:
-          type: string
-      type: object
-    database.MailQueue:
-      properties:
-        body:
-          type: string
-        body_html:
-          type: string
+        attempts:
+          type: integer
         created_at:
           type: string
         error:
           type: string
         id:
+          type: string
+        next_attempt_at:
           type: string
         recipient_email:
           type: string
@@ -72,10 +28,6 @@ components:
           type: string
         status:
           $ref: '#/components/schemas/database.NullMailQueueStatus'
-        subject:
-          type: string
-        task_id:
-          type: string
       type: object
     database.MailQueueStatus:
       enum:
@@ -139,6 +91,8 @@ components:
           type: string
         id:
           type: string
+        key:
+          type: string
         name:
           type: string
         plain_text_content:
@@ -147,7 +101,47 @@ components:
           type: string
         subject:
           type: string
+        system:
+          type: boolean
         updated_at:
+          type: string
+      type: object
+    handlers.DailySent:
+      properties:
+        date:
+          example: "2026-09-22"
+          type: string
+        sent:
+          type: integer
+      type: object
+    handlers.MailTaskItem:
+      properties:
+        audience:
+          $ref: '#/components/schemas/handlers.SendAudience'
+        body_variables:
+          items:
+            type: integer
+          type: array
+          uniqueItems: false
+        created_at:
+          type: string
+        id:
+          type: string
+        mail_list_id:
+          type: string
+        mail_list_name:
+          type: string
+        recipient_counts:
+          $ref: '#/components/schemas/handlers.QueueCounts'
+        sent_by:
+          type: string
+        status:
+          $ref: '#/components/schemas/handlers.SendStatus'
+        template_id:
+          type: string
+        template_key:
+          type: string
+        template_name:
           type: string
       type: object
     handlers.MailingListItem:
@@ -167,6 +161,77 @@ components:
         source:
           type: string
         updated_at:
+          type: string
+      type: object
+    handlers.QueueCounts:
+      properties:
+        failed:
+          type: integer
+        pending:
+          type: integer
+        processing:
+          type: integer
+        sent:
+          type: integer
+      type: object
+    handlers.SendAudience:
+      properties:
+        kind:
+          enum:
+          - mailing_list
+          - single
+          type: string
+        mail_list_id:
+          type: string
+        name:
+          type: string
+        recipient_email:
+          type: string
+        recipient_full_name:
+          type: string
+        source:
+          enum:
+          - internal
+          - keycloak
+          type: string
+      type: object
+    handlers.SendCounts:
+      properties:
+        failed:
+          type: integer
+        sending:
+          type: integer
+        sent:
+          type: integer
+      type: object
+    handlers.SendStatus:
+      enum:
+      - failed
+      - sending
+      - sent
+      type: string
+      x-enum-varnames:
+      - SendStatusFailed
+      - SendStatusSending
+      - SendStatusSent
+    handlers.SendSummary:
+      properties:
+        daily_sent:
+          items:
+            $ref: '#/components/schemas/handlers.DailySent'
+          type: array
+          uniqueItems: false
+        queue_counts:
+          $ref: '#/components/schemas/handlers.QueueCounts'
+        recent_sends:
+          items:
+            $ref: '#/components/schemas/handlers.MailTaskItem'
+          type: array
+          uniqueItems: false
+        send_counts:
+          $ref: '#/components/schemas/handlers.SendCounts'
+        time_zone:
+          example: Europe/Istanbul
           type: string
       type: object
     requests.AddRecipient:
@@ -203,6 +268,8 @@ components:
       properties:
         html_content:
           type: string
+        key:
+          type: string
         name:
           type: string
         plain_text_content:
@@ -229,9 +296,10 @@ components:
           type: string
         template_id:
           type: string
+        template_key:
+          type: string
       required:
       - recipient_email
-      - template_id
       type: object
     requests.UpdateMailingList:
       properties:
@@ -244,6 +312,8 @@ components:
       properties:
         html_content:
           type: string
+        key:
+          type: string
         name:
           type: string
         plain_text_content:
@@ -252,6 +322,27 @@ components:
           type: string
         subject:
           type: string
+      required:
+      - html_content
+      - name
+      - plain_text_content
+      - react_email_content
+      - subject
+      type: object
+    requests.UpsertTemplateByKey:
+      properties:
+        html_content:
+          type: string
+        name:
+          type: string
+        plain_text_content:
+          type: string
+        react_email_content:
+          type: string
+        subject:
+          type: string
+        system:
+          type: boolean
       required:
       - html_content
       - name
@@ -274,7 +365,11 @@ openapi: 3.1.0
 paths:
   /mail_tasks:
     get:
-      description: Get a list of all mail tasks with pagination.
+      description: Get a list of all mail tasks with pagination, newest first, each
+        with its derived status, recipients by status and audience. The status filter
+        keeps only sends with that derived status; X-Total-Count counts the filtered
+        sends. Keycloak group names are looked up within 2 seconds for the whole page
+        and are null past that.
       parameters:
       - description: Start index
         in: query
@@ -286,15 +381,44 @@ paths:
         name: _end
         schema:
           type: integer
+      - description: 'Derived send status: failed (a recipient failed, or none was
+          queued a minute after the send), sending (none failed and some pending or
+          processing, or none queued yet within that minute), sent (none failed or
+          queued, some sent)'
+        in: query
+        name: status
+        schema:
+          enum:
+          - failed
+          - sending
+          - sent
+          type: string
       responses:
         "200":
           content:
             application/json:
               schema:
                 items:
-                  $ref: '#/components/schemas/database.GetAllMailTasksRow'
+                  $ref: '#/components/schemas/handlers.MailTaskItem'
                 type: array
           description: OK
+          headers:
+            X-Total-Count:
+              description: Number of sends matching the filter
+              schema:
+                type: integer
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
         "500":
           content:
             application/json:
@@ -342,7 +466,8 @@ paths:
       - Mail
   /mail_tasks/{id}:
     get:
-      description: Get details of a specific mail task by its ID.
+      description: Get details of a specific mail task by its ID, with its derived
+        status, recipients by status and audience, as the send list shows it.
       parameters:
       - description: Task ID
         in: path
@@ -355,7 +480,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/database.GetMailTaskByIdRow'
+                $ref: '#/components/schemas/handlers.MailTaskItem'
           description: OK
         "400":
           content:
@@ -363,6 +488,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/apperrors.AppError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -380,8 +511,10 @@ paths:
       - Mail
   /mail_tasks/{id}/queue:
     get:
-      description: Get a list of mail queue items associated with a specific task
-        ID, with pagination.
+      description: Get a send's recipients, one queue row each, newest first with
+        the row id breaking ties so pages neither repeat nor skip a recipient. The
+        status filter keeps only recipients in that queue status; X-Total-Count counts
+        the filtered recipients.
       parameters:
       - description: Task ID
         in: path
@@ -399,21 +532,42 @@ paths:
         name: _end
         schema:
           type: integer
+      - description: Recipient queue status
+        in: query
+        name: status
+        schema:
+          enum:
+          - pending
+          - processing
+          - sent
+          - failed
+          type: string
       responses:
         "200":
           content:
             application/json:
               schema:
                 items:
-                  $ref: '#/components/schemas/database.MailQueue'
+                  $ref: '#/components/schemas/database.GetMailQueueItemsByTaskIdRow'
                 type: array
           description: OK
+          headers:
+            X-Total-Count:
+              description: Number of recipients matching the filter
+              schema:
+                type: integer
         "400":
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/apperrors.AppError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
         "500":
           content:
             application/json:
@@ -457,6 +611,56 @@ paths:
                 $ref: '#/components/schemas/apperrors.AppError'
           description: Internal Server Error
       summary: Send a single email
+      tags:
+      - Mail
+  /mail_tasks/summary:
+    get:
+      description: 'Queue rows (one per recipient) by status; sends by derived status,
+        each equal to the X-Total-Count of the send list filtered by it; mail sent
+        per Europe/Istanbul day over the last days (zero-filled, oldest first, ending
+        today); and the latest sends. Derived status: failed (a recipient failed,
+        or none was queued a minute after the send), sending (none failed and some
+        pending or processing, or none queued yet within that minute), sent (none
+        failed or queued, some sent).'
+      parameters:
+      - description: Days in the daily series, ending today in Europe/Istanbul (1-90)
+        in: query
+        name: days
+        schema:
+          default: 30
+          type: integer
+      - description: Latest sends to list, newest first (1-20)
+        in: query
+        name: recent
+        schema:
+          default: 5
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.SendSummary'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Internal Server Error
+      summary: Summarise mail sends
       tags:
       - Mail
   /mailing_lists:
@@ -1052,6 +1256,76 @@ paths:
                 $ref: '#/components/schemas/apperrors.AppError'
           description: Conflict
       summary: Restore an archived email template
+      tags:
+      - Templates
+  /templates/by-key/{key}:
+    get:
+      description: Get a template by its stable key (for example keycloak.verify-email).
+      parameters:
+      - description: Template key
+        in: path
+        name: key
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/database.Template'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Not Found
+      summary: Get an email template by key
+      tags:
+      - Templates
+    put:
+      description: 'Seed path for system templates: creates the template when the
+        key is new and replaces its content when it already exists. Un-archives the
+        template so a seed always leaves a usable template behind.'
+      parameters:
+      - description: Template key
+        in: path
+        name: key
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/requests.UpsertTemplateByKey'
+                description: Template details
+                summary: template
+        description: Template details
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/database.Template'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Internal Server Error
+      summary: Create or replace a template addressed by key
       tags:
       - Templates
 servers:

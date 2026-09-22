@@ -170,12 +170,7 @@ func main() {
 	lists.Get("/:id/recipients", authMiddleware.RequireAnyPermission("skymail:lists:read"), listHandler.GetRecipients)
 	lists.Delete("/:id/recipients/:recipientId", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.RemoveRecipient)
 
-	tasks := api.Group("/mail_tasks")
-	tasks.Post("/", authMiddleware.RequireAnyPermission("skymail:mails:write"), mailHandler.CreateTask)
-	tasks.Post("/single", authMiddleware.RequireAnyPermission("skymail:mails:send", "skymail:mails:write"), mailHandler.SendSingle)
-	tasks.Get("/", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTasks)
-	tasks.Get("/:id", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTask)
-	tasks.Get("/:id/queue", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTaskQueueItems)
+	registerMailTaskRoutes(api, authMiddleware, mailHandler)
 
 	mailerService.Start(ctx, 3)
 
@@ -187,6 +182,17 @@ func main() {
 	if err = app.Listen(addr); err != nil {
 		log.Fatal().Err(err).Msg("error starting server")
 	}
+}
+
+func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, mail handlers.MailHandler) {
+	tasks := api.Group("/mail_tasks")
+	tasks.Post("/", auth.RequireAnyPermission("skymail:mails:write"), mail.CreateTask)
+	tasks.Post("/single", auth.RequireAnyPermission("skymail:mails:send", "skymail:mails:write"), mail.SendSingle)
+	tasks.Get("/", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTasks)
+	// Before /:id, which would otherwise take "summary" for a task id.
+	tasks.Get("/summary", auth.RequireAnyPermission("skymail:mails:read"), mail.GetSummary)
+	tasks.Get("/:id", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTask)
+	tasks.Get("/:id/queue", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTaskQueueItems)
 }
 
 // defaultTrustedProxyRanges covers the private and loopback space a container
