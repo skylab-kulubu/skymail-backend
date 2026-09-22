@@ -11,15 +11,6 @@ sql:
         emit_interface: true
         emit_json_tags: true
         overrides:
-          # Which version a template row is the published copy of. The version
-          # routes serve it (as a version's "current"); the template itself is
-          # served in the shape the old panel and core have always read.
-          - column: "templates.published_version_id"
-            go_struct_tag: 'json:"-"'
-            go_type:
-              type: "UUID"
-              import: "github.com/google/uuid"
-              pointer: true
           - db_type: "uuid"
             go_type:
               type: "UUID"

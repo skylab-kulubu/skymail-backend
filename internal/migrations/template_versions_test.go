@@ -111,6 +111,7 @@ type migratedVersion struct {
 	name             string
 	seq              int
 	subject          string
+	requestedSubject *string
 	jsxSource        *string
 	visualSource     *string
 	htmlSource       *string
@@ -234,6 +235,9 @@ func assertOneFirstVersionPerTemplate(t *testing.T, database testpostgres.Databa
 			t.Errorf("%s: author = %s %v %v, want %s with no identity (unknown before versioning)", existing.name, version.authorKind, version.authorSub, version.authorName, wantAuthor)
 		}
 
+		if version.requestedSubject != nil {
+			t.Errorf("%s: requested_subject = %q, but what the seed once sent is not known", existing.name, *version.requestedSubject)
+		}
 		if version.subject != existing.subject || version.htmlContent != existing.html || version.plainTextContent != existing.plainText {
 			t.Errorf("%s: subject/render = %q %q %q, want the row's", existing.name, version.subject, version.htmlContent, version.plainTextContent)
 		}
@@ -257,7 +261,7 @@ func assertOneFirstVersionPerTemplate(t *testing.T, database testpostgres.Databa
 func versionsByName(t *testing.T, database testpostgres.Database) map[string]migratedVersion {
 	t.Helper()
 	rows, err := database.Pool.Query(context.Background(), `
-		SELECT t.key, t.name, v.seq, v.subject, v.jsx_source, v.visual_source::text, v.html_source, v.main_mode::text,
+		SELECT t.key, t.name, v.seq, v.subject, v.requested_subject, v.jsx_source, v.visual_source::text, v.html_source, v.main_mode::text,
 		       v.html_content, v.plain_text_content, v.author_kind::text, v.author_sub, v.author_name,
 		       v.created_at = t.updated_at, v.published_at IS NOT NULL, v.published_at = t.updated_at,
 		       v.base_version_id::text, t.published_version_id = v.id
@@ -270,7 +274,7 @@ func versionsByName(t *testing.T, database testpostgres.Database) map[string]mig
 	versions := map[string]migratedVersion{}
 	for rows.Next() {
 		var v migratedVersion
-		if err := rows.Scan(&v.key, &v.name, &v.seq, &v.subject, &v.jsxSource, &v.visualSource, &v.htmlSource, &v.mainMode,
+		if err := rows.Scan(&v.key, &v.name, &v.seq, &v.subject, &v.requestedSubject, &v.jsxSource, &v.visualSource, &v.htmlSource, &v.mainMode,
 			&v.htmlContent, &v.plainTextContent, &v.authorKind, &v.authorSub, &v.authorName,
 			&v.createdIsUpdated, &v.published, &v.publishedIsRow, &v.baseVersion, &v.isRowsVersion); err != nil {
 			t.Fatal(err)
@@ -321,7 +325,7 @@ func equalRows(a, b map[string]string) bool {
 
 func equalVersions(a, b migratedVersion) bool {
 	same := func(x, y *string) bool { return (x == nil && y == nil) || (x != nil && y != nil && *x == *y) }
-	return a.name == b.name && same(a.key, b.key) && a.seq == b.seq && a.subject == b.subject &&
+	return a.name == b.name && same(a.key, b.key) && a.seq == b.seq && a.subject == b.subject && same(a.requestedSubject, b.requestedSubject) &&
 		same(a.jsxSource, b.jsxSource) && same(a.visualSource, b.visualSource) && same(a.htmlSource, b.htmlSource) &&
 		a.mainMode == b.mainMode && a.htmlContent == b.htmlContent && a.plainTextContent == b.plainTextContent &&
 		a.authorKind == b.authorKind && same(a.authorSub, b.authorSub) && same(a.authorName, b.authorName) &&

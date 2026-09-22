@@ -201,7 +201,7 @@ type Template struct {
 	ArchivedBy         *string    `json:"archived_by"`
 	Key                *string    `json:"key"`
 	System             bool       `json:"system"`
-	PublishedVersionID *uuid.UUID `json:"-"`
+	PublishedVersionID *uuid.UUID `json:"published_version_id"`
 }
 
 type TemplateVersion struct {
@@ -209,6 +209,7 @@ type TemplateVersion struct {
 	TemplateID       uuid.UUID          `json:"template_id"`
 	Seq              int                `json:"seq"`
 	Subject          string             `json:"subject"`
+	RequestedSubject *string            `json:"requested_subject"`
 	JsxSource        *string            `json:"jsx_source"`
 	VisualSource     []byte             `json:"visual_source"`
 	HtmlSource       *string            `json:"html_source"`

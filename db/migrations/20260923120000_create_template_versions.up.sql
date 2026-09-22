@@ -25,6 +25,12 @@ CREATE TABLE template_versions
     -- the template row's lock before numbering, so the order is the write order.
     seq                INT                  NOT NULL CHECK (seq > 0),
     subject            TEXT                 NOT NULL,
+    -- The subject a Template seed sent, beside the one its version got: until
+    -- the seed's conflict rule (ticket 09) the by-key upsert keeps the row's
+    -- subject on an existing key, so the two can differ. Null on an operator's
+    -- version, and on the migration's first versions, whose seed payload is not
+    -- known.
+    requested_subject  TEXT,
     jsx_source         TEXT,
     visual_source      JSONB CHECK (jsonb_typeof(visual_source) = 'object'),
     html_source        TEXT,
@@ -54,6 +60,7 @@ CREATE TABLE template_versions
             OR (main_mode = 'html' AND html_source IS NOT NULL)
         ),
     CONSTRAINT template_versions_published_after_created CHECK (published_at IS NULL OR published_at >= created_at),
+    CONSTRAINT template_versions_requested_subject_by_seed CHECK (requested_subject IS NULL OR author_kind = 'template_seed'),
     CONSTRAINT template_versions_base_same_template
         FOREIGN KEY (template_id, base_version_id) REFERENCES template_versions (template_id, id)
 );

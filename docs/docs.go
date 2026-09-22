@@ -151,6 +151,9 @@ const docTemplate = `{
                     "plain_text_content": {
                         "type": "string"
                     },
+                    "published_version_id": {
+                        "type": "string"
+                    },
                     "react_email_content": {
                         "type": "string"
                     },

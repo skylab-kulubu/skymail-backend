@@ -62,7 +62,7 @@ func TestTemplateVersionConstraints(t *testing.T) {
 
 	create := func(name string) Template {
 		t.Helper()
-		template, err := db.PublishTemplateWrite(ctx, VersionAuthor{Kind: TemplateAuthorKindOperator}, func(q *Queries) (Template, error) {
+		template, err := db.PublishTemplateWrite(ctx, VersionAuthor{Kind: TemplateAuthorKindOperator}, nil, func(q *Queries) (Template, error) {
 			return q.CreateTemplate(ctx, CreateTemplateParams{
 				Name: name, Subject: name, HtmlContent: "<p>" + name + "</p>", PlainTextContent: name, ReactEmailContent: "",
 			})
@@ -102,6 +102,10 @@ func TestTemplateVersionConstraints(t *testing.T) {
 			err:  insert(", html_source, base_version_id", first.ID, 2, "html", "<p>x</p>", *second.PublishedVersionID),
 			code: "23503", purpose: "a draft starts from a version of its own template",
 		},
+		"an operator's requested subject": {
+			err:  insert(", html_source, requested_subject", first.ID, 2, "html", "<p>x</p>", "Konu"),
+			code: "23514", purpose: "only a Template seed asks for a subject",
+		},
 		"published before written": {
 			err:  insert(", html_source, created_at, published_at", first.ID, 2, "html", "<p>x</p>", "2026-09-23T12:00:00Z", "2026-09-23T11:00:00Z"),
 			code: "23514", purpose: "publishing follows writing",
@@ -132,7 +136,7 @@ func TestPublishTemplateWriteIsOneTransaction(t *testing.T) {
 	ctx := context.Background()
 	operator := VersionAuthor{Kind: TemplateAuthorKindOperator}
 
-	template, err := db.PublishTemplateWrite(ctx, operator, func(q *Queries) (Template, error) {
+	template, err := db.PublishTemplateWrite(ctx, operator, nil, func(q *Queries) (Template, error) {
 		return q.CreateTemplate(ctx, CreateTemplateParams{
 			Name: "Bülten", Subject: "Bülten", HtmlContent: "<p>Bülten</p>", PlainTextContent: "Bülten", ReactEmailContent: "",
 		})
@@ -143,7 +147,7 @@ func TestPublishTemplateWriteIsOneTransaction(t *testing.T) {
 
 	// The row write goes through, then there is no row to record a version
 	// of — the write names a template that does not exist.
-	if _, err := db.PublishTemplateWrite(ctx, operator, func(q *Queries) (Template, error) {
+	if _, err := db.PublishTemplateWrite(ctx, operator, nil, func(q *Queries) (Template, error) {
 		written, err := q.UpdateTemplate(ctx, UpdateTemplateParams{
 			ID: template.ID, Name: "Bülten", Subject: "Değişti", HtmlContent: "<p>Değişti</p>", PlainTextContent: "Değişti", ReactEmailContent: "",
 		})
@@ -164,7 +168,7 @@ func TestPublishTemplateWriteIsOneTransaction(t *testing.T) {
 	if _, err := db.ArchiveTemplate(ctx, ArchiveTemplateParams{ID: template.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.PublishTemplateWrite(ctx, operator, func(q *Queries) (Template, error) {
+	if _, err := db.PublishTemplateWrite(ctx, operator, nil, func(q *Queries) (Template, error) {
 		return q.UpdateTemplate(ctx, UpdateTemplateParams{
 			ID: template.ID, Name: "x", Subject: "x", HtmlContent: "x", PlainTextContent: "x", ReactEmailContent: "",
 		})
@@ -187,7 +191,7 @@ func TestConcurrentTemplateWritesNumberVersionsInTurn(t *testing.T) {
 	ctx := context.Background()
 	operator := VersionAuthor{Kind: TemplateAuthorKindOperator}
 
-	template, err := db.PublishTemplateWrite(ctx, operator, func(q *Queries) (Template, error) {
+	template, err := db.PublishTemplateWrite(ctx, operator, nil, func(q *Queries) (Template, error) {
 		return q.CreateTemplate(ctx, CreateTemplateParams{
 			Name: "Bülten", Subject: "0", HtmlContent: "<p>0</p>", PlainTextContent: "0", ReactEmailContent: "",
 		})
@@ -201,7 +205,7 @@ func TestConcurrentTemplateWritesNumberVersionsInTurn(t *testing.T) {
 	for i := 1; i <= writers; i++ {
 		go func(i int) {
 			subject := fmt.Sprint(i)
-			_, err := db.PublishTemplateWrite(ctx, operator, func(q *Queries) (Template, error) {
+			_, err := db.PublishTemplateWrite(ctx, operator, nil, func(q *Queries) (Template, error) {
 				return q.UpdateTemplate(ctx, UpdateTemplateParams{
 					ID: template.ID, Name: "Bülten", Subject: subject, HtmlContent: "<p>" + subject + "</p>", PlainTextContent: subject, ReactEmailContent: "",
 				})

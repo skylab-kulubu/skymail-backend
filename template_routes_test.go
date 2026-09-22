@@ -25,7 +25,7 @@ func templateRoutesApp(t *testing.T, roles ...string) (*fiber.App, database.Temp
 		t.Fatal(err)
 	}
 	store := database.NewStore(postgres.Pool)
-	template, err := store.PublishTemplateWrite(context.Background(), database.VersionAuthor{Kind: database.TemplateAuthorKindOperator},
+	template, err := store.PublishTemplateWrite(context.Background(), database.VersionAuthor{Kind: database.TemplateAuthorKindOperator}, nil,
 		func(q *database.Queries) (database.Template, error) {
 			return q.CreateTemplate(context.Background(), database.CreateTemplateParams{
 				Name: "Bülten", Subject: "SKY LAB", HtmlContent: "<p>SKY LAB</p>", PlainTextContent: "SKY LAB", ReactEmailContent: "",

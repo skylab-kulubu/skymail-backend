@@ -114,52 +114,97 @@ WHERE id = $1
 RETURNING *;
 
 
--- Records the content a template row now holds as a new Mail template version,
+-- Records what a template row now holds as a new Mail template version,
 -- published at once, and makes the row a copy of it. This is the expand step
 -- for the writers that still write the row directly — the old panel's create
 -- and edit, and the Template seed's by-key upsert: each runs this after its
 -- row write, in the same transaction, so the version is what the row ended up
 -- with (a subject the upsert kept included), not what the request asked for.
 --
--- Those writers send one body, JSX in react_email_content. template_jsx_source
--- decides whether that is a JSX source; when it is not — the seed's pointer
--- comment, or nothing — the Main source is HTML and it is html_content. The
--- version is numbered after the template's last one; the row write before it
--- holds the row's lock, so two writers cannot take the same number. Its base
--- is the version the row was a copy of until now.
--- name: PublishTemplateRowAsVersion :one
-WITH row_content AS (SELECT t.id,
-                            t.subject,
-                            t.html_content,
-                            t.plain_text_content,
-                            t.published_version_id,
-                            template_jsx_source(t.react_email_content) AS jsx_source
-                     FROM templates t
-                     WHERE t.id = sqlc.arg(template_id)),
+-- Those writers send a subject, a render and at most a JSX source, so the
+-- version starts from the published one and replaces only what they changed:
+--   * The subject and the render are the row's.
+--   * If the body — html_content, plain_text_content and the JSX source — is
+--     the published version's, the Main source and every source stay as they
+--     were: the old panel sends a stored body back untouched when only the
+--     wording around it changed.
+--   * Otherwise the body is new. react_email_content with a JSX source in it
+--     (template_jsx_source decides) makes JSX the Main source with that text;
+--     without one — the seed's pointer comment, or nothing — html_content is
+--     the HTML source and the Main source.
+--   * Sources in the other Authoring modes are carried over.
+-- A row with no published version yet — written before versions were kept,
+-- or by the old binary between the migration and this one — is taken as it
+-- now is. When the result is the published version over again, nothing is
+-- recorded: the write changed nothing a version holds (name is not one).
+--
+-- The version is numbered after the template's last one; the row write before
+-- this holds the row's lock, so two writers cannot take the same number. Its
+-- base is the version the row was a copy of until now. A Template seed's
+-- version also keeps the subject the seed sent, requested_subject.
+--
+-- Affects one row when a version was recorded and none when not.
+-- name: RecordTemplateRowAsVersion :execrows
+WITH written AS (SELECT t.id,
+                        t.subject,
+                        t.html_content,
+                        t.plain_text_content,
+                        t.published_version_id,
+                        template_jsx_source(t.react_email_content) AS jsx_source
+                 FROM templates t
+                 WHERE t.id = sqlc.arg(template_id)),
+     candidate AS (SELECT w.id                                                        AS template_id,
+                          w.subject,
+                          COALESCE(w.jsx_source, p.jsx_source)                        AS jsx_source,
+                          p.visual_source,
+                          CASE
+                              WHEN body.kept OR w.jsx_source IS NOT NULL THEN p.html_source
+                              ELSE w.html_content
+                              END                                                     AS html_source,
+                          CASE
+                              WHEN body.kept THEN p.main_mode
+                              WHEN w.jsx_source IS NOT NULL THEN 'jsx'::authoring_mode
+                              ELSE 'html'::authoring_mode
+                              END                                                     AS main_mode,
+                          w.html_content,
+                          w.plain_text_content,
+                          p.id                                                        AS published_id,
+                          (p.subject, p.jsx_source, p.visual_source, p.html_source, p.main_mode,
+                           p.html_content, p.plain_text_content)                      AS published_content
+                   FROM written w
+                            LEFT JOIN template_versions p ON p.id = w.published_version_id
+                            CROSS JOIN LATERAL (SELECT p.id IS NOT NULL
+                                                           AND w.html_content = p.html_content
+                                                           AND w.plain_text_content = p.plain_text_content
+                                                           AND w.jsx_source IS NOT DISTINCT FROM p.jsx_source AS kept) body),
      version AS (
-         INSERT INTO template_versions (template_id, seq, subject, jsx_source, html_source, main_mode,
+         INSERT INTO template_versions (template_id, seq, subject, jsx_source, visual_source, html_source, main_mode,
                                         html_content, plain_text_content, author_kind, author_sub, author_name,
-                                        published_at, base_version_id)
-             SELECT r.id,
-                    COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = r.id), 0) + 1,
-                    r.subject,
-                    r.jsx_source,
-                    CASE WHEN r.jsx_source IS NULL THEN r.html_content END,
-                    CASE WHEN r.jsx_source IS NULL THEN 'html' ELSE 'jsx' END::authoring_mode,
-                    r.html_content,
-                    r.plain_text_content,
+                                        requested_subject, published_at, base_version_id)
+             SELECT c.template_id,
+                    COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = c.template_id), 0) + 1,
+                    c.subject,
+                    c.jsx_source,
+                    c.visual_source,
+                    c.html_source,
+                    c.main_mode,
+                    c.html_content,
+                    c.plain_text_content,
                     sqlc.arg(author_kind)::template_author_kind,
                     sqlc.narg(author_sub)::text,
                     sqlc.narg(author_name)::text,
+                    sqlc.narg(requested_subject)::text,
                     NOW(),
-                    r.published_version_id
-             FROM row_content r
+                    c.published_id
+             FROM candidate c
+             WHERE c.published_id IS NULL
+                OR (c.subject, c.jsx_source, c.visual_source, c.html_source, c.main_mode,
+                    c.html_content, c.plain_text_content) IS DISTINCT FROM c.published_content
              RETURNING id, template_id)
 UPDATE templates t
 SET published_version_id = version.id
 FROM version
-WHERE t.id = version.template_id
-RETURNING t.*;
+WHERE t.id = version.template_id;
 
 -- A template's Mail template versions, newest first, without their sources or
 -- render. is_current marks the one the row is a copy of, the one being sent.

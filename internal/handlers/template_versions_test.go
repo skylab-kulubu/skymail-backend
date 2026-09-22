@@ -102,6 +102,7 @@ type storedVersion struct {
 	ID               uuid.UUID
 	Seq              int
 	Subject          string
+	RequestedSubject *string
 	JSXSource        *string
 	VisualSource     []byte
 	HTMLSource       *string
@@ -122,7 +123,7 @@ func storedVersions(t *testing.T, db *database.Store, templateID uuid.UUID) ([]s
 	t.Helper()
 	ctx := context.Background()
 	rows, err := db.Conn.Query(ctx, `
-		SELECT id, seq, subject, jsx_source, visual_source, html_source, main_mode::text, html_content,
+		SELECT id, seq, subject, requested_subject, jsx_source, visual_source, html_source, main_mode::text, html_content,
 		       plain_text_content, author_kind::text, author_sub, author_name, created_at, published_at, base_version_id
 		FROM template_versions
 		WHERE template_id = $1
@@ -134,7 +135,7 @@ func storedVersions(t *testing.T, db *database.Store, templateID uuid.UUID) ([]s
 	var versions []storedVersion
 	for rows.Next() {
 		var v storedVersion
-		if err := rows.Scan(&v.ID, &v.Seq, &v.Subject, &v.JSXSource, &v.VisualSource, &v.HTMLSource, &v.MainMode, &v.HTMLContent,
+		if err := rows.Scan(&v.ID, &v.Seq, &v.Subject, &v.RequestedSubject, &v.JSXSource, &v.VisualSource, &v.HTMLSource, &v.MainMode, &v.HTMLContent,
 			&v.PlainTextContent, &v.AuthorKind, &v.AuthorSub, &v.AuthorName, &v.CreatedAt, &v.PublishedAt, &v.BaseVersionID); err != nil {
 			t.Fatal(err)
 		}
@@ -150,11 +151,12 @@ func storedVersions(t *testing.T, db *database.Store, templateID uuid.UUID) ([]s
 	return versions, published
 }
 
-// The fields a template has always been served with. The version store must
-// not add to them or take from them: the old panel and core read this shape.
+// The fields a template is served with: the ones the old panel and core have
+// always read, and published_version_id beside them — the version the row is a
+// copy of, which the old panel ignores and the new editor starts a draft from.
 var templateFields = []string{
 	"archived_at", "archived_by", "created_at", "html_content", "id", "key", "name",
-	"plain_text_content", "react_email_content", "subject", "system", "updated_at",
+	"plain_text_content", "published_version_id", "react_email_content", "subject", "system", "updated_at",
 }
 
 func assertTemplateShape(t *testing.T, body []byte) {
@@ -212,6 +214,12 @@ func TestOldPanelCreateWritesAPublishedOperatorVersion(t *testing.T) {
 	v := versions[0]
 	if v.Seq != 1 || v.PublishedAt == nil || v.BaseVersionID != nil || published == nil || *published != v.ID {
 		t.Fatalf("version = seq %d published %v base %v, row copy of %v; want the first version, published, the row's", v.Seq, v.PublishedAt, v.BaseVersionID, published)
+	}
+	if created.PublishedVersionID == nil || *created.PublishedVersionID != v.ID {
+		t.Fatalf("response published_version_id = %v, want the version just written (%s)", created.PublishedVersionID, v.ID)
+	}
+	if v.RequestedSubject != nil {
+		t.Fatalf("an operator's version has requested_subject %q; only a Template seed asks for one", *v.RequestedSubject)
 	}
 	if v.AuthorKind != "operator" || !sameString(v.AuthorSub, operatorSub) || !sameString(v.AuthorName, operatorName) {
 		t.Fatalf("author = %s %v %v, want the operator by subject and name", v.AuthorKind, v.AuthorSub, v.AuthorName)
@@ -279,6 +287,9 @@ func TestOldPanelEditWritesAPublishedOperatorVersion(t *testing.T) {
 	}
 	if second.BaseVersionID == nil || *second.BaseVersionID != first.ID {
 		t.Fatalf("edit's base = %v, want the version it replaced (%s)", second.BaseVersionID, first.ID)
+	}
+	if updated.PublishedVersionID == nil || *updated.PublishedVersionID != second.ID {
+		t.Fatalf("response published_version_id = %v, want the edit's version (%s)", updated.PublishedVersionID, second.ID)
 	}
 	if second.AuthorKind != "operator" || !sameString(second.AuthorSub, operatorSub) || !sameString(second.AuthorName, operatorName) {
 		t.Fatalf("author = %s %v %v, want the operator", second.AuthorKind, second.AuthorSub, second.AuthorName)
@@ -405,6 +416,9 @@ func TestUpsertByKeyWritesAPublishedSeedVersionOfTheResultingRow(t *testing.T) {
 	if first.AuthorKind != "template_seed" || !sameString(first.AuthorSub, operatorSub) || !sameString(first.AuthorName, operatorName) {
 		t.Fatalf("seed author = %s %v %v, want a Template seed, run with the caller's token", first.AuthorKind, first.AuthorSub, first.AuthorName)
 	}
+	if !sameString(first.RequestedSubject, "E-postanı doğrula") {
+		t.Fatalf("first seed requested_subject = %v, want the subject it sent", first.RequestedSubject)
+	}
 	if first.PublishedAt == nil || first.BaseVersionID != nil || published == nil || *published != first.ID {
 		t.Fatalf("seed version published %v base %v, row copy of %v; want published, no base, the row's", first.PublishedAt, first.BaseVersionID, published)
 	}
@@ -454,13 +468,25 @@ func TestUpsertByKeyWritesAPublishedSeedVersionOfTheResultingRow(t *testing.T) {
 	if reseed.Subject != "E-posta adresini doğrula" {
 		t.Fatalf("reseed version subject = %q, want the subject the row kept", reseed.Subject)
 	}
+	// What the seed asked for is kept beside what it got, so ticket 09 can tell
+	// a subject the seed did not set.
+	if !sameString(reseed.RequestedSubject, "E-postanı doğrula") {
+		t.Fatalf("reseed requested_subject = %v, want the repo's subject it sent", reseed.RequestedSubject)
+	}
+	if operator.RequestedSubject != nil {
+		t.Fatalf("the operator's version has requested_subject %q", *operator.RequestedSubject)
+	}
+	if reseeded.PublishedVersionID == nil || *reseeded.PublishedVersionID != reseed.ID {
+		t.Fatalf("response published_version_id = %v, want the reseed's version", reseeded.PublishedVersionID)
+	}
 	if reseed.HTMLContent != seed["html_content"] || reseed.PlainTextContent != seed["plain_text_content"] || !sameString(reseed.HTMLSource, seed["html_content"].(string)) {
 		t.Fatalf("reseed version body = %q %q, want the repo's new body", reseed.HTMLContent, reseed.PlainTextContent)
 	}
 }
 
-// A seed brings an archived template back and records that as a version too.
-func TestUpsertByKeyOfAnArchivedTemplateWritesAVersion(t *testing.T) {
+// A seed brings an archived template back. Restoring changes only the row, so
+// an unchanged seed records no version; a changed one does.
+func TestUpsertByKeyOfAnArchivedTemplate(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	app := templateVersionsApp(t, db)
 
@@ -477,12 +503,28 @@ func TestUpsertByKeyOfAnArchivedTemplateWritesAVersion(t *testing.T) {
 	if err := json.Unmarshal(body, &seeded); err != nil {
 		t.Fatal(err)
 	}
-	if response, err := app.Test(httptest.NewRequest(fiber.MethodDelete, "/templates/"+seeded.ID.String(), nil)); err != nil || response.StatusCode != fiber.StatusNoContent {
-		t.Fatalf("archive: %v %v", response, err)
+	archive := func() {
+		t.Helper()
+		if response, err := app.Test(httptest.NewRequest(fiber.MethodDelete, "/templates/"+seeded.ID.String(), nil)); err != nil || response.StatusCode != fiber.StatusNoContent {
+			t.Fatalf("archive: %v %v", response, err)
+		}
 	}
 
+	archive()
 	if response, body = sendJSON(t, app, fiber.MethodPut, "/templates/by-key/free.basic", payload); response.StatusCode != fiber.StatusOK {
-		t.Fatalf("reseed = %d %s", response.StatusCode, body)
+		t.Fatalf("unchanged reseed = %d %s", response.StatusCode, body)
+	}
+	if _, err := db.GetTemplateById(context.Background(), seeded.ID); err != nil {
+		t.Fatalf("the reseed left the template archived: %v", err)
+	}
+	if versions, _ := storedVersions(t, db, seeded.ID); len(versions) != 1 {
+		t.Fatalf("versions after an unchanged reseed = %d, want 1", len(versions))
+	}
+
+	archive()
+	payload["html_content"] = "<div>{{safeHTML .Body}}</div>"
+	if response, body = sendJSON(t, app, fiber.MethodPut, "/templates/by-key/free.basic", payload); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("changed reseed = %d %s", response.StatusCode, body)
 	}
 	versions, published := storedVersions(t, db, seeded.ID)
 	if len(versions) != 2 || versions[1].AuthorKind != "template_seed" || published == nil || *published != versions[1].ID {
@@ -750,7 +792,9 @@ func TestReadOneTemplateVersion(t *testing.T) {
 	if response.StatusCode != fiber.StatusOK {
 		t.Fatalf("GET edit version = %d", response.StatusCode)
 	}
-	if edit["main_mode"] != "jsx" || edit["jsx_source"] != panelSource || edit["html_source"] != nil || edit["visual_source"] != nil ||
+	// The operator's JSX became the Main source; the seed's HTML source is
+	// carried along beside it.
+	if edit["main_mode"] != "jsx" || edit["jsx_source"] != panelSource || edit["html_source"] != `<a href="{{.VerifyURL}}">Doğrula</a>` || edit["visual_source"] != nil ||
 		edit["current"] != true || edit["html_content"] != `<p>Tebrikler</p><a href="{{.VerifyURL}}">Doğrula</a>` ||
 		edit["base_version_id"] != stored[0].ID.String() {
 		t.Errorf("edit version = %v", edit)
@@ -804,6 +848,198 @@ func TestTemplateVersionResponsesAreServedAsDocumented(t *testing.T) {
 		}
 	}
 	if documented := documentedFields(t, "/templates/{id}"); fmt.Sprint(documented) != fmt.Sprint(templateFields) {
-		t.Errorf("GET /templates/{id} documents %v, want the fields it always had: %v", documented, templateFields)
+		t.Errorf("GET /templates/{id} documents %v, want %v", documented, templateFields)
+	}
+}
+
+// A write that leaves the template as its published version already is —
+// subject, every source, Main source, render — is not a change and records no
+// version: a routine seed must not make every open draft stale (ticket 07), nor
+// fill the history with copies. name is not part of a version.
+func TestUnchangedWritesRecordNoVersion(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+
+	const key = "keycloak.reset-password"
+	seed := map[string]any{
+		"name": "Parola Sıfırlama", "subject": "SKY LAB parola sıfırlama isteği",
+		"html_content": `<a href="{{.link}}">Sıfırla</a>`, "plain_text_content": "Sıfırla: {{.link}}",
+		"react_email_content": seedPointerComment(key), "system": true,
+	}
+	var seeded database.Template
+	for run := 0; run < 3; run++ {
+		response, body := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/"+key, seed)
+		if response.StatusCode != fiber.StatusOK {
+			t.Fatalf("seed run %d = %d %s", run+1, response.StatusCode, body)
+		}
+		assertTemplateShape(t, body)
+		if err := json.Unmarshal(body, &seeded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	versions, published := storedVersions(t, db, seeded.ID)
+	if len(versions) != 1 || seeded.PublishedVersionID == nil || *seeded.PublishedVersionID != versions[0].ID || *published != versions[0].ID {
+		t.Fatalf("three identical seeds left %d versions (row copy of %v, answered %v), want 1", len(versions), published, seeded.PublishedVersionID)
+	}
+
+	for name, change := range map[string]map[string]any{
+		"an identical save": {},
+		"a rename":          {"name": "Parola sıfırlama (Keycloak)"},
+	} {
+		body := map[string]any{
+			"name": seeded.Name, "subject": seeded.Subject, "key": key,
+			"html_content": seeded.HtmlContent, "plain_text_content": seeded.PlainTextContent,
+			"react_email_content": seeded.ReactEmailContent,
+		}
+		for field, value := range change {
+			body[field] = value
+		}
+		response, raw := sendJSON(t, app, fiber.MethodPatch, "/templates/"+seeded.ID.String(), body)
+		if response.StatusCode != fiber.StatusOK {
+			t.Fatalf("%s = %d %s", name, response.StatusCode, raw)
+		}
+		assertTemplateShape(t, raw)
+		if versions, _ := storedVersions(t, db, seeded.ID); len(versions) != 1 {
+			t.Fatalf("%s recorded a version; versions = %d, want 1", name, len(versions))
+		}
+	}
+}
+
+// publishVisualVersion stands in for ticket 07: it publishes a version holding
+// a Visual source as the Main source and a JSX source beside it, and copies it
+// onto the row the way publishing will.
+func publishVisualVersion(t *testing.T, db *database.Store, templateID uuid.UUID) storedVersion {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := db.Conn.Exec(ctx, `
+		WITH version AS (
+			INSERT INTO template_versions (template_id, seq, subject, jsx_source, visual_source, main_mode, html_content,
+			                               plain_text_content, author_kind, author_sub, author_name, published_at, base_version_id)
+			SELECT id, (SELECT max(seq) + 1 FROM template_versions WHERE template_id = $1), 'Görsel konu', $2,
+			       '{"type": "doc", "content": [{"type": "paragraph"}]}', 'visual', '<p>Görsel</p>', 'Görsel',
+			       'operator', 'b7d1e7a2-3c1f-4c55-9d6e-0a1b2c3d4e5f', 'Can Demir', NOW(), published_version_id
+			FROM templates
+			WHERE id = $1
+			RETURNING id, template_id, subject, jsx_source, html_content, plain_text_content)
+		UPDATE templates t
+		SET subject = v.subject, html_content = v.html_content, plain_text_content = v.plain_text_content,
+		    react_email_content = v.jsx_source, published_version_id = v.id
+		FROM version v
+		WHERE t.id = v.template_id`, templateID, panelSource); err != nil {
+		t.Fatal(err)
+	}
+	versions, _ := storedVersions(t, db, templateID)
+	return versions[len(versions)-1]
+}
+
+// The old panel and the seed write only a subject, a body and JSX. Every other
+// source the published version holds is carried into the version they write;
+// a write that keeps the body keeps the Main source too.
+func TestLegacyWritesCarryTheOtherSourcesForward(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+
+	const key = "core.welcome"
+	response, body := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/"+key, map[string]any{
+		"name": "Hoş Geldin", "subject": "Hoş geldin",
+		"html_content": "<p>Hoş geldin</p>", "plain_text_content": "Hoş geldin",
+		"react_email_content": seedPointerComment(key), "system": true,
+	})
+	if response.StatusCode != fiber.StatusOK {
+		t.Fatalf("seed = %d %s", response.StatusCode, body)
+	}
+	var template database.Template
+	if err := json.Unmarshal(body, &template); err != nil {
+		t.Fatal(err)
+	}
+	visual := publishVisualVersion(t, db, template.ID)
+	if err := db.Conn.QueryRow(context.Background(), `SELECT react_email_content, html_content, plain_text_content FROM templates WHERE id = $1`, template.ID).
+		Scan(&template.ReactEmailContent, &template.HtmlContent, &template.PlainTextContent); err != nil {
+		t.Fatal(err)
+	}
+	patch := func(subject, html, plainText, react string) storedVersion {
+		t.Helper()
+		response, body := sendJSON(t, app, fiber.MethodPatch, "/templates/"+template.ID.String(), map[string]any{
+			"name": template.Name, "subject": subject, "key": key,
+			"html_content": html, "plain_text_content": plainText, "react_email_content": react,
+		})
+		if response.StatusCode != fiber.StatusOK {
+			t.Fatalf("PATCH = %d %s", response.StatusCode, body)
+		}
+		versions, _ := storedVersions(t, db, template.ID)
+		return versions[len(versions)-1]
+	}
+
+	// Rewording in the old panel sends the stored body back untouched: the
+	// Visual source stays the Main source.
+	reworded := patch("Aramıza hoş geldin", template.HtmlContent, template.PlainTextContent, template.ReactEmailContent)
+	if reworded.ID == visual.ID || reworded.Subject != "Aramıza hoş geldin" || reworded.MainMode != "visual" ||
+		string(reworded.VisualSource) != string(visual.VisualSource) || !sameString(reworded.JSXSource, panelSource) ||
+		reworded.HTMLContent != "<p>Görsel</p>" {
+		t.Fatalf("rewording = %+v, want the Visual Main source and the JSX source kept under the new subject", reworded)
+	}
+
+	// Editing the JSX in the old panel makes JSX the Main source; the Visual
+	// source is kept.
+	edited := panelSource + "\n// düzenlendi\n"
+	jsx := patch("Aramıza hoş geldin", "<p>JSX</p>", "JSX", edited)
+	if jsx.MainMode != "jsx" || !sameString(jsx.JSXSource, edited) || string(jsx.VisualSource) != string(visual.VisualSource) ||
+		jsx.HTMLSource != nil || jsx.HTMLContent != "<p>JSX</p>" {
+		t.Fatalf("JSX edit = %+v, want JSX as the Main source with the Visual source kept", jsx)
+	}
+
+	// A seed with a new body and no JSX makes that body the HTML Main source;
+	// the Visual and JSX sources are kept.
+	response, body = sendJSON(t, app, fiber.MethodPut, "/templates/by-key/"+key, map[string]any{
+		"name": "Hoş Geldin", "subject": "Hoş geldin",
+		"html_content": "<p>Repo gövdesi</p>", "plain_text_content": "Repo gövdesi",
+		"react_email_content": seedPointerComment(key), "system": true,
+	})
+	if response.StatusCode != fiber.StatusOK {
+		t.Fatalf("reseed = %d %s", response.StatusCode, body)
+	}
+	versions, _ := storedVersions(t, db, template.ID)
+	seeded := versions[len(versions)-1]
+	if seeded.AuthorKind != "template_seed" || seeded.MainMode != "html" || !sameString(seeded.HTMLSource, "<p>Repo gövdesi</p>") ||
+		string(seeded.VisualSource) != string(visual.VisualSource) || !sameString(seeded.JSXSource, edited) {
+		t.Fatalf("seed = %+v, want the repo body as the HTML Main source, Visual and JSX sources kept", seeded)
+	}
+}
+
+// Between the migration and the new binary taking over, the old binary still
+// writes rows without versions. The next write versions the row as it now is.
+func TestAWriteVersionsARowWrittenWithoutOne(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+
+	created := createTemplate(t, app, map[string]any{
+		"name": "Bülten", "subject": "Bülten", "html_content": "<p>Bülten</p>", "plain_text_content": "Bülten",
+		"react_email_content": panelSource,
+	})
+	// The old binary's edit: the row changes, no version is written.
+	drifted := panelSource + "\n// eski sürümle kaydedildi\n"
+	if _, err := db.Conn.Exec(context.Background(), `
+		UPDATE templates SET subject = 'Eylül bülteni', html_content = '<p>Eylül</p>', plain_text_content = 'Eylül',
+		                     react_email_content = $2, updated_at = NOW()
+		WHERE id = $1`, created.ID, drifted); err != nil {
+		t.Fatal(err)
+	}
+
+	// The new binary's next write only renames it.
+	response, body := sendJSON(t, app, fiber.MethodPatch, "/templates/"+created.ID.String(), map[string]any{
+		"name": "Eylül bülteni", "subject": "Eylül bülteni", "html_content": "<p>Eylül</p>", "plain_text_content": "Eylül",
+		"react_email_content": drifted,
+	})
+	if response.StatusCode != fiber.StatusOK {
+		t.Fatalf("PATCH = %d %s", response.StatusCode, body)
+	}
+	versions, published := storedVersions(t, db, created.ID)
+	if len(versions) != 2 {
+		t.Fatalf("versions = %d, want the row's drift recorded as a second", len(versions))
+	}
+	latest := versions[1]
+	if latest.Subject != "Eylül bülteni" || latest.HTMLContent != "<p>Eylül</p>" || !sameString(latest.JSXSource, drifted) ||
+		published == nil || *published != latest.ID {
+		t.Fatalf("version = %+v, want the row as it now is", latest)
 	}
 }

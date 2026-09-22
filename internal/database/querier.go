@@ -77,20 +77,37 @@ type Querier interface {
 	// render. is_current marks the one the row is a copy of, the one being sent.
 	ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]ListTemplateVersionsRow, error)
 	ProcessQueueItems(ctx context.Context) ([]MailQueue, error)
-	// Records the content a template row now holds as a new Mail template version,
+	// Records what a template row now holds as a new Mail template version,
 	// published at once, and makes the row a copy of it. This is the expand step
 	// for the writers that still write the row directly — the old panel's create
 	// and edit, and the Template seed's by-key upsert: each runs this after its
 	// row write, in the same transaction, so the version is what the row ended up
 	// with (a subject the upsert kept included), not what the request asked for.
 	//
-	// Those writers send one body, JSX in react_email_content. template_jsx_source
-	// decides whether that is a JSX source; when it is not — the seed's pointer
-	// comment, or nothing — the Main source is HTML and it is html_content. The
-	// version is numbered after the template's last one; the row write before it
-	// holds the row's lock, so two writers cannot take the same number. Its base
-	// is the version the row was a copy of until now.
-	PublishTemplateRowAsVersion(ctx context.Context, arg PublishTemplateRowAsVersionParams) (Template, error)
+	// Those writers send a subject, a render and at most a JSX source, so the
+	// version starts from the published one and replaces only what they changed:
+	//   * The subject and the render are the row's.
+	//   * If the body — html_content, plain_text_content and the JSX source — is
+	//     the published version's, the Main source and every source stay as they
+	//     were: the old panel sends a stored body back untouched when only the
+	//     wording around it changed.
+	//   * Otherwise the body is new. react_email_content with a JSX source in it
+	//     (template_jsx_source decides) makes JSX the Main source with that text;
+	//     without one — the seed's pointer comment, or nothing — html_content is
+	//     the HTML source and the Main source.
+	//   * Sources in the other Authoring modes are carried over.
+	// A row with no published version yet — written before versions were kept,
+	// or by the old binary between the migration and this one — is taken as it
+	// now is. When the result is the published version over again, nothing is
+	// recorded: the write changed nothing a version holds (name is not one).
+	//
+	// The version is numbered after the template's last one; the row write before
+	// this holds the row's lock, so two writers cannot take the same number. Its
+	// base is the version the row was a copy of until now. A Template seed's
+	// version also keeps the subject the seed sent, requested_subject.
+	//
+	// Affects one row when a version was recorded and none when not.
+	RecordTemplateRowAsVersion(ctx context.Context, arg RecordTemplateRowAsVersionParams) (int64, error)
 	RemoveRecipientFromMailingListByID(ctx context.Context, arg RemoveRecipientFromMailingListByIDParams) error
 	RescheduleMailQueueItem(ctx context.Context, arg RescheduleMailQueueItemParams) (int, error)
 	ResetDeadJobs(ctx context.Context) error

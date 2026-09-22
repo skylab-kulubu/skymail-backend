@@ -94,7 +94,7 @@ func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
 		return err
 	}
 
-	template, err := h.db.PublishTemplateWrite(c.Context(), versionAuthor(c, database.TemplateAuthorKindOperator), func(q *database.Queries) (database.Template, error) {
+	template, err := h.db.PublishTemplateWrite(c.Context(), versionAuthor(c, database.TemplateAuthorKindOperator), nil, func(q *database.Queries) (database.Template, error) {
 		return q.CreateTemplate(c.Context(), database.CreateTemplateParams{
 			Name:              params.Name,
 			Subject:           params.Subject,
@@ -228,7 +228,7 @@ func (h *templateHandlerImpl) UpdateTemplate(c fiber.Ctx) error {
 
 	// The old panel has no drafts: its edit is an operator's version, published
 	// at once, as its saves always went straight to live mail.
-	template, err := h.db.PublishTemplateWrite(c.Context(), versionAuthor(c, database.TemplateAuthorKindOperator), func(q *database.Queries) (database.Template, error) {
+	template, err := h.db.PublishTemplateWrite(c.Context(), versionAuthor(c, database.TemplateAuthorKindOperator), nil, func(q *database.Queries) (database.Template, error) {
 		return q.UpdateTemplate(c.Context(), database.UpdateTemplateParams{
 			ID:                id,
 			Name:              params.Name,
@@ -375,7 +375,7 @@ func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 
 	// A Template seed's version is published at once. It is taken from the row
 	// the upsert leaves, so a subject the upsert kept is the subject recorded.
-	template, err := h.db.PublishTemplateWrite(c.Context(), versionAuthor(c, database.TemplateAuthorKindTemplateSeed), func(q *database.Queries) (database.Template, error) {
+	template, err := h.db.PublishTemplateWrite(c.Context(), versionAuthor(c, database.TemplateAuthorKindTemplateSeed), &params.Subject, func(q *database.Queries) (database.Template, error) {
 		return q.UpsertTemplateByKey(c.Context(), database.UpsertTemplateByKeyParams{
 			Key:               key,
 			Name:              params.Name,
