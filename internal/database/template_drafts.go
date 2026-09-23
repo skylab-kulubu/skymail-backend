@@ -28,9 +28,6 @@ type VersionContent struct {
 type VersionCheck func(ctx context.Context, q *Queries, template Template, content VersionContent) error
 
 var (
-	// ErrTemplateArchived refuses a draft, a restore or a publish of an
-	// archived template: it has to be restored first.
-	ErrTemplateArchived = errors.New("the template is archived")
 	// ErrInvalidBase refuses a draft whose base is not a published version of
 	// its template, or that names none when the template has one: a draft
 	// starts from what was published.
@@ -84,7 +81,7 @@ func (s *Store) SaveTemplateDraft(ctx context.Context, templateID uuid.UUID, aut
 	var created bool
 	err := pgx.BeginFunc(ctx, s.Conn, func(tx pgx.Tx) error {
 		q := s.WithTx(tx)
-		template, err := lockWritableTemplate(ctx, q, templateID)
+		template, err := q.LockTemplate(ctx, templateID)
 		if err != nil {
 			return err
 		}
@@ -108,15 +105,16 @@ func (s *Store) SaveTemplateDraft(ctx context.Context, templateID uuid.UUID, aut
 
 // RestoreTemplateVersion records a copy of any version of a template — its
 // subject, sources, Main source and render — as an operator's draft started
-// from the version published now. The template row does not change.
+// from the version published now, once check has passed it as it would a
+// saved draft. The template row does not change.
 //
 // It returns the draft and whether it was written.
-func (s *Store) RestoreTemplateVersion(ctx context.Context, templateID, versionID uuid.UUID, author VersionAuthor) (GetTemplateVersionRow, bool, error) {
+func (s *Store) RestoreTemplateVersion(ctx context.Context, templateID, versionID uuid.UUID, author VersionAuthor, check VersionCheck) (GetTemplateVersionRow, bool, error) {
 	var restored GetTemplateVersionRow
 	var created bool
 	err := pgx.BeginFunc(ctx, s.Conn, func(tx pgx.Tx) error {
 		q := s.WithTx(tx)
-		template, err := lockWritableTemplate(ctx, q, templateID)
+		template, err := q.LockTemplate(ctx, templateID)
 		if err != nil {
 			return err
 		}
@@ -124,7 +122,7 @@ func (s *Store) RestoreTemplateVersion(ctx context.Context, templateID, versionI
 		if err != nil {
 			return err
 		}
-		restored, created, err = recordDraft(ctx, q, template, author, template.PublishedVersionID, contentOf(version), false, nil)
+		restored, created, err = recordDraft(ctx, q, template, author, template.PublishedVersionID, contentOf(version), false, check)
 		return err
 	})
 	return restored, created, err
@@ -145,7 +143,7 @@ func (s *Store) PublishTemplateDraft(ctx context.Context, templateID, versionID 
 	var published Template
 	err := pgx.BeginFunc(ctx, s.Conn, func(tx pgx.Tx) error {
 		q := s.WithTx(tx)
-		template, err := lockWritableTemplate(ctx, q, templateID)
+		template, err := q.LockTemplate(ctx, templateID)
 		if err != nil {
 			return err
 		}
@@ -306,19 +304,6 @@ func (c VersionContent) checkSources(ctx context.Context, q *Queries) error {
 		}
 	}
 	return nil
-}
-
-// lockWritableTemplate takes a template row's lock for a version write and
-// refuses an archived template.
-func lockWritableTemplate(ctx context.Context, q *Queries, id uuid.UUID) (Template, error) {
-	template, err := q.LockTemplate(ctx, id)
-	if err != nil {
-		return Template{}, err
-	}
-	if template.ArchivedAt != nil {
-		return Template{}, ErrTemplateArchived
-	}
-	return template, nil
 }
 
 // contentOf is what a stored version holds.

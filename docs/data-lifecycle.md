@@ -49,8 +49,9 @@ unpublished, is their draft in progress; their earlier drafts stay in the
 history, superseded, and so does a draft nobody publishes. Nothing discards a
 draft. They are not the ephemeral "expired drafts" ADR-0042 has hard-deleted:
 a Mail template draft is part of the template's history (ADR-0046), and no
-version is deleted. An archived template takes no drafts, restores or
-publishes until it is restored.
+version is deleted. Like any other update, saving, restoring or publishing a
+version of an archived template answers `404` until the template is
+un-archived with `POST /v1/templates/{id}/restore`.
 
 During the deploy, the migration runs before the new binary takes over, and
 the old binary keeps writing rows without versions in between. A template

@@ -1615,14 +1615,16 @@ const lockTemplate = `-- name: LockTemplate :one
 SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
 FROM templates
 WHERE id = $1
+  AND archived_at IS NULL
     FOR UPDATE
 `
 
-// Takes a template row's lock, archived or not, for a write that does not
-// change the row first — saving a draft, restoring a version, publishing. A
-// version is numbered after the lock is taken, and the old panel's and the
-// seed's writes take the same lock by updating the row, so every writer of one
-// template numbers its version in turn.
+// Takes a template row's lock for a write that does not change the row first —
+// saving a draft, restoring a version, publishing, discarding. A version is
+// numbered after the lock is taken, and the old panel's and the seed's writes
+// take the same lock by updating the row, so every writer of one template
+// numbers its version in turn. An archived template is not found here, as it
+// is not for any other write.
 func (q *Queries) LockTemplate(ctx context.Context, id uuid.UUID) (Template, error) {
 	row := q.db.QueryRow(ctx, lockTemplate, id)
 	var i Template

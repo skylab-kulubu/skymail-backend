@@ -234,15 +234,17 @@ FROM template_version_summaries s
 WHERE s.template_id = sqlc.arg(template_id)
   AND s.id = sqlc.arg(id);
 
--- Takes a template row's lock, archived or not, for a write that does not
--- change the row first — saving a draft, restoring a version, publishing. A
--- version is numbered after the lock is taken, and the old panel's and the
--- seed's writes take the same lock by updating the row, so every writer of one
--- template numbers its version in turn.
+-- Takes a template row's lock for a write that does not change the row first —
+-- saving a draft, restoring a version, publishing, discarding. A version is
+-- numbered after the lock is taken, and the old panel's and the seed's writes
+-- take the same lock by updating the row, so every writer of one template
+-- numbers its version in turn. An archived template is not found here, as it
+-- is not for any other write.
 -- name: LockTemplate :one
 SELECT *
 FROM templates
 WHERE id = $1
+  AND archived_at IS NULL
     FOR UPDATE;
 
 -- Each operator's draft in progress on the given templates, newest first: the

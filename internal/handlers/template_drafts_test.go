@@ -658,14 +658,20 @@ func TestDraftSavesTheServerRefuses(t *testing.T) {
 		"no base, though one is published": {valid(map[string]any{"base_version_id": nil}), "template.invalid_base", ""},
 		"another template's base":          {valid(map[string]any{"base_version_id": other.PublishedVersionID}), "template.invalid_base", ""},
 		"a draft as the base":              {valid(map[string]any{"base_version_id": draft.ID}), "template.invalid_base", ""},
-		"a subject that does not parse":    {valid(map[string]any{"subject": "{{if .FullName}}Merhaba"}), "template.invalid_body", "subject"},
-		"plain text that does not parse":   {valid(map[string]any{"plain_text_content": "{{upper .FullName}}"}), "template.invalid_body", "plain_text_content"},
-		"HTML that does not parse":         {valid(map[string]any{"html_content": "<p>{{.FullName</p>"}), "template.invalid_body", "html_content"},
+		// A body the mailer cannot parse is refused as ticket 08 refuses one:
+		// 422, naming the part.
+		"a subject that does not parse":  {valid(map[string]any{"subject": "{{if .FullName}}Merhaba"}), "template.unparseable", "subject"},
+		"plain text that does not parse": {valid(map[string]any{"plain_text_content": "{{upper .FullName}}"}), "template.unparseable", "plain_text"},
+		"HTML that does not parse":       {valid(map[string]any{"html_content": "<p>{{.FullName</p>"}), "template.unparseable", "html"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			want := fiber.StatusBadRequest
+			if tc.code == "template.unparseable" {
+				want = fiber.StatusUnprocessableEntity
+			}
 			response, _, body := saveDraft(t, app, created.ID, tc.body)
-			if response.StatusCode != fiber.StatusBadRequest {
-				t.Fatalf("save = %d %s, want 400", response.StatusCode, body)
+			if response.StatusCode != want {
+				t.Fatalf("save = %d %s, want %d", response.StatusCode, body, want)
 			}
 			refusal := decodeError(t, body)
 			if refusal.Code != tc.code || refusal.Message == "" {
@@ -675,6 +681,30 @@ func TestDraftSavesTheServerRefuses(t *testing.T) {
 				t.Fatalf("refusal = %+v, want it to name %s", refusal, tc.field)
 			}
 		})
+	}
+
+	// Every field a save gets wrong is named, in the same order every time.
+	for attempt := 0; attempt < 5; attempt++ {
+		response, _, body := saveDraft(t, app, created.ID, valid(map[string]any{
+			"subject": " ", "plain_text_content": "\t", "html_source": " ", "visual_source": json.RawMessage(`[]`),
+		}))
+		var refusal struct {
+			Params struct {
+				Errors []struct {
+					Field string `json:"field"`
+				} `json:"errors"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal(body, &refusal); err != nil {
+			t.Fatal(err)
+		}
+		var fields []string
+		for _, e := range refusal.Params.Errors {
+			fields = append(fields, e.Field)
+		}
+		if response.StatusCode != fiber.StatusBadRequest || fmt.Sprint(fields) != "[html_source plain_text_content subject visual_source]" {
+			t.Fatalf("a save with four problems = %d, fields %v; want 400 naming them sorted", response.StatusCode, fields)
+		}
 	}
 
 	// A body that is not JSON is the caller's mistake too.
@@ -704,10 +734,11 @@ func TestDraftSavesTheServerRefuses(t *testing.T) {
 	}
 }
 
-// namesField reports whether an API error names a request field: in the field
-// list of a validation error, or as the field it is about.
+// namesField reports whether an API error names a request field or a part of
+// the body: in the field list of a validation error, or as the part it is
+// about.
 func namesField(e appError, field string) bool {
-	if e.Params["field"] == field {
+	if e.Params["part"] == field && e.Params["error"] != "" && e.Params["error"] != nil {
 		return true
 	}
 	errs, _ := e.Params["errors"].([]any)
@@ -781,17 +812,34 @@ func TestPublishesTheServerRefuses(t *testing.T) {
 	}
 
 	// The old panel wrote a body the mailer cannot parse before anything
-	// checked it; it was fixed, and then restored.
+	// checked it, and it was fixed. Restoring it is saving a draft of it, and
+	// is refused like one.
 	broken := edit("<p>{{.FullName</p>")
 	edit("<p>Düzeldi</p>")
-	response, restored, body := restore(t, app, created.ID, broken)
-	if response.StatusCode != fiber.StatusCreated {
-		t.Fatalf("restore = %d %s", response.StatusCode, body)
+	versions, _ := storedVersions(t, db, created.ID)
+	response, _, body = restore(t, app, created.ID, broken)
+	if refusal := decodeError(t, body); response.StatusCode != fiber.StatusUnprocessableEntity || refusal.Code != "template.unparseable" || !namesField(refusal, "html") {
+		t.Fatalf("restoring a body the mailer cannot parse = %d %s, want 422 template.unparseable naming html", response.StatusCode, body)
+	}
+	if after, _ := storedVersions(t, db, created.ID); len(after) != len(versions) {
+		t.Fatalf("a refused restore recorded a version")
+	}
+
+	// A draft written before anything checked is checked again on publishing.
+	var unchecked uuid.UUID
+	if err := db.Conn.QueryRow(context.Background(), `
+		INSERT INTO template_versions (template_id, seq, subject, html_source, main_mode, html_content, plain_text_content,
+		                               author_kind, author_sub, author_name, base_version_id)
+		SELECT id, (SELECT max(seq) + 1 FROM template_versions WHERE template_id = $1), 'Konu', '<p>{{.FullName</p>', 'html',
+		       '<p>{{.FullName</p>', 'Merhaba', 'operator', $2, 'Ada Yılmaz', published_version_id
+		FROM templates WHERE id = $1
+		RETURNING id`, created.ID, operatorSub).Scan(&unchecked); err != nil {
+		t.Fatal(err)
 	}
 	before = templateRow(t, db, created.ID)
-	response, _, body = publish(t, app, created.ID, restored.ID, nil)
-	if refusal := decodeError(t, body); response.StatusCode != fiber.StatusBadRequest || refusal.Code != "template.invalid_body" || !namesField(refusal, "html_content") {
-		t.Fatalf("publishing a body the mailer cannot parse = %d %s, want 400 template.invalid_body naming html_content", response.StatusCode, body)
+	response, _, body = publish(t, app, created.ID, unchecked, nil)
+	if refusal := decodeError(t, body); response.StatusCode != fiber.StatusUnprocessableEntity || refusal.Code != "template.unparseable" || !namesField(refusal, "html") {
+		t.Fatalf("publishing a body the mailer cannot parse = %d %s, want 422 template.unparseable naming html", response.StatusCode, body)
 	}
 	if after := templateRow(t, db, created.ID); !reflect.DeepEqual(before, after) {
 		t.Fatalf("a refused publish changed the row: %+v", after)
@@ -799,8 +847,8 @@ func TestPublishesTheServerRefuses(t *testing.T) {
 }
 
 // An archived template takes no drafts, restores or publishes until it is
-// restored itself, and says so in the API's error shape. Its history stays
-// readable.
+// un-archived: like every other write (docs/data-lifecycle.md), these do not
+// find it. Its history stays readable.
 func TestAnArchivedTemplateTakesNoDraftsOrPublishes(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	app := templateVersionsApp(t, db)
@@ -819,8 +867,8 @@ func TestAnArchivedTemplateTakesNoDraftsOrPublishes(t *testing.T) {
 
 	refused := func(name string, response *http.Response, body []byte) {
 		t.Helper()
-		if refusal := decodeError(t, body); response.StatusCode != fiber.StatusConflict || refusal.Code != "template.archived" || refusal.Message == "" {
-			t.Errorf("%s of an archived template = %d %s, want 409 template.archived", name, response.StatusCode, body)
+		if response.StatusCode != fiber.StatusNotFound {
+			t.Errorf("%s of an archived template = %d %s, want 404", name, response.StatusCode, body)
 		}
 	}
 	response, _, body = saveDraft(t, app, created.ID, map[string]any{

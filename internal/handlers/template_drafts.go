@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 
 	"github.com/gofiber/fiber/v3"
@@ -14,12 +15,6 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
-)
-
-var errTemplateArchived = apperrors.New(
-	"template.archived",
-	"An archived template takes no drafts and is not published; restore it first.",
-	fiber.StatusConflict,
 )
 
 var errInvalidBase = apperrors.New(
@@ -34,10 +29,15 @@ var errMainSourceMissing = apperrors.New(
 	fiber.StatusBadRequest,
 )
 
-var errInvalidBody = apperrors.New(
-	"template.invalid_body",
-	"The subject, plain text or HTML does not parse as a Go template, so no send of it could go out.",
-	fiber.StatusBadRequest,
+// errUnparseable refuses a version the mailer could not parse: it parses the
+// subject, plain text and HTML before every send, so no mail of it could go
+// out. params.part is "subject", "plain_text" or "html"; params.error is the
+// parser's message, with the line it stopped at. Ticket 08's Required
+// variable check refuses an unparseable subject or HTML body the same way.
+var errUnparseable = apperrors.New(
+	"template.unparseable",
+	"The subject, plain text or HTML body is not a Go template the mailer can parse.",
+	fiber.StatusUnprocessableEntity,
 )
 
 var errNotADraft = apperrors.New(
@@ -60,7 +60,7 @@ var errStaleBase = apperrors.New(
 //	@Summary		Save a draft of a template
 //	@Description	Records an operator's draft of a Mail template: a version that is sent to nobody until it is published. The template row, which is what is sent, does not change. Changing which source is the Main source is a save too: send the new main_mode and the render its source gives.
 //	@Description
-//	@Description	The editor renders the Main source; the server stores the render it is given. It checks what it can without rendering: the fields are there and not blank, the Main source's Authoring mode holds a source, the base is a published version of this template, a Visual source is a JSON object, a JSX source has code in it, and the subject, plain text and HTML parse as the mailer's Go templates.
+//	@Description	The editor renders the Main source; the server stores the render it is given. It checks what it can without rendering: the fields are there and not blank, the Main source's Authoring mode holds a source, the base is a published version of this template, a Visual source is a JSON object, a JSX source has code in it, and the subject, plain text and HTML parse as the mailer's Go templates (422 template.unparseable otherwise). An archived template is not found.
 //	@Description
 //	@Description	Each save is a new version; an operator's newest version, while unpublished, is their draft in progress. A save continues it when it started from the same base, or else starts from the base. Sources left out, or null, are kept from the version the save continues, so a save never drops a source. A save that changes nothing records nothing and answers 200 with the version it continues.
 //	@Tags			Templates
@@ -70,10 +70,10 @@ var errStaleBase = apperrors.New(
 //	@Param			draft	body		requests.SaveTemplateDraft	true	"The draft"
 //	@Success		201		{object}	handlers.TemplateVersion	"The draft, written"
 //	@Success		200		{object}	handlers.TemplateVersion	"Nothing changed: the version the save would have repeated"
-//	@Failure		400		{object}	apperrors.AppError			"validation.error, template.invalid_base, template.main_source_missing or template.invalid_body (params.field names the part)"
+//	@Failure		400		{object}	apperrors.AppError			"validation.error (params.errors, sorted by field), template.invalid_base or template.main_source_missing"
 //	@Failure		403		{object}	apperrors.AppError			"Forbidden"
-//	@Failure		404		{object}	apperrors.AppError			"Not Found"
-//	@Failure		409		{object}	apperrors.AppError			"template.archived"
+//	@Failure		404		{object}	apperrors.AppError			"Not Found: no such template, or it is archived"
+//	@Failure		422		{object}	apperrors.AppError			"template.unparseable: params.part (subject, plain_text or html) does not parse; params.error is the parser's message"
 //	@Failure		500		{object}	apperrors.AppError			"Internal Server Error"
 //	@Router			/templates/{id}/drafts [post]
 func (h *templateHandlerImpl) SaveTemplateDraft(c fiber.Ctx) error {
@@ -117,10 +117,11 @@ func (h *templateHandlerImpl) SaveTemplateDraft(c fiber.Ctx) error {
 //	@Param			versionId	path		string							true	"Version ID of the draft"
 //	@Param			publish		body		requests.PublishTemplateVersion	false	"The version a stale draft is published over"
 //	@Success		200			{object}	handlers.Template
-//	@Failure		400			{object}	apperrors.AppError	"validation.error or template.invalid_body"
+//	@Failure		400			{object}	apperrors.AppError	"validation.error"
 //	@Failure		403			{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404			{object}	apperrors.AppError	"Not Found"
-//	@Failure		409			{object}	apperrors.AppError	"template.stale_base, template.not_a_draft or template.archived"
+//	@Failure		404			{object}	apperrors.AppError	"Not Found: no such template or version, or the template is archived"
+//	@Failure		409			{object}	apperrors.AppError	"template.stale_base or template.not_a_draft"
+//	@Failure		422			{object}	apperrors.AppError	"template.unparseable"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates/{id}/versions/{versionId}/publish [post]
 func (h *templateHandlerImpl) PublishTemplateVersion(c fiber.Ctx) error {
@@ -163,8 +164,8 @@ func (h *templateHandlerImpl) PublishTemplateVersion(c fiber.Ctx) error {
 //	@Success		201			{object}	handlers.TemplateVersion	"The draft, written"
 //	@Success		200			{object}	handlers.TemplateVersion	"Nothing changed: the version the copy would have repeated"
 //	@Failure		403			{object}	apperrors.AppError			"Forbidden"
-//	@Failure		404			{object}	apperrors.AppError			"Not Found"
-//	@Failure		409			{object}	apperrors.AppError			"template.archived"
+//	@Failure		404			{object}	apperrors.AppError			"Not Found: no such template or version, or the template is archived"
+//	@Failure		422			{object}	apperrors.AppError			"template.unparseable: the copy would not parse, as a saved draft would not"
 //	@Failure		500			{object}	apperrors.AppError			"Internal Server Error"
 //	@Router			/templates/{id}/versions/{versionId}/restore [post]
 func (h *templateHandlerImpl) RestoreTemplateVersion(c fiber.Ctx) error {
@@ -173,7 +174,7 @@ func (h *templateHandlerImpl) RestoreTemplateVersion(c fiber.Ctx) error {
 		return err
 	}
 
-	draft, created, err := h.db.RestoreTemplateVersion(c.Context(), templateID, versionID, versionAuthor(c, database.TemplateAuthorKindOperator))
+	draft, created, err := h.db.RestoreTemplateVersion(c.Context(), templateID, versionID, versionAuthor(c, database.TemplateAuthorKindOperator), checkVersion)
 	if err != nil {
 		return draftError(err)
 	}
@@ -181,10 +182,10 @@ func (h *templateHandlerImpl) RestoreTemplateVersion(c fiber.Ctx) error {
 }
 
 // checkVersion is the one place for rules on what a version's content says,
-// beyond what the store keeps whole: it runs on a draft before it is saved and
-// again before it is published, inside the write's transaction with the
-// template row locked, and whatever it returns refuses the write. The
-// Required variable check belongs here.
+// beyond what the store keeps whole: it runs on a draft before it is saved —
+// a restored copy included — and again before it is published, inside the
+// write's transaction with the template row locked, and whatever it returns
+// refuses the write. The Required variable check belongs here.
 //
 // The mailer has to be able to parse the subject, plain text and HTML, or
 // every send of the version fails.
@@ -194,17 +195,18 @@ func checkVersion(_ context.Context, _ *database.Queries, _ database.Template, c
 	if !errors.As(err, &unparsable) {
 		return err
 	}
-	return errInvalidBody.WithParams(map[string]interface{}{
-		"field": mailPartFields[unparsable.Part],
+	return errUnparseable.WithParams(map[string]interface{}{
+		"part":  unparseableParts[unparsable.Part],
 		"error": unparsable.Err.Error(),
 	})
 }
 
-// mailPartFields is the request field each part the mailer parses comes from.
-var mailPartFields = map[mailer.MailPart]string{
+// unparseableParts is how template.unparseable names each part the mailer
+// parses.
+var unparseableParts = map[mailer.MailPart]string{
 	mailer.PartSubject:   "subject",
-	mailer.PartPlainText: "plain_text_content",
-	mailer.PartHTML:      "html_content",
+	mailer.PartPlainText: "plain_text",
+	mailer.PartHTML:      "html",
 }
 
 // draftProblems are what the struct tags on a draft cannot see: text that is
@@ -227,6 +229,7 @@ func draftProblems(p requests.SaveTemplateDraft) []validator.FieldError {
 			problems = append(problems, validator.FieldError{Field: "visual_source", Code: "invalid"})
 		}
 	}
+	sort.Slice(problems, func(i, j int) bool { return problems[i].Field < problems[j].Field })
 	return problems
 }
 
@@ -262,8 +265,6 @@ func draftError(err error) error {
 		})
 	case errors.As(err, &mainMissing):
 		return errMainSourceMissing.WithParams(map[string]interface{}{"main_mode": mainMissing.MainMode})
-	case errors.Is(err, database.ErrTemplateArchived):
-		return errTemplateArchived
 	case errors.Is(err, database.ErrInvalidBase):
 		return errInvalidBase
 	case errors.Is(err, database.ErrNotADraft):

@@ -2250,7 +2250,7 @@ const docTemplate = `{
         },
         "/templates/{id}/drafts": {
             "post": {
-                "description": "Records an operator's draft of a Mail template: a version that is sent to nobody until it is published. The template row, which is what is sent, does not change. Changing which source is the Main source is a save too: send the new main_mode and the render its source gives.\n\nThe editor renders the Main source; the server stores the render it is given. It checks what it can without rendering: the fields are there and not blank, the Main source's Authoring mode holds a source, the base is a published version of this template, a Visual source is a JSON object, a JSX source has code in it, and the subject, plain text and HTML parse as the mailer's Go templates.\n\nEach save is a new version; an operator's newest version, while unpublished, is their draft in progress. A save continues it when it started from the same base, or else starts from the base. Sources left out, or null, are kept from the version the save continues, so a save never drops a source. A save that changes nothing records nothing and answers 200 with the version it continues.",
+                "description": "Records an operator's draft of a Mail template: a version that is sent to nobody until it is published. The template row, which is what is sent, does not change. Changing which source is the Main source is a save too: send the new main_mode and the render its source gives.\n\nThe editor renders the Main source; the server stores the render it is given. It checks what it can without rendering: the fields are there and not blank, the Main source's Authoring mode holds a source, the base is a published version of this template, a Visual source is a JSON object, a JSX source has code in it, and the subject, plain text and HTML parse as the mailer's Go templates (422 template.unparseable otherwise). An archived template is not found.\n\nEach save is a new version; an operator's newest version, while unpublished, is their draft in progress. A save continues it when it started from the same base, or else starts from the base. Sources left out, or null, are kept from the version the save continues, so a save never drops a source. A save that changes nothing records nothing and answers 200 with the version it continues.",
                 "parameters": [
                     {
                         "description": "Template ID",
@@ -2311,7 +2311,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "validation.error, template.invalid_base, template.main_source_missing or template.invalid_body (params.field names the part)"
+                        "description": "validation.error (params.errors, sorted by field), template.invalid_base or template.main_source_missing"
                     },
                     "403": {
                         "content": {
@@ -2331,9 +2331,9 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "Not Found"
+                        "description": "Not Found: no such template, or it is archived"
                     },
-                    "409": {
+                    "422": {
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -2341,7 +2341,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "template.archived"
+                        "description": "template.unparseable: params.part (subject, plain_text or html) does not parse; params.error is the parser's message"
                     },
                     "500": {
                         "content": {
@@ -2633,7 +2633,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "validation.error or template.invalid_body"
+                        "description": "validation.error"
                     },
                     "403": {
                         "content": {
@@ -2653,7 +2653,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "Not Found"
+                        "description": "Not Found: no such template or version, or the template is archived"
                     },
                     "409": {
                         "content": {
@@ -2663,7 +2663,17 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "template.stale_base, template.not_a_draft or template.archived"
+                        "description": "template.stale_base or template.not_a_draft"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "template.unparseable"
                     },
                     "500": {
                         "content": {
@@ -2744,9 +2754,9 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "Not Found"
+                        "description": "Not Found: no such template or version, or the template is archived"
                     },
-                    "409": {
+                    "422": {
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -2754,7 +2764,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "template.archived"
+                        "description": "template.unparseable: the copy would not parse, as a saved draft would not"
                     },
                     "500": {
                         "content": {

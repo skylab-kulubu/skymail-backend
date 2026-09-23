@@ -195,7 +195,7 @@ func TestTemplateDraftWritesRequireTemplatesWrite(t *testing.T) {
 
 // The draft routes refuse in the API's error shape, through the error
 // handler production uses: a stale publish names the versions involved, an
-// archived template says so, and an invalid body names its fields.
+// archived template is not found, and an invalid body names its fields.
 func TestTemplateDraftRefusalsAnswerInTheAPIsErrorShape(t *testing.T) {
 	app, template := templateRoutesApp(t, "skymail:access", "skymail:templates:read", "skymail:templates:write")
 	id := template.ID.String()
@@ -256,8 +256,8 @@ func TestTemplateDraftRefusalsAnswerInTheAPIsErrorShape(t *testing.T) {
 		t.Fatalf("archive = %d %s", status, body)
 	}
 	status, body = sendJSON(t, app, fiber.MethodPost, "/v1/templates/"+id+"/versions/"+draft.ID.String()+"/publish", map[string]any{"force": map[string]any{"over_version_id": edited.PublishedVersionID}})
-	if e := decode(body); status != fiber.StatusConflict || e.Code != "template.archived" {
-		t.Errorf("publishing on an archived template = %d %s, want 409 template.archived", status, body)
+	if e := decode(body); status != fiber.StatusNotFound || e.Code != "server.not_found" {
+		t.Errorf("publishing on an archived template = %d %s, want 404 server.not_found", status, body)
 	}
 
 	status, body = sendJSON(t, app, fiber.MethodPost, "/v1/templates/"+uuid.NewString()+"/drafts", map[string]any{
