@@ -179,8 +179,8 @@ func (s *Store) PublishTemplateDraft(ctx context.Context, templateID, versionID 
 // The draft continues the version the author was working on: their draft in
 // progress when it started from the same base, or else the base itself. With
 // keep, the sources content leaves out are that version's. When the draft
-// would repeat what it continues — the draft in progress, or, with none, the
-// base — nothing is written and that version is returned instead.
+// would repeat what it continues, nothing is written and that version is
+// returned instead.
 func recordDraft(ctx context.Context, q *Queries, template Template, author VersionAuthor, base *uuid.UUID, content VersionContent, keep bool, check VersionCheck) (GetTemplateVersionRow, bool, error) {
 	draft, err := draftInProgress(ctx, q, template.ID, author)
 	if err != nil {
@@ -209,8 +209,7 @@ func recordDraft(ctx context.Context, q *Queries, template Template, author Vers
 		}
 	}
 
-	// A draft in progress on another base is left behind, never repeated.
-	if continued != nil && (draft == nil || continued == draft) {
+	if continued != nil {
 		repeats, err := q.TemplateVersionHoldsContent(ctx, TemplateVersionHoldsContentParams{
 			ID:               continued.TemplateVersionSummary.ID,
 			Subject:          content.Subject,

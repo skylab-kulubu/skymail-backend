@@ -62,7 +62,7 @@ var errStaleBase = apperrors.New(
 //	@Description
 //	@Description	The editor renders the Main source; the server stores the render it is given. It checks what it can without rendering: the fields are there and not blank, the Main source's Authoring mode holds a source, the base is a published version of this template, a Visual source is a JSON object, a JSX source has code in it, and the subject, plain text and HTML parse as the mailer's Go templates.
 //	@Description
-//	@Description	Each save is a new version; an operator's newest version, while unpublished, is their draft in progress. A save continues it when it started from the same base, or else starts from the base. Sources left out, or null, are kept from the version the save continues, so a save never drops a source. A save that changes nothing records nothing and answers 200 with the version it would have repeated: the draft in progress, or with none the base.
+//	@Description	Each save is a new version; an operator's newest version, while unpublished, is their draft in progress. A save continues it when it started from the same base, or else starts from the base. Sources left out, or null, are kept from the version the save continues, so a save never drops a source. A save that changes nothing records nothing and answers 200 with the version it continues.
 //	@Tags			Templates
 //	@Accept			json
 //	@Produce		json
@@ -145,7 +145,7 @@ func (h *templateHandlerImpl) PublishTemplateVersion(c fiber.Ctx) error {
 // RestoreTemplateVersion godoc
 //
 //	@Summary		Restore a version as a draft
-//	@Description	Copies any version of the template — its subject, sources, Main source and render — into a new draft by the caller, started from the version published now. Nothing that is sent changes; the draft is published like any other. Another operator's draft can be restored too. When the copy would repeat the caller's draft in progress, or with none the published version, nothing is recorded and that version is answered with 200.
+//	@Description	Copies any version of the template — its subject, sources, Main source and render — into a new draft by the caller, started from the version published now. Nothing that is sent changes; the draft is published like any other. Another operator's draft can be restored too. When the copy would repeat the version it continues — the caller's draft in progress on the published version, or else the published version — nothing is recorded and that version is answered with 200.
 //	@Tags			Templates
 //	@Produce		json
 //	@Param			id			path		string						true	"Template ID"

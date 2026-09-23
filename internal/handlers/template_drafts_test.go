@@ -1146,3 +1146,42 @@ func TestPublishingAnotherMainSourceGivesTheOldPanelNoJSXToRerender(t *testing.T
 		t.Fatalf("after an old panel subject edit the row sends %q, latest version %s main %s; want the HTML draft still sent and Main", after.HtmlContent, latest.ID, latest.MainMode)
 	}
 }
+
+// A save that changes nothing writes nothing, whatever else the operator has
+// lying about: with a draft of theirs on an older base, a save of exactly the
+// version published now, started from it, answers with that version and
+// records no copy of it.
+func TestASaveThatRepeatsItsBaseRecordsNothingBesideAnOlderDraft(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+
+	response, _, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": "Eski taslak", "main_mode": "jsx", "html_content": "<p>Eski taslak</p>", "plain_text_content": "Eski taslak",
+		"base_version_id": created.PublishedVersionID,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("draft = %d %s", response.StatusCode, body)
+	}
+	// Another operator publishes through the old panel.
+	if response, body := sendJSONAs(t, app, fiber.MethodPatch, "/templates/"+created.ID.String(), map[string]any{
+		"name": created.Name, "subject": "Yeni yayımlanan konu", "html_content": "<p>Yeni</p>",
+		"plain_text_content": "Yeni", "react_email_content": panelSource,
+	}, canDemir...); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("other operator's edit = %d %s", response.StatusCode, body)
+	}
+	current := templateRow(t, db, created.ID)
+	versions, _ := storedVersions(t, db, created.ID)
+
+	response, answered, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": current.Subject, "main_mode": "jsx", "jsx_source": panelSource,
+		"html_content": current.HtmlContent, "plain_text_content": current.PlainTextContent,
+		"base_version_id": current.PublishedVersionID,
+	})
+	if response.StatusCode != fiber.StatusOK || answered.ID != *current.PublishedVersionID {
+		t.Fatalf("saving the published version unchanged = %d %s, want 200 answering it", response.StatusCode, body)
+	}
+	if after, _ := storedVersions(t, db, created.ID); len(after) != len(versions) {
+		t.Fatalf("versions = %d, want %d: nothing recorded", len(after), len(versions))
+	}
+}
