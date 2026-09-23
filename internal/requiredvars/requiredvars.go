@@ -1,10 +1,13 @@
-// Package requiredvars holds the one rule every write of a Mail template's
-// body obeys (ADR-0046): the body references each of the template's Required
-// variables. The rule is enforced by the server, where every writer — the old
-// panel, the Template seed, the editor's draft and publish — passes through.
+// Package requiredvars holds the rules every write of a Mail template version
+// obeys: the mailer can parse its subject, plain text and HTML (CheckParts),
+// and its body references each of the template's Required variables
+// (CheckBody, ADR-0046). They are enforced by the server, where every writer —
+// the old panel, the Template seed, the editor's draft, restore and publish —
+// passes through.
 package requiredvars
 
 import (
+	"errors"
 	"sort"
 
 	"github.com/gofiber/fiber/v3"
@@ -13,22 +16,23 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 )
 
-// ErrUnparseable refuses a subject or an HTML body the mailer could not
-// parse: the mailer parses both before every send, so the mail could not be
-// sent at all, and what a body references cannot be said. params.part is
-// "subject" or "html"; params.error is the parser's message, with the line it
-// stopped at.
+// ErrUnparseable refuses a version the mailer could not parse: it parses the
+// subject, the plain text and the HTML before every send, so no mail of it
+// could go out, and what its body references cannot be said. params.part is
+// "subject", "plain_text" or "html", the first that does not parse;
+// params.error is the parser's message, with the line it stopped at.
 var ErrUnparseable = apperrors.New(
 	"template.unparseable",
-	"The subject or the HTML body is not a Go template the mailer can parse.",
+	"The subject, plain text or HTML body is not a Go template the mailer can parse.",
 	fiber.StatusUnprocessableEntity,
 )
 
-// The parts of a version ErrUnparseable names.
-const (
-	PartSubject = "subject"
-	PartHTML    = "html"
-)
+// parts is how ErrUnparseable names each part the mailer parses.
+var parts = map[mailer.MailPart]string{
+	mailer.PartSubject:   "subject",
+	mailer.PartPlainText: "plain_text",
+	mailer.PartHTML:      "html",
+}
 
 // ErrMissing refuses a body that no longer references every Required
 // variable. params.missing lists each one it lacks, by name, with why it is
@@ -72,12 +76,11 @@ type Missing struct {
 //
 // It returns nil, ErrUnparseable with params {"part": "html", "error"}, or
 // ErrMissing with params {"missing": [{name, source, reason}…]} sorted by
-// name. Both are 422s.
-// A version's subject is checked by CheckSubject; a write calls both.
+// name. Both are 422s. A write of a version calls CheckParts first, then this.
 func CheckBody(template database.Template, html string) error {
 	referenced, err := mailer.ReferencedVariables(html)
 	if err != nil {
-		return unparseable(PartHTML, err)
+		return unparseable(parts[mailer.PartHTML], err)
 	}
 
 	has := make(map[string]bool, len(referenced))
@@ -103,15 +106,19 @@ func CheckBody(template database.Template, html string) error {
 	return ErrMissing.WithParams(map[string]interface{}{"missing": missing})
 }
 
-// CheckSubject reports whether subject may become a version's subject: it
-// parses the way the mailer parses a subject before every send. It returns
-// nil or ErrUnparseable with params {"part": "subject", "error"}. Like
-// CheckBody, call it inside the writing transaction and return its error.
-func CheckSubject(subject string) error {
-	if err := mailer.ParseSubject(subject); err != nil {
-		return unparseable(PartSubject, err)
+// CheckParts reports whether a version's subject, plain text and HTML parse
+// the way the mailer parses them before every send. It returns nil or
+// ErrUnparseable with params {"part", "error"} for the first part that does
+// not. It is the one place a version's parts are parsed: every write of a
+// version — the old panel's, the seed's, a draft, a restore, a publish —
+// calls it, then CheckBody, inside its transaction, and returns their error.
+func CheckParts(subject, plainText, html string) error {
+	err := mailer.CheckTemplate(subject, plainText, html)
+	var unparsable *mailer.ParseError
+	if !errors.As(err, &unparsable) {
+		return err
 	}
-	return nil
+	return unparseable(parts[unparsable.Part], unparsable.Err)
 }
 
 func unparseable(part string, err error) error {

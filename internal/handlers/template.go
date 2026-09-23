@@ -116,14 +116,14 @@ func getPaginationParams(c fiber.Ctx) (int32, int32) {
 // CreateTemplate godoc
 //
 //	@Summary		Create a new email template
-//	@Description	Create a new email template with the provided name, HTML content, and plain text content. Records the content as the template's first version: an operator's, published at once. The subject and the HTML content must parse as Go templates the way the mailer parses them.
+//	@Description	Create a new email template with the provided name, HTML content, and plain text content. Records the content as the template's first version: an operator's, published at once. The subject, plain text and HTML content must parse as Go templates the way the mailer parses them.
 //	@Tags			Templates
 //	@Accept			json
 //	@Produce		json
 //	@Param			template	body		requests.CreateTemplate	true	"Template details"
 //	@Success		201			{object}	handlers.Template
 //	@Failure		400			{object}	apperrors.AppError	"Bad Request"
-//	@Failure		422			{object}	apperrors.AppError	"The subject or the HTML content does not parse (template.unparseable, params.part)"
+//	@Failure		422			{object}	apperrors.AppError	"The subject, plain text or HTML content does not parse (template.unparseable, params.part)"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates [post]
 func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
@@ -233,7 +233,7 @@ func (h *templateHandlerImpl) GetTemplate(c fiber.Ctx) error {
 // UpdateTemplate godoc
 //
 //	@Summary		Update an email template
-//	@Description	Update an existing email template with the provided ID and details. Records the content the template ends up with as an operator's version, published at once. The subject and the HTML content must parse as Go templates, and the HTML content must reference every Required variable of the template, or nothing is written.
+//	@Description	Update an existing email template with the provided ID and details. Records the content the template ends up with as an operator's version, published at once. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable of the template, or nothing is written.
 //	@Tags			Templates
 //	@Accept			json
 //	@Produce		json
@@ -242,7 +242,7 @@ func (h *templateHandlerImpl) GetTemplate(c fiber.Ctx) error {
 //	@Success		200			{object}	handlers.Template
 //	@Failure		400			{object}	apperrors.AppError	"Bad Request"
 //	@Failure		404			{object}	apperrors.AppError	"Not Found"
-//	@Failure		422			{object}	apperrors.AppError	"The subject or the HTML content does not parse (template.unparseable, params.part) or drops a Required variable (template.required_variables_missing, params.missing names each with its set)"
+//	@Failure		422			{object}	apperrors.AppError	"The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates/{id} [patch]
 func (h *templateHandlerImpl) UpdateTemplate(c fiber.Ctx) error {
@@ -406,8 +406,9 @@ func versionAuthor(c fiber.Ctx, kind database.TemplateAuthorKind) database.Versi
 	}
 }
 
-// checkedWrite is a row write that must leave a subject and a body the mailer
-// can parse, and a body that references every Required variable: it checks
+// checkedWrite is a row write that must leave a subject, plain text and body
+// the mailer can parse, and a body that references every Required variable —
+// what checkVersion asks of a draft and a publish: it checks
 // what the write left, inside the write's transaction, so a refused write —
 // and the version it would have been — is rolled back with it.
 func checkedWrite(write func(*database.Queries) (database.Template, error)) func(*database.Queries) (database.Template, error) {
@@ -416,7 +417,7 @@ func checkedWrite(write func(*database.Queries) (database.Template, error)) func
 		if err != nil {
 			return written, err
 		}
-		if err := requiredvars.CheckSubject(written.Subject); err != nil {
+		if err := requiredvars.CheckParts(written.Subject, written.PlainTextContent, written.HtmlContent); err != nil {
 			return written, err
 		}
 		return written, requiredvars.CheckBody(written, written.HtmlContent)
@@ -472,7 +473,7 @@ func (h *templateHandlerImpl) GetTemplateByKey(c fiber.Ctx) error {
 // UpsertTemplateByKey godoc
 //
 //	@Summary		Create or replace a template addressed by key
-//	@Description	Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once. Writes the contract Required variables when sent, and keeps them when not. The subject and the HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.
+//	@Description	Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once. Writes the contract Required variables when sent, and keeps them when not. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.
 //	@Tags			Templates
 //	@Accept			json
 //	@Produce		json
@@ -480,7 +481,7 @@ func (h *templateHandlerImpl) GetTemplateByKey(c fiber.Ctx) error {
 //	@Param			template	body		requests.UpsertTemplateByKey	true	"Template details"
 //	@Success		200			{object}	handlers.Template
 //	@Failure		400			{object}	apperrors.AppError	"Bad Request"
-//	@Failure		422			{object}	apperrors.AppError	"The subject or the HTML content does not parse (template.unparseable, params.part) or drops a Required variable (template.required_variables_missing, params.missing names each with its set)"
+//	@Failure		422			{object}	apperrors.AppError	"The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates/by-key/{key} [put]
 func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {

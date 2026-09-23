@@ -88,13 +88,18 @@ with every template and kept sorted by name, byte by byte:
 The two sets never share a name; a name the contract comes to declare leaves
 the operators' set.
 
-Every write of a subject and a body — the old panel's `POST /v1/templates` and
-`PATCH /v1/templates/{id}`, the seed's upsert, and marking a variable — is
-checked inside its transaction, and a refused write leaves neither row nor
-version behind:
+Every write of a version — the old panel's `POST /v1/templates` and
+`PATCH /v1/templates/{id}`, the seed's upsert, saving a draft
+(`POST /v1/templates/{id}/drafts`), restoring a version as one and publishing
+a draft — is checked inside its transaction, against the version's own
+subject, plain text and HTML and the template's sets as they stand at that
+moment; marking a variable checks the published body. A refused write leaves
+neither row nor version behind. The rules live in one place,
+`internal/requiredvars`:
 
-- `422 template.unparseable`, `params: {"part": "subject"|"html", "error"}` —
-  the mailer could not parse it, so it could not be sent at all.
+- `422 template.unparseable`, `params: {"part": "subject"|"plain_text"|"html",
+  "error"}` — the mailer, which parses all three before every send, could not
+  parse that part, so the version could not be sent at all.
 - `422 template.required_variables_missing`, `params: {"missing": [{"name",
   "source": "contract"|"operator", "reason"}]}` — the body no longer references
   these Required variables. A reference is a field of the mailer's data used

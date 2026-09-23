@@ -456,9 +456,9 @@ func TestAPanelEditIsCheckedAgainstTheRequiredVariables(t *testing.T) {
 	}
 }
 
-// A body or a subject the mailer cannot parse could not be sent at all — the
-// mailer parses both before every send — and the check could not say what
-// the body references. Every writer is refused with one error naming the part
+// A subject, plain text or body the mailer cannot parse could not be sent at
+// all — the mailer parses all three before every send — and the check could
+// not say what the body references. Every writer is refused with one error naming the part
 // and carrying the parser's words, and nothing is written.
 func TestAPartTheMailerCannotParseIsRefused(t *testing.T) {
 	db := lifecycleHandlerStore(t)
@@ -474,13 +474,14 @@ func TestAPartTheMailerCannotParseIsRefused(t *testing.T) {
 		}
 	}
 
-	for _, tc := range []struct{ part, subject, html string }{
-		{"html", "Kırık", `<a href="{{.link">Git</a>`},
-		{"subject", "Merhaba {{.FullName", `<p>{{.FullName}}</p>`},
+	for _, tc := range []struct{ part, subject, plainText, html string }{
+		{"html", "Kırık", "Kırık", `<a href="{{.link">Git</a>`},
+		{"subject", "Merhaba {{.FullName", "Kırık", `<p>{{.FullName}}</p>`},
+		{"plain_text", "Kırık", "Merhaba {{.FullName", `<p>{{.FullName}}</p>`},
 	} {
 		response, body := sendJSON(t, app, fiber.MethodPost, "/templates", map[string]any{
 			"name": "Kırık", "subject": tc.subject, "html_content": tc.html,
-			"plain_text_content": "Kırık", "react_email_content": panelSource,
+			"plain_text_content": tc.plainText, "react_email_content": panelSource,
 		})
 		assertUnparseable(t, response.StatusCode, body, tc.part)
 	}

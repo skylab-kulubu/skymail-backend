@@ -1960,7 +1960,7 @@ const docTemplate = `{
                 ]
             },
             "post": {
-                "description": "Create a new email template with the provided name, HTML content, and plain text content. Records the content as the template's first version: an operator's, published at once. The subject and the HTML content must parse as Go templates the way the mailer parses them.",
+                "description": "Create a new email template with the provided name, HTML content, and plain text content. Records the content as the template's first version: an operator's, published at once. The subject, plain text and HTML content must parse as Go templates the way the mailer parses them.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -2010,7 +2010,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "The subject or the HTML content does not parse (template.unparseable, params.part)"
+                        "description": "The subject, plain text or HTML content does not parse (template.unparseable, params.part)"
                     },
                     "500": {
                         "content": {
@@ -2071,7 +2071,7 @@ const docTemplate = `{
                 ]
             },
             "put": {
-                "description": "Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once. Writes the contract Required variables when sent, and keeps them when not. The subject and the HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.",
+                "description": "Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once. Writes the contract Required variables when sent, and keeps them when not. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.",
                 "parameters": [
                     {
                         "description": "Template key",
@@ -2132,7 +2132,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "The subject or the HTML content does not parse (template.unparseable, params.part) or drops a Required variable (template.required_variables_missing, params.missing names each with its set)"
+                        "description": "The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
                     },
                     "500": {
                         "content": {
@@ -2266,7 +2266,7 @@ const docTemplate = `{
                 ]
             },
             "patch": {
-                "description": "Update an existing email template with the provided ID and details. Records the content the template ends up with as an operator's version, published at once. The subject and the HTML content must parse as Go templates, and the HTML content must reference every Required variable of the template, or nothing is written.",
+                "description": "Update an existing email template with the provided ID and details. Records the content the template ends up with as an operator's version, published at once. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable of the template, or nothing is written.",
                 "parameters": [
                     {
                         "description": "Template ID",
@@ -2337,7 +2337,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "The subject or the HTML content does not parse (template.unparseable, params.part) or drops a Required variable (template.required_variables_missing, params.missing names each with its set)"
+                        "description": "The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
                     },
                     "500": {
                         "content": {
@@ -2358,7 +2358,7 @@ const docTemplate = `{
         },
         "/templates/{id}/drafts": {
             "post": {
-                "description": "Records an operator's draft of a Mail template: a version that is sent to nobody until it is published. The template row, which is what is sent, does not change. Changing which source is the Main source is a save too: send the new main_mode and the render its source gives.\n\nThe editor renders the Main source; the server stores the render it is given. It checks what it can without rendering: the fields are there and not blank, the Main source's Authoring mode holds a source, the base is a published version of this template, a Visual source is a JSON object, a JSX source has code in it, and the subject, plain text and HTML parse as the mailer's Go templates (422 template.unparseable otherwise). An archived template is not found.\n\nEach save is a new version; an operator's newest version, while unpublished, is their draft in progress. A save continues it when it started from the same base, or else starts from the base. Sources left out, or null, are kept from the version the save continues, so a save never drops a source. A save that changes nothing records nothing and answers 200 with the version it continues.",
+                "description": "Records an operator's draft of a Mail template: a version that is sent to nobody until it is published. The template row, which is what is sent, does not change. Changing which source is the Main source is a save too: send the new main_mode and the render its source gives.\n\nThe editor renders the Main source; the server stores the render it is given. It checks what it can without rendering: the fields are there and not blank, the Main source's Authoring mode holds a source, the base is a published version of this template, a Visual source is a JSON object, a JSX source has code in it, and — as every write of a version is checked, by requiredvars — the subject, plain text and HTML parse as the mailer's Go templates (422 template.unparseable, params.part naming subject, plain_text or html) and the HTML references every Required variable of the template as it stands now (422 template.required_variables_missing, params.missing: [{name, source, reason}]). An archived template is not found.\n\nEach save is a new version; an operator's newest version, while unpublished, is their draft in progress. A save continues it when it started from the same base, or else starts from the base. Sources left out, or null, are kept from the version the save continues, so a save never drops a source. A save that changes nothing records nothing and answers 200 with the version it continues.",
                 "parameters": [
                     {
                         "description": "Template ID",
@@ -2449,7 +2449,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "template.unparseable: params.part (subject, plain_text or html) does not parse; params.error is the parser's message"
+                        "description": "template.unparseable: params.part (subject, plain_text or html) does not parse, params.error is the parser's message; or template.required_variables_missing: params.missing names each Required variable the HTML drops, with its source (contract or operator) and reason"
                     },
                     "500": {
                         "content": {
@@ -2980,7 +2980,7 @@ const docTemplate = `{
         },
         "/templates/{id}/versions/{versionId}/publish": {
             "post": {
-                "description": "Makes a draft the version the template sends: the draft is marked published and copied onto the template row — subject, HTML and plain text, and react_email_content: the JSX source when JSX is the Main source, an empty string otherwise, so the old panel never re-renders a JSX source that is not what is sent — in one transaction. Answers with the template as publishing left it. Publishing the version the template already sends changes nothing and answers the same way.\n\nA draft is stale when its base_version_id is not the template's published_version_id: someone published after it was started, and publishing it would quietly revert their version. That is refused with 409 template.stale_base, whose params name version_id (the draft), base_version_id (what it started from) and published_version_id (what is sent now), so both can be shown side by side. The operator's confirmation names the version they saw: {\"force\": {\"over_version_id\": \u003cpublished_version_id from the conflict\u003e}} publishes the draft over it, and the replaced version stays in the history. If another version was published since, the confirmation is refused with a fresh 409 naming it.",
+                "description": "Makes a draft the version the template sends: the draft is marked published and copied onto the template row — subject, HTML and plain text, and react_email_content: the JSX source when JSX is the Main source, an empty string otherwise, so the old panel never re-renders a JSX source that is not what is sent — in one transaction. Answers with the template as publishing left it. Publishing the version the template already sends changes nothing and answers the same way. The draft is checked again as it was when saved, against the template's Required variables as they stand at publishing.\n\nA draft is stale when its base_version_id is not the template's published_version_id: someone published after it was started, and publishing it would quietly revert their version. That is refused with 409 template.stale_base, whose params name version_id (the draft), base_version_id (what it started from) and published_version_id (what is sent now), so both can be shown side by side. The operator's confirmation names the version they saw: {\"force\": {\"over_version_id\": \u003cpublished_version_id from the conflict\u003e}} publishes the draft over it, and the replaced version stays in the history. If another version was published since, the confirmation is refused with a fresh 409 naming it.",
                 "parameters": [
                     {
                         "description": "Template ID",
@@ -3079,7 +3079,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "template.unparseable"
+                        "description": "template.unparseable (params.part: subject, plain_text or html), or template.required_variables_missing: the draft drops a Required variable the template has now, a variable marked since it was saved included (params.missing: [{name, source, reason}])"
                     },
                     "500": {
                         "content": {
@@ -3170,7 +3170,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "template.unparseable: the copy would not parse, as a saved draft would not"
+                        "description": "template.unparseable: the copy would not parse; or template.required_variables_missing: it drops a Required variable the template has now (params.missing: [{name, source, reason}]) — checked as a saved draft is"
                     },
                     "500": {
                         "content": {

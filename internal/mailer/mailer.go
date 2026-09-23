@@ -254,7 +254,7 @@ func CheckTemplate(subject, plainText, html string) error {
 // Execute and dereferences nil. Keeping the three together means no caller can
 // reintroduce that by handling one of them differently.
 func parseMailTemplates(subject, plainText, html string) (mailTemplates, error) {
-	subjectTemplate, err := parseSubject(subject)
+	subjectTemplate, err := textt.New("subject").Funcs(mailFuncs).Parse(subject)
 	if err != nil {
 		return mailTemplates{}, &ParseError{Part: PartSubject, Err: err}
 	}
@@ -267,17 +267,6 @@ func parseMailTemplates(subject, plainText, html string) (mailTemplates, error) 
 		return mailTemplates{}, &ParseError{Part: PartHTML, Err: err}
 	}
 	return mailTemplates{subject: subjectTemplate, text: textTemplate, html: htmlTemplate}, nil
-}
-
-func parseSubject(subject string) (*textt.Template, error) {
-	return textt.New("subject").Funcs(mailFuncs).Parse(subject)
-}
-
-// ParseSubject reports whether a subject parses the way the mailer parses it
-// before every send, and the parser's error when it does not.
-func ParseSubject(subject string) error {
-	_, err := parseSubject(subject)
-	return err
 }
 
 func (m *mailerImpl) renderAndQueue(ctx context.Context, rows []commonMailRow) error {
