@@ -761,3 +761,199 @@ func TestApprovingSendsToAGroupOrOneRecipient(t *testing.T) {
 		t.Errorf("queued single = %+v", rows)
 	}
 }
+
+// variableChange is the change an event records for one variable.
+func variableChange(t *testing.T, changes []approvalChange, name string) (before, after string) {
+	t.Helper()
+	for _, change := range changes {
+		if change.Field == "variable" && change.Name != nil && *change.Name == name {
+			return string(change.Before), string(change.After)
+		}
+	}
+	t.Fatalf("no change to %s in %+v", name, changes)
+	return "", ""
+}
+
+// An approver may edit the variables and send the edit at once: the edit is
+// what goes out, the record shows who changed what, and the submitter is told.
+func TestApprovingWithAnEditSendsTheEditAndRecordsIt(t *testing.T) {
+	w := newApprovalWorld(t)
+	submitted := w.submit("elif", w.listSend())
+
+	edit := map[string]any{
+		"Subject":  "GECEKODU başvuruları açıldı!",
+		"BodyHtml": "<p>Başvurular <strong>6 Nisan</strong>'da kapanıyor.</p>",
+	}
+	status, approved, failure := w.act("fatih", submitted.ID, "approve", map[string]any{"body_variables": edit})
+	if status != fiber.StatusOK {
+		t.Fatalf("approve with an edit = %d %+v", status, failure)
+	}
+	if approved.State != "approved" || approved.kinds() != "submitted,edited,approved" {
+		t.Fatalf("approved = %s %s", approved.State, approved.kinds())
+	}
+	edited := approved.History[1]
+	if edited.Actor == nil || edited.Actor.Sub != fatih.sub || len(edited.Changes) != 3 {
+		t.Fatalf("edited event = %+v", edited)
+	}
+	if before, after := variableChange(t, edited.Changes, "Subject"); before != `"GECEKODU başvuruları açıldı"` || after != `"GECEKODU başvuruları açıldı!"` {
+		t.Errorf("Subject changed %s → %s", before, after)
+	}
+	// The approver's edit is the whole set of variables: one left out is gone.
+	if before, after := variableChange(t, edited.Changes, "Heading"); before != `"GECEKODU Başvuruları Açıldı"` || after != "null" {
+		t.Errorf("Heading changed %s → %s", before, after)
+	}
+	variableChange(t, edited.Changes, "BodyHtml")
+
+	sent := w.mail.of(w.freeBasic.ID)
+	if len(sent) != 1 || !sameJSON(t, w.task(sent[0].taskID).BodyVariables, edit) {
+		t.Fatalf("sent %+v, want the edit once", sent)
+	}
+	if !sameJSON(t, mustJSON(t, approved.BodyVariables), edit) {
+		t.Errorf("the request holds %v, want the edit", approved.BodyVariables)
+	}
+
+	notices := w.mail.of(w.resolved.ID)
+	if len(notices) != 1 || notices[0].variables["Decision"] != "approved" ||
+		!strings.Contains(notices[0].variables["DecisionNote"].(string), "BodyHtml, Heading, Subject") {
+		t.Errorf("approval-resolved = %+v", notices)
+	}
+
+	// An edit that changes nothing is no edit.
+	again := w.submit("elif", w.listSend())
+	status, same, _ := w.act("fatih", again.ID, "approve", map[string]any{"body_variables": w.listSend()["body_variables"]})
+	if status != fiber.StatusOK || same.kinds() != "submitted,approved" {
+		t.Errorf("approving with the request's own values = %d %s", status, same.kinds())
+	}
+	// An edit that blanks a Required variable is refused, and nothing is sent.
+	third := w.submit("elif", w.listSend())
+	status, _, failure = w.act("fatih", third.ID, "approve", map[string]any{"body_variables": map[string]any{"Subject": "", "BodyHtml": "x"}})
+	if status != fiber.StatusUnprocessableEntity || failure.Code != "mail_approval.required_variables_missing" {
+		t.Errorf("an edit without a subject = %d %+v", status, failure)
+	}
+	if _, read := w.get("fatih", third.ID); read.State != "pending" || read.kinds() != "submitted" {
+		t.Errorf("after a refused edit: %s %s", read.State, read.kinds())
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// An approver may instead return the edit to the submitter. Nothing goes out
+// until the submitter accepts it; then the edit goes out, once.
+func TestAReturnedEditGoesOutWhenTheSubmitterAcceptsIt(t *testing.T) {
+	w := newApprovalWorld(t)
+	submitted := w.submit("elif", w.listSend())
+
+	edit := w.listSend()["body_variables"].(map[string]any)
+	edit["Heading"] = "GECEKODU 2026 Başvuruları"
+	status, returned, failure := w.act("fatih", submitted.ID, "return", map[string]any{"body_variables": edit, "note": "Başlığa yılı ekledim."})
+	if status != fiber.StatusOK {
+		t.Fatalf("return = %d %+v", status, failure)
+	}
+	if returned.State != "returned" || returned.kinds() != "submitted,edited,returned" || len(returned.History[1].Changes) != 1 {
+		t.Fatalf("returned = %s %s %+v", returned.State, returned.kinds(), returned.History)
+	}
+	if n := len(w.mail.of(w.freeBasic.ID)); n != 0 {
+		t.Fatalf("a return sent %d mails", n)
+	}
+	notices := w.mail.of(w.resolved.ID)
+	if len(notices) != 1 || notices[0].recipients[0] != elif.email || notices[0].variables["Decision"] != "returned" ||
+		!strings.Contains(notices[0].variables["DecisionNote"].(string), "Heading") ||
+		!strings.Contains(notices[0].variables["DecisionNote"].(string), "Başlığa yılı ekledim.") {
+		t.Fatalf("approval-resolved = %+v", notices)
+	}
+
+	// Only the submitter answers a return; an approver cannot approve it now.
+	if status, _, failure := w.act("yusuf", submitted.ID, "accept", nil); status != fiber.StatusForbidden || failure.Code != "mail_approval.not_submitter" {
+		t.Errorf("an approver accepting = %d %+v", status, failure)
+	}
+	if status, _, failure := w.act("baska", submitted.ID, "accept", nil); status != fiber.StatusNotFound {
+		t.Errorf("someone else accepting = %d %+v", status, failure)
+	}
+	if status, _, failure := w.act("yusuf", submitted.ID, "approve", nil); status != fiber.StatusConflict || failure.Params["state"] != "returned" {
+		t.Errorf("approving a returned request = %d %+v", status, failure)
+	}
+	// Returning takes an edit.
+	other := w.submit("elif", w.listSend())
+	if status, _, failure := w.act("fatih", other.ID, "return", map[string]any{"body_variables": w.listSend()["body_variables"]}); status != fiber.StatusUnprocessableEntity || failure.Code != "mail_approval.no_edit" {
+		t.Errorf("returning without an edit = %d %+v", status, failure)
+	}
+
+	status, accepted, failure := w.act("elif", submitted.ID, "accept", nil)
+	if status != fiber.StatusOK {
+		t.Fatalf("accept = %d %+v", status, failure)
+	}
+	if accepted.State != "approved" || accepted.TaskID == nil || accepted.kinds() != "submitted,edited,returned,accepted" ||
+		accepted.History[3].Actor.Sub != elif.sub || *accepted.History[3].TaskID != *accepted.TaskID {
+		t.Fatalf("accepted = %s %s", accepted.State, accepted.kinds())
+	}
+	sent := w.mail.of(w.freeBasic.ID)
+	if len(sent) != 1 || sent[0].sentBy != elif.sub || !sameJSON(t, w.task(sent[0].taskID).BodyVariables, edit) {
+		t.Fatalf("sent = %+v, want the returned edit once", sent)
+	}
+	if status, _, _ := w.act("elif", submitted.ID, "accept", nil); status != fiber.StatusConflict {
+		t.Errorf("accepting twice = %d", status)
+	}
+	if n := len(w.mail.of(w.freeBasic.ID)); n != 1 {
+		t.Fatalf("sends after accepting twice = %d", n)
+	}
+}
+
+// A submitter who declines a returned edit sends nothing and may edit and
+// resubmit; the request keeps everything that happened to it.
+func TestADeclinedEditCanBeResubmitted(t *testing.T) {
+	w := newApprovalWorld(t)
+	submitted := w.submit("elif", w.listSend())
+	edit := w.listSend()["body_variables"].(map[string]any)
+	edit["Subject"] = "Başvurular açık"
+	w.act("fatih", submitted.ID, "return", map[string]any{"body_variables": edit})
+
+	status, declined, failure := w.act("elif", submitted.ID, "decline", map[string]any{"note": "Konu böyle kalsın."})
+	if status != fiber.StatusOK || declined.State != "declined" || declined.kinds() != "submitted,edited,returned,declined" ||
+		*declined.History[3].Note != "Konu böyle kalsın." {
+		t.Fatalf("decline = %d %+v %s", status, failure, declined.kinds())
+	}
+	if n := len(w.mail.of(w.freeBasic.ID)); n != 0 {
+		t.Fatalf("a decline sent %d mails", n)
+	}
+	if status, _, _ := w.act("elif", submitted.ID, "accept", nil); status != fiber.StatusConflict {
+		t.Errorf("accepting a declined edit = %d", status)
+	}
+
+	w.advance(2 * 24 * time.Hour)
+	resend := w.listSend()
+	resend["body_variables"].(map[string]any)["Heading"] = "GECEKODU'na son çağrı"
+	status, resubmitted, failure := w.act("elif", submitted.ID, "resubmit", resend)
+	if status != fiber.StatusOK {
+		t.Fatalf("resubmit = %d %+v", status, failure)
+	}
+	if resubmitted.ID != submitted.ID || resubmitted.State != "pending" || resubmitted.kinds() != "submitted,edited,returned,declined,resubmitted" {
+		t.Fatalf("resubmitted = %s %s", resubmitted.State, resubmitted.kinds())
+	}
+	// The resubmission is measured against the approver's edit it declined.
+	changes := resubmitted.History[4].Changes
+	if before, after := variableChange(t, changes, "Subject"); before != `"Başvurular açık"` || after != `"GECEKODU başvuruları açıldı"` {
+		t.Errorf("Subject %s → %s", before, after)
+	}
+	variableChange(t, changes, "Heading")
+	if !resubmitted.SubmittedAt.Equal(w.now()) || !resubmitted.DeadlineAt.Equal(w.now().Add(7*24*time.Hour)) {
+		t.Errorf("resubmitted %s, deadline %s: want a new seven days", resubmitted.SubmittedAt, resubmitted.DeadlineAt)
+	}
+	if n := len(w.mail.of(w.requested.ID)); n != 4 {
+		t.Errorf("approval-requested mails = %d, want two approvers told twice", n)
+	}
+
+	if status, approved, failure := w.act("yusuf", submitted.ID, "approve", nil); status != fiber.StatusOK || approved.State != "approved" {
+		t.Fatalf("approve the resubmission = %d %+v", status, failure)
+	}
+	sent := w.mail.of(w.freeBasic.ID)
+	if len(sent) != 1 || !sameJSON(t, w.task(sent[0].taskID).BodyVariables, resend["body_variables"]) {
+		t.Fatalf("sent %+v, want the resubmission", sent)
+	}
+}
