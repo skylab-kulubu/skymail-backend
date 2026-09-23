@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"strconv"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skymail-backend/internal/ptr"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 )
@@ -35,6 +37,17 @@ var errInvalidTemplateKey = apperrors.New(
 	fiber.StatusBadRequest,
 )
 
+// Template is a Mail template as the template routes serve it: its row — a
+// copy of the published version, which is what is sent — with the Authoring
+// mode of that version's Main source and each operator's draft in progress.
+type Template struct {
+	database.Template
+	// The Authoring mode of the Main source the template sends: its published version's. Null for a template with no published version.
+	MainMode *string `json:"main_mode" enums:"jsx,visual,html"`
+	// Each operator's draft in progress, newest first: the newest version an operator wrote of the template, while it is neither published nor discarded. An operator's earlier drafts are superseded and not listed. A draft whose base_version_id is not published_version_id is stale: a newer version was published after it was started, and publishing it takes force.
+	Drafts []TemplateVersionSummary `json:"drafts"`
+}
+
 type TemplateHandler interface {
 	CreateTemplate(c fiber.Ctx) error
 	GetTemplates(c fiber.Ctx) error
@@ -46,6 +59,10 @@ type TemplateHandler interface {
 	UpsertTemplateByKey(c fiber.Ctx) error
 	ListTemplateVersions(c fiber.Ctx) error
 	GetTemplateVersion(c fiber.Ctx) error
+	SaveTemplateDraft(c fiber.Ctx) error
+	PublishTemplateVersion(c fiber.Ctx) error
+	RestoreTemplateVersion(c fiber.Ctx) error
+	DiscardTemplateVersion(c fiber.Ctx) error
 }
 
 type templateHandlerImpl struct {
@@ -83,7 +100,7 @@ func getPaginationParams(c fiber.Ctx) (int32, int32) {
 //	@Accept			json
 //	@Produce		json
 //	@Param			template	body		requests.CreateTemplate	true	"Template details"
-//	@Success		201			{object}	database.Template
+//	@Success		201			{object}	handlers.Template
 //	@Failure		400			{object}	apperrors.AppError	"Bad Request"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates [post]
@@ -108,7 +125,7 @@ func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
 		return err
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(template)
+	return h.sendTemplate(c, fiber.StatusCreated, template)
 }
 
 // GetTemplates godoc
@@ -120,7 +137,7 @@ func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
 //	@Param			_start		query		int		false	"Start index"
 //	@Param			_end		query		int		false	"End index"
 //	@Param			lifecycle	query		string	false	"Lifecycle filter: current, inactive, all"	Enums(current,inactive,all)	default(current)
-//	@Success		200			{array}		database.Template
+//	@Success		200			{array}		handlers.Template
 //	@Failure		400			{object}	apperrors.AppError	"Bad Request"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates [get]
@@ -155,9 +172,14 @@ func (h *templateHandlerImpl) GetTemplates(c fiber.Ctx) error {
 		return err
 	}
 
+	served, err := h.served(c.Context(), templates)
+	if err != nil {
+		return err
+	}
+
 	c.Response().Header.Set("X-Total-Count", strconv.FormatInt(count, 10))
 
-	return c.JSON(templates)
+	return c.JSON(served)
 }
 
 // GetTemplate godoc
@@ -167,7 +189,7 @@ func (h *templateHandlerImpl) GetTemplates(c fiber.Ctx) error {
 //	@Tags			Templates
 //	@Produce		json
 //	@Param			id	path		string	true	"Template ID"
-//	@Success		200	{object}	database.Template
+//	@Success		200	{object}	handlers.Template
 //	@Failure		400	{object}	apperrors.AppError	"Bad Request"
 //	@Failure		404	{object}	apperrors.AppError	"Not Found"
 //	@Failure		500	{object}	apperrors.AppError	"Internal Server Error"
@@ -183,7 +205,7 @@ func (h *templateHandlerImpl) GetTemplate(c fiber.Ctx) error {
 		return err
 	}
 
-	return c.JSON(template)
+	return h.sendTemplate(c, fiber.StatusOK, template)
 }
 
 // UpdateTemplate godoc
@@ -195,7 +217,7 @@ func (h *templateHandlerImpl) GetTemplate(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			id			path		string					true	"Template ID"
 //	@Param			template	body		requests.UpdateTemplate	true	"Template details"
-//	@Success		200			{object}	database.Template
+//	@Success		200			{object}	handlers.Template
 //	@Failure		400			{object}	apperrors.AppError	"Bad Request"
 //	@Failure		404			{object}	apperrors.AppError	"Not Found"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
@@ -220,7 +242,7 @@ func (h *templateHandlerImpl) UpdateTemplate(c fiber.Ctx) error {
 	if existing.System {
 		// The content of a system template may be reworded freely; its key is the
 		// contract another service calls it by, so that stays put.
-		if !sameKey(key, existing.Key) {
+		if !ptr.Equal(key, existing.Key) {
 			return errSystemTemplateKey
 		}
 		key = existing.Key
@@ -243,7 +265,7 @@ func (h *templateHandlerImpl) UpdateTemplate(c fiber.Ctx) error {
 		return err
 	}
 
-	return c.JSON(template)
+	return h.sendTemplate(c, fiber.StatusOK, template)
 }
 
 // DeleteTemplate godoc
@@ -288,7 +310,7 @@ func (h *templateHandlerImpl) DeleteTemplate(c fiber.Ctx) error {
 //	@Tags			Templates
 //	@Produce		json
 //	@Param			id	path		string	true	"Template ID"
-//	@Success		200	{object}	database.Template
+//	@Success		200	{object}	handlers.Template
 //	@Failure		404	{object}	apperrors.AppError	"Not Found"
 //	@Failure		409	{object}	apperrors.AppError	"Conflict"
 //	@Router			/templates/{id}/restore [post]
@@ -302,7 +324,53 @@ func (h *templateHandlerImpl) RestoreTemplate(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(template)
+	return h.sendTemplate(c, fiber.StatusOK, template)
+}
+
+// served is template rows as the template routes serve them.
+func (h *templateHandlerImpl) served(ctx context.Context, rows []database.Template) ([]Template, error) {
+	ids := make([]uuid.UUID, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+	modes, err := h.db.ListPublishedMainModes(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	drafts, err := h.db.ListTemplateDrafts(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+
+	mainModes := make(map[uuid.UUID]string, len(modes))
+	for _, mode := range modes {
+		mainModes[mode.TemplateID] = string(mode.MainMode)
+	}
+	inProgress := make(map[uuid.UUID][]TemplateVersionSummary, len(rows))
+	for _, draft := range drafts {
+		inProgress[draft.TemplateID] = append(inProgress[draft.TemplateID], versionSummary(draft))
+	}
+	served := make([]Template, 0, len(rows))
+	for _, row := range rows {
+		template := Template{Template: row, Drafts: inProgress[row.ID]}
+		if mode, ok := mainModes[row.ID]; ok {
+			template.MainMode = &mode
+		}
+		if template.Drafts == nil {
+			template.Drafts = []TemplateVersionSummary{}
+		}
+		served = append(served, template)
+	}
+	return served, nil
+}
+
+// sendTemplate answers with one template as the template routes serve it.
+func (h *templateHandlerImpl) sendTemplate(c fiber.Ctx, status int, row database.Template) error {
+	served, err := h.served(c.Context(), []database.Template{row})
+	if err != nil {
+		return err
+	}
+	return c.Status(status).JSON(served[0])
 }
 
 // versionAuthor is who a request writes a Mail template version as: the
@@ -315,13 +383,6 @@ func versionAuthor(c fiber.Ctx, kind database.TemplateAuthorKind) database.Versi
 	}
 }
 
-func sameKey(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
 // GetTemplateByKey godoc
 //
 //	@Summary		Get an email template by key
@@ -329,7 +390,7 @@ func sameKey(a, b *string) bool {
 //	@Tags			Templates
 //	@Produce		json
 //	@Param			key	path		string	true	"Template key"
-//	@Success		200	{object}	database.Template
+//	@Success		200	{object}	handlers.Template
 //	@Failure		404	{object}	apperrors.AppError	"Not Found"
 //	@Router			/templates/by-key/{key} [get]
 func (h *templateHandlerImpl) GetTemplateByKey(c fiber.Ctx) error {
@@ -343,7 +404,7 @@ func (h *templateHandlerImpl) GetTemplateByKey(c fiber.Ctx) error {
 		return err
 	}
 
-	return c.JSON(template)
+	return h.sendTemplate(c, fiber.StatusOK, template)
 }
 
 // UpsertTemplateByKey godoc
@@ -355,7 +416,7 @@ func (h *templateHandlerImpl) GetTemplateByKey(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			key			path		string							true	"Template key"
 //	@Param			template	body		requests.UpsertTemplateByKey	true	"Template details"
-//	@Success		200			{object}	database.Template
+//	@Success		200			{object}	handlers.Template
 //	@Failure		400			{object}	apperrors.AppError	"Bad Request"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates/by-key/{key} [put]
@@ -390,5 +451,5 @@ func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 		return err
 	}
 
-	return c.JSON(template)
+	return h.sendTemplate(c, fiber.StatusOK, template)
 }

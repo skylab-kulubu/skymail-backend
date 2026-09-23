@@ -39,6 +39,23 @@ The template row is a copy of the published version, and
 only the row; its versions stay readable through
 `GET /v1/templates/{id}/versions` whether it is archived or not.
 
+Drafts are versions too. Saving a draft
+(`POST /v1/templates/{id}/drafts`) and restoring a version
+(`POST /v1/templates/{id}/versions/{versionId}/restore`) each record a new,
+unpublished version; publishing one
+(`POST /v1/templates/{id}/versions/{versionId}/publish`) marks it published
+and copies it onto the row. An operator's newest version of a template, while
+unpublished, is their draft in progress; their earlier drafts stay in the
+history, superseded, and so does a draft nobody publishes. Discarding a draft
+(`POST /v1/templates/{id}/versions/{versionId}/discard`) sets its
+`discarded_at`: it stays in the history, readable and restorable, but it is
+nobody's draft in progress and is never published. Drafts are not the
+ephemeral "expired drafts" ADR-0042 has hard-deleted:
+a Mail template draft is part of the template's history (ADR-0046), and no
+version is deleted. Like any other update, saving, restoring or publishing a
+version of an archived template answers `404` until the template is
+un-archived with `POST /v1/templates/{id}/restore`.
+
 During the deploy, the migration runs before the new binary takes over, and
 the old binary keeps writing rows without versions in between. A template
 written in that window has no version for that write: its row, which is what

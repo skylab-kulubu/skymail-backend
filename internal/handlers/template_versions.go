@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -31,6 +32,8 @@ type TemplateVersionSummary struct {
 	BaseVersionID *uuid.UUID `json:"base_version_id"`
 	// Whether this is the published version the template sends.
 	Current bool `json:"current"`
+	// Whether an operator gave this draft up: it stays in the history and can be restored, but it is nobody's draft in progress and is never published.
+	Discarded bool `json:"discarded"`
 }
 
 // TemplateVersion is one Mail template version whole: at most one source per
@@ -63,6 +66,7 @@ func versionSummary(s database.TemplateVersionSummary) TemplateVersionSummary {
 		PublishedAt:      s.PublishedAt,
 		BaseVersionID:    s.BaseVersionID,
 		Current:          s.IsCurrent,
+		Discarded:        s.DiscardedAt != nil,
 	}
 }
 
@@ -75,8 +79,10 @@ func versionSummary(s database.TemplateVersionSummary) TemplateVersionSummary {
 //	@Param			id		path		string	true	"Template ID"
 //	@Param			_start	query		int		false	"Start index"
 //	@Param			_end	query		int		false	"End index"
+//	@Param			state	query		string	false	"Which versions: published ones, drafts (discarded ones included, flagged), or all"	Enums(published,draft,all)	default(all)
 //	@Success		200		{array}		handlers.TemplateVersionSummary
-//	@Header			200		{integer}	X-Total-Count		"Number of versions the template has"
+//	@Header			200		{integer}	X-Total-Count		"Number of versions the template has in that state"
+//	@Failure		400		{object}	apperrors.AppError	"validation.error: an unknown state"
 //	@Failure		403		{object}	apperrors.AppError	"Forbidden"
 //	@Failure		404		{object}	apperrors.AppError	"Not Found"
 //	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
@@ -90,14 +96,18 @@ func (h *templateHandlerImpl) ListTemplateVersions(c fiber.Ctx) error {
 		return err
 	}
 
+	published, err := parseVersionState(c.Query("state"))
+	if err != nil {
+		return err
+	}
 	limit, offset := getPaginationParams(c)
 	rows, err := h.db.ListTemplateVersions(c.Context(), database.ListTemplateVersionsParams{
-		TemplateID: id, Limit: limit, Offset: offset,
+		TemplateID: id, Published: published, Limit: limit, Offset: offset,
 	})
 	if err != nil {
 		return err
 	}
-	count, err := h.db.CountTemplateVersions(c.Context(), id)
+	count, err := h.db.CountTemplateVersions(c.Context(), database.CountTemplateVersionsParams{TemplateID: id, Published: published})
 	if err != nil {
 		return err
 	}
@@ -109,6 +119,24 @@ func (h *templateHandlerImpl) ListTemplateVersions(c fiber.Ctx) error {
 
 	c.Response().Header.Set("X-Total-Count", strconv.FormatInt(count, 10))
 	return c.JSON(versions)
+}
+
+// parseVersionState reads the history filter: nil for every version, true
+// for published ones only, false for drafts only.
+func parseVersionState(raw string) (*bool, error) {
+	published, drafts := true, false
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "all":
+		return nil, nil
+	case "published":
+		return &published, nil
+	case "draft":
+		return &drafts, nil
+	default:
+		return nil, apperrors.ErrValidation.WithParams(map[string]interface{}{
+			"state": "must be one of published, draft, all",
+		})
+	}
 }
 
 // GetTemplateVersion godoc
@@ -125,13 +153,9 @@ func (h *templateHandlerImpl) ListTemplateVersions(c fiber.Ctx) error {
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates/{id}/versions/{versionId} [get]
 func (h *templateHandlerImpl) GetTemplateVersion(c fiber.Ctx) error {
-	templateID, err := uuid.Parse(c.Params("id"))
+	templateID, versionID, err := versionPath(c)
 	if err != nil {
-		return apperrors.ErrStatusNotFound
-	}
-	versionID, err := uuid.Parse(c.Params("versionId"))
-	if err != nil {
-		return apperrors.ErrStatusNotFound
+		return err
 	}
 
 	row, err := h.db.GetTemplateVersion(c.Context(), database.GetTemplateVersionParams{
@@ -141,12 +165,17 @@ func (h *templateHandlerImpl) GetTemplateVersion(c fiber.Ctx) error {
 		return err
 	}
 
-	return c.JSON(TemplateVersion{
+	return c.JSON(templateVersion(row))
+}
+
+// templateVersion is one version whole as the version routes serve it.
+func templateVersion(row database.GetTemplateVersionRow) TemplateVersion {
+	return TemplateVersion{
 		TemplateVersionSummary: versionSummary(row.TemplateVersionSummary),
 		JSXSource:              row.JsxSource,
 		VisualSource:           row.VisualSource,
 		HTMLSource:             row.HtmlSource,
 		HTMLContent:            row.HtmlContent,
 		PlainTextContent:       row.PlainTextContent,
-	})
+	}
 }

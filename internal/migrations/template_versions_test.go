@@ -162,8 +162,8 @@ func TestTemplateVersionMigrationGivesEveryTemplateOnePublishedFirstVersion(t *t
 	firstUp := versionsByName(t, database)
 
 	// Down puts the schema back and leaves every row — the published copy the
-	// send path reads — as it was.
-	if err := runner.Steps(-1); err != nil {
+	// send path reads — as it was. Later migrations go down first.
+	if err := runner.Migrate(beforeTemplateVersions); err != nil {
 		t.Fatalf("down: %v", err)
 	}
 	for _, leftover := range []string{

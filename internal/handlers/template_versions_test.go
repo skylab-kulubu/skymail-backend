@@ -19,6 +19,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 )
 
 // The operator every request in these tests comes from: the Keycloak subject
@@ -47,14 +48,24 @@ func seedPointerComment(key string) string {
 }
 
 // templateVersionsApp serves the template routes and a single send the way
-// the old panel, the Template seed and a sending service reach them, with the
-// real mailer queueing into the test database.
+// the old panel, the new editor, the Template seed and a sending service reach
+// them, with the real mailer queueing into the test database and request
+// bodies validated as production validates them.
+//
+// Requests come from operatorSub unless they carry X-Operator-Sub (and
+// X-Operator-Name): another operator's token.
 func templateVersionsApp(t *testing.T, db *database.Store) *fiber.App {
 	t.Helper()
-	app := fiber.New(fiber.Config{ErrorHandler: func(c fiber.Ctx, err error) error {
+	app := fiber.New(fiber.Config{StructValidator: validator.NewStructValidator(), ErrorHandler: func(c fiber.Ctx, err error) error {
 		var appErr *apperrors.AppError
 		if errors.As(err, &appErr) {
 			return c.Status(appErr.Status).JSON(appErr)
+		}
+		var invalid validator.ValidationErrors
+		if errors.As(err, &invalid) {
+			return c.Status(fiber.StatusBadRequest).JSON(apperrors.ErrValidation.WithParams(map[string]interface{}{
+				"errors": validator.ParseValidationErrors(invalid),
+			}))
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			return c.SendStatus(fiber.StatusNotFound)
@@ -64,17 +75,28 @@ func templateVersionsApp(t *testing.T, db *database.Store) *fiber.App {
 	app.Use(func(c fiber.Ctx) error {
 		c.Locals("user_id", operatorSub)
 		c.Locals("user_name", operatorName)
+		if sub := c.Get("X-Operator-Sub"); sub != "" {
+			c.Locals("user_id", sub)
+			c.Locals("user_name", c.Get("X-Operator-Name"))
+		}
 		return c.Next()
 	})
 
 	templates := NewTemplateHandler(db)
 	app.Post("/templates", templates.CreateTemplate)
+	app.Get("/templates", templates.GetTemplates)
 	app.Get("/templates/:id", templates.GetTemplate)
 	app.Patch("/templates/:id", templates.UpdateTemplate)
 	app.Delete("/templates/:id", templates.DeleteTemplate)
+	app.Post("/templates/:id/restore", templates.RestoreTemplate)
+	app.Get("/templates/by-key/:key", templates.GetTemplateByKey)
 	app.Put("/templates/by-key/:key", templates.UpsertTemplateByKey)
 	app.Get("/templates/:id/versions", templates.ListTemplateVersions)
 	app.Get("/templates/:id/versions/:versionId", templates.GetTemplateVersion)
+	app.Post("/templates/:id/drafts", templates.SaveTemplateDraft)
+	app.Post("/templates/:id/versions/:versionId/publish", templates.PublishTemplateVersion)
+	app.Post("/templates/:id/versions/:versionId/restore", templates.RestoreTemplateVersion)
+	app.Post("/templates/:id/versions/:versionId/discard", templates.DiscardTemplateVersion)
 
 	mails := NewMailHandler(db, mailer.NewMailer(db, mailer.SMTPConfig{}), lifecycleKeycloakStub{})
 	app.Post("/mail_tasks/single", mails.SendSingle)
@@ -152,10 +174,12 @@ func storedVersions(t *testing.T, db *database.Store, templateID uuid.UUID) ([]s
 }
 
 // The fields a template is served with: the ones the old panel and core have
-// always read, and published_version_id beside them — the version the row is a
-// copy of, which the old panel ignores and the new editor starts a draft from.
+// always read, and beside them, all ignored by the old panel,
+// published_version_id — the version the row is a copy of, which the new
+// editor starts a draft from — main_mode, the Authoring mode of the Main
+// source it sends, and drafts, each operator's draft in progress.
 var templateFields = []string{
-	"archived_at", "archived_by", "created_at", "html_content", "id", "key", "name",
+	"archived_at", "archived_by", "created_at", "drafts", "html_content", "id", "key", "main_mode", "name",
 	"plain_text_content", "published_version_id", "react_email_content", "subject", "system", "updated_at",
 }
 
@@ -908,36 +932,38 @@ func TestUnchangedWritesRecordNoVersion(t *testing.T) {
 	}
 }
 
-// publishVisualVersion stands in for ticket 07: it publishes a version holding
-// a Visual source as the Main source and a JSX source beside it, and copies it
-// onto the row the way publishing will.
-func publishVisualVersion(t *testing.T, db *database.Store, templateID uuid.UUID) storedVersion {
+// publishVisualVersion saves and publishes a draft holding a Visual source as
+// the Main source and a JSX source beside it.
+func publishVisualVersion(t *testing.T, app *fiber.App, db *database.Store, templateID uuid.UUID) storedVersion {
 	t.Helper()
-	ctx := context.Background()
-	if _, err := db.Conn.Exec(ctx, `
-		WITH version AS (
-			INSERT INTO template_versions (template_id, seq, subject, jsx_source, visual_source, main_mode, html_content,
-			                               plain_text_content, author_kind, author_sub, author_name, published_at, base_version_id)
-			SELECT id, (SELECT max(seq) + 1 FROM template_versions WHERE template_id = $1), 'Görsel konu', $2,
-			       '{"type": "doc", "content": [{"type": "paragraph"}]}', 'visual', '<p>Görsel</p>', 'Görsel',
-			       'operator', 'b7d1e7a2-3c1f-4c55-9d6e-0a1b2c3d4e5f', 'Can Demir', NOW(), published_version_id
-			FROM templates
-			WHERE id = $1
-			RETURNING id, template_id, subject, jsx_source, html_content, plain_text_content)
-		UPDATE templates t
-		SET subject = v.subject, html_content = v.html_content, plain_text_content = v.plain_text_content,
-		    react_email_content = v.jsx_source, published_version_id = v.id
-		FROM version v
-		WHERE t.id = v.template_id`, templateID, panelSource); err != nil {
+	var template database.Template
+	if err := db.Conn.QueryRow(context.Background(), `SELECT published_version_id FROM templates WHERE id = $1`, templateID).
+		Scan(&template.PublishedVersionID); err != nil {
 		t.Fatal(err)
+	}
+	response, body := sendJSON(t, app, fiber.MethodPost, "/templates/"+templateID.String()+"/drafts", map[string]any{
+		"subject": "Görsel konu", "main_mode": "visual", "jsx_source": panelSource,
+		"visual_source": json.RawMessage(`{"type": "doc", "content": [{"type": "paragraph"}]}`),
+		"html_content":  "<p>Görsel</p>", "plain_text_content": "Görsel", "base_version_id": template.PublishedVersionID,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("draft = %d %s", response.StatusCode, body)
+	}
+	var draft struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if err := json.Unmarshal(body, &draft); err != nil {
+		t.Fatal(err)
+	}
+	if response, body := sendJSON(t, app, fiber.MethodPost, "/templates/"+templateID.String()+"/versions/"+draft.ID.String()+"/publish", nil); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("publish = %d %s", response.StatusCode, body)
 	}
 	versions, _ := storedVersions(t, db, templateID)
 	return versions[len(versions)-1]
 }
 
 // The old panel and the seed write only a subject, a body and JSX. Every other
-// source the published version holds is carried into the version they write;
-// a write that keeps the body keeps the Main source too.
+// source the published version holds is carried into the version they write.
 func TestLegacyWritesCarryTheOtherSourcesForward(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	app := templateVersionsApp(t, db)
@@ -955,7 +981,7 @@ func TestLegacyWritesCarryTheOtherSourcesForward(t *testing.T) {
 	if err := json.Unmarshal(body, &template); err != nil {
 		t.Fatal(err)
 	}
-	visual := publishVisualVersion(t, db, template.ID)
+	visual := publishVisualVersion(t, app, db, template.ID)
 	if err := db.Conn.QueryRow(context.Background(), `SELECT react_email_content, html_content, plain_text_content FROM templates WHERE id = $1`, template.ID).
 		Scan(&template.ReactEmailContent, &template.HtmlContent, &template.PlainTextContent); err != nil {
 		t.Fatal(err)
@@ -973,22 +999,29 @@ func TestLegacyWritesCarryTheOtherSourcesForward(t *testing.T) {
 		return versions[len(versions)-1]
 	}
 
-	// Rewording in the old panel sends the stored body back untouched: the
-	// Visual source stays the Main source.
-	reworded := patch("Aramıza hoş geldin", template.HtmlContent, template.PlainTextContent, template.ReactEmailContent)
-	if reworded.ID == visual.ID || reworded.Subject != "Aramıza hoş geldin" || reworded.MainMode != "visual" ||
-		string(reworded.VisualSource) != string(visual.VisualSource) || !sameString(reworded.JSXSource, panelSource) ||
-		reworded.HTMLContent != "<p>Görsel</p>" {
-		t.Fatalf("rewording = %+v, want the Visual Main source and the JSX source kept under the new subject", reworded)
+	// Publishing a Visual Main source leaves the old panel no JSX to edit, so
+	// it cannot save the template around it: a save with no JSX is refused
+	// and records nothing.
+	if template.ReactEmailContent != "" {
+		t.Fatalf("react_email_content = %q, want nothing for a Visual Main source", template.ReactEmailContent)
+	}
+	if response, body := sendJSON(t, app, fiber.MethodPatch, "/templates/"+template.ID.String(), map[string]any{
+		"name": template.Name, "subject": "Aramıza hoş geldin", "key": key, "html_content": template.HtmlContent,
+		"plain_text_content": template.PlainTextContent, "react_email_content": template.ReactEmailContent,
+	}); response.StatusCode != fiber.StatusBadRequest {
+		t.Fatalf("an old panel save with no JSX = %d %s, want 400", response.StatusCode, body)
+	}
+	if versions, _ := storedVersions(t, db, template.ID); versions[len(versions)-1].ID != visual.ID {
+		t.Fatalf("a refused save recorded a version")
 	}
 
-	// Editing the JSX in the old panel makes JSX the Main source; the Visual
-	// source is kept.
+	// Writing JSX in the old panel makes JSX the Main source; the Visual source
+	// and the HTML source the seed left are kept.
 	edited := panelSource + "\n// düzenlendi\n"
 	jsx := patch("Aramıza hoş geldin", "<p>JSX</p>", "JSX", edited)
 	if jsx.MainMode != "jsx" || !sameString(jsx.JSXSource, edited) || string(jsx.VisualSource) != string(visual.VisualSource) ||
-		jsx.HTMLSource != nil || jsx.HTMLContent != "<p>JSX</p>" {
-		t.Fatalf("JSX edit = %+v, want JSX as the Main source with the Visual source kept", jsx)
+		visual.HTMLSource == nil || !sameString(jsx.HTMLSource, *visual.HTMLSource) || jsx.HTMLContent != "<p>JSX</p>" {
+		t.Fatalf("JSX edit = %+v, want JSX as the Main source with the Visual and HTML sources kept", jsx)
 	}
 
 	// A seed with a new body and no JSX makes that body the HTML Main source;

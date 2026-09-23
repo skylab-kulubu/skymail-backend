@@ -207,18 +207,21 @@ FROM version
 WHERE t.id = version.template_id;
 
 -- A template's Mail template versions, newest first, without their sources or
--- render.
+-- render. A NULL published lists every version; true only published ones,
+-- false only drafts, discarded ones included.
 -- name: ListTemplateVersions :many
 SELECT *
 FROM template_version_summaries
 WHERE template_id = $1
+  AND (sqlc.narg(published)::boolean IS NULL OR (published_at IS NOT NULL) = sqlc.narg(published)::boolean)
 ORDER BY seq DESC
 LIMIT $2 OFFSET $3;
 
 -- name: CountTemplateVersions :one
 SELECT count(*)
 FROM template_versions
-WHERE template_id = $1;
+WHERE template_id = $1
+  AND (sqlc.narg(published)::boolean IS NULL OR (published_at IS NOT NULL) = sqlc.narg(published)::boolean);
 
 -- One version of one template, whole. A version of another template is not
 -- found here.
@@ -233,6 +236,135 @@ FROM template_version_summaries s
          JOIN template_versions v ON v.id = s.id
 WHERE s.template_id = sqlc.arg(template_id)
   AND s.id = sqlc.arg(id);
+
+-- Takes a template row's lock for a write that does not change the row first —
+-- saving a draft, restoring a version, publishing, discarding. A version is
+-- numbered after the lock is taken, and the old panel's and the seed's writes
+-- take the same lock by updating the row, so every writer of one template
+-- numbers its version in turn. An archived template is not found here, as it
+-- is not for any other write.
+-- name: LockTemplate :one
+SELECT *
+FROM templates
+WHERE id = $1
+  AND archived_at IS NULL
+    FOR UPDATE;
+
+-- Each operator's draft in progress on the given templates, newest first: the
+-- newest version an operator wrote of a template, when it is neither published
+-- nor discarded. An operator's later version supersedes their earlier drafts,
+-- so those are not listed, and discarding their newest leaves them none; a
+-- draft that someone else's publish made stale still is listed, until its
+-- author writes again or discards it.
+-- name: ListTemplateDrafts :many
+SELECT *
+FROM template_version_summaries s
+WHERE s.id IN (SELECT DISTINCT ON (v.template_id, v.author_sub) v.id
+               FROM template_versions v
+               WHERE v.template_id = ANY (sqlc.arg(template_ids)::uuid[])
+                 AND v.author_kind = 'operator'
+               ORDER BY v.template_id, v.author_sub, v.seq DESC)
+  AND s.published_at IS NULL
+  AND s.discarded_at IS NULL
+ORDER BY s.template_id, s.seq DESC;
+
+-- The Authoring mode of each template's Main source as it is sent: its
+-- published version's.
+-- name: ListPublishedMainModes :many
+SELECT t.id AS template_id, v.main_mode
+FROM templates t
+         JOIN template_versions v ON v.id = t.published_version_id
+WHERE t.id = ANY (sqlc.arg(template_ids)::uuid[]);
+
+-- Whether text is a JSX source by the rule the migration and the old panel's
+-- writes read react_email_content with: something other than whitespace and
+-- comments is left in it.
+-- name: IsJSXSource :one
+SELECT (template_jsx_source(sqlc.arg(content)::text) IS NOT NULL)::boolean AS is_source;
+
+-- Writes an operator's draft, numbered after the template's last version,
+-- unless the version it continues holds exactly this content already —
+-- subject, every source, Main source and render, a Visual document compared
+-- as JSON rather than as text. Returns the draft it wrote, or the version it
+-- would have repeated, and whether it wrote one. The caller holds the template
+-- row's lock (LockTemplate).
+-- name: RecordTemplateDraft :one
+WITH repeated AS (SELECT v.id
+                  FROM template_versions v
+                  WHERE v.id = sqlc.narg(continued_id)::uuid
+                    AND (v.subject, v.jsx_source, v.visual_source, v.html_source, v.main_mode, v.html_content,
+                         v.plain_text_content)
+                      IS NOT DISTINCT FROM
+                        (sqlc.arg(subject)::text, sqlc.narg(jsx_source)::text, sqlc.narg(visual_source)::jsonb,
+                         sqlc.narg(html_source)::text, sqlc.arg(main_mode)::authoring_mode, sqlc.arg(html_content)::text,
+                         sqlc.arg(plain_text_content)::text)),
+     written AS (
+         INSERT INTO template_versions (template_id, seq, subject, jsx_source, visual_source, html_source, main_mode,
+                                        html_content, plain_text_content, author_kind, author_sub, author_name,
+                                        base_version_id)
+             SELECT sqlc.arg(template_id)::uuid,
+                    COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = sqlc.arg(template_id)::uuid),
+                             0) + 1,
+                    sqlc.arg(subject)::text,
+                    sqlc.narg(jsx_source)::text,
+                    sqlc.narg(visual_source)::jsonb,
+                    sqlc.narg(html_source)::text,
+                    sqlc.arg(main_mode)::authoring_mode,
+                    sqlc.arg(html_content)::text,
+                    sqlc.arg(plain_text_content)::text,
+                    'operator',
+                    sqlc.narg(author_sub)::text,
+                    sqlc.narg(author_name)::text,
+                    sqlc.narg(base_version_id)::uuid
+             WHERE NOT EXISTS (SELECT 1 FROM repeated)
+             RETURNING id)
+SELECT id, true AS written
+FROM written
+UNION ALL
+SELECT id, false AS written
+FROM repeated;
+
+-- Publishes a draft: marks it published and copies it onto the template row,
+-- which the send path reads — its subject and its render. react_email_content,
+-- the column the old panel edits, gets the JSX source only when JSX is the
+-- Main source, and an empty string otherwise. The old panel re-renders any JSX
+-- it finds there and saves that render as the body, and the expand step would
+-- then make JSX the Main source: a JSX source kept beside another Main source
+-- would reach live mail without anyone choosing it. With nothing there, the
+-- old panel refuses to save (it never saves an empty JSX source), so a
+-- template whose Main source is not JSX is edited in the editor only. The
+-- caller holds the row's lock and has checked that the version is a draft of
+-- this template.
+-- name: PublishTemplateDraft :one
+WITH published AS (
+    UPDATE template_versions v
+        SET published_at = NOW()
+        WHERE v.id = sqlc.arg(version_id)
+            AND v.template_id = sqlc.arg(template_id)
+            AND v.published_at IS NULL
+            AND v.discarded_at IS NULL
+        RETURNING v.id, v.template_id, v.subject, v.jsx_source, v.main_mode, v.html_content, v.plain_text_content)
+UPDATE templates t
+SET subject              = p.subject,
+    html_content         = p.html_content,
+    plain_text_content   = p.plain_text_content,
+    react_email_content  = CASE WHEN p.main_mode = 'jsx' THEN p.jsx_source ELSE '' END,
+    published_version_id = p.id,
+    updated_at           = NOW()
+FROM published p
+WHERE t.id = p.template_id
+RETURNING t.*;
+
+-- Discards a draft: it stays in the history, but it is nobody's draft in
+-- progress any more and it is never published. A draft discarded already
+-- keeps the time it was. The caller holds the template row's lock and has
+-- checked that the version is a draft of this template.
+-- name: DiscardTemplateDraft :exec
+UPDATE template_versions
+SET discarded_at = COALESCE(discarded_at, NOW())
+WHERE template_id = sqlc.arg(template_id)
+  AND id = sqlc.arg(id)
+  AND published_at IS NULL;
 
 -- name: CreateMailingList :one
 INSERT INTO mailing_lists (name)
@@ -597,3 +729,4 @@ FROM (SELECT mail_task_status(mt.id) AS status FROM mail_tasks mt) s;
 SELECT count(*)
 FROM mail_tasks mt
 WHERE (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(status)::text);
+

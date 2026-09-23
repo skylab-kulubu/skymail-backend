@@ -316,10 +316,16 @@ const countTemplateVersions = `-- name: CountTemplateVersions :one
 SELECT count(*)
 FROM template_versions
 WHERE template_id = $1
+  AND ($2::boolean IS NULL OR (published_at IS NOT NULL) = $2::boolean)
 `
 
-func (q *Queries) CountTemplateVersions(ctx context.Context, templateID uuid.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countTemplateVersions, templateID)
+type CountTemplateVersionsParams struct {
+	TemplateID uuid.UUID `json:"template_id"`
+	Published  *bool     `json:"published"`
+}
+
+func (q *Queries) CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countTemplateVersions, arg.TemplateID, arg.Published)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -552,6 +558,28 @@ func (q *Queries) CreateTemplate(ctx context.Context, arg CreateTemplateParams) 
 		&i.PublishedVersionID,
 	)
 	return i, err
+}
+
+const discardTemplateDraft = `-- name: DiscardTemplateDraft :exec
+UPDATE template_versions
+SET discarded_at = COALESCE(discarded_at, NOW())
+WHERE template_id = $1
+  AND id = $2
+  AND published_at IS NULL
+`
+
+type DiscardTemplateDraftParams struct {
+	TemplateID uuid.UUID `json:"template_id"`
+	ID         uuid.UUID `json:"id"`
+}
+
+// Discards a draft: it stays in the history, but it is nobody's draft in
+// progress any more and it is never published. A draft discarded already
+// keeps the time it was. The caller holds the template row's lock and has
+// checked that the version is a draft of this template.
+func (q *Queries) DiscardTemplateDraft(ctx context.Context, arg DiscardTemplateDraftParams) error {
+	_, err := q.db.Exec(ctx, discardTemplateDraft, arg.TemplateID, arg.ID)
+	return err
 }
 
 const getAllMailingLists = `-- name: GetAllMailingLists :many
@@ -1199,7 +1227,7 @@ func (q *Queries) GetTemplateByKey(ctx context.Context, key *string) (Template, 
 }
 
 const getTemplateVersion = `-- name: GetTemplateVersion :one
-SELECT s.id, s.template_id, s.seq, s.subject, s.requested_subject, s.main_mode, s.author_kind, s.author_sub, s.author_name, s.created_at, s.published_at, s.base_version_id, s.is_current,
+SELECT s.id, s.template_id, s.seq, s.subject, s.requested_subject, s.main_mode, s.author_kind, s.author_sub, s.author_name, s.created_at, s.published_at, s.base_version_id, s.is_current, s.discarded_at,
        v.jsx_source,
        v.visual_source,
        v.html_source,
@@ -1244,6 +1272,7 @@ func (q *Queries) GetTemplateVersion(ctx context.Context, arg GetTemplateVersion
 		&i.TemplateVersionSummary.PublishedAt,
 		&i.TemplateVersionSummary.BaseVersionID,
 		&i.TemplateVersionSummary.IsCurrent,
+		&i.TemplateVersionSummary.DiscardedAt,
 		&i.JsxSource,
 		&i.VisualSource,
 		&i.HtmlSource,
@@ -1286,6 +1315,20 @@ func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) 
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const isJSXSource = `-- name: IsJSXSource :one
+SELECT (template_jsx_source($1::text) IS NOT NULL)::boolean AS is_source
+`
+
+// Whether text is a JSX source by the rule the migration and the old panel's
+// writes read react_email_content with: something other than whitespace and
+// comments is left in it.
+func (q *Queries) IsJSXSource(ctx context.Context, content string) (bool, error) {
+	row := q.db.QueryRow(ctx, isJSXSource, content)
+	var is_source bool
+	err := row.Scan(&is_source)
+	return is_source, err
 }
 
 const listMailTaskSends = `-- name: ListMailTaskSends :many
@@ -1407,24 +1450,61 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 	return items, nil
 }
 
-const listTemplateVersions = `-- name: ListTemplateVersions :many
-SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current
-FROM template_version_summaries
-WHERE template_id = $1
-ORDER BY seq DESC
-LIMIT $2 OFFSET $3
+const listPublishedMainModes = `-- name: ListPublishedMainModes :many
+SELECT t.id AS template_id, v.main_mode
+FROM templates t
+         JOIN template_versions v ON v.id = t.published_version_id
+WHERE t.id = ANY ($1::uuid[])
 `
 
-type ListTemplateVersionsParams struct {
-	TemplateID uuid.UUID `json:"template_id"`
-	Limit      int32     `json:"limit"`
-	Offset     int32     `json:"offset"`
+type ListPublishedMainModesRow struct {
+	TemplateID uuid.UUID     `json:"template_id"`
+	MainMode   AuthoringMode `json:"main_mode"`
 }
 
-// A template's Mail template versions, newest first, without their sources or
-// render.
-func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]TemplateVersionSummary, error) {
-	rows, err := q.db.Query(ctx, listTemplateVersions, arg.TemplateID, arg.Limit, arg.Offset)
+// The Authoring mode of each template's Main source as it is sent: its
+// published version's.
+func (q *Queries) ListPublishedMainModes(ctx context.Context, templateIds []uuid.UUID) ([]ListPublishedMainModesRow, error) {
+	rows, err := q.db.Query(ctx, listPublishedMainModes, templateIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPublishedMainModesRow
+	for rows.Next() {
+		var i ListPublishedMainModesRow
+		if err := rows.Scan(&i.TemplateID, &i.MainMode); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTemplateDrafts = `-- name: ListTemplateDrafts :many
+SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at
+FROM template_version_summaries s
+WHERE s.id IN (SELECT DISTINCT ON (v.template_id, v.author_sub) v.id
+               FROM template_versions v
+               WHERE v.template_id = ANY ($1::uuid[])
+                 AND v.author_kind = 'operator'
+               ORDER BY v.template_id, v.author_sub, v.seq DESC)
+  AND s.published_at IS NULL
+  AND s.discarded_at IS NULL
+ORDER BY s.template_id, s.seq DESC
+`
+
+// Each operator's draft in progress on the given templates, newest first: the
+// newest version an operator wrote of a template, when it is neither published
+// nor discarded. An operator's later version supersedes their earlier drafts,
+// so those are not listed, and discarding their newest leaves them none; a
+// draft that someone else's publish made stale still is listed, until its
+// author writes again or discards it.
+func (q *Queries) ListTemplateDrafts(ctx context.Context, templateIds []uuid.UUID) ([]TemplateVersionSummary, error) {
+	rows, err := q.db.Query(ctx, listTemplateDrafts, templateIds)
 	if err != nil {
 		return nil, err
 	}
@@ -1446,6 +1526,7 @@ func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVers
 			&i.PublishedAt,
 			&i.BaseVersionID,
 			&i.IsCurrent,
+			&i.DiscardedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1455,6 +1536,100 @@ func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVers
 		return nil, err
 	}
 	return items, nil
+}
+
+const listTemplateVersions = `-- name: ListTemplateVersions :many
+SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at
+FROM template_version_summaries
+WHERE template_id = $1
+  AND ($4::boolean IS NULL OR (published_at IS NOT NULL) = $4::boolean)
+ORDER BY seq DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListTemplateVersionsParams struct {
+	TemplateID uuid.UUID `json:"template_id"`
+	Limit      int32     `json:"limit"`
+	Offset     int32     `json:"offset"`
+	Published  *bool     `json:"published"`
+}
+
+// A template's Mail template versions, newest first, without their sources or
+// render. A NULL published lists every version; true only published ones,
+// false only drafts, discarded ones included.
+func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]TemplateVersionSummary, error) {
+	rows, err := q.db.Query(ctx, listTemplateVersions,
+		arg.TemplateID,
+		arg.Limit,
+		arg.Offset,
+		arg.Published,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TemplateVersionSummary
+	for rows.Next() {
+		var i TemplateVersionSummary
+		if err := rows.Scan(
+			&i.ID,
+			&i.TemplateID,
+			&i.Seq,
+			&i.Subject,
+			&i.RequestedSubject,
+			&i.MainMode,
+			&i.AuthorKind,
+			&i.AuthorSub,
+			&i.AuthorName,
+			&i.CreatedAt,
+			&i.PublishedAt,
+			&i.BaseVersionID,
+			&i.IsCurrent,
+			&i.DiscardedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockTemplate = `-- name: LockTemplate :one
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id
+FROM templates
+WHERE id = $1
+  AND archived_at IS NULL
+    FOR UPDATE
+`
+
+// Takes a template row's lock for a write that does not change the row first —
+// saving a draft, restoring a version, publishing, discarding. A version is
+// numbered after the lock is taken, and the old panel's and the seed's writes
+// take the same lock by updating the row, so every writer of one template
+// numbers its version in turn. An archived template is not found here, as it
+// is not for any other write.
+func (q *Queries) LockTemplate(ctx context.Context, id uuid.UUID) (Template, error) {
+	row := q.db.QueryRow(ctx, lockTemplate, id)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.Key,
+		&i.System,
+		&i.PublishedVersionID,
+	)
+	return i, err
 }
 
 const processQueueItems = `-- name: ProcessQueueItems :many
@@ -1500,6 +1675,147 @@ func (q *Queries) ProcessQueueItems(ctx context.Context) ([]MailQueue, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const publishTemplateDraft = `-- name: PublishTemplateDraft :one
+WITH published AS (
+    UPDATE template_versions v
+        SET published_at = NOW()
+        WHERE v.id = $1
+            AND v.template_id = $2
+            AND v.published_at IS NULL
+            AND v.discarded_at IS NULL
+        RETURNING v.id, v.template_id, v.subject, v.jsx_source, v.main_mode, v.html_content, v.plain_text_content)
+UPDATE templates t
+SET subject              = p.subject,
+    html_content         = p.html_content,
+    plain_text_content   = p.plain_text_content,
+    react_email_content  = CASE WHEN p.main_mode = 'jsx' THEN p.jsx_source ELSE '' END,
+    published_version_id = p.id,
+    updated_at           = NOW()
+FROM published p
+WHERE t.id = p.template_id
+RETURNING t.id, t.name, t.html_content, t.plain_text_content, t.react_email_content, t.created_at, t.updated_at, t.subject, t.archived_at, t.archived_by, t.key, t.system, t.published_version_id
+`
+
+type PublishTemplateDraftParams struct {
+	VersionID  uuid.UUID `json:"version_id"`
+	TemplateID uuid.UUID `json:"template_id"`
+}
+
+// Publishes a draft: marks it published and copies it onto the template row,
+// which the send path reads — its subject and its render. react_email_content,
+// the column the old panel edits, gets the JSX source only when JSX is the
+// Main source, and an empty string otherwise. The old panel re-renders any JSX
+// it finds there and saves that render as the body, and the expand step would
+// then make JSX the Main source: a JSX source kept beside another Main source
+// would reach live mail without anyone choosing it. With nothing there, the
+// old panel refuses to save (it never saves an empty JSX source), so a
+// template whose Main source is not JSX is edited in the editor only. The
+// caller holds the row's lock and has checked that the version is a draft of
+// this template.
+func (q *Queries) PublishTemplateDraft(ctx context.Context, arg PublishTemplateDraftParams) (Template, error) {
+	row := q.db.QueryRow(ctx, publishTemplateDraft, arg.VersionID, arg.TemplateID)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.Key,
+		&i.System,
+		&i.PublishedVersionID,
+	)
+	return i, err
+}
+
+const recordTemplateDraft = `-- name: RecordTemplateDraft :one
+WITH repeated AS (SELECT v.id
+                  FROM template_versions v
+                  WHERE v.id = $1::uuid
+                    AND (v.subject, v.jsx_source, v.visual_source, v.html_source, v.main_mode, v.html_content,
+                         v.plain_text_content)
+                      IS NOT DISTINCT FROM
+                        ($2::text, $3::text, $4::jsonb,
+                         $5::text, $6::authoring_mode, $7::text,
+                         $8::text)),
+     written AS (
+         INSERT INTO template_versions (template_id, seq, subject, jsx_source, visual_source, html_source, main_mode,
+                                        html_content, plain_text_content, author_kind, author_sub, author_name,
+                                        base_version_id)
+             SELECT $9::uuid,
+                    COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = $9::uuid),
+                             0) + 1,
+                    $2::text,
+                    $3::text,
+                    $4::jsonb,
+                    $5::text,
+                    $6::authoring_mode,
+                    $7::text,
+                    $8::text,
+                    'operator',
+                    $10::text,
+                    $11::text,
+                    $12::uuid
+             WHERE NOT EXISTS (SELECT 1 FROM repeated)
+             RETURNING id)
+SELECT id, true AS written
+FROM written
+UNION ALL
+SELECT id, false AS written
+FROM repeated
+`
+
+type RecordTemplateDraftParams struct {
+	ContinuedID      *uuid.UUID    `json:"continued_id"`
+	Subject          string        `json:"subject"`
+	JsxSource        *string       `json:"jsx_source"`
+	VisualSource     []byte        `json:"visual_source"`
+	HtmlSource       *string       `json:"html_source"`
+	MainMode         AuthoringMode `json:"main_mode"`
+	HtmlContent      string        `json:"html_content"`
+	PlainTextContent string        `json:"plain_text_content"`
+	TemplateID       uuid.UUID     `json:"template_id"`
+	AuthorSub        *string       `json:"author_sub"`
+	AuthorName       *string       `json:"author_name"`
+	BaseVersionID    *uuid.UUID    `json:"base_version_id"`
+}
+
+type RecordTemplateDraftRow struct {
+	ID      uuid.UUID `json:"id"`
+	Written bool      `json:"written"`
+}
+
+// Writes an operator's draft, numbered after the template's last version,
+// unless the version it continues holds exactly this content already —
+// subject, every source, Main source and render, a Visual document compared
+// as JSON rather than as text. Returns the draft it wrote, or the version it
+// would have repeated, and whether it wrote one. The caller holds the template
+// row's lock (LockTemplate).
+func (q *Queries) RecordTemplateDraft(ctx context.Context, arg RecordTemplateDraftParams) (RecordTemplateDraftRow, error) {
+	row := q.db.QueryRow(ctx, recordTemplateDraft,
+		arg.ContinuedID,
+		arg.Subject,
+		arg.JsxSource,
+		arg.VisualSource,
+		arg.HtmlSource,
+		arg.MainMode,
+		arg.HtmlContent,
+		arg.PlainTextContent,
+		arg.TemplateID,
+		arg.AuthorSub,
+		arg.AuthorName,
+		arg.BaseVersionID,
+	)
+	var i RecordTemplateDraftRow
+	err := row.Scan(&i.ID, &i.Written)
+	return i, err
 }
 
 const recordTemplateRowAsVersion = `-- name: RecordTemplateRowAsVersion :execrows
