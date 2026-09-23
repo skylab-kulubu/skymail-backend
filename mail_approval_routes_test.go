@@ -45,7 +45,10 @@ var (
 		[]string{"skymail:access", "skymail:mails:read"}}
 )
 
-var approvalPeople = map[string]approvalPerson{"elif": elif, "fatih": fatih, "yusuf": yusuf, "baska": baska}
+// A member whose token carries no e-mail address.
+var adsiz = approvalPerson{"55555555-5555-4555-8555-555555555555", "Adsız Üye", "", []string{"skymail:access"}}
+
+var approvalPeople = map[string]approvalPerson{"elif": elif, "fatih": fatih, "yusuf": yusuf, "baska": baska, "adsiz": adsiz}
 
 func (p approvalPerson) user() *gocloak.User {
 	id, email, first := p.sub, p.email, p.name
@@ -254,7 +257,9 @@ func newApprovalWorld(t *testing.T) *approvalWorld {
 		}
 		c.Locals("user_id", person.sub)
 		c.Locals("user_name", person.name)
-		c.Locals("user_email", person.email)
+		if person.email != "" {
+			c.Locals("user_email", person.email)
+		}
 		c.Locals("roles", person.roles)
 		return c.Next()
 	})
@@ -1305,5 +1310,27 @@ func TestARequestIsNotSentOverARepublishedTemplate(t *testing.T) {
 	rows := w.queuedRows(w.mail.of(w.freeBasic.ID)[0].taskID)
 	if !strings.Contains(*rows["ayse@example.com"].BodyHtml, "<footer>SKY LAB</footer>") {
 		t.Errorf("sent %q, want the new version", *rows["ayse@example.com"].BodyHtml)
+	}
+}
+
+// A notification that cannot go out does not undo what it was about, and the
+// answer says why it went nowhere.
+func TestANotificationThatCannotGoOutSaysWhy(t *testing.T) {
+	w := newApprovalWorld(t)
+
+	noAddress := w.submit("adsiz", w.listSend())
+	status, rejected, failure := w.act("fatih", noAddress.ID, "reject", map[string]any{"reason": "Eksik."})
+	if status != fiber.StatusOK || rejected.State != "rejected" || rejected.Notification == nil ||
+		rejected.Notification.Problem == nil || *rejected.Notification.Problem != "no_address" || rejected.Notification.Notified != 0 {
+		t.Fatalf("rejecting for a submitter with no address = %d %+v %+v", status, failure, rejected.Notification)
+	}
+
+	if _, err := w.store.ArchiveTemplate(context.Background(), database.ArchiveTemplateParams{ID: w.requested.ID}); err != nil {
+		t.Fatal(err)
+	}
+	unseeded := w.submit("elif", w.listSend())
+	if unseeded.State != "pending" || unseeded.Notification == nil || unseeded.Notification.Problem == nil ||
+		*unseeded.Notification.Problem != "template_unavailable" {
+		t.Fatalf("submitting with no approval-requested template = %+v", unseeded.Notification)
 	}
 }
