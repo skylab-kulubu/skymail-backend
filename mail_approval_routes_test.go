@@ -763,7 +763,9 @@ func TestApprovingSendsExactlyWhatWasSubmittedOnce(t *testing.T) {
 	}
 	vars := notices[0].variables
 	if vars["Decision"] != "approved" || vars["DecidedBy"] != "Fatih Naz" || vars["DecisionNote"] != "Güzel olmuş." ||
-		vars["TemplateName"] != "Serbest Gönderim" || vars["AudienceName"] != "Tüm üyeler" {
+		vars["TemplateName"] != "Serbest Gönderim" || vars["AudienceName"] != "Tüm üyeler" ||
+		vars["RequestUrl"] != "https://mail.yildizskylab.com/mail-approvals/show/"+submitted.ID.String() ||
+		vars["DeadlineAt"] != "30.09.2026 13:00" {
 		t.Errorf("approval-resolved variables = %v", vars)
 	}
 	if approved.Notification == nil || approved.Notification.TemplateKey != "mail.approval-resolved" || approved.Notification.Notified != 1 {
@@ -1212,7 +1214,9 @@ func TestReadingAnOverdueRequestWritesAndSendsNothing(t *testing.T) {
 	if _, read := w.get("elif", overdue.ID); read.State != "expired" || read.kinds() != "submitted,expired" {
 		t.Errorf("after the sweep: %s %s", read.State, read.kinds())
 	}
-	if notices := w.mail.of(w.resolved.ID); len(notices) != 1 || notices[0].variables["Decision"] != "expired" {
+	if notices := w.mail.of(w.resolved.ID); len(notices) != 1 || notices[0].variables["Decision"] != "expired" ||
+		notices[0].variables["RequestUrl"] != "https://mail.yildizskylab.com/mail-approvals/show/"+overdue.ID.String() ||
+		notices[0].variables["DeadlineAt"] != "30.09.2026 13:00" {
 		t.Errorf("expiry notices = %+v", notices)
 	}
 }

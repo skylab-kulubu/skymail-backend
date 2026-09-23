@@ -142,7 +142,7 @@ func (h *mailApprovalHandlerImpl) notifyApprovers(ctx context.Context, view data
 	if n := h.recipientCount(ctx, view); n != nil {
 		count = strconv.FormatInt(*n, 10)
 	}
-	link := h.uiURL + "/mail-approvals/show/" + view.ID.String()
+	link := h.requestURL(view)
 	return h.notify(ctx, approvalRequestedKey, notice.by, approvers, map[string]interface{}{
 		"RequesterName":  requester,
 		"TemplateName":   view.TemplateName,
@@ -173,7 +173,13 @@ func (h *mailApprovalHandlerImpl) notifySubmitter(ctx context.Context, view data
 		"DecidedBy":    notice.decidedBy,
 		"DecisionNote": notice.decisionNote(view),
 		"DeadlineAt":   mailTime(view.DeadlineAt),
+		"RequestUrl":   h.requestURL(view),
 	})
+}
+
+// requestURL is the request's page in the SkyMail UI.
+func (h *mailApprovalHandlerImpl) requestURL(view database.GetMailApprovalRow) string {
+	return h.uiURL + "/mail-approvals/show/" + view.ID.String()
 }
 
 // approvers are the holders of MailApproverRole with an address, each once —
