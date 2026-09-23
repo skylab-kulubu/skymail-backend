@@ -24,8 +24,10 @@ type authMiddlewareImpl struct {
 }
 
 type userInfo struct {
-	ID             string `json:"sub"`
-	ResourceAccess map[string]struct {
+	ID                string `json:"sub"`
+	Name              string `json:"name"`
+	PreferredUsername string `json:"preferred_username"`
+	ResourceAccess    map[string]struct {
 		Roles []string `json:"roles"`
 	} `json:"resource_access"`
 }
@@ -105,7 +107,20 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) er
 
 	c.Locals("user_id", info.ID)
 	c.Locals("roles", roles)
+	if name := info.displayName(); name != "" {
+		c.Locals("user_name", name)
+	}
 	return c.Next()
+}
+
+// displayName is what the caller is called: a person's token carries their
+// name, a service account's only its username. Handlers read it as the
+// "user_name" local beside "user_id".
+func (info userInfo) displayName() string {
+	if name := strings.TrimSpace(info.Name); name != "" {
+		return name
+	}
+	return strings.TrimSpace(info.PreferredUsername)
 }
 
 func rolesFromJWT(tokenStr, clientID string) []string {

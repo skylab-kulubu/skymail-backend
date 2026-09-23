@@ -151,6 +151,9 @@ const docTemplate = `{
                     "plain_text_content": {
                         "type": "string"
                     },
+                    "published_version_id": {
+                        "type": "string"
+                    },
                     "react_email_content": {
                         "type": "string"
                     },
@@ -161,6 +164,27 @@ const docTemplate = `{
                         "type": "boolean"
                     },
                     "updated_at": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "database.VersionAuthor": {
+                "properties": {
+                    "kind": {
+                        "description": "operator: written in SkyMail; template_seed: written by the Template seed from the repo.",
+                        "enum": [
+                            "operator",
+                            "template_seed"
+                        ],
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "The name the writer's token carried when the version was written. Null when not known.",
+                        "type": "string"
+                    },
+                    "sub": {
+                        "description": "The Keycloak subject of the token that wrote the version. Null when not known: the first versions, made from templates written before versions were kept.",
                         "type": "string"
                     }
                 },
@@ -351,6 +375,124 @@ const docTemplate = `{
                     },
                     "time_zone": {
                         "example": "Europe/Istanbul",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.TemplateVersion": {
+                "properties": {
+                    "author": {
+                        "$ref": "#/components/schemas/database.VersionAuthor"
+                    },
+                    "base_version_id": {
+                        "description": "The published version a draft started from; null for a template's first version.",
+                        "type": "string"
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "current": {
+                        "description": "Whether this is the published version the template sends.",
+                        "type": "boolean"
+                    },
+                    "html_content": {
+                        "description": "The Main source rendered as HTML, as the browser or the Template seed rendered it.",
+                        "type": "string"
+                    },
+                    "html_source": {
+                        "description": "The HTML source; null when the version has none.",
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "jsx_source": {
+                        "description": "The JSX source, React Email code; null when the version has none.",
+                        "type": "string"
+                    },
+                    "main_mode": {
+                        "description": "The Authoring mode whose source is the Main source: its render is what the version sends.",
+                        "enum": [
+                            "jsx",
+                            "visual",
+                            "html"
+                        ],
+                        "type": "string"
+                    },
+                    "plain_text_content": {
+                        "description": "The Main source rendered as plain text.",
+                        "type": "string"
+                    },
+                    "published_at": {
+                        "description": "When the version was published; null for a draft.",
+                        "type": "string"
+                    },
+                    "requested_subject": {
+                        "description": "The subject the Template seed sent for its version. It can differ from subject: until the seed's conflict rule, the seed keeps the subject a template already has. Null on an operator's version and on the first versions, made from templates written before versions were kept.",
+                        "type": "string"
+                    },
+                    "seq": {
+                        "description": "1, 2, 3… within the template, in the order versions were written.",
+                        "type": "integer"
+                    },
+                    "subject": {
+                        "type": "string"
+                    },
+                    "template_id": {
+                        "type": "string"
+                    },
+                    "visual_source": {
+                        "description": "The Visual source, the block editor's document; null when the version has none.",
+                        "type": "object"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.TemplateVersionSummary": {
+                "properties": {
+                    "author": {
+                        "$ref": "#/components/schemas/database.VersionAuthor"
+                    },
+                    "base_version_id": {
+                        "description": "The published version a draft started from; null for a template's first version.",
+                        "type": "string"
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "current": {
+                        "description": "Whether this is the published version the template sends.",
+                        "type": "boolean"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "main_mode": {
+                        "description": "The Authoring mode whose source is the Main source: its render is what the version sends.",
+                        "enum": [
+                            "jsx",
+                            "visual",
+                            "html"
+                        ],
+                        "type": "string"
+                    },
+                    "published_at": {
+                        "description": "When the version was published; null for a draft.",
+                        "type": "string"
+                    },
+                    "requested_subject": {
+                        "description": "The subject the Template seed sent for its version. It can differ from subject: until the seed's conflict rule, the seed keeps the subject a template already has. Null on an operator's version and on the first versions, made from templates written before versions were kept.",
+                        "type": "string"
+                    },
+                    "seq": {
+                        "description": "1, 2, 3… within the template, in the order versions were written.",
+                        "type": "integer"
+                    },
+                    "subject": {
+                        "type": "string"
+                    },
+                    "template_id": {
                         "type": "string"
                     }
                 },
@@ -1655,7 +1797,7 @@ const docTemplate = `{
                 ]
             },
             "post": {
-                "description": "Create a new email template with the provided name, HTML content, and plain text content.",
+                "description": "Create a new email template with the provided name, HTML content, and plain text content. Records the content as the template's first version: an operator's, published at once.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -1756,7 +1898,7 @@ const docTemplate = `{
                 ]
             },
             "put": {
-                "description": "Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind.",
+                "description": "Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once.",
                 "parameters": [
                     {
                         "description": "Template key",
@@ -1941,7 +2083,7 @@ const docTemplate = `{
                 ]
             },
             "patch": {
-                "description": "Update an existing email template with the provided ID and details.",
+                "description": "Update an existing email template with the provided ID and details. Records the content the template ends up with as an operator's version, published at once.",
                 "parameters": [
                     {
                         "description": "Template ID",
@@ -2068,6 +2210,166 @@ const docTemplate = `{
                     }
                 },
                 "summary": "Restore an archived email template",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/{id}/versions": {
+            "get": {
+                "description": "A Mail template's version history, newest first: who wrote each version (an operator, by the name their token carried, or a Template seed), when, whether it is published or a draft (published_at null), which Authoring mode is its Main source, the published version it started from, and which version the template sends (current). Sources and render are left out; read one version for them. An archived template's history stays readable.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Start index",
+                        "in": "query",
+                        "name": "_start",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "End index",
+                        "in": "query",
+                        "name": "_end",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "items": {
+                                        "$ref": "#/components/schemas/handlers.TemplateVersionSummary"
+                                    },
+                                    "type": "array"
+                                }
+                            }
+                        },
+                        "description": "OK",
+                        "headers": {
+                            "X-Total-Count": {
+                                "description": "Number of versions the template has",
+                                "schema": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "List a template's versions",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/{id}/versions/{versionId}": {
+            "get": {
+                "description": "One Mail template version whole: its sources (at most one per Authoring mode, null where it has none), which is the Main source, and the Main source's render as HTML and plain text. A version of another template is not found.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Version ID",
+                        "in": "path",
+                        "name": "versionId",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.TemplateVersion"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Read one version of a template",
                 "tags": [
                     "Templates"
                 ]
