@@ -38,7 +38,7 @@ import (
 // go-template.ts), and the two are held to the same cases in
 // testdata/referenced-variables.json.
 func ReferencedVariables(html string) ([]string, error) {
-	tmpl, err := textt.New("html").Funcs(mailFuncs).Parse(html)
+	tmpl, err := textt.New("html").Funcs(htmlFuncs).Parse(html)
 	if err != nil {
 		return nil, err
 	}

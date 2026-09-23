@@ -55,7 +55,7 @@ func TestSafeHTMLKeepsFormattingAndDropsScripts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tmpl := template.Must(template.New("body").Funcs(mailFuncs).Parse(`{{safeHTML .BodyHtml}}`))
+			tmpl := template.Must(template.New("body").Funcs(htmlFuncs).Parse(`{{safeHTML .BodyHtml}}`))
 
 			var out bytes.Buffer
 			if err := tmpl.Execute(&out, map[string]any{"BodyHtml": tt.body}); err != nil {
@@ -75,7 +75,7 @@ func TestSafeHTMLKeepsFormattingAndDropsScripts(t *testing.T) {
 
 // Every other variable must stay escaped — safeHTML is opt-in per template.
 func TestOrdinaryVariablesStayEscaped(t *testing.T) {
-	tmpl := template.Must(template.New("body").Funcs(mailFuncs).Parse(`{{.FormTitle}}`))
+	tmpl := template.Must(template.New("body").Funcs(htmlFuncs).Parse(`{{.FormTitle}}`))
 
 	var out bytes.Buffer
 	if err := tmpl.Execute(&out, map[string]any{"FormTitle": "<b>x</b>"}); err != nil {
@@ -88,7 +88,7 @@ func TestOrdinaryVariablesStayEscaped(t *testing.T) {
 }
 
 func TestSafeHTMLHandlesMissingValue(t *testing.T) {
-	tmpl := template.Must(template.New("body").Funcs(mailFuncs).Parse(`[{{safeHTML .Missing}}]`))
+	tmpl := template.Must(template.New("body").Funcs(htmlFuncs).Parse(`[{{safeHTML .Missing}}]`))
 
 	var out bytes.Buffer
 	if err := tmpl.Execute(&out, map[string]any{}); err != nil {
