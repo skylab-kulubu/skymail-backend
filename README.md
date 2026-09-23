@@ -43,6 +43,28 @@ olmayan bir girdi atlanmak yerine başlatmayı durdurur. Proxy bir konteyner
 olduğu ve ağ içindeki adresi her yeniden oluşturulduğunda değiştiği için tek
 bir adres yazılmaz, paylaşılan ağın aralığı yazılır.
 
+## Keycloak
+
+SkyMail'in izinleri `KEYCLOAK_CLIENT_ID` istemcisinin (varsayılan `skymail`)
+rolleridir: `skymail:access` giriş kapısı, `templates:*`, `lists:*`,
+`mails:*` kaynak rolleri, `skymail:mails:approve` mail onayı.
+
+`KEYCLOAK_SERVICE_CLIENT_ID` (`skymail-backend`) istemcisinin service
+account'u Keycloak'tan okur: gönderim ve listeler için grupları ve üyelerini,
+mail onayında da `skymail:mails:approve` rolünü kimin taşıdığını (doğrudan ya
+da bir grup üzerinden). Bunun için `realm-management` istemcisinin şu rolleri
+gerekir:
+
+- `view-users` — kullanıcıları, grupları ve üyelerini okumak;
+- `view-clients` — istemciyi clientId ile bulup rolünün kullanıcılarını ve
+  gruplarını okumak.
+
+`view-clients` yoksa mail onayı yine çalışır, ama onaycılar bulunamaz ve
+sunuşun yanıtı `notification.problem: approver_lookup_failed` der.
+
+Mail onayı bildirimlerindeki linkler `SKYMAIL_UI_URL` altına kurulur
+(varsayılan `https://mail.yildizskylab.com`).
+
 ## Veritabanı migration'ları
 
 Uygulama bekleyen migration'ları servis trafiğe açılmadan önce çalıştırabilir.

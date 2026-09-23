@@ -169,3 +169,7 @@ func TestOpenAPIDocumentDescribesTheSendSummaryAndStatusFilter(t *testing.T) {
 		t.Errorf("GET /mail_tasks query parameters = %v, want status", list)
 	}
 }
+
+func (noGroups) ClientRoleMembers(context.Context, string, string) ([]*gocloak.User, error) {
+	return nil, nil
+}

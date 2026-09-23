@@ -6,6 +6,7 @@ package database
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -27,6 +28,7 @@ type Querier interface {
 	CountAllTemplatesIncludingArchived(ctx context.Context) (int64, error)
 	CountArchivedMailingLists(ctx context.Context) (int64, error)
 	CountArchivedTemplates(ctx context.Context) (int64, error)
+	CountMailApprovals(ctx context.Context, arg CountMailApprovalsParams) (int64, error)
 	CountMailQueueByStatus(ctx context.Context) (CountMailQueueByStatusRow, error)
 	CountMailQueueItemsByTaskId(ctx context.Context, arg CountMailQueueItemsByTaskIdParams) (int64, error)
 	CountMailTaskSends(ctx context.Context, status *string) (int64, error)
@@ -39,6 +41,11 @@ type Querier interface {
 	CountRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) (int64, error)
 	CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error)
 	CountTemplates(ctx context.Context) (int64, error)
+	// A new Mail onayı request, pending until its deadline. Every later write of
+	// a request runs in a transaction that first takes its row lock
+	// (LockMailApproval), so its checks, its state change and its events happen
+	// in turn, and an approval queues its send once.
+	CreateMailApproval(ctx context.Context, arg CreateMailApprovalParams) (MailApproval, error)
 	CreateMailQueueItems(ctx context.Context, arg []CreateMailQueueItemsParams) (int64, error)
 	CreateMailTask(ctx context.Context, arg CreateMailTaskParams) ([]CreateMailTaskRow, error)
 	CreateMailingList(ctx context.Context, name string) (MailingList, error)
@@ -64,6 +71,10 @@ type Querier interface {
 	// Days are calendar days in time_zone; the series ends on as_of's day and has
 	// one row per day, zero-filled.
 	GetDailySentCounts(ctx context.Context, arg GetDailySentCountsParams) ([]GetDailySentCountsRow, error)
+	// A request as every screen shows it: with its template's name and key, the
+	// version the template publishes now, and its list's name when the list is an
+	// internal one (a Keycloak group's is Keycloak's to give).
+	GetMailApproval(ctx context.Context, id uuid.UUID) (GetMailApprovalRow, error)
 	// A send's recipients, newest first. A list send's rows come from one insert
 	// and share a created_at, so the id breaks the tie: pages neither repeat nor
 	// skip a recipient. A NULL status lists every recipient.
@@ -89,6 +100,14 @@ type Querier interface {
 	// The last version a Template seed wrote of a template. Seed versions are
 	// always published, so this is the seed's last word on the template.
 	LastTemplateSeedVersion(ctx context.Context, templateID uuid.UUID) (TemplateVersionSummary, error)
+	// The last event of each of the requests, for the list.
+	ListLastMailApprovalEvents(ctx context.Context, approvalIds []uuid.UUID) ([]MailApprovalEvent, error)
+	ListMailApprovalEvents(ctx context.Context, approvalID uuid.UUID) ([]MailApprovalEvent, error)
+	// Requests newest submission first, the id breaking ties. A NULL submitter
+	// lists everyone's and a NULL state every state. A request is filtered by the
+	// state it is in as of as_of: one undecided past its deadline is expired,
+	// whether or not the sweep has written it yet.
+	ListMailApprovals(ctx context.Context, arg ListMailApprovalsParams) ([]ListMailApprovalsRow, error)
 	// A send as every screen shows it — the home screen, the send list and a
 	// send's own page: the task, the template it used, who it went to, its status
 	// as mail_task_status derives it, and its recipients by status. A NULL task_id
@@ -113,6 +132,14 @@ type Querier interface {
 	// render. A NULL published lists every version; true only published ones,
 	// false only drafts, discarded ones included.
 	ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]TemplateVersionSummary, error)
+	// The next undecided request past its deadline that no one is deciding right
+	// now, locked for the expiry sweep.
+	LockDueMailApproval(ctx context.Context, asOf time.Time) (MailApproval, error)
+	// Takes a request's row lock without waiting for it: a request someone else is
+	// deciding right now is refused (55P03) rather than queued behind them — the
+	// lock is held while the send is queued, and a wait would hold a connection
+	// that send needs.
+	LockMailApproval(ctx context.Context, id uuid.UUID) (MailApproval, error)
 	// Takes a template row's lock for a write that does not change the row first —
 	// saving a draft, restoring a version, publishing, discarding. A version is
 	// numbered after the lock is taken, and the old panel's and the seed's writes
@@ -137,6 +164,8 @@ type Querier interface {
 	// caller holds the row's lock and has checked that the version is a draft of
 	// this template.
 	PublishTemplateDraft(ctx context.Context, arg PublishTemplateDraftParams) (Template, error)
+	// Numbered after the request's last event; the caller holds its row lock.
+	RecordMailApprovalEvent(ctx context.Context, arg RecordMailApprovalEventParams) (MailApprovalEvent, error)
 	// Keeps on a template that a Template seed was refused, and why. Refusing the
 	// content refused last time again keeps when it was first refused; other
 	// content starts over. Nothing that is sent changes, so updated_at stays.
@@ -188,8 +217,20 @@ type Querier interface {
 	ResetDeadJobs(ctx context.Context) error
 	RestoreMailingList(ctx context.Context, id uuid.UUID) (MailingList, error)
 	RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, error)
+	// A resubmission: what would be sent, as the submitter now fills it in,
+	// pinned to the version published now, pending again with a new deadline.
+	ResubmitMailApproval(ctx context.Context, arg ResubmitMailApprovalParams) (MailApproval, error)
+	// A NULL deadline leaves the request's deadline as it is.
+	SetMailApprovalState(ctx context.Context, arg SetMailApprovalStateParams) (MailApproval, error)
+	SetMailApprovalVariables(ctx context.Context, arg SetMailApprovalVariablesParams) (MailApproval, error)
 	SetMailQueueItemFailed(ctx context.Context, arg SetMailQueueItemFailedParams) error
 	SetMailQueueItemSent(ctx context.Context, id uuid.UUID) error
+	// Keeps an internal list from being archived while a send to it is checked
+	// and queued. No row: the id is not an internal list's.
+	ShareLockMailingList(ctx context.Context, id uuid.UUID) (MailingList, error)
+	// Keeps a template from being published over, archived or changed while a
+	// send of it is checked and queued; other sends of it share the lock.
+	ShareLockTemplate(ctx context.Context, id uuid.UUID) (Template, error)
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
 	UpdateRecipient(ctx context.Context, arg UpdateRecipientParams) (Recipient, error)
 	UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) (Template, error)

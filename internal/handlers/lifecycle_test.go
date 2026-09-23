@@ -408,3 +408,11 @@ func TestArchivedInternalListDoesNotFallThroughToKeycloak(t *testing.T) {
 		t.Fatalf("mailer enqueue calls = %d, want 0", mailerStub.enqueueCalls)
 	}
 }
+
+func (lifecycleKeycloakStub) ClientRoleMembers(context.Context, string, string) ([]*gocloak.User, error) {
+	return []*gocloak.User{}, nil
+}
+
+func (failingLifecycleKeycloakStub) ClientRoleMembers(context.Context, string, string) ([]*gocloak.User, error) {
+	return nil, errors.New("unexpected Keycloak role lookup")
+}

@@ -157,17 +157,50 @@ neither row nor version behind. The rules live in one place,
   `internal/mailer/testdata/referenced-variables.json`, which skymail-frontend
   holds a copy of).
 
+## Mail approvals
+
+A Mail onayı request (ADR-0031) is kept in `mail_approvals`, and everything
+that happened to it in `mail_approval_events`. Neither is ever deleted or
+rewritten: a request stays when it is sent, rejected, declined or expired, and
+a resubmission is the same request with the events before it kept. The send an
+approval queues is an ordinary `mail_tasks` row, kept as every send is, and
+the request and its `approved` or `accepted` event name it by `task_id`.
+
+A request keeps what would be sent — the template, pinned to the version it
+was submitted on, the audience and the variables — its state and its
+deadline: seven days after it was last submitted, or after an approver
+returned it. A request still pending or returned at its deadline is reported
+as expired at once; the one-minute sweep records the expiry as an `expired`
+event with no actor and mails the submitter. Reading or listing a request
+writes nothing.
+
 ## Personal data
 
-Three kinds of field keep an operator's Keycloak subject with no end date:
-`mail_tasks.sent_by` (who sent), `archived_by` on templates and mailing lists
-(who archived), and `template_versions.author_sub` with `author_name` (who
-wrote a version, and the name their token carried then).
+These fields keep a person's identity with no end date:
+
+- `mail_tasks.sent_by` — who sent: the Keycloak subject of the token that
+  queued the send — for an approved Mail onayı request, its submitter's — or
+  `skymail` for the mail SkyMail sends of its own accord, the notice that a
+  request expired.
+- `archived_by` on templates and mailing lists — who archived.
+- `template_versions.author_sub` with `author_name` — who wrote a version, and
+  the name their token carried then.
+- `mail_approvals.submitter_sub`, `submitter_name` and `submitter_email` — who
+  submitted a request, and the name and verified address their token carried
+  (`submitter_email_unverified` says the token carried an address Keycloak
+  had not verified, which is not kept).
+- `mail_approvals.recipient_email` and `recipient_full_name` — the one
+  recipient of a single send.
+- `mail_approvals.body_variables` — the values of the send, which may name or
+  address people.
+- `mail_approval_events.actor_sub` and `actor_name` — who did each thing to a
+  request — and `changes`, each variable's value before and after an edit or a
+  resubmission.
 
 SkyMail has no erasure or anonymisation path for account deletion: nothing
 tells it an account was deleted, and nothing clears or replaces these fields.
-This is a known gap, shared by all three, against ADR-0042's rule that PII is
-erased on account deletion rather than kept.
+This is a known gap, shared by all of them, against ADR-0042's rule that PII
+is erased on account deletion rather than kept.
 
 ## Retention boundaries
 

@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/gofiber/fiber/v3"
@@ -42,6 +43,9 @@ var swaggerDocument = sync.OnceValue(docs.SwaggerInfo.ReadDoc)
 
 //	@tag.name			Lists
 //	@tag.description	Mailing list and recipient management operations
+
+//	@tag.name			Mail approval
+//	@tag.description	Mail onayı: sends submitted by members without send permission, held until an approver decides them
 
 //	@contact.name	Enes Genç
 //	@contact.url	https://enesgenc.dev
@@ -91,7 +95,7 @@ func main() {
 		Plain:     cfg.SMTPPlain,
 	})
 
-	authMiddleware := middlewares.NewAuthMiddleware("skymail", cfg.KeycloakRealmURL)
+	authMiddleware := middlewares.NewAuthMiddleware(cfg.KeycloakClientID, cfg.KeycloakRealmURL)
 	gateConfig, err := accessgate.ConfigFromEnv(config.Value, cfg.KeycloakRealmURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid account access gate configuration")
@@ -117,6 +121,10 @@ func main() {
 	templateHandler := handlers.NewTemplateHandler(db)
 	listHandler := handlers.NewListHandler(db, kcClient)
 	mailHandler := handlers.NewMailHandler(db, mailerService, kcClient)
+	approvalHandler := handlers.NewMailApprovalHandler(db, mailerService, kcClient, handlers.MailApprovalOptions{
+		ClientID: cfg.KeycloakClientID,
+		UIURL:    config.Value("SKYMAIL_UI_URL"),
+	})
 
 	// The reverse proxy in front of Skymail discards a caller-supplied
 	// X-Forwarded-For and writes its own, so ProxyHeader is only safe to read
@@ -163,8 +171,10 @@ func main() {
 	lists.Delete("/:id/recipients/:recipientId", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.RemoveRecipient)
 
 	registerMailTaskRoutes(api, authMiddleware, mailHandler)
+	registerMailApprovalRoutes(api, authMiddleware, approvalHandler)
 
 	mailerService.Start(ctx, 3)
+	go expireMailApprovals(ctx, approvalHandler, time.Minute)
 
 	addr := fmt.Sprintf(":%d", 3000)
 	if cfg.AppPort != 0 {
@@ -205,6 +215,48 @@ func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, m
 	tasks.Get("/summary", auth.RequireAnyPermission("skymail:mails:read"), mail.GetSummary)
 	tasks.Get("/:id", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTask)
 	tasks.Get("/:id/queue", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTaskQueueItems)
+}
+
+// registerMailApprovalRoutes serves Mail onayı. Anyone who can use SkyMail —
+// the /v1 gate is skymail:access — submits and follows their own requests;
+// deciding one takes the approver's role, and the handler keeps an approver
+// off their own requests and a submitter's actions to the submitter.
+func registerMailApprovalRoutes(api fiber.Router, auth middlewares.AuthMiddleware, approvals handlers.MailApprovalHandler) {
+	requests := api.Group("/mail_approvals")
+	approver := auth.RequireAnyPermission(handlers.MailApproverRole)
+	requests.Post("/", approvals.Submit)
+	requests.Get("/", approvals.List)
+	requests.Get("/:id", approvals.Get)
+	requests.Post("/:id/approve", approver, approvals.Approve)
+	requests.Post("/:id/return", approver, approvals.Return)
+	requests.Post("/:id/reject", approver, approvals.Reject)
+	requests.Post("/:id/accept", approvals.Accept)
+	requests.Post("/:id/decline", approvals.Decline)
+	requests.Post("/:id/resubmit", approvals.Resubmit)
+}
+
+// expireMailApprovals expires the requests left undecided past their deadline
+// every interval, and tells each submitter. It is the only writer of an
+// expiry but one: an action on an overdue request expires it in its own
+// transaction and is refused. Reads write nothing; they report an overdue
+// request as expired, so nothing a reader sees waits on the sweep.
+func expireMailApprovals(ctx context.Context, approvals handlers.MailApprovalHandler, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			expired, err := approvals.ExpireDue(ctx)
+			if err != nil {
+				log.Error().Err(err).Msg("mail approval expiry sweep failed")
+			}
+			if expired > 0 {
+				log.Info().Int("expired", expired).Msg("expired mail approval requests past their deadline")
+			}
+		}
+	}
 }
 
 // defaultTrustedProxyRanges covers the private and loopback space a container
