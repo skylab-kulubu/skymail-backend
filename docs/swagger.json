@@ -177,6 +177,312 @@
                 },
                 "type": "object"
             },
+            "handlers.MailApproval": {
+                "properties": {
+                    "audience": {
+                        "$ref": "#/components/schemas/handlers.SendAudience"
+                    },
+                    "body_variables": {
+                        "description": "The variables it is sent with: as submitted, or as an approver edited them.",
+                        "type": "object"
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "deadline_at": {
+                        "description": "Pending or returned past this, it expires.",
+                        "type": "string"
+                    },
+                    "history": {
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.MailApprovalEvent"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "last_event": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalEvent"
+                    },
+                    "notification": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalNotification"
+                    },
+                    "preview": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalPreview"
+                    },
+                    "preview_error": {
+                        "type": "string"
+                    },
+                    "recipient_count": {
+                        "description": "How many it would reach now: 1 for one recipient, a list's members, a Keycloak group's members with an address. Null when Keycloak did not say in time.",
+                        "type": "integer"
+                    },
+                    "state": {
+                        "description": "pending: awaiting an approver; returned: an approver's edit awaits the submitter; approved: sent; rejected: refused with a reason, the submitter may resubmit; declined: the submitter refused an approver's edit and may resubmit; expired: undecided seven days after it was submitted, never sent.",
+                        "enum": [
+                            "pending",
+                            "returned",
+                            "approved",
+                            "rejected",
+                            "declined",
+                            "expired"
+                        ],
+                        "type": "string"
+                    },
+                    "submitted_at": {
+                        "description": "When it was last submitted; its deadline is seven days on.",
+                        "type": "string"
+                    },
+                    "submitter": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalSubmitter"
+                    },
+                    "task_id": {
+                        "description": "The send, once approved.",
+                        "type": "string"
+                    },
+                    "template": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
+                    },
+                    "updated_at": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalChange": {
+                "properties": {
+                    "after": {
+                        "description": "The value after; null when there is none.",
+                        "type": "object"
+                    },
+                    "before": {
+                        "description": "The value before; null when there was none.",
+                        "type": "object"
+                    },
+                    "field": {
+                        "description": "variable: a variable's value; template: the template or its version ({id, version_id}); audience: who it goes to ({mail_list_id} or {recipient_email, recipient_full_name}).",
+                        "enum": [
+                            "variable",
+                            "template",
+                            "audience"
+                        ],
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "The variable's name; null for the template and the audience.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalEvent": {
+                "description": "What happened to it last.",
+                "properties": {
+                    "actor": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalPerson"
+                    },
+                    "at": {
+                        "type": "string"
+                    },
+                    "changes": {
+                        "description": "What an edit or a resubmission changed; empty for every other event.",
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.MailApprovalChange"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "kind": {
+                        "description": "submitted, resubmitted and accepted, declined are the submitter's; edited, returned, approved, rejected an approver's; expired SkyMail's.",
+                        "enum": [
+                            "submitted",
+                            "resubmitted",
+                            "edited",
+                            "returned",
+                            "accepted",
+                            "declined",
+                            "approved",
+                            "rejected",
+                            "expired"
+                        ],
+                        "type": "string"
+                    },
+                    "note": {
+                        "description": "A rejection's reason, or the note an approver or the submitter left.",
+                        "type": "string"
+                    },
+                    "seq": {
+                        "description": "1, 2, 3… in the order they happened.",
+                        "type": "integer"
+                    },
+                    "task_id": {
+                        "description": "The send an approval or an acceptance queued.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalItem": {
+                "properties": {
+                    "audience": {
+                        "$ref": "#/components/schemas/handlers.SendAudience"
+                    },
+                    "body_variables": {
+                        "description": "The variables it is sent with: as submitted, or as an approver edited them.",
+                        "type": "object"
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "deadline_at": {
+                        "description": "Pending or returned past this, it expires.",
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "last_event": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalEvent"
+                    },
+                    "state": {
+                        "description": "pending: awaiting an approver; returned: an approver's edit awaits the submitter; approved: sent; rejected: refused with a reason, the submitter may resubmit; declined: the submitter refused an approver's edit and may resubmit; expired: undecided seven days after it was submitted, never sent.",
+                        "enum": [
+                            "pending",
+                            "returned",
+                            "approved",
+                            "rejected",
+                            "declined",
+                            "expired"
+                        ],
+                        "type": "string"
+                    },
+                    "submitted_at": {
+                        "description": "When it was last submitted; its deadline is seven days on.",
+                        "type": "string"
+                    },
+                    "submitter": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalSubmitter"
+                    },
+                    "task_id": {
+                        "description": "The send, once approved.",
+                        "type": "string"
+                    },
+                    "template": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
+                    },
+                    "updated_at": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalNotification": {
+                "description": "On the answer to an action: the mail it sent about itself. Absent when it sent none.",
+                "properties": {
+                    "notified": {
+                        "description": "How many people it was queued to.",
+                        "type": "integer"
+                    },
+                    "problem": {
+                        "description": "Why it reached no one or fewer than it was for: no_approvers (no one else holds skymail:mails:approve), approver_lookup_failed (Keycloak did not say in time), no_address (the submitter's token carried no e-mail), template_unavailable (the System template is not seeded), enqueue_failed. Null when it reached everyone.",
+                        "enum": [
+                            "no_approvers",
+                            "approver_lookup_failed",
+                            "no_address",
+                            "template_unavailable",
+                            "enqueue_failed"
+                        ],
+                        "type": "string"
+                    },
+                    "template_key": {
+                        "description": "The System template it was sent with.",
+                        "enum": [
+                            "mail.approval-requested",
+                            "mail.approval-resolved"
+                        ],
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalPerson": {
+                "description": "Who did it; null when SkyMail expired the request.",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "sub": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalPreview": {
+                "description": "Null when it does not render; preview_error says why.",
+                "properties": {
+                    "html": {
+                        "type": "string"
+                    },
+                    "plain_text": {
+                        "type": "string"
+                    },
+                    "rendered_for": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalRecipient"
+                    },
+                    "subject": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalRecipient": {
+                "properties": {
+                    "email": {
+                        "type": "string"
+                    },
+                    "full_name": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalSubmitter": {
+                "properties": {
+                    "email": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "sub": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalTemplate": {
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "key": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "republished": {
+                        "description": "The template has published another version since: approving or accepting is refused (mail_approval.template_republished) until the submitter resubmits.",
+                        "type": "boolean"
+                    },
+                    "version_id": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "handlers.MailTaskItem": {
                 "properties": {
                     "audience": {
@@ -728,6 +1034,21 @@
                 ],
                 "type": "object"
             },
+            "requests.ApproveMailApproval": {
+                "properties": {
+                    "body_variables": {
+                        "additionalProperties": {},
+                        "description": "The variables as the approver edited them, whole. Leave them out to send the request as it stands.",
+                        "type": "object"
+                    },
+                    "note": {
+                        "description": "A word for the submitter, mailed with the decision.",
+                        "maxLength": 2000,
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "requests.ContractVariable": {
                 "properties": {
                     "name": {
@@ -807,6 +1128,16 @@
                 ],
                 "type": "object"
             },
+            "requests.DeclineMailApproval": {
+                "properties": {
+                    "note": {
+                        "description": "A word for the record: why the edit was not taken.",
+                        "maxLength": 2000,
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "requests.PublishOver": {
                 "description": "Publish a stale draft anyway, replacing the version named. Left out: a stale draft is refused.",
                 "properties": {
@@ -826,6 +1157,36 @@
                         "$ref": "#/components/schemas/requests.PublishOver"
                     }
                 },
+                "type": "object"
+            },
+            "requests.RejectMailApproval": {
+                "properties": {
+                    "reason": {
+                        "maxLength": 2000,
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "reason"
+                ],
+                "type": "object"
+            },
+            "requests.ReturnMailApproval": {
+                "properties": {
+                    "body_variables": {
+                        "additionalProperties": {},
+                        "description": "The variables as the approver edited them, whole. They must differ from the request's.",
+                        "type": "object"
+                    },
+                    "note": {
+                        "description": "A word for the submitter, mailed with the decision.",
+                        "maxLength": 2000,
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "body_variables"
+                ],
                 "type": "object"
             },
             "requests.SaveTemplateDraft": {
@@ -900,6 +1261,32 @@
                 },
                 "required": [
                     "recipient_email"
+                ],
+                "type": "object"
+            },
+            "requests.SubmitMailApproval": {
+                "properties": {
+                    "body_variables": {
+                        "additionalProperties": {},
+                        "type": "object"
+                    },
+                    "mail_list_id": {
+                        "description": "An internal mailing list or a Keycloak group. Leave it out to send to one recipient.",
+                        "type": "string"
+                    },
+                    "recipient_email": {
+                        "description": "The one recipient. Leave it out to send to a mailing list.",
+                        "type": "string"
+                    },
+                    "recipient_full_name": {
+                        "type": "string"
+                    },
+                    "template_id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "template_id"
                 ],
                 "type": "object"
             },
@@ -1001,6 +1388,861 @@
         "url": ""
     },
     "paths": {
+        "/mail_approvals": {
+            "get": {
+                "description": "An approver (skymail:mails:approve) lists everyone's requests, or only their own with mine=true; anyone else lists only their own. Newest submission first; X-Total-Count counts the filtered requests. A request past its deadline is expired before it is listed.",
+                "parameters": [
+                    {
+                        "description": "Only requests in this state",
+                        "in": "query",
+                        "name": "state",
+                        "schema": {
+                            "enum": [
+                                "pending",
+                                "returned",
+                                "approved",
+                                "rejected",
+                                "declined",
+                                "expired"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Only the caller's own requests",
+                        "in": "query",
+                        "name": "mine",
+                        "schema": {
+                            "type": "boolean"
+                        }
+                    },
+                    {
+                        "description": "Start index",
+                        "in": "query",
+                        "name": "_start",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "End index",
+                        "in": "query",
+                        "name": "_end",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "items": {
+                                        "$ref": "#/components/schemas/handlers.MailApprovalItem"
+                                    },
+                                    "type": "array"
+                                }
+                            }
+                        },
+                        "description": "OK",
+                        "headers": {
+                            "X-Total-Count": {
+                                "description": "Number of requests matching the filter",
+                                "schema": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error: an unknown state"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "List requests for approval",
+                "tags": [
+                    "Mail approval"
+                ]
+            },
+            "post": {
+                "description": "Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or one recipient (as POST /mail_tasks/single takes them), never both — and nothing is sent until someone holding skymail:mails:approve approves it. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values. It waits seven days; undecided by then, it expires and is never sent.\n\nEvery approver but the submitter is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.SubmitMailApproval",
+                                        "summary": "send",
+                                        "description": "The send"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The send",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
+                        "description": "The request, pending, with notification"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error: no template_id, a malformed address, or not exactly one of mail_list_id and recipient_email (params.errors)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.template_unavailable, mail_approval.audience_unavailable, mail_approval.required_variables_missing (params.missing: [{name, source, reason}]) or mail_approval.unrenderable (params.error)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Submit a send for approval",
+                "tags": [
+                    "Mail approval"
+                ]
+            }
+        },
+        "/mail_approvals/{id}": {
+            "get": {
+                "description": "A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to, and its history — for an approver or its submitter; to anyone else it is not found. A request past its deadline is expired before it is read.",
+                "parameters": [
+                    {
+                        "description": "Request ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such request, or not the caller's to see"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Read a request for approval",
+                "tags": [
+                    "Mail approval"
+                ]
+            }
+        },
+        "/mail_approvals/{id}/accept": {
+            "post": {
+                "description": "The submitter accepts the edit an approver returned, and the request is sent as edited, exactly as an approval sends it — locked, once, of the pinned template version.",
+                "parameters": [
+                    {
+                        "description": "Request ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
+                        "description": "The request, approved, with its task_id"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.not_submitter"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such request, or not the caller's to see"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.state_conflict, mail_approval.expired, mail_approval.busy, mail_approval.template_republished, mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Accept an approver's edit and send it",
+                "tags": [
+                    "Mail approval"
+                ]
+            }
+        },
+        "/mail_approvals/{id}/approve": {
+            "post": {
+                "description": "An approver approves a pending request someone else submitted, and it is queued through the send path at once, sent by its submitter: without body_variables exactly as it stands, with them as the approver edited them — the edit is recorded (an edited event naming each variable changed, before and after) and told to the submitter. The send is of the template version the request is pinned to, to its audience as it is now. Approving is idempotent and race-safe: the request is locked while it is sent, someone else acting on it at that moment is refused (409 mail_approval.busy), and approving an approved request again without an edit sends nothing and answers it as it is.\n\nThe submitter is mailed the mail.approval-resolved System template with Decision \"approved\". A request past its deadline is expired instead (409 mail_approval.expired) and its submitter told.",
+                "parameters": [
+                    {
+                        "description": "Request ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.ApproveMailApproval",
+                                        "summary": "approval",
+                                        "description": "An edit and a note, both optional"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "An edit and a note, both optional"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
+                        "description": "The request, approved, with its task_id and notification"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not an approver, or mail_approval.own_request"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such request"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.state_conflict (params.state, params.allowed), mail_approval.expired, mail_approval.busy, mail_approval.template_republished (params.submitted_version_id, params.published_version_id), mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The edit leaves a Required variable empty (mail_approval.required_variables_missing) or does not render (mail_approval.unrenderable)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Approve a request and send it",
+                "tags": [
+                    "Mail approval"
+                ]
+            }
+        },
+        "/mail_approvals/{id}/decline": {
+            "post": {
+                "description": "The submitter refuses the edit an approver returned. Nothing is sent; the submitter may edit and resubmit the request.",
+                "parameters": [
+                    {
+                        "description": "Request ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.DeclineMailApproval",
+                                        "summary": "decline",
+                                        "description": "A note"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "A note"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
+                        "description": "The request, declined"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.not_submitter"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such request, or not the caller's to see"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.state_conflict, mail_approval.expired or mail_approval.busy"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Decline an approver's edit",
+                "tags": [
+                    "Mail approval"
+                ]
+            }
+        },
+        "/mail_approvals/{id}/reject": {
+            "post": {
+                "description": "An approver refuses a pending request someone else submitted, with a reason. Nothing is sent. The submitter is mailed the mail.approval-resolved System template with Decision \"rejected\" and the reason as DecisionNote, and may edit and resubmit the request; the rejection stays in its history.",
+                "parameters": [
+                    {
+                        "description": "Request ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.RejectMailApproval",
+                                        "summary": "rejection",
+                                        "description": "The reason"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The reason",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
+                        "description": "The request, rejected, with notification"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error: no reason, or a blank one"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not an approver, or mail_approval.own_request"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such request"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.state_conflict, mail_approval.expired or mail_approval.busy"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Reject a request",
+                "tags": [
+                    "Mail approval"
+                ]
+            }
+        },
+        "/mail_approvals/{id}/resubmit": {
+            "post": {
+                "description": "The submitter fills a rejected request, or one whose returned edit they declined, in again — whole, as a submission is — and it is pending again with a new seven-day deadline, pinned to the version its template publishes now. It is checked as a submission is. It stays the same request: a resubmitted event records what changed, and everything before it stays in the history. Every approver but the submitter is mailed mail.approval-requested again.",
+                "parameters": [
+                    {
+                        "description": "Request ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.SubmitMailApproval",
+                                        "summary": "send",
+                                        "description": "The send"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The send",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
+                        "description": "The request, pending, with notification"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.not_submitter"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such request, or not the caller's to see"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.state_conflict or mail_approval.busy"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.template_unavailable, mail_approval.audience_unavailable, mail_approval.required_variables_missing or mail_approval.unrenderable"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Resubmit a rejected or declined request",
+                "tags": [
+                    "Mail approval"
+                ]
+            }
+        },
+        "/mail_approvals/{id}/return": {
+            "post": {
+                "description": "An approver edits a pending request someone else submitted and hands it back: the edit is recorded (an edited event naming each variable changed, before and after), the request is returned, and the submitter is mailed the mail.approval-resolved System template with Decision \"returned\". Nothing is sent. The submitter accepts it — and it goes out as edited — or declines it. body_variables is the whole edit and must differ from the request's.",
+                "parameters": [
+                    {
+                        "description": "Request ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.ReturnMailApproval",
+                                        "summary": "edit",
+                                        "description": "The edit and a note"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The edit and a note",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
+                        "description": "The request, returned, with notification"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not an approver, or mail_approval.own_request"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such request"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.state_conflict, mail_approval.expired or mail_approval.busy"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.no_edit, mail_approval.required_variables_missing or mail_approval.unrenderable"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Return an edited request to its submitter",
+                "tags": [
+                    "Mail approval"
+                ]
+            }
+        },
         "/mail_tasks": {
             "get": {
                 "description": "Get a list of all mail tasks with pagination, newest first, each with its derived status, recipients by status and audience. The status filter keeps only sends with that derived status; X-Total-Count counts the filtered sends. Keycloak group names are looked up within 2 seconds for the whole page and are null past that.",
@@ -3370,6 +4612,10 @@
         {
             "description": "Mailing list and recipient management operations",
             "name": "Lists"
+        },
+        {
+            "description": "Mail onayı: sends submitted by members without send permission, held until an approver decides them",
+            "name": "Mail approval"
         }
     ],
     "servers": [

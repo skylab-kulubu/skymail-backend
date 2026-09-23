@@ -178,15 +178,15 @@ type MailApprovalEvent struct {
 	At     time.Time  `json:"at"`
 }
 
-// MailApprovalItem is a request as the list shows it.
+// MailApprovalItem is a request as the list shows it. Its audience reads as a
+// send's does.
 type MailApprovalItem struct {
 	ID uuid.UUID `json:"id"`
 	// pending: awaiting an approver; returned: an approver's edit awaits the submitter; approved: sent; rejected: refused with a reason, the submitter may resubmit; declined: the submitter refused an approver's edit and may resubmit; expired: undecided seven days after it was submitted, never sent.
 	State     string                `json:"state" enums:"pending,returned,approved,rejected,declined,expired"`
 	Submitter MailApprovalSubmitter `json:"submitter"`
 	Template  MailApprovalTemplate  `json:"template"`
-	// Who it goes to, as a send's audience reads.
-	Audience SendAudience `json:"audience"`
+	Audience  SendAudience          `json:"audience"`
 	// The variables it is sent with: as submitted, or as an approver edited them.
 	BodyVariables json.RawMessage `json:"body_variables" swaggertype:"object"`
 	CreatedAt     time.Time       `json:"created_at"`

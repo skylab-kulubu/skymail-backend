@@ -1334,3 +1334,41 @@ func TestANotificationThatCannotGoOutSaysWhy(t *testing.T) {
 		t.Fatalf("submitting with no approval-requested template = %+v", unseeded.Notification)
 	}
 }
+
+// The screens are built from the OpenAPI document, so every approval route
+// is in it with its answer.
+func TestOpenAPIDocumentDescribesMailApproval(t *testing.T) {
+	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
+	registerPublicRoutes(app, nil)
+
+	response, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/docs/openapi.json", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Paths map[string]map[string]struct {
+			Tags      []string                   `json:"tags"`
+			Responses map[string]json.RawMessage `json:"responses"`
+		} `json:"paths"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&document); err != nil {
+		t.Fatal(err)
+	}
+	for path, methods := range map[string][]string{
+		"/mail_approvals":               {"get", "post"},
+		"/mail_approvals/{id}":          {"get"},
+		"/mail_approvals/{id}/approve":  {"post"},
+		"/mail_approvals/{id}/return":   {"post"},
+		"/mail_approvals/{id}/reject":   {"post"},
+		"/mail_approvals/{id}/accept":   {"post"},
+		"/mail_approvals/{id}/decline":  {"post"},
+		"/mail_approvals/{id}/resubmit": {"post"},
+	} {
+		for _, method := range methods {
+			operation, ok := document.Paths[path][method]
+			if !ok || len(operation.Tags) != 1 || operation.Tags[0] != "Mail approval" || operation.Responses["409"] == nil && method == "post" && path != "/mail_approvals" {
+				t.Errorf("%s %s documented as %+v", method, path, operation)
+			}
+		}
+	}
+}
