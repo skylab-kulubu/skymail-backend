@@ -104,7 +104,9 @@ type Querier interface {
 	ListLastMailApprovalEvents(ctx context.Context, approvalIds []uuid.UUID) ([]MailApprovalEvent, error)
 	ListMailApprovalEvents(ctx context.Context, approvalID uuid.UUID) ([]MailApprovalEvent, error)
 	// Requests newest submission first, the id breaking ties. A NULL submitter
-	// lists everyone's and a NULL state every state.
+	// lists everyone's and a NULL state every state. A request is filtered by the
+	// state it is in as of as_of: one undecided past its deadline is expired,
+	// whether or not the sweep has written it yet.
 	ListMailApprovals(ctx context.Context, arg ListMailApprovalsParams) ([]ListMailApprovalsRow, error)
 	// A send as every screen shows it — the home screen, the send list and a
 	// send's own page: the task, the template it used, who it went to, its status

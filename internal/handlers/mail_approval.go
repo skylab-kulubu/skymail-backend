@@ -9,7 +9,6 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/rs/zerolog/log"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
@@ -377,7 +376,7 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 // List godoc
 //
 //	@Summary		List requests for approval
-//	@Description	An approver (skymail:mails:approve) lists everyone's requests, or only their own with mine=true; anyone else lists only their own. Newest submission first; X-Total-Count counts the filtered requests. A request past its deadline is expired before it is listed.
+//	@Description	An approver (skymail:mails:approve) lists everyone's requests, or only their own with mine=true; anyone else lists only their own. Newest submission first; X-Total-Count counts the filtered requests. A request undecided past its deadline is listed, and filtered, as expired; listing writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.
 //	@Tags			Mail approval
 //	@Produce		json
 //	@Param			state	query		string	false	"Only requests in this state"	Enums(pending,returned,approved,rejected,declined,expired)
@@ -404,18 +403,15 @@ func (h *mailApprovalHandlerImpl) List(c fiber.Ctx) error {
 		submitter = &caller.sub
 	}
 
-	if _, err := h.ExpireDue(c.Context()); err != nil {
-		log.Warn().Err(err).Msg("could not expire the approval requests past their deadline before listing")
-	}
-
+	now := h.now()
 	limit, offset := getPaginationParams(c)
 	rows, err := h.db.ListMailApprovals(c.Context(), database.ListMailApprovalsParams{
-		Limit: limit, Offset: offset, SubmitterSub: submitter, State: state,
+		Limit: limit, Offset: offset, SubmitterSub: submitter, State: state, AsOf: now,
 	})
 	if err != nil {
 		return err
 	}
-	count, err := h.db.CountMailApprovals(c.Context(), database.CountMailApprovalsParams{SubmitterSub: submitter, State: state})
+	count, err := h.db.CountMailApprovals(c.Context(), database.CountMailApprovalsParams{SubmitterSub: submitter, State: state, AsOf: now})
 	if err != nil {
 		return err
 	}
@@ -442,7 +438,7 @@ func (h *mailApprovalHandlerImpl) List(c fiber.Ctx) error {
 		if event, ok := last[view.ID]; ok {
 			lastEvent = &event
 		}
-		items[i] = approvalItem(view, names, lastEvent)
+		items[i] = approvalItem(view, names, lastEvent, now)
 	}
 	c.Response().Header.Set("X-Total-Count", strconv.FormatInt(count, 10))
 	return c.JSON(items)
@@ -451,7 +447,7 @@ func (h *mailApprovalHandlerImpl) List(c fiber.Ctx) error {
 // Get godoc
 //
 //	@Summary		Read a request for approval
-//	@Description	A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to, and its history — for an approver or its submitter; to anyone else it is not found. A request past its deadline is expired before it is read.
+//	@Description	A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to, and its history — for an approver or its submitter; to anyone else it is not found. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.
 //	@Tags			Mail approval
 //	@Produce		json
 //	@Param			id	path		string	true	"Request ID"
@@ -475,14 +471,6 @@ func (h *mailApprovalHandlerImpl) Get(c fiber.Ctx) error {
 	}
 	if !caller.approver && view.SubmitterSub != caller.sub {
 		return apperrors.ErrStatusNotFound
-	}
-	if undecided(view.State) && !h.now().Before(view.DeadlineAt) {
-		if err := h.expireIfDue(c.Context(), id); err != nil {
-			return err
-		}
-		if view, err = h.db.GetMailApproval(c.Context(), id); err != nil {
-			return err
-		}
 	}
 	answer, err := h.approval(c.Context(), view)
 	if err != nil {

@@ -703,37 +703,6 @@ func (h *mailApprovalHandlerImpl) expireLocked(ctx context.Context, q *database.
 	return approvalNotice{kind: noticeResolved, decision: decisionExpired, decidedBy: "SkyMail"}, err
 }
 
-// expireIfDue expires one request if it is undecided past its deadline and
-// no one is acting on it right now; someone who is will find it expired.
-func (h *mailApprovalHandlerImpl) expireIfDue(ctx context.Context, id uuid.UUID) error {
-	var notice approvalNotice
-	err := h.db.InTx(ctx, func(q *database.Queries) error {
-		a, err := q.LockMailApproval(ctx, id)
-		if err != nil {
-			return err
-		}
-		if !undecided(a.State) || h.now().Before(a.DeadlineAt) {
-			return nil
-		}
-		notice, err = h.expireLocked(ctx, q, a)
-		return err
-	})
-	if errors.Is(lockError(err), errApprovalBusy) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if notice.kind != noticeNone {
-		view, err := h.db.GetMailApproval(ctx, id)
-		if err != nil {
-			return err
-		}
-		h.deliver(ctx, view, notice)
-	}
-	return nil
-}
-
 // A sweep expires at most this many requests; the next one goes on.
 const expirySweepBatch = 100
 
@@ -783,7 +752,7 @@ func (h *mailApprovalHandlerImpl) approval(ctx context.Context, view database.Ge
 	}
 
 	answer := MailApproval{
-		MailApprovalItem: approvalItem(view, h.approvalGroupNames(ctx, []database.GetMailApprovalRow{view}), last),
+		MailApprovalItem: approvalItem(view, h.approvalGroupNames(ctx, []database.GetMailApprovalRow{view}), last, h.now()),
 		RecipientCount:   h.recipientCount(ctx, view),
 		History:          history,
 	}
@@ -817,10 +786,19 @@ func viewSend(view database.GetMailApprovalRow) approvalSend {
 	}
 }
 
-func approvalItem(view database.GetMailApprovalRow, groupNames map[uuid.UUID]*string, last *MailApprovalEvent) MailApprovalItem {
+// effectiveState is the state a request is in as of now: one undecided past
+// its deadline is expired, whether or not the sweep has written it yet.
+func effectiveState(state database.MailApprovalState, deadline, now time.Time) database.MailApprovalState {
+	if undecided(state) && !now.Before(deadline) {
+		return database.MailApprovalStateExpired
+	}
+	return state
+}
+
+func approvalItem(view database.GetMailApprovalRow, groupNames map[uuid.UUID]*string, last *MailApprovalEvent, now time.Time) MailApprovalItem {
 	return MailApprovalItem{
 		ID:    view.ID,
-		State: string(view.State),
+		State: string(effectiveState(view.State, view.DeadlineAt, now)),
 		Submitter: MailApprovalSubmitter{
 			Sub:   view.SubmitterSub,
 			Name:  view.SubmitterName,

@@ -1152,16 +1152,58 @@ func TestAnUndecidedRequestExpiresAndIsNeverSent(t *testing.T) {
 		t.Errorf("approval-resolved mails = %d, want a return, a rejection and four expiries", n)
 	}
 
-	// Listing expires what is due before it lists.
-	listed := w.submit("elif", w.listSend())
+}
+
+// Reading or listing a request past its deadline writes nothing and mails no
+// one: the answer reports it expired, and the sweep writes the expiry and
+// tells the submitter, once.
+func TestReadingAnOverdueRequestWritesAndSendsNothing(t *testing.T) {
+	w := newApprovalWorld(t)
+	overdue := w.submit("elif", w.listSend())
 	w.advance(8 * 24 * time.Hour)
-	var items []approvalAnswer
-	w.call("fatih", fiber.MethodGet, "/v1/mail_approvals?state=pending", nil, &items)
-	if len(items) != 0 {
-		t.Errorf("pending after the deadline: %d", len(items))
+	fresh := w.submit("elif", w.listSend())
+
+	_, read := w.get("elif", overdue.ID)
+	if read.State != "expired" || read.kinds() != "submitted" {
+		t.Fatalf("an overdue request reads %s %s, want expired with nothing written", read.State, read.kinds())
 	}
-	if _, read := w.get("elif", listed.ID); read.State != "expired" {
-		t.Errorf("listed request is %s", read.State)
+	ids := func(query string) []uuid.UUID {
+		t.Helper()
+		var items []approvalAnswer
+		w.call("fatih", fiber.MethodGet, "/v1/mail_approvals"+query, nil, &items)
+		var out []uuid.UUID
+		for _, item := range items {
+			out = append(out, item.ID)
+			if item.ID == overdue.ID && item.State != "expired" {
+				t.Errorf("%s lists the overdue request as %s", query, item.State)
+			}
+		}
+		return out
+	}
+	if got := ids("?state=pending"); !reflect.DeepEqual(got, []uuid.UUID{fresh.ID}) {
+		t.Errorf("pending = %v, want only the fresh one", got)
+	}
+	if got := ids("?state=expired"); !reflect.DeepEqual(got, []uuid.UUID{overdue.ID}) {
+		t.Errorf("expired = %v, want the overdue one", got)
+	}
+	ids("")
+
+	var stored string
+	if err := w.store.Conn.QueryRow(context.Background(), `SELECT state FROM mail_approvals WHERE id = $1`, overdue.ID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "pending" || len(w.mail.of(w.resolved.ID)) != 0 {
+		t.Fatalf("reads wrote %s and sent %d mails", stored, len(w.mail.of(w.resolved.ID)))
+	}
+
+	if expired, err := w.handler.ExpireDue(context.Background()); err != nil || expired != 1 {
+		t.Fatalf("sweep = %d, %v", expired, err)
+	}
+	if _, read := w.get("elif", overdue.ID); read.State != "expired" || read.kinds() != "submitted,expired" {
+		t.Errorf("after the sweep: %s %s", read.State, read.kinds())
+	}
+	if notices := w.mail.of(w.resolved.ID); len(notices) != 1 || notices[0].variables["Decision"] != "expired" {
+		t.Errorf("expiry notices = %+v", notices)
 	}
 }
 

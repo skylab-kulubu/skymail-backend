@@ -241,16 +241,19 @@ const countMailApprovals = `-- name: CountMailApprovals :one
 SELECT count(*)
 FROM mail_approvals a
 WHERE ($1::text IS NULL OR a.submitter_sub = $1::text)
-  AND ($2::mail_approval_state IS NULL OR a.state = $2::mail_approval_state)
+  AND ($2::mail_approval_state IS NULL OR $2::mail_approval_state = (CASE
+        WHEN a.state IN ('pending', 'returned') AND a.deadline_at <= $3 THEN 'expired'
+        ELSE a.state END))
 `
 
 type CountMailApprovalsParams struct {
 	SubmitterSub *string               `json:"submitter_sub"`
 	State        NullMailApprovalState `json:"state"`
+	AsOf         time.Time             `json:"as_of"`
 }
 
 func (q *Queries) CountMailApprovals(ctx context.Context, arg CountMailApprovalsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countMailApprovals, arg.SubmitterSub, arg.State)
+	row := q.db.QueryRow(ctx, countMailApprovals, arg.SubmitterSub, arg.State, arg.AsOf)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1739,7 +1742,9 @@ FROM mail_approvals a
          JOIN templates t ON t.id = a.template_id
          LEFT JOIN mailing_lists ml ON ml.id = a.mail_list_id
 WHERE ($3::text IS NULL OR a.submitter_sub = $3::text)
-  AND ($4::mail_approval_state IS NULL OR a.state = $4::mail_approval_state)
+  AND ($4::mail_approval_state IS NULL OR $4::mail_approval_state = (CASE
+        WHEN a.state IN ('pending', 'returned') AND a.deadline_at <= $5 THEN 'expired'
+        ELSE a.state END))
 ORDER BY a.submitted_at DESC, a.id DESC
 LIMIT $1 OFFSET $2
 `
@@ -1749,6 +1754,7 @@ type ListMailApprovalsParams struct {
 	Offset       int32                 `json:"offset"`
 	SubmitterSub *string               `json:"submitter_sub"`
 	State        NullMailApprovalState `json:"state"`
+	AsOf         time.Time             `json:"as_of"`
 }
 
 type ListMailApprovalsRow struct {
@@ -1777,13 +1783,16 @@ type ListMailApprovalsRow struct {
 }
 
 // Requests newest submission first, the id breaking ties. A NULL submitter
-// lists everyone's and a NULL state every state.
+// lists everyone's and a NULL state every state. A request is filtered by the
+// state it is in as of as_of: one undecided past its deadline is expired,
+// whether or not the sweep has written it yet.
 func (q *Queries) ListMailApprovals(ctx context.Context, arg ListMailApprovalsParams) ([]ListMailApprovalsRow, error) {
 	rows, err := q.db.Query(ctx, listMailApprovals,
 		arg.Limit,
 		arg.Offset,
 		arg.SubmitterSub,
 		arg.State,
+		arg.AsOf,
 	)
 	if err != nil {
 		return nil, err

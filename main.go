@@ -236,9 +236,10 @@ func registerMailApprovalRoutes(api fiber.Router, auth middlewares.AuthMiddlewar
 }
 
 // expireMailApprovals expires the requests left undecided past their deadline
-// every interval, so a submitter hears that theirs expired without anyone
-// opening it. Reading or acting on a request expires it too, so nothing
-// depends on the sweep being on time.
+// every interval, and tells each submitter. It is the only writer of an
+// expiry but one: an action on an overdue request expires it in its own
+// transaction and is refused. Reads write nothing; they report an overdue
+// request as expired, so nothing a reader sees waits on the sweep.
 func expireMailApprovals(ctx context.Context, approvals handlers.MailApprovalHandler, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

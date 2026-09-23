@@ -937,7 +937,9 @@ FROM mail_approvals a
 WHERE a.id = $1;
 
 -- Requests newest submission first, the id breaking ties. A NULL submitter
--- lists everyone's and a NULL state every state.
+-- lists everyone's and a NULL state every state. A request is filtered by the
+-- state it is in as of as_of: one undecided past its deadline is expired,
+-- whether or not the sweep has written it yet.
 -- name: ListMailApprovals :many
 SELECT a.*,
        t.name                             AS template_name,
@@ -950,7 +952,9 @@ FROM mail_approvals a
          JOIN templates t ON t.id = a.template_id
          LEFT JOIN mailing_lists ml ON ml.id = a.mail_list_id
 WHERE (sqlc.narg(submitter_sub)::text IS NULL OR a.submitter_sub = sqlc.narg(submitter_sub)::text)
-  AND (sqlc.narg(state)::mail_approval_state IS NULL OR a.state = sqlc.narg(state)::mail_approval_state)
+  AND (sqlc.narg(state)::mail_approval_state IS NULL OR sqlc.narg(state)::mail_approval_state = (CASE
+        WHEN a.state IN ('pending', 'returned') AND a.deadline_at <= sqlc.arg(as_of) THEN 'expired'
+        ELSE a.state END))
 ORDER BY a.submitted_at DESC, a.id DESC
 LIMIT $1 OFFSET $2;
 
@@ -958,7 +962,9 @@ LIMIT $1 OFFSET $2;
 SELECT count(*)
 FROM mail_approvals a
 WHERE (sqlc.narg(submitter_sub)::text IS NULL OR a.submitter_sub = sqlc.narg(submitter_sub)::text)
-  AND (sqlc.narg(state)::mail_approval_state IS NULL OR a.state = sqlc.narg(state)::mail_approval_state);
+  AND (sqlc.narg(state)::mail_approval_state IS NULL OR sqlc.narg(state)::mail_approval_state = (CASE
+        WHEN a.state IN ('pending', 'returned') AND a.deadline_at <= sqlc.arg(as_of) THEN 'expired'
+        ELSE a.state END));
 
 -- name: ListMailApprovalEvents :many
 SELECT *
