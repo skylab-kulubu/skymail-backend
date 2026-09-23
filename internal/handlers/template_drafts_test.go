@@ -898,54 +898,25 @@ func TestConcurrentSavesNumberVersionsInTurn(t *testing.T) {
 	app := templateVersionsApp(t, db)
 	created := panelTemplate(t, app)
 
-	type result struct {
-		what   string
-		status int
-		body   string
-		err    error
-	}
-	request := func(what, method, path string, body any, headers ...string) result {
-		payload, err := json.Marshal(body)
-		if err != nil {
-			return result{what: what, err: err}
-		}
-		req := httptest.NewRequest(method, path, bytes.NewReader(payload))
-		req.Header.Set("Content-Type", "application/json")
-		for i := 0; i+1 < len(headers); i += 2 {
-			req.Header.Set(headers[i], headers[i+1])
-		}
-		response, err := app.Test(req, fiber.TestConfig{Timeout: 0})
-		if err != nil {
-			return result{what: what, err: err}
-		}
-		raw, _ := io.ReadAll(response.Body)
-		return result{what: what, status: response.StatusCode, body: string(raw)}
-	}
-
 	const drafts, edits = 8, 4
-	results := make(chan result, drafts+edits)
+	var calls []call
 	for i := 0; i < drafts; i++ {
-		go func(i int) {
-			subject := fmt.Sprintf("Taslak %d", i)
-			results <- request("draft "+subject, fiber.MethodPost, "/templates/"+created.ID.String()+"/drafts", map[string]any{
-				"subject": subject, "main_mode": "jsx", "html_content": "<p>" + subject + "</p>", "plain_text_content": subject,
-				"base_version_id": created.PublishedVersionID,
-			}, "X-Operator-Sub", uuid.NewString(), "X-Operator-Name", "Operatör "+fmt.Sprint(i))
-		}(i)
+		subject := fmt.Sprintf("Taslak %d", i)
+		calls = append(calls, call{"draft " + subject, fiber.MethodPost, "/templates/" + created.ID.String() + "/drafts", map[string]any{
+			"subject": subject, "main_mode": "jsx", "html_content": "<p>" + subject + "</p>", "plain_text_content": subject,
+			"base_version_id": created.PublishedVersionID,
+		}, []string{"X-Operator-Sub", uuid.NewString(), "X-Operator-Name", "Operatör " + fmt.Sprint(i)}})
 	}
 	for i := 0; i < edits; i++ {
-		go func(i int) {
-			subject := fmt.Sprintf("Düzenleme %d", i)
-			results <- request("edit "+subject, fiber.MethodPatch, "/templates/"+created.ID.String(), map[string]any{
-				"name": created.Name, "subject": subject, "html_content": "<p>" + subject + "</p>",
-				"plain_text_content": subject, "react_email_content": panelSource,
-			})
-		}(i)
+		subject := fmt.Sprintf("Düzenleme %d", i)
+		calls = append(calls, call{"edit " + subject, fiber.MethodPatch, "/templates/" + created.ID.String(), map[string]any{
+			"name": created.Name, "subject": subject, "html_content": "<p>" + subject + "</p>",
+			"plain_text_content": subject, "react_email_content": panelSource,
+		}, nil})
 	}
-	for i := 0; i < drafts+edits; i++ {
-		r := <-results
-		if r.err != nil || (r.status != fiber.StatusCreated && r.status != fiber.StatusOK) {
-			t.Errorf("%s = %d %s %v", r.what, r.status, r.body, r.err)
+	for _, a := range concurrently(app, calls...) {
+		if a.err != nil || (a.status != fiber.StatusCreated && a.status != fiber.StatusOK) {
+			t.Errorf("%s = %d %s %v", a.name, a.status, a.body, a.err)
 		}
 	}
 
@@ -1472,5 +1443,172 @@ func TestTemplateHistoryFiltersByState(t *testing.T) {
 	}
 	if status, _, _ := list("?state=taslak"); status != fiber.StatusBadRequest {
 		t.Errorf("an unknown state = %d, want 400", status)
+	}
+}
+
+// call is one request among several made at once.
+type call struct {
+	name, method, path string
+	body               any
+	headers            []string
+}
+
+// answer is what a call got back.
+type answer struct {
+	call
+	status int
+	body   []byte
+	err    error
+}
+
+// concurrently makes the calls at the same moment, each on its own goroutine,
+// and returns their answers in the order of the calls.
+func concurrently(app *fiber.App, calls ...call) []answer {
+	answers := make([]answer, len(calls))
+	start := make(chan struct{})
+	done := make(chan struct{}, len(calls))
+	for i, c := range calls {
+		go func(i int, c call) {
+			defer func() { done <- struct{}{} }()
+			answers[i].call = c
+			payload, err := json.Marshal(c.body)
+			if err != nil {
+				answers[i].err = err
+				return
+			}
+			request := httptest.NewRequest(c.method, c.path, bytes.NewReader(payload))
+			request.Header.Set("Content-Type", "application/json")
+			for j := 0; j+1 < len(c.headers); j += 2 {
+				request.Header.Set(c.headers[j], c.headers[j+1])
+			}
+			<-start
+			response, err := app.Test(request, fiber.TestConfig{Timeout: 0})
+			if err != nil {
+				answers[i].err = err
+				return
+			}
+			answers[i].status = response.StatusCode
+			answers[i].body, answers[i].err = io.ReadAll(response.Body)
+		}(i, c)
+	}
+	close(start)
+	for range calls {
+		<-done
+	}
+	return answers
+}
+
+// Two publishes that meet each take the template's lock in turn, so the
+// second sees what the first published. Two drafts started from the same
+// version: one is published, and the other is refused as stale, naming it.
+// The same draft twice: both succeed, the second a repeat that changes
+// nothing.
+func TestPublishesThatMeetTakeTurns(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+	save := func(subject string, headers ...string) servedDraft {
+		t.Helper()
+		response, draft, body := saveDraft(t, app, created.ID, map[string]any{
+			"subject": subject, "main_mode": "jsx", "html_content": "<p>" + subject + "</p>", "plain_text_content": subject,
+			"base_version_id": created.PublishedVersionID,
+		}, headers...)
+		if response.StatusCode != fiber.StatusCreated {
+			t.Fatalf("draft = %d %s", response.StatusCode, body)
+		}
+		return draft
+	}
+	publishCall := func(draft servedDraft) call {
+		return call{"publish " + draft.Subject, fiber.MethodPost, "/templates/" + created.ID.String() + "/versions/" + draft.ID.String() + "/publish", nil, nil}
+	}
+
+	mine, theirs := save("Benim"), save("Can'ın", canDemir...)
+	answers := concurrently(app, publishCall(mine), publishCall(theirs))
+	var won, lost answer
+	var winner servedDraft
+	switch {
+	case answers[0].status == fiber.StatusOK && answers[1].status == fiber.StatusConflict:
+		won, lost, winner = answers[0], answers[1], mine
+	case answers[1].status == fiber.StatusOK && answers[0].status == fiber.StatusConflict:
+		won, lost, winner = answers[1], answers[0], theirs
+	default:
+		t.Fatalf("two stale-to-each-other publishes = %d %s / %d %s, want one 200 and one 409", answers[0].status, answers[0].body, answers[1].status, answers[1].body)
+	}
+	if conflict := decodeError(t, lost.body); conflict.Code != "template.stale_base" || conflict.Params["published_version_id"] != winner.ID.String() {
+		t.Fatalf("the refused publish = %s, want template.stale_base naming the one published (%s)", lost.body, winner.ID)
+	}
+	if row := templateRow(t, db, created.ID); row.PublishedVersionID == nil || *row.PublishedVersionID != winner.ID || row.Subject != winner.Subject {
+		t.Fatalf("row = %+v after %s, want a copy of the winner", row, won.name)
+	}
+
+	// The same draft published twice at once.
+	next := save("Bir sonraki")
+	if response, _, body := publish(t, app, created.ID, next.ID, &winner.ID); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("publish = %d %s", response.StatusCode, body)
+	}
+	again := save("Yine")
+	answers = concurrently(app, publishCall(again), publishCall(again))
+	if answers[0].status != fiber.StatusConflict || answers[1].status != fiber.StatusConflict {
+		// again started from the first version: stale, both refused alike.
+		t.Fatalf("publishing a stale draft twice at once = %d / %d, want both refused", answers[0].status, answers[1].status)
+	}
+	current := *templateRow(t, db, created.ID).PublishedVersionID
+	response, fresh, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": "Güncel", "main_mode": "jsx", "html_content": "<p>Güncel</p>", "plain_text_content": "Güncel",
+		"base_version_id": current,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("draft = %d %s", response.StatusCode, body)
+	}
+	answers = concurrently(app, publishCall(fresh), publishCall(fresh))
+	if answers[0].status != fiber.StatusOK || answers[1].status != fiber.StatusOK {
+		t.Fatalf("one draft published twice at once = %d %s / %d %s, want both 200", answers[0].status, answers[0].body, answers[1].status, answers[1].body)
+	}
+	versions, published := storedVersions(t, db, created.ID)
+	if published == nil || *published != fresh.ID || versions[len(versions)-1].ID != fresh.ID || versions[len(versions)-1].PublishedAt == nil {
+		t.Fatalf("after publishing one draft twice the row is a copy of %v, want %s published once", published, fresh.ID)
+	}
+}
+
+// A publish and a save that meet take turns too, and either order ends the
+// same: the draft published is sent, and the save is a new draft beside it,
+// started from the version it named.
+func TestAPublishAndASaveThatMeetTakeTurns(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+	base := *created.PublishedVersionID
+	response, draft, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": "Yayımlanacak", "main_mode": "jsx", "html_content": "<p>Yayımlanacak</p>", "plain_text_content": "Yayımlanacak",
+		"base_version_id": base,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("draft = %d %s", response.StatusCode, body)
+	}
+
+	answers := concurrently(app,
+		call{"publish", fiber.MethodPost, "/templates/" + created.ID.String() + "/versions/" + draft.ID.String() + "/publish", nil, nil},
+		call{"save", fiber.MethodPost, "/templates/" + created.ID.String() + "/drafts", map[string]any{
+			"subject": "Sonraki taslak", "main_mode": "html", "html_source": "<p>Sonraki</p>",
+			"html_content": "<p>Sonraki</p>", "plain_text_content": "Sonraki", "base_version_id": base,
+		}, nil},
+	)
+	if answers[0].status != fiber.StatusOK || answers[1].status != fiber.StatusCreated {
+		t.Fatalf("publish = %d %s, save = %d %s; want 200 and 201", answers[0].status, answers[0].body, answers[1].status, answers[1].body)
+	}
+	var saved servedDraft
+	if err := json.Unmarshal(answers[1].body, &saved); err != nil {
+		t.Fatal(err)
+	}
+	versions, published := storedVersions(t, db, created.ID)
+	if len(versions) != 3 || published == nil || *published != draft.ID {
+		t.Fatalf("versions = %d, row copy of %v; want 3 and the published draft sent", len(versions), published)
+	}
+	if last := versions[2]; last.ID != saved.ID || last.PublishedAt != nil || last.BaseVersionID == nil || *last.BaseVersionID != base ||
+		last.MainMode != "html" || !sameString(last.JSXSource, panelSource) {
+		t.Fatalf("the save = %+v, want an unpublished HTML draft started from %s, the JSX source kept", last, base)
+	}
+	if row := templateRow(t, db, created.ID); row.Subject != "Yayımlanacak" {
+		t.Fatalf("row subject = %q, want the published draft's", row.Subject)
 	}
 }
