@@ -134,11 +134,14 @@ func (s *Store) RestoreTemplateVersion(ctx context.Context, templateID, versionI
 // published and copied onto the template row, so it is what the template sends
 // from then on. It returns the row as publishing left it.
 //
-// A draft is stale when its base is not the version published now; without
-// force that is a *StaleBaseError and nothing changes. The version the
-// template sends already is published again as a repeat that changes nothing;
-// any other published version is not a draft, ErrNotADraft.
-func (s *Store) PublishTemplateDraft(ctx context.Context, templateID, versionID uuid.UUID, force bool, check VersionCheck) (Template, error) {
+// A draft is stale when its base is not the version published now. A stale
+// draft is published only over the version the operator was shown and chose
+// to replace, over; nil, or any other version — one published since they
+// looked — is a *StaleBaseError naming what is published now, and nothing
+// changes. The version the template sends already is published again as a
+// repeat that changes nothing; any other published version is not a draft,
+// ErrNotADraft.
+func (s *Store) PublishTemplateDraft(ctx context.Context, templateID, versionID uuid.UUID, over *uuid.UUID, check VersionCheck) (Template, error) {
 	var published Template
 	err := pgx.BeginFunc(ctx, s.Conn, func(tx pgx.Tx) error {
 		q := s.WithTx(tx)
@@ -159,7 +162,7 @@ func (s *Store) PublishTemplateDraft(ctx context.Context, templateID, versionID 
 			return ErrNotADraft
 		}
 		base := version.TemplateVersionSummary.BaseVersionID
-		if !force && !sameVersion(base, template.PublishedVersionID) {
+		if !sameVersion(base, template.PublishedVersionID) && (over == nil || !sameVersion(over, template.PublishedVersionID)) {
 			return &StaleBaseError{VersionID: versionID, BaseVersionID: base, PublishedVersionID: template.PublishedVersionID}
 		}
 		if check != nil {

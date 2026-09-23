@@ -59,6 +59,13 @@ type SaveTemplateDraft struct {
 
 // PublishTemplateVersion publishes a draft. The body is optional.
 type PublishTemplateVersion struct {
-	// Publish even though a newer version was published after the draft was started, replacing it. The replaced version stays in the history.
-	Force bool `json:"force"`
+	// Publish a stale draft anyway, replacing the version named. Left out: a stale draft is refused.
+	Force *PublishOver `json:"force"`
+}
+
+// PublishOver is an operator's confirmation that a stale draft replaces the
+// version they were shown.
+type PublishOver struct {
+	// The published_version_id of the template.stale_base conflict: the version the operator saw and chose to replace. If another has been published since, the publish is refused again, naming it. The replaced version stays in the history.
+	OverVersionID uuid.UUID `json:"over_version_id" validate:"required"`
 }

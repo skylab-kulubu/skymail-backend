@@ -125,14 +125,15 @@ func TestSavingADraftLeavesThePublishedTemplateAlone(t *testing.T) {
 	}
 }
 
-// publish publishes a version of a template, forced or not, and decodes the
-// template it answers with when it answers with one.
-func publish(t *testing.T, app *fiber.App, templateID, versionID uuid.UUID, force bool) (*http.Response, database.Template, []byte) {
+// publish publishes a version of a template — forced over the published
+// version over names, when it names one — and decodes the template it answers
+// with when it answers with one.
+func publish(t *testing.T, app *fiber.App, templateID, versionID uuid.UUID, over *uuid.UUID) (*http.Response, database.Template, []byte) {
 	t.Helper()
 	path := "/templates/" + templateID.String() + "/versions/" + versionID.String() + "/publish"
 	var body any
-	if force {
-		body = map[string]any{"force": true}
+	if over != nil {
+		body = map[string]any{"force": map[string]any{"over_version_id": over}}
 	}
 	response, raw := sendJSON(t, app, fiber.MethodPost, path, body)
 	var template database.Template
@@ -207,7 +208,7 @@ func TestPublishingADraftCopiesItOntoTheRowAndSendsIt(t *testing.T) {
 		t.Fatalf("save = %d %s", response.StatusCode, body)
 	}
 
-	response, published, body := publish(t, app, seeded.ID, draft.ID, false)
+	response, published, body := publish(t, app, seeded.ID, draft.ID, nil)
 	if response.StatusCode != fiber.StatusOK {
 		t.Fatalf("publish = %d %s, want 200", response.StatusCode, body)
 	}
@@ -292,7 +293,7 @@ func TestPublishingAStaleDraftIsRefusedUntilForced(t *testing.T) {
 	theirs := *templateRow(t, db, created.ID).PublishedVersionID
 	before := templateRow(t, db, created.ID)
 
-	response, _, body = publish(t, app, created.ID, draft.ID, false)
+	response, _, body = publish(t, app, created.ID, draft.ID, nil)
 	if response.StatusCode != fiber.StatusConflict {
 		t.Fatalf("publishing a stale draft = %d %s, want 409", response.StatusCode, body)
 	}
@@ -310,7 +311,7 @@ func TestPublishingAStaleDraftIsRefusedUntilForced(t *testing.T) {
 		t.Fatalf("a refused publish published the draft: %+v", versions[1])
 	}
 
-	response, published, body := publish(t, app, created.ID, draft.ID, true)
+	response, published, body := publish(t, app, created.ID, draft.ID, &theirs)
 	if response.StatusCode != fiber.StatusOK {
 		t.Fatalf("forced publish = %d %s, want 200", response.StatusCode, body)
 	}
@@ -347,7 +348,7 @@ func TestOnlyAChangingSeedMakesADraftStale(t *testing.T) {
 
 	first := draftOf("Birinci taslak", *seeded.PublishedVersionID)
 	seededTemplate(t, app, key) // the same seed again
-	if response, _, body := publish(t, app, seeded.ID, first.ID, false); response.StatusCode != fiber.StatusOK {
+	if response, _, body := publish(t, app, seeded.ID, first.ID, nil); response.StatusCode != fiber.StatusOK {
 		t.Fatalf("publishing after an unchanged seed = %d %s, want 200", response.StatusCode, body)
 	}
 
@@ -360,7 +361,7 @@ func TestOnlyAChangingSeedMakesADraftStale(t *testing.T) {
 	if response.StatusCode != fiber.StatusOK {
 		t.Fatalf("changed seed = %d %s", response.StatusCode, body)
 	}
-	response, _, body = publish(t, app, seeded.ID, second.ID, false)
+	response, _, body = publish(t, app, seeded.ID, second.ID, nil)
 	if response.StatusCode != fiber.StatusConflict || decodeError(t, body).Code != "template.stale_base" {
 		t.Fatalf("publishing over a changed seed = %d %s, want 409 template.stale_base", response.StatusCode, body)
 	}
@@ -478,7 +479,7 @@ func TestChangingTheMainSourceKeepsTheOtherSources(t *testing.T) {
 	if !sameString(withSources.JSXSource, panelSource) || withSources.MainMode != "jsx" {
 		t.Fatalf("draft = %+v, want the JSX source kept as the Main source", withSources)
 	}
-	if response, _, body := publish(t, app, created.ID, withSources.ID, false); response.StatusCode != fiber.StatusOK {
+	if response, _, body := publish(t, app, created.ID, withSources.ID, nil); response.StatusCode != fiber.StatusOK {
 		t.Fatalf("publish = %d %s", response.StatusCode, body)
 	}
 
@@ -507,7 +508,7 @@ func TestChangingTheMainSourceKeepsTheOtherSources(t *testing.T) {
 
 	// Published, the switch sends the Visual render. The JSX source stays in
 	// the version, not on the row, where the old panel would re-render it.
-	response, row, body := publish(t, app, created.ID, switched.ID, false)
+	response, row, body := publish(t, app, created.ID, switched.ID, nil)
 	if response.StatusCode != fiber.StatusOK {
 		t.Fatalf("publish the switch = %d %s", response.StatusCode, body)
 	}
@@ -742,7 +743,7 @@ func TestPublishesTheServerRefuses(t *testing.T) {
 	current := edit("<p>İkinci</p>")
 	before := templateRow(t, db, created.ID)
 
-	response, again, body := publish(t, app, created.ID, current, false)
+	response, again, body := publish(t, app, created.ID, current, nil)
 	if response.StatusCode != fiber.StatusOK || again.PublishedVersionID == nil || *again.PublishedVersionID != current {
 		t.Fatalf("publishing the version already sent = %d %s, want 200 and nothing changed", response.StatusCode, body)
 	}
@@ -750,7 +751,7 @@ func TestPublishesTheServerRefuses(t *testing.T) {
 		t.Fatalf("publishing the version already sent changed the row: %+v", after)
 	}
 
-	response, _, body = publish(t, app, created.ID, first, false)
+	response, _, body = publish(t, app, created.ID, first, nil)
 	if response.StatusCode != fiber.StatusConflict || decodeError(t, body).Code != "template.not_a_draft" {
 		t.Fatalf("publishing an earlier published version = %d %s, want 409 template.not_a_draft", response.StatusCode, body)
 	}
@@ -788,7 +789,7 @@ func TestPublishesTheServerRefuses(t *testing.T) {
 		t.Fatalf("restore = %d %s", response.StatusCode, body)
 	}
 	before = templateRow(t, db, created.ID)
-	response, _, body = publish(t, app, created.ID, restored.ID, false)
+	response, _, body = publish(t, app, created.ID, restored.ID, nil)
 	if refusal := decodeError(t, body); response.StatusCode != fiber.StatusBadRequest || refusal.Code != "template.invalid_body" || !namesField(refusal, "html_content") {
 		t.Fatalf("publishing a body the mailer cannot parse = %d %s, want 400 template.invalid_body naming html_content", response.StatusCode, body)
 	}
@@ -829,7 +830,7 @@ func TestAnArchivedTemplateTakesNoDraftsOrPublishes(t *testing.T) {
 	refused("a draft", response, body)
 	response, _, body = restore(t, app, created.ID, *created.PublishedVersionID)
 	refused("a restore", response, body)
-	response, _, body = publish(t, app, created.ID, draft.ID, true)
+	response, _, body = publish(t, app, created.ID, draft.ID, created.PublishedVersionID)
 	refused("a publish", response, body)
 
 	if after := templateRow(t, db, created.ID); !reflect.DeepEqual(before, after) {
@@ -1075,7 +1076,7 @@ func TestDraftResponsesAreServedAsDocumented(t *testing.T) {
 		"base_version_id": created.PublishedVersionID,
 	})
 	_, _, restored := restore(t, app, created.ID, *created.PublishedVersionID)
-	_, _, published := publish(t, app, created.ID, draft.ID, false)
+	_, _, published := publish(t, app, created.ID, draft.ID, nil)
 
 	for _, tc := range []struct {
 		path, status string
@@ -1130,7 +1131,7 @@ func TestPublishingAnotherMainSourceGivesTheOldPanelNoJSXToRerender(t *testing.T
 	if response.StatusCode != fiber.StatusCreated || !sameString(draft.JSXSource, panelSource) {
 		t.Fatalf("draft = %d %s, want HTML the Main source with the JSX source kept beside it", response.StatusCode, body)
 	}
-	if response, _, body := publish(t, app, created.ID, draft.ID, false); response.StatusCode != fiber.StatusOK {
+	if response, _, body := publish(t, app, created.ID, draft.ID, nil); response.StatusCode != fiber.StatusOK {
 		t.Fatalf("publish = %d %s", response.StatusCode, body)
 	}
 	row := templateRow(t, db, created.ID)
@@ -1183,5 +1184,74 @@ func TestASaveThatRepeatsItsBaseRecordsNothingBesideAnOlderDraft(t *testing.T) {
 	}
 	if after, _ := storedVersions(t, db, created.ID); len(after) != len(versions) {
 		t.Fatalf("versions = %d, want %d: nothing recorded", len(after), len(versions))
+	}
+}
+
+// Forcing names the version the operator saw and chose to replace: the
+// published_version_id of the conflict. If something else was published after
+// the conflict — a seed, another operator — forcing over what they saw would
+// quietly revert it, so it is refused again with a conflict naming the version
+// published now. Force that names no version is not force.
+func TestForcingOverAVersionTheOperatorDidNotSeeIsRefused(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	const key = "core.welcome"
+	seeded := seededTemplate(t, app, key)
+
+	response, draft, body := saveDraft(t, app, seeded.ID, map[string]any{
+		"subject": "Taslak", "main_mode": "html", "html_source": "<p>Taslak</p>",
+		"html_content": "<p>Taslak</p>", "plain_text_content": "Taslak", "base_version_id": seeded.PublishedVersionID,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("draft = %d %s", response.StatusCode, body)
+	}
+	seedWith := func(html string) uuid.UUID {
+		t.Helper()
+		response, body := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/"+key, map[string]any{
+			"name": "Hoş Geldin", "subject": "SKY LAB'e hoş geldin", "html_content": html, "plain_text_content": "Hoş geldin",
+			"react_email_content": seedPointerComment(key), "system": true,
+		})
+		if response.StatusCode != fiber.StatusOK {
+			t.Fatalf("seed = %d %s", response.StatusCode, body)
+		}
+		return *templateRow(t, db, seeded.ID).PublishedVersionID
+	}
+	seen := seedWith("<p>Koyu tema</p>")
+
+	response, _, body = publish(t, app, seeded.ID, draft.ID, nil)
+	if conflict := decodeError(t, body); response.StatusCode != fiber.StatusConflict || conflict.Params["published_version_id"] != seen.String() {
+		t.Fatalf("publish = %d %s, want 409 naming %s", response.StatusCode, body, seen)
+	}
+
+	// Before the operator confirms, the seed runs again with another fix.
+	later := seedWith("<p>Koyu tema ve logo</p>")
+	before := templateRow(t, db, seeded.ID)
+	response, _, body = publish(t, app, seeded.ID, draft.ID, &seen)
+	conflict := decodeError(t, body)
+	if response.StatusCode != fiber.StatusConflict || conflict.Code != "template.stale_base" ||
+		conflict.Params["version_id"] != draft.ID.String() || conflict.Params["base_version_id"] != seeded.PublishedVersionID.String() ||
+		conflict.Params["published_version_id"] != later.String() {
+		t.Fatalf("forcing over %s after %s was published = %d %s, want a fresh 409 naming %s", seen, later, response.StatusCode, body, later)
+	}
+	if after := templateRow(t, db, seeded.ID); !reflect.DeepEqual(before, after) {
+		t.Fatalf("a refused force changed the row: %+v", after)
+	}
+
+	for name, force := range map[string]any{
+		"force: true":                 true,
+		"force naming no version":     map[string]any{},
+		"force naming a non-UUID":     map[string]any{"over_version_id": "sürüm"},
+		"force: null over_version_id": map[string]any{"over_version_id": nil},
+	} {
+		response, body := sendJSON(t, app, fiber.MethodPost, "/templates/"+seeded.ID.String()+"/versions/"+draft.ID.String()+"/publish",
+			map[string]any{"force": force})
+		if response.StatusCode != fiber.StatusBadRequest || decodeError(t, body).Code != "validation.error" {
+			t.Errorf("publishing with %s = %d %s, want 400 validation.error", name, response.StatusCode, body)
+		}
+	}
+
+	response, published, body := publish(t, app, seeded.ID, draft.ID, &later)
+	if response.StatusCode != fiber.StatusOK || published.PublishedVersionID == nil || *published.PublishedVersionID != draft.ID {
+		t.Fatalf("forcing over what is published now = %d %s, want the draft published", response.StatusCode, body)
 	}
 }

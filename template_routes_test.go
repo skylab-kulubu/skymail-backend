@@ -255,7 +255,7 @@ func TestTemplateDraftRefusalsAnswerInTheAPIsErrorShape(t *testing.T) {
 	if status, body := sendJSON(t, app, fiber.MethodDelete, "/v1/templates/"+id, nil); status != fiber.StatusNoContent {
 		t.Fatalf("archive = %d %s", status, body)
 	}
-	status, body = sendJSON(t, app, fiber.MethodPost, "/v1/templates/"+id+"/versions/"+draft.ID.String()+"/publish", map[string]any{"force": true})
+	status, body = sendJSON(t, app, fiber.MethodPost, "/v1/templates/"+id+"/versions/"+draft.ID.String()+"/publish", map[string]any{"force": map[string]any{"over_version_id": edited.PublishedVersionID}})
 	if e := decode(body); status != fiber.StatusConflict || e.Code != "template.archived" {
 		t.Errorf("publishing on an archived template = %d %s, want 409 template.archived", status, body)
 	}

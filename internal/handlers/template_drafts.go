@@ -109,13 +109,13 @@ func (h *templateHandlerImpl) SaveTemplateDraft(c fiber.Ctx) error {
 //	@Summary		Publish a draft
 //	@Description	Makes a draft the version the template sends: the draft is marked published and copied onto the template row — subject, HTML and plain text, and react_email_content: the JSX source when JSX is the Main source, an empty string otherwise, so the old panel never re-renders a JSX source that is not what is sent — in one transaction. Answers with the template as publishing left it. Publishing the version the template already sends changes nothing and answers the same way.
 //	@Description
-//	@Description	A draft is stale when its base_version_id is not the template's published_version_id: someone published after it was started, and publishing it would quietly revert their version. That is refused with 409 template.stale_base, whose params name version_id (the draft), base_version_id (what it started from) and published_version_id (what is sent now), so both can be shown side by side. {"force": true} publishes it anyway; the replaced version stays in the history.
+//	@Description	A draft is stale when its base_version_id is not the template's published_version_id: someone published after it was started, and publishing it would quietly revert their version. That is refused with 409 template.stale_base, whose params name version_id (the draft), base_version_id (what it started from) and published_version_id (what is sent now), so both can be shown side by side. The operator's confirmation names the version they saw: {"force": {"over_version_id": <published_version_id from the conflict>}} publishes the draft over it, and the replaced version stays in the history. If another version was published since, the confirmation is refused with a fresh 409 naming it.
 //	@Tags			Templates
 //	@Accept			json
 //	@Produce		json
 //	@Param			id			path		string							true	"Template ID"
 //	@Param			versionId	path		string							true	"Version ID of the draft"
-//	@Param			publish		body		requests.PublishTemplateVersion	false	"Whether to publish over a newer version"
+//	@Param			publish		body		requests.PublishTemplateVersion	false	"The version a stale draft is published over"
 //	@Success		200			{object}	handlers.Template
 //	@Failure		400			{object}	apperrors.AppError	"validation.error or template.invalid_body"
 //	@Failure		403			{object}	apperrors.AppError	"Forbidden"
@@ -135,7 +135,17 @@ func (h *templateHandlerImpl) PublishTemplateVersion(c fiber.Ctx) error {
 		}
 	}
 
-	template, err := h.db.PublishTemplateDraft(c.Context(), templateID, versionID, params.Force, checkVersion)
+	var over *uuid.UUID
+	if params.Force != nil {
+		if params.Force.OverVersionID == uuid.Nil {
+			return apperrors.ErrValidation.WithParams(map[string]interface{}{
+				"errors": []validator.FieldError{{Field: "over_version_id", Code: "required"}},
+			})
+		}
+		over = &params.Force.OverVersionID
+	}
+
+	template, err := h.db.PublishTemplateDraft(c.Context(), templateID, versionID, over, checkVersion)
 	if err != nil {
 		return draftError(err)
 	}

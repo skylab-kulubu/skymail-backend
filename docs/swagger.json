@@ -583,11 +583,23 @@
                 ],
                 "type": "object"
             },
+            "requests.PublishOver": {
+                "description": "Publish a stale draft anyway, replacing the version named. Left out: a stale draft is refused.",
+                "properties": {
+                    "over_version_id": {
+                        "description": "The published_version_id of the template.stale_base conflict: the version the operator saw and chose to replace. If another has been published since, the publish is refused again, naming it. The replaced version stays in the history.",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "over_version_id"
+                ],
+                "type": "object"
+            },
             "requests.PublishTemplateVersion": {
                 "properties": {
                     "force": {
-                        "description": "Publish even though a newer version was published after the draft was started, replacing it. The replaced version stays in the history.",
-                        "type": "boolean"
+                        "$ref": "#/components/schemas/requests.PublishOver"
                     }
                 },
                 "type": "object"
@@ -2555,7 +2567,7 @@
         },
         "/templates/{id}/versions/{versionId}/publish": {
             "post": {
-                "description": "Makes a draft the version the template sends: the draft is marked published and copied onto the template row — subject, HTML and plain text, and react_email_content: the JSX source when JSX is the Main source, an empty string otherwise, so the old panel never re-renders a JSX source that is not what is sent — in one transaction. Answers with the template as publishing left it. Publishing the version the template already sends changes nothing and answers the same way.\n\nA draft is stale when its base_version_id is not the template's published_version_id: someone published after it was started, and publishing it would quietly revert their version. That is refused with 409 template.stale_base, whose params name version_id (the draft), base_version_id (what it started from) and published_version_id (what is sent now), so both can be shown side by side. {\"force\": true} publishes it anyway; the replaced version stays in the history.",
+                "description": "Makes a draft the version the template sends: the draft is marked published and copied onto the template row — subject, HTML and plain text, and react_email_content: the JSX source when JSX is the Main source, an empty string otherwise, so the old panel never re-renders a JSX source that is not what is sent — in one transaction. Answers with the template as publishing left it. Publishing the version the template already sends changes nothing and answers the same way.\n\nA draft is stale when its base_version_id is not the template's published_version_id: someone published after it was started, and publishing it would quietly revert their version. That is refused with 409 template.stale_base, whose params name version_id (the draft), base_version_id (what it started from) and published_version_id (what is sent now), so both can be shown side by side. The operator's confirmation names the version they saw: {\"force\": {\"over_version_id\": \u003cpublished_version_id from the conflict\u003e}} publishes the draft over it, and the replaced version stays in the history. If another version was published since, the confirmation is refused with a fresh 409 naming it.",
                 "parameters": [
                     {
                         "description": "Template ID",
@@ -2587,13 +2599,13 @@
                                     {
                                         "$ref": "#/components/schemas/requests.PublishTemplateVersion",
                                         "summary": "publish",
-                                        "description": "Whether to publish over a newer version"
+                                        "description": "The version a stale draft is published over"
                                     }
                                 ]
                             }
                         }
                     },
-                    "description": "Whether to publish over a newer version"
+                    "description": "The version a stale draft is published over"
                 },
                 "responses": {
                     "200": {
