@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -257,7 +258,7 @@ func (c *clientImpl) ClientRoleMembers(ctx context.Context, clientID, role strin
 
 	// A group's role mapping reaches every group below it, which is what
 	// groupMembers walks.
-	groups, err := c.gc.GetGroupsByClientRole(ctx, token, c.realm, role, idOfClient)
+	groups, err := c.roleGroups(ctx, token, idOfClient, role)
 	if err != nil {
 		return nil, err
 	}
@@ -280,4 +281,32 @@ func (c *clientImpl) ClientRoleMembers(ctx context.Context, clientID, role strin
 		enabled = append(enabled, u)
 	}
 	return enabled, nil
+}
+
+// roleGroups lists the groups a client role is mapped to, page by page as the
+// role's users are read.
+func (c *clientImpl) roleGroups(ctx context.Context, token, idOfClient, role string) ([]*gocloak.Group, error) {
+	out := make([]*gocloak.Group, 0)
+	const pageSize = 100
+	for first := 0; ; first += pageSize {
+		var page []*gocloak.Group
+		resp, err := c.gc.GetRequestWithBearerAuth(ctx, token).
+			SetResult(&page).
+			SetQueryParams(map[string]string{
+				"first":               strconv.Itoa(first),
+				"max":                 strconv.Itoa(pageSize),
+				"briefRepresentation": "true",
+			}).
+			Get(c.base + "/admin/realms/" + c.realm + "/clients/" + idOfClient + "/roles/" + url.PathEscape(role) + "/groups")
+		if err != nil {
+			return nil, err
+		}
+		if resp.IsError() {
+			return nil, fmt.Errorf("keycloak: groups of role %q: %s", role, resp.Status())
+		}
+		out = append(out, page...)
+		if len(page) < pageSize {
+			return out, nil
+		}
+	}
 }

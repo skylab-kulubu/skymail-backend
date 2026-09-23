@@ -3,6 +3,7 @@ package keycloak_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -172,5 +173,62 @@ func TestClientRoleMembersRefusesAnUnknownClient(t *testing.T) {
 
 	if _, err := kc.ClientRoleMembers(context.Background(), "skymail", "skymail:mails:approve"); err == nil {
 		t.Fatal("an unknown client gave role members")
+	}
+}
+
+// The groups that hold a role are read page by page, like its users: a role
+// on more groups than one page holds reaches the members of the last one too.
+func TestClientRoleMembersReadsEveryPageOfGroups(t *testing.T) {
+	t.Parallel()
+	const clientUUID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+	const lastGroup = "99999999-9999-9999-9999-999999999999"
+	member := map[string]any{"id": "11111111-1111-1111-1111-111111111111", "email": "son@example.com", "enabled": true}
+	firstPage := make([]any, 100)
+	for i := range firstPage {
+		firstPage[i] = map[string]any{"id": fmt.Sprintf("00000000-0000-0000-0000-%012d", i), "name": fmt.Sprint(i)}
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		admin := "/admin/realms/e-skylab"
+		role := admin + "/clients/" + clientUUID + "/roles/skymail:mails:approve"
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/protocol/openid-connect/token"):
+			_, _ = w.Write([]byte(`{"access_token":"tok","expires_in":300,"token_type":"Bearer"}`))
+		case r.URL.Path == admin+"/clients":
+			_ = json.NewEncoder(w).Encode([]any{map[string]any{"id": clientUUID, "clientId": "skymail"}})
+		case r.URL.Path == role+"/users":
+			_ = json.NewEncoder(w).Encode([]any{})
+		case r.URL.Path == role+"/groups":
+			switch r.URL.Query().Get("first") {
+			case "", "0":
+				_ = json.NewEncoder(w).Encode(firstPage)
+			case "100":
+				_ = json.NewEncoder(w).Encode([]any{map[string]any{"id": lastGroup, "name": "SON"}})
+			default:
+				_ = json.NewEncoder(w).Encode([]any{})
+			}
+		case strings.HasPrefix(r.URL.Path, admin+"/groups/") && strings.HasSuffix(r.URL.Path, "/children"):
+			_ = json.NewEncoder(w).Encode([]any{})
+		case r.URL.Path == admin+"/groups/"+lastGroup+"/members":
+			_ = json.NewEncoder(w).Encode([]any{member})
+		case strings.HasPrefix(r.URL.Path, admin+"/groups/") && strings.HasSuffix(r.URL.Path, "/members"):
+			_ = json.NewEncoder(w).Encode([]any{})
+		case strings.HasPrefix(r.URL.Path, admin+"/groups/"):
+			id := strings.TrimPrefix(r.URL.Path, admin+"/groups/")
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "name": id})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "skymail-backend", "secret")
+
+	members, err := kc.ClientRoleMembers(context.Background(), "skymail", "skymail:mails:approve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 1 || *members[0].Email != "son@example.com" {
+		t.Fatalf("role members = %v, want the last page's group's member", members)
 	}
 }
