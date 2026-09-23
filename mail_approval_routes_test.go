@@ -957,3 +957,164 @@ func TestADeclinedEditCanBeResubmitted(t *testing.T) {
 		t.Fatalf("sent %+v, want the resubmission", sent)
 	}
 }
+
+// A rejection carries a reason, sends nothing, and tells the submitter why;
+// the submitter may fix the request and resubmit it, and the rejection stays
+// in its history.
+func TestARejectionCarriesItsReasonAndCanBeResubmitted(t *testing.T) {
+	w := newApprovalWorld(t)
+	submitted := w.submit("elif", w.listSend())
+
+	for _, body := range []any{nil, map[string]any{}, map[string]any{"reason": "   "}} {
+		if status, _, failure := w.act("fatih", submitted.ID, "reject", body); status != fiber.StatusBadRequest || failure.Code != "validation.error" {
+			t.Errorf("reject with %v = %d %+v", body, status, failure)
+		}
+	}
+	status, rejected, failure := w.act("fatih", submitted.ID, "reject", map[string]any{"reason": "Tarih yanlış: başvurular 6 Nisan'da kapanıyor."})
+	if status != fiber.StatusOK || rejected.State != "rejected" || rejected.kinds() != "submitted,rejected" ||
+		*rejected.History[1].Note != "Tarih yanlış: başvurular 6 Nisan'da kapanıyor." {
+		t.Fatalf("reject = %d %+v %+v", status, failure, rejected.History)
+	}
+	if n := len(w.mail.of(w.freeBasic.ID)); n != 0 {
+		t.Fatalf("a rejection sent %d mails", n)
+	}
+	notices := w.mail.of(w.resolved.ID)
+	if len(notices) != 1 || notices[0].variables["Decision"] != "rejected" ||
+		notices[0].variables["DecisionNote"] != "Tarih yanlış: başvurular 6 Nisan'da kapanıyor." || notices[0].variables["DecidedBy"] != "Fatih Naz" {
+		t.Fatalf("approval-resolved = %+v", notices)
+	}
+	if status, _, failure := w.act("yusuf", submitted.ID, "approve", nil); status != fiber.StatusConflict || failure.Params["state"] != "rejected" {
+		t.Errorf("approving a rejected request = %d %+v", status, failure)
+	}
+	// Only the submitter resubmits, and only what was rejected or declined.
+	if status, _, _ := w.act("fatih", submitted.ID, "resubmit", w.listSend()); status != fiber.StatusForbidden {
+		t.Errorf("an approver resubmitting = %d", status)
+	}
+	pending := w.submit("elif", w.listSend())
+	if status, _, failure := w.act("elif", pending.ID, "resubmit", w.listSend()); status != fiber.StatusConflict || failure.Params["state"] != "pending" {
+		t.Errorf("resubmitting a pending request = %d %+v", status, failure)
+	}
+
+	fixed := w.listSend()
+	fixed["body_variables"].(map[string]any)["BodyHtml"] = "<p>Başvurular <strong>6 Nisan</strong>'da kapanıyor.</p>"
+	fixed["mail_list_id"] = w.group
+	status, resubmitted, failure := w.act("elif", submitted.ID, "resubmit", fixed)
+	if status != fiber.StatusOK || resubmitted.State != "pending" || resubmitted.kinds() != "submitted,rejected,resubmitted" {
+		t.Fatalf("resubmit = %d %+v %s", status, failure, resubmitted.kinds())
+	}
+	changes := resubmitted.History[2].Changes
+	if len(changes) != 2 || changes[0].Field != "audience" || !strings.Contains(string(changes[0].After), w.group.String()) {
+		t.Errorf("resubmitted changes = %+v", changes)
+	}
+	variableChange(t, changes, "BodyHtml")
+	if resubmitted.History[1].Kind != "rejected" || *resubmitted.History[1].Note == "" {
+		t.Errorf("the rejection left the history: %+v", resubmitted.History)
+	}
+
+	// A resubmission is checked as a submission is.
+	if status, _, failure := w.act("elif", pending.ID, "reject", map[string]any{"reason": "x"}); status != fiber.StatusForbidden || failure.Code != "server.forbidden" {
+		t.Errorf("the submitter rejecting = %d %+v", status, failure)
+	}
+	w.act("fatih", pending.ID, "reject", map[string]any{"reason": "Liste yanlış."})
+	broken := w.listSend()
+	delete(broken["body_variables"].(map[string]any), "Subject")
+	if status, _, failure := w.act("elif", pending.ID, "resubmit", broken); status != fiber.StatusUnprocessableEntity || failure.Code != "mail_approval.required_variables_missing" {
+		t.Errorf("resubmitting without a subject = %d %+v", status, failure)
+	}
+
+	if status, approved, failure := w.act("yusuf", submitted.ID, "approve", nil); status != fiber.StatusOK || approved.State != "approved" {
+		t.Fatalf("approve the resubmission = %d %+v", status, failure)
+	}
+	sent := w.mail.of(w.freeBasic.ID)
+	if len(sent) != 1 || sent[0].kind != "group" || !sameJSON(t, w.task(sent[0].taskID).BodyVariables, fixed["body_variables"]) {
+		t.Fatalf("sent %+v, want the resubmission to the group", sent)
+	}
+}
+
+// A request undecided seven days after it was submitted expires: it can no
+// longer be approved or accepted, it is never sent, and its submitter hears
+// so once. Acting on it, reading it or listing it expires it on the spot;
+// the sweep expires the ones no one looks at.
+func TestAnUndecidedRequestExpiresAndIsNeverSent(t *testing.T) {
+	w := newApprovalWorld(t)
+	pending := w.submit("elif", w.listSend())
+	returned := w.submit("elif", w.listSend())
+	edit := w.listSend()["body_variables"].(map[string]any)
+	edit["Heading"] = "Son gün"
+	w.act("fatih", returned.ID, "return", map[string]any{"body_variables": edit})
+	rejected := w.submit("elif", w.listSend())
+	w.act("fatih", rejected.ID, "reject", map[string]any{"reason": "Hayır."})
+
+	w.advance(7*24*time.Hour - time.Second)
+	if _, read := w.get("fatih", pending.ID); read.State != "pending" {
+		t.Fatalf("a second before its deadline: %s", read.State)
+	}
+	w.advance(time.Second)
+
+	status, _, failure := w.act("fatih", pending.ID, "approve", nil)
+	if status != fiber.StatusConflict || failure.Code != "mail_approval.expired" {
+		t.Fatalf("approving at the deadline = %d %+v", status, failure)
+	}
+	status, _, failure = w.act("elif", returned.ID, "accept", nil)
+	if status != fiber.StatusConflict || failure.Code != "mail_approval.expired" {
+		t.Fatalf("accepting at the deadline = %d %+v", status, failure)
+	}
+	for _, id := range []uuid.UUID{pending.ID, returned.ID} {
+		_, read := w.get("elif", id)
+		if read.State != "expired" || read.History[len(read.History)-1].Kind != "expired" || read.History[len(read.History)-1].Actor != nil {
+			t.Errorf("after the deadline: %s %s", read.State, read.kinds())
+		}
+		if status, _, failure := w.act("fatih", id, "approve", nil); status != fiber.StatusConflict || failure.Code != "mail_approval.state_conflict" {
+			t.Errorf("approving an expired request = %d %+v", status, failure)
+		}
+	}
+	// A rejected request is not waiting on anyone, so it does not expire.
+	if _, read := w.get("elif", rejected.ID); read.State != "rejected" {
+		t.Errorf("a rejected request past its deadline is %s", read.State)
+	}
+	if n := len(w.mail.of(w.freeBasic.ID)); n != 0 {
+		t.Fatalf("expired requests sent %d mails", n)
+	}
+	var expiredNotices []sentMail
+	for _, notice := range w.mail.of(w.resolved.ID) {
+		if notice.variables["Decision"] == "expired" {
+			expiredNotices = append(expiredNotices, notice)
+		}
+	}
+	if len(expiredNotices) != 2 || expiredNotices[0].recipients[0] != elif.email || expiredNotices[0].sentBy != "skymail" ||
+		expiredNotices[0].variables["DecidedBy"] != "SkyMail" || expiredNotices[0].variables["DecisionNote"] == "" {
+		t.Fatalf("expiry notices = %+v", expiredNotices)
+	}
+
+	// The sweep expires what no one opened, each once.
+	unread := w.submit("elif", w.listSend())
+	unreadToo := w.submit("elif", w.listSend())
+	w.advance(8 * 24 * time.Hour)
+	expired, err := w.handler.ExpireDue(context.Background())
+	if err != nil || expired != 2 {
+		t.Fatalf("sweep = %d, %v; want the two unread requests", expired, err)
+	}
+	if expired, err := w.handler.ExpireDue(context.Background()); err != nil || expired != 0 {
+		t.Fatalf("second sweep = %d, %v; want nothing", expired, err)
+	}
+	for _, id := range []uuid.UUID{unread.ID, unreadToo.ID} {
+		if _, read := w.get("elif", id); read.State != "expired" {
+			t.Errorf("after the sweep: %s", read.State)
+		}
+	}
+	if n := len(w.mail.of(w.resolved.ID)); n != 2+2+2 {
+		t.Errorf("approval-resolved mails = %d, want a return, a rejection and four expiries", n)
+	}
+
+	// Listing expires what is due before it lists.
+	listed := w.submit("elif", w.listSend())
+	w.advance(8 * 24 * time.Hour)
+	var items []approvalAnswer
+	w.call("fatih", fiber.MethodGet, "/v1/mail_approvals?state=pending", nil, &items)
+	if len(items) != 0 {
+		t.Errorf("pending after the deadline: %d", len(items))
+	}
+	if _, read := w.get("elif", listed.ID); read.State != "expired" {
+		t.Errorf("listed request is %s", read.State)
+	}
+}
