@@ -26,10 +26,13 @@ CREATE TABLE mail_approvals
     id                  UUID PRIMARY KEY             DEFAULT gen_random_uuid(),
     -- The Keycloak subject of the submitter's token, and the name and e-mail
     -- it carried: the decision is mailed there, also when SkyMail itself
-    -- expires the request and there is no token to ask.
-    submitter_sub       TEXT                NOT NULL,
-    submitter_name      TEXT,
-    submitter_email     TEXT,
+    -- expires the request and there is no token to ask. Only an address
+    -- Keycloak verified is kept; submitter_email_unverified says the token
+    -- carried one it had not, so the decision could not be mailed.
+    submitter_sub              TEXT                NOT NULL,
+    submitter_name             TEXT,
+    submitter_email            TEXT,
+    submitter_email_unverified BOOLEAN             NOT NULL DEFAULT false,
     state               mail_approval_state NOT NULL DEFAULT 'pending',
     -- Templates are archived, never deleted (ADR-0042).
     template_id         UUID                NOT NULL REFERENCES templates (id),
@@ -51,6 +54,7 @@ CREATE TABLE mail_approvals
     task_id             UUID REFERENCES mail_tasks (id),
     CONSTRAINT mail_approvals_template_version
         FOREIGN KEY (template_id, template_version_id) REFERENCES template_versions (template_id, id),
+    CONSTRAINT mail_approvals_submitter_email_verified CHECK (submitter_email IS NULL OR NOT submitter_email_unverified),
     CONSTRAINT mail_approvals_one_audience CHECK ((mail_list_id IS NULL) <> (recipient_email IS NULL)),
     CONSTRAINT mail_approvals_recipient_name CHECK (recipient_email IS NOT NULL OR recipient_full_name IS NULL),
     CONSTRAINT mail_approvals_variables_object CHECK (jsonb_typeof(body_variables) = 'object'),

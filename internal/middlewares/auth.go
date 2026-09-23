@@ -28,6 +28,7 @@ type userInfo struct {
 	Name              string `json:"name"`
 	PreferredUsername string `json:"preferred_username"`
 	Email             string `json:"email"`
+	EmailVerified     bool   `json:"email_verified"`
 	ResourceAccess    map[string]struct {
 		Roles []string `json:"roles"`
 	} `json:"resource_access"`
@@ -112,15 +113,20 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) er
 		c.Locals("user_name", name)
 	}
 	if email := strings.TrimSpace(info.Email); email != "" {
-		c.Locals("user_email", email)
+		if info.EmailVerified {
+			c.Locals("user_email", email)
+		} else {
+			c.Locals("user_email_unverified", true)
+		}
 	}
 	return c.Next()
 }
 
 // displayName is what the caller is called: a person's token carries their
 // name, a service account's only its username. Handlers read it as the
-// "user_name" local beside "user_id", and the address the token carries, if
-// any, as "user_email".
+// "user_name" local beside "user_id", and the address the token carries as
+// "user_email" — only once Keycloak has verified it; an unverified one is
+// left out, and "user_email_unverified" says there was one.
 func (info userInfo) displayName() string {
 	if name := strings.TrimSpace(info.Name); name != "" {
 		return name

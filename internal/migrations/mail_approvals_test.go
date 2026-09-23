@@ -72,6 +72,7 @@ func TestMailApprovalMigrationGoesUpAndDown(t *testing.T) {
 	for statement, constraint := range map[string]string{
 		`UPDATE mail_approvals SET mail_list_id = gen_random_uuid()`:                                                     "mail_approvals_one_audience",
 		`UPDATE mail_approvals SET recipient_email = NULL`:                                                               "mail_approvals_one_audience",
+		`UPDATE mail_approvals SET submitter_email = 'a@b.c', submitter_email_unverified = true`:                         "mail_approvals_submitter_email_verified",
 		`UPDATE mail_approvals SET body_variables = '[]'`:                                                                "mail_approvals_variables_object",
 		`UPDATE mail_approvals SET deadline_at = submitted_at`:                                                           "mail_approvals_deadline_after_submission",
 		`UPDATE mail_approvals SET submitted_at = created_at - INTERVAL '1 second'`:                                      "mail_approvals_submitted_after_created",

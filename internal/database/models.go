@@ -237,22 +237,23 @@ func (ns NullTemplateAuthorKind) Value() (driver.Value, error) {
 }
 
 type MailApproval struct {
-	ID                uuid.UUID         `json:"id"`
-	SubmitterSub      string            `json:"submitter_sub"`
-	SubmitterName     *string           `json:"submitter_name"`
-	SubmitterEmail    *string           `json:"submitter_email"`
-	State             MailApprovalState `json:"state"`
-	TemplateID        uuid.UUID         `json:"template_id"`
-	TemplateVersionID uuid.UUID         `json:"template_version_id"`
-	MailListID        *uuid.UUID        `json:"mail_list_id"`
-	RecipientEmail    *string           `json:"recipient_email"`
-	RecipientFullName *string           `json:"recipient_full_name"`
-	BodyVariables     []byte            `json:"body_variables"`
-	CreatedAt         time.Time         `json:"created_at"`
-	SubmittedAt       time.Time         `json:"submitted_at"`
-	DeadlineAt        time.Time         `json:"deadline_at"`
-	UpdatedAt         time.Time         `json:"updated_at"`
-	TaskID            *uuid.UUID        `json:"task_id"`
+	ID                       uuid.UUID         `json:"id"`
+	SubmitterSub             string            `json:"submitter_sub"`
+	SubmitterName            *string           `json:"submitter_name"`
+	SubmitterEmail           *string           `json:"submitter_email"`
+	SubmitterEmailUnverified bool              `json:"submitter_email_unverified"`
+	State                    MailApprovalState `json:"state"`
+	TemplateID               uuid.UUID         `json:"template_id"`
+	TemplateVersionID        uuid.UUID         `json:"template_version_id"`
+	MailListID               *uuid.UUID        `json:"mail_list_id"`
+	RecipientEmail           *string           `json:"recipient_email"`
+	RecipientFullName        *string           `json:"recipient_full_name"`
+	BodyVariables            []byte            `json:"body_variables"`
+	CreatedAt                time.Time         `json:"created_at"`
+	SubmittedAt              time.Time         `json:"submitted_at"`
+	DeadlineAt               time.Time         `json:"deadline_at"`
+	UpdatedAt                time.Time         `json:"updated_at"`
+	TaskID                   *uuid.UUID        `json:"task_id"`
 }
 
 type MailApprovalEvent struct {

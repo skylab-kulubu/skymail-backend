@@ -156,6 +156,9 @@ func (h *mailApprovalHandlerImpl) notifyApprovers(ctx context.Context, view data
 func (h *mailApprovalHandlerImpl) notifySubmitter(ctx context.Context, view database.GetMailApprovalRow, notice approvalNotice) *MailApprovalNotification {
 	if deref(view.SubmitterEmail) == "" {
 		problem := "no_address"
+		if view.SubmitterEmailUnverified {
+			problem = "unverified_address"
+		}
 		return &MailApprovalNotification{TemplateKey: approvalResolvedKey, Problem: &problem}
 	}
 	sender := notice.by

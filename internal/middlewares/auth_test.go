@@ -204,34 +204,39 @@ func TestAuthenticatedNameIsTheTokensNameOrUsername(t *testing.T) {
 
 // A Mail onayı decision is mailed to whoever submitted the request, also when
 // SkyMail itself expires it days later with no token to ask, so the address
-// the token carried is kept at submission. A token with none leaves it unset.
-func TestAuthenticatedEmailIsTheTokensEmail(t *testing.T) {
+// the token carried is kept at submission — only one Keycloak has verified:
+// an unverified one is taken as none, and "user_email_unverified" says why.
+func TestAuthenticatedEmailIsTheTokensVerifiedEmail(t *testing.T) {
 	t.Parallel()
 
 	for name, tc := range map[string]struct {
-		claims string
-		want   any
+		claims     string
+		want       any
+		unverified any
 	}{
-		"person":  {`"name":"Ada Yılmaz","email":"ada@yildizskylab.com"`, "ada@yildizskylab.com"},
-		"blank":   {`"name":"Ada Yılmaz","email":" "`, nil},
-		"missing": {`"preferred_username":"service-account-skymail-seed"`, nil},
+		"verified":   {`"name":"Ada Yılmaz","email":"ada@yildizskylab.com","email_verified":true`, "ada@yildizskylab.com", nil},
+		"unverified": {`"name":"Ada Yılmaz","email":"ada@yildizskylab.com","email_verified":false`, nil, true},
+		"unsaid":     {`"name":"Ada Yılmaz","email":"ada@yildizskylab.com"`, nil, true},
+		"blank":      {`"name":"Ada Yılmaz","email":" ","email_verified":true`, nil, nil},
+		"missing":    {`"preferred_username":"service-account-skymail-seed"`, nil, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			body := `{"sub":"11111111-1111-4111-8111-111111111111",` + tc.claims +
 				`,"resource_access":{"skymail":{"roles":["skymail:access"]}}}`
-			var got any
+			var got, unverified any
 			app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
 			app.Use(NewAuthMiddleware("skymail", userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body)).Authenticate)
 			app.Get("/probe", func(c fiber.Ctx) error {
 				got = c.Locals("user_email")
+				unverified = c.Locals("user_email_unverified")
 				return c.SendStatus(fiber.StatusNoContent)
 			})
 
 			if response := requestWithToken(t, app, "good.token.value"); response.StatusCode != fiber.StatusNoContent {
 				t.Fatalf("status = %d, want 204", response.StatusCode)
 			}
-			if got != tc.want {
-				t.Fatalf("user_email = %#v, want %#v", got, tc.want)
+			if got != tc.want || unverified != tc.unverified {
+				t.Fatalf("user_email = %#v, user_email_unverified = %#v; want %#v, %#v", got, unverified, tc.want, tc.unverified)
 			}
 		})
 	}

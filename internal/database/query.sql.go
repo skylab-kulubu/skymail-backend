@@ -425,28 +425,30 @@ func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
 }
 
 const createMailApproval = `-- name: CreateMailApproval :one
-INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, template_id, template_version_id,
-                            mail_list_id, recipient_email, recipient_full_name, body_variables,
+INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, submitter_email_unverified, template_id,
+                            template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables,
                             created_at, submitted_at, deadline_at, updated_at)
-VALUES ($1, $2, $3, $4,
-        $5, $6, $7,
-        $8, $9, $10, $10, $11,
-        $10)
-RETURNING id, submitter_sub, submitter_name, submitter_email, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+VALUES ($1, $2, $3,
+        $4, $5,
+        $6, $7, $8,
+        $9, $10, $11, $11, $12,
+        $11)
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
 `
 
 type CreateMailApprovalParams struct {
-	SubmitterSub      string     `json:"submitter_sub"`
-	SubmitterName     *string    `json:"submitter_name"`
-	SubmitterEmail    *string    `json:"submitter_email"`
-	TemplateID        uuid.UUID  `json:"template_id"`
-	TemplateVersionID uuid.UUID  `json:"template_version_id"`
-	MailListID        *uuid.UUID `json:"mail_list_id"`
-	RecipientEmail    *string    `json:"recipient_email"`
-	RecipientFullName *string    `json:"recipient_full_name"`
-	BodyVariables     []byte     `json:"body_variables"`
-	At                time.Time  `json:"at"`
-	DeadlineAt        time.Time  `json:"deadline_at"`
+	SubmitterSub             string     `json:"submitter_sub"`
+	SubmitterName            *string    `json:"submitter_name"`
+	SubmitterEmail           *string    `json:"submitter_email"`
+	SubmitterEmailUnverified bool       `json:"submitter_email_unverified"`
+	TemplateID               uuid.UUID  `json:"template_id"`
+	TemplateVersionID        uuid.UUID  `json:"template_version_id"`
+	MailListID               *uuid.UUID `json:"mail_list_id"`
+	RecipientEmail           *string    `json:"recipient_email"`
+	RecipientFullName        *string    `json:"recipient_full_name"`
+	BodyVariables            []byte     `json:"body_variables"`
+	At                       time.Time  `json:"at"`
+	DeadlineAt               time.Time  `json:"deadline_at"`
 }
 
 // A new Mail onayı request, pending until its deadline. Every later write of
@@ -458,6 +460,7 @@ func (q *Queries) CreateMailApproval(ctx context.Context, arg CreateMailApproval
 		arg.SubmitterSub,
 		arg.SubmitterName,
 		arg.SubmitterEmail,
+		arg.SubmitterEmailUnverified,
 		arg.TemplateID,
 		arg.TemplateVersionID,
 		arg.MailListID,
@@ -473,6 +476,7 @@ func (q *Queries) CreateMailApproval(ctx context.Context, arg CreateMailApproval
 		&i.SubmitterSub,
 		&i.SubmitterName,
 		&i.SubmitterEmail,
+		&i.SubmitterEmailUnverified,
 		&i.State,
 		&i.TemplateID,
 		&i.TemplateVersionID,
@@ -1065,7 +1069,7 @@ func (q *Queries) GetDailySentCounts(ctx context.Context, arg GetDailySentCounts
 }
 
 const getMailApproval = `-- name: GetMailApproval :one
-SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.recipient_email, a.recipient_full_name, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.task_id,
+SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.recipient_email, a.recipient_full_name, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.task_id,
        t.name                             AS template_name,
        t.key                              AS template_key,
        t.published_version_id             AS template_published_version_id,
@@ -1083,6 +1087,7 @@ type GetMailApprovalRow struct {
 	SubmitterSub               string            `json:"submitter_sub"`
 	SubmitterName              *string           `json:"submitter_name"`
 	SubmitterEmail             *string           `json:"submitter_email"`
+	SubmitterEmailUnverified   bool              `json:"submitter_email_unverified"`
 	State                      MailApprovalState `json:"state"`
 	TemplateID                 uuid.UUID         `json:"template_id"`
 	TemplateVersionID          uuid.UUID         `json:"template_version_id"`
@@ -1114,6 +1119,7 @@ func (q *Queries) GetMailApproval(ctx context.Context, id uuid.UUID) (GetMailApp
 		&i.SubmitterSub,
 		&i.SubmitterName,
 		&i.SubmitterEmail,
+		&i.SubmitterEmailUnverified,
 		&i.State,
 		&i.TemplateID,
 		&i.TemplateVersionID,
@@ -1731,7 +1737,7 @@ func (q *Queries) ListMailApprovalEvents(ctx context.Context, approvalID uuid.UU
 }
 
 const listMailApprovals = `-- name: ListMailApprovals :many
-SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.recipient_email, a.recipient_full_name, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.task_id,
+SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.recipient_email, a.recipient_full_name, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.task_id,
        t.name                             AS template_name,
        t.key                              AS template_key,
        t.published_version_id             AS template_published_version_id,
@@ -1762,6 +1768,7 @@ type ListMailApprovalsRow struct {
 	SubmitterSub               string            `json:"submitter_sub"`
 	SubmitterName              *string           `json:"submitter_name"`
 	SubmitterEmail             *string           `json:"submitter_email"`
+	SubmitterEmailUnverified   bool              `json:"submitter_email_unverified"`
 	State                      MailApprovalState `json:"state"`
 	TemplateID                 uuid.UUID         `json:"template_id"`
 	TemplateVersionID          uuid.UUID         `json:"template_version_id"`
@@ -1806,6 +1813,7 @@ func (q *Queries) ListMailApprovals(ctx context.Context, arg ListMailApprovalsPa
 			&i.SubmitterSub,
 			&i.SubmitterName,
 			&i.SubmitterEmail,
+			&i.SubmitterEmailUnverified,
 			&i.State,
 			&i.TemplateID,
 			&i.TemplateVersionID,
@@ -2158,7 +2166,7 @@ func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVers
 }
 
 const lockDueMailApproval = `-- name: LockDueMailApproval :one
-SELECT id, submitter_sub, submitter_name, submitter_email, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
 FROM mail_approvals
 WHERE state IN ('pending', 'returned')
   AND deadline_at <= $1
@@ -2176,6 +2184,7 @@ func (q *Queries) LockDueMailApproval(ctx context.Context, asOf time.Time) (Mail
 		&i.SubmitterSub,
 		&i.SubmitterName,
 		&i.SubmitterEmail,
+		&i.SubmitterEmailUnverified,
 		&i.State,
 		&i.TemplateID,
 		&i.TemplateVersionID,
@@ -2193,7 +2202,7 @@ func (q *Queries) LockDueMailApproval(ctx context.Context, asOf time.Time) (Mail
 }
 
 const lockMailApproval = `-- name: LockMailApproval :one
-SELECT id, submitter_sub, submitter_name, submitter_email, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
 FROM mail_approvals
 WHERE id = $1
     FOR UPDATE NOWAIT
@@ -2211,6 +2220,7 @@ func (q *Queries) LockMailApproval(ctx context.Context, id uuid.UUID) (MailAppro
 		&i.SubmitterSub,
 		&i.SubmitterName,
 		&i.SubmitterEmail,
+		&i.SubmitterEmailUnverified,
 		&i.State,
 		&i.TemplateID,
 		&i.TemplateVersionID,
@@ -2863,7 +2873,7 @@ SET state               = 'pending',
     deadline_at         = $8,
     updated_at          = $7
 WHERE id = $9
-RETURNING id, submitter_sub, submitter_name, submitter_email, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
 `
 
 type ResubmitMailApprovalParams struct {
@@ -2898,6 +2908,7 @@ func (q *Queries) ResubmitMailApproval(ctx context.Context, arg ResubmitMailAppr
 		&i.SubmitterSub,
 		&i.SubmitterName,
 		&i.SubmitterEmail,
+		&i.SubmitterEmailUnverified,
 		&i.State,
 		&i.TemplateID,
 		&i.TemplateVersionID,
@@ -2921,7 +2932,7 @@ SET state       = $1,
     deadline_at = COALESCE($3, deadline_at),
     updated_at  = $4
 WHERE id = $5
-RETURNING id, submitter_sub, submitter_name, submitter_email, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
 `
 
 type SetMailApprovalStateParams struct {
@@ -2947,6 +2958,7 @@ func (q *Queries) SetMailApprovalState(ctx context.Context, arg SetMailApprovalS
 		&i.SubmitterSub,
 		&i.SubmitterName,
 		&i.SubmitterEmail,
+		&i.SubmitterEmailUnverified,
 		&i.State,
 		&i.TemplateID,
 		&i.TemplateVersionID,
@@ -2968,7 +2980,7 @@ UPDATE mail_approvals
 SET body_variables = $1,
     updated_at     = $2
 WHERE id = $3
-RETURNING id, submitter_sub, submitter_name, submitter_email, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
 `
 
 type SetMailApprovalVariablesParams struct {
@@ -2985,6 +2997,7 @@ func (q *Queries) SetMailApprovalVariables(ctx context.Context, arg SetMailAppro
 		&i.SubmitterSub,
 		&i.SubmitterName,
 		&i.SubmitterEmail,
+		&i.SubmitterEmailUnverified,
 		&i.State,
 		&i.TemplateID,
 		&i.TemplateVersionID,

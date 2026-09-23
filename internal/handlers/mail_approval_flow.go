@@ -24,10 +24,12 @@ import (
 
 // approvalCaller is who makes a request, as their token names them.
 type approvalCaller struct {
-	sub      string
-	name     *string
-	email    *string
-	approver bool
+	sub   string
+	name  *string
+	email *string
+	// The token carried an address Keycloak had not verified; email is nil.
+	emailUnverified bool
+	approver        bool
 }
 
 func approvalCallerOf(c fiber.Ctx) (approvalCaller, error) {
@@ -42,6 +44,7 @@ func approvalCallerOf(c fiber.Ctx) (approvalCaller, error) {
 	if email, _ := c.Locals("user_email").(string); email != "" {
 		caller.email = &email
 	}
+	caller.emailUnverified, _ = c.Locals("user_email_unverified").(bool)
 	roles, _ := c.Locals("roles").([]string)
 	for _, role := range roles {
 		if role == MailApproverRole {

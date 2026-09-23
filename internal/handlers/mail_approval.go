@@ -219,8 +219,8 @@ type MailApprovalNotification struct {
 	TemplateKey string `json:"template_key" enums:"mail.approval-requested,mail.approval-resolved"`
 	// How many people it was queued to.
 	Notified int `json:"notified"`
-	// Why it reached no one or fewer than it was for: no_approvers (no one holding skymail:mails:approve has an address), approver_lookup_failed (Keycloak did not say in time), no_address (the submitter's token carried no e-mail), template_unavailable (the System template is not seeded), enqueue_failed. Null when it reached everyone.
-	Problem *string `json:"problem" enums:"no_approvers,approver_lookup_failed,no_address,template_unavailable,enqueue_failed"`
+	// Why it reached no one or fewer than it was for: no_approvers (no one holding skymail:mails:approve has an address), approver_lookup_failed (Keycloak did not say in time), no_address (the submitter's token carried no e-mail), unverified_address (it carried one Keycloak had not verified, which is not used), template_unavailable (the System template is not seeded), enqueue_failed. Null when it reached everyone.
+	Problem *string `json:"problem" enums:"no_approvers,approver_lookup_failed,no_address,unverified_address,template_unavailable,enqueue_failed"`
 }
 
 // MailApproval is a request whole: as the list shows it, with how many it
@@ -331,17 +331,18 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 	var id uuid.UUID
 	err = h.db.InTx(c.Context(), func(q *database.Queries) error {
 		created, err := q.CreateMailApproval(c.Context(), database.CreateMailApprovalParams{
-			SubmitterSub:      caller.sub,
-			SubmitterName:     caller.name,
-			SubmitterEmail:    caller.email,
-			TemplateID:        checked.template.ID,
-			TemplateVersionID: checked.versionID,
-			MailListID:        send.mailListID,
-			RecipientEmail:    send.recipientEmail,
-			RecipientFullName: send.recipientFullName,
-			BodyVariables:     send.variables,
-			At:                now,
-			DeadlineAt:        now.Add(mailApprovalDeadline),
+			SubmitterSub:             caller.sub,
+			SubmitterName:            caller.name,
+			SubmitterEmail:           caller.email,
+			SubmitterEmailUnverified: caller.emailUnverified,
+			TemplateID:               checked.template.ID,
+			TemplateVersionID:        checked.versionID,
+			MailListID:               send.mailListID,
+			RecipientEmail:           send.recipientEmail,
+			RecipientFullName:        send.recipientFullName,
+			BodyVariables:            send.variables,
+			At:                       now,
+			DeadlineAt:               now.Add(mailApprovalDeadline),
 		})
 		if err != nil {
 			return err

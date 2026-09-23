@@ -47,10 +47,17 @@ var (
 		[]string{"skymail:access", "skymail:mails:read"}}
 )
 
-// A member whose token carries no e-mail address.
-var adsiz = approvalPerson{"55555555-5555-4555-8555-555555555555", "Adsız Üye", "", []string{"skymail:access"}}
+// A member whose token carries no e-mail address, and one whose token carries
+// an address Keycloak has not verified.
+var (
+	adsiz          = approvalPerson{"55555555-5555-4555-8555-555555555555", "Adsız Üye", "", []string{"skymail:access"}}
+	dogrulanmamis  = approvalPerson{"66666666-6666-4666-8666-666666666666", "Doğrulanmamış Üye", "", []string{"skymail:access"}}
+	unverifiedSubs = map[string]bool{dogrulanmamis.sub: true}
+)
 
-var approvalPeople = map[string]approvalPerson{"elif": elif, "fatih": fatih, "yusuf": yusuf, "baska": baska, "adsiz": adsiz}
+var approvalPeople = map[string]approvalPerson{
+	"elif": elif, "fatih": fatih, "yusuf": yusuf, "baska": baska, "adsiz": adsiz, "dogrulanmamis": dogrulanmamis,
+}
 
 func (p approvalPerson) user() *gocloak.User {
 	id, email, first := p.sub, p.email, p.name
@@ -300,6 +307,9 @@ func newApprovalWorldWithPool(t *testing.T, poolSize int) *approvalWorld {
 		c.Locals("user_name", person.name)
 		if person.email != "" {
 			c.Locals("user_email", person.email)
+		}
+		if unverifiedSubs[person.sub] {
+			c.Locals("user_email_unverified", true)
 		}
 		c.Locals("roles", person.roles)
 		return c.Next()
@@ -1401,6 +1411,19 @@ func TestANotificationThatCannotGoOutSaysWhy(t *testing.T) {
 	if status != fiber.StatusOK || rejected.State != "rejected" || rejected.Notification == nil ||
 		rejected.Notification.Problem == nil || *rejected.Notification.Problem != "no_address" || rejected.Notification.Notified != 0 {
 		t.Fatalf("rejecting for a submitter with no address = %d %+v %+v", status, failure, rejected.Notification)
+	}
+
+	unverified := w.submit("dogrulanmamis", w.listSend())
+	if unverified.Submitter.Email != nil {
+		t.Errorf("an unverified address was kept: %v", *unverified.Submitter.Email)
+	}
+	status, rejected, failure = w.act("fatih", unverified.ID, "reject", map[string]any{"reason": "Eksik."})
+	if status != fiber.StatusOK || rejected.Notification == nil || rejected.Notification.Problem == nil ||
+		*rejected.Notification.Problem != "unverified_address" {
+		t.Fatalf("rejecting for a submitter with an unverified address = %d %+v %+v", status, failure, rejected.Notification)
+	}
+	if n := len(w.mail.of(w.resolved.ID)); n != 0 {
+		t.Fatalf("approval-resolved mails = %d, want none", n)
 	}
 
 	if _, err := w.store.ArchiveTemplate(context.Background(), database.ArchiveTemplateParams{ID: w.requested.ID}); err != nil {

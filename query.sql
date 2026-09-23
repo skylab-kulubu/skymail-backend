@@ -841,10 +841,11 @@ WHERE (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(st
 -- (LockMailApproval), so its checks, its state change and its events happen
 -- in turn, and an approval queues its send once.
 -- name: CreateMailApproval :one
-INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, template_id, template_version_id,
-                            mail_list_id, recipient_email, recipient_full_name, body_variables,
+INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, submitter_email_unverified, template_id,
+                            template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables,
                             created_at, submitted_at, deadline_at, updated_at)
-VALUES (sqlc.arg(submitter_sub), sqlc.narg(submitter_name), sqlc.narg(submitter_email), sqlc.arg(template_id),
+VALUES (sqlc.arg(submitter_sub), sqlc.narg(submitter_name), sqlc.narg(submitter_email),
+        sqlc.arg(submitter_email_unverified), sqlc.arg(template_id),
         sqlc.arg(template_version_id), sqlc.narg(mail_list_id), sqlc.narg(recipient_email),
         sqlc.narg(recipient_full_name), sqlc.arg(body_variables), sqlc.arg(at), sqlc.arg(at), sqlc.arg(deadline_at),
         sqlc.arg(at))
