@@ -2,8 +2,6 @@ package database
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5"
 )
 
 // VersionAuthor is who wrote a Mail template version: an operator or a
@@ -39,8 +37,7 @@ func (s TemplateVersionSummary) Author() VersionAuthor {
 // published.
 func (s *Store) PublishTemplateWrite(ctx context.Context, author VersionAuthor, requestedSubject *string, write func(*Queries) (Template, error)) (Template, error) {
 	var published Template
-	err := pgx.BeginFunc(ctx, s.Conn, func(tx pgx.Tx) error {
-		queries := s.WithTx(tx)
+	err := s.InTx(ctx, func(queries *Queries) error {
 		written, err := write(queries)
 		if err != nil {
 			return err

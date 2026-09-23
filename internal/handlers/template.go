@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"encoding/json"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
@@ -97,14 +99,14 @@ func getPaginationParams(c fiber.Ctx) (int32, int32) {
 // CreateTemplate godoc
 //
 //	@Summary		Create a new email template
-//	@Description	Create a new email template with the provided name, HTML content, and plain text content. Records the content as the template's first version: an operator's, published at once. The HTML content must parse as a Go template the way the mailer parses it.
+//	@Description	Create a new email template with the provided name, HTML content, and plain text content. Records the content as the template's first version: an operator's, published at once. The subject and the HTML content must parse as Go templates the way the mailer parses them.
 //	@Tags			Templates
 //	@Accept			json
 //	@Produce		json
 //	@Param			template	body		requests.CreateTemplate	true	"Template details"
 //	@Success		201			{object}	database.Template
 //	@Failure		400			{object}	apperrors.AppError	"Bad Request"
-//	@Failure		422			{object}	apperrors.AppError	"The HTML content does not parse (template.body_unparseable)"
+//	@Failure		422			{object}	apperrors.AppError	"The subject or the HTML content does not parse (template.unparseable, params.part)"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates [post]
 func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
@@ -209,7 +211,7 @@ func (h *templateHandlerImpl) GetTemplate(c fiber.Ctx) error {
 // UpdateTemplate godoc
 //
 //	@Summary		Update an email template
-//	@Description	Update an existing email template with the provided ID and details. Records the content the template ends up with as an operator's version, published at once. The HTML content must parse as a Go template and reference every Required variable of the template, or nothing is written.
+//	@Description	Update an existing email template with the provided ID and details. Records the content the template ends up with as an operator's version, published at once. The subject and the HTML content must parse as Go templates, and the HTML content must reference every Required variable of the template, or nothing is written.
 //	@Tags			Templates
 //	@Accept			json
 //	@Produce		json
@@ -218,7 +220,7 @@ func (h *templateHandlerImpl) GetTemplate(c fiber.Ctx) error {
 //	@Success		200			{object}	database.Template
 //	@Failure		400			{object}	apperrors.AppError	"Bad Request"
 //	@Failure		404			{object}	apperrors.AppError	"Not Found"
-//	@Failure		422			{object}	apperrors.AppError	"The HTML content does not parse (template.body_unparseable) or drops a Required variable (template.required_variables_missing, params.missing names each with its set)"
+//	@Failure		422			{object}	apperrors.AppError	"The subject or the HTML content does not parse (template.unparseable, params.part) or drops a Required variable (template.required_variables_missing, params.missing names each with its set)"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates/{id} [patch]
 func (h *templateHandlerImpl) UpdateTemplate(c fiber.Ctx) error {
@@ -336,29 +338,43 @@ func versionAuthor(c fiber.Ctx, kind database.TemplateAuthorKind) database.Versi
 	}
 }
 
-// checkedWrite is a row write that must leave a body the Required variable
-// check accepts: it checks what the write left, inside the write's
-// transaction, so a refused body — and the version it would have been — is
-// rolled back with it.
+// checkedWrite is a row write that must leave a subject and a body the mailer
+// can parse, and a body that references every Required variable: it checks
+// what the write left, inside the write's transaction, so a refused write —
+// and the version it would have been — is rolled back with it.
 func checkedWrite(write func(*database.Queries) (database.Template, error)) func(*database.Queries) (database.Template, error) {
 	return func(q *database.Queries) (database.Template, error) {
 		written, err := write(q)
 		if err != nil {
 			return written, err
 		}
+		if err := requiredvars.CheckSubject(written.Subject); err != nil {
+			return written, err
+		}
 		return written, requiredvars.CheckBody(written, written.HtmlContent)
 	}
 }
 
-// variableSet is a set of names as the database keeps one, sorted and each
-// once; nil, a set not sent, stays nil.
-func variableSet(names *[]string) []string {
-	if names == nil {
-		return nil
+// contractSet is a contract set as the database keeps one: sorted by name
+// byte by byte, each name once (its first entry wins), a blank reason
+// unknown. nil, a set not sent, stays nil.
+func contractSet(sent *[]requests.ContractVariable) ([]byte, error) {
+	if sent == nil {
+		return nil, nil
 	}
-	set := slices.Clone(*names)
-	slices.Sort(set)
-	return slices.Compact(set)
+	set := make(database.ContractVariables, 0, len(*sent))
+	for _, variable := range *sent {
+		if _, taken := set.Find(variable.Name); taken {
+			continue
+		}
+		reason := variable.Reason
+		if reason != nil && strings.TrimSpace(*reason) == "" {
+			reason = nil
+		}
+		set = append(set, database.ContractVariable{Name: variable.Name, Reason: reason})
+	}
+	slices.SortFunc(set, func(a, b database.ContractVariable) int { return strings.Compare(a.Name, b.Name) })
+	return json.Marshal(set)
 }
 
 func sameKey(a, b *string) bool {
@@ -395,7 +411,7 @@ func (h *templateHandlerImpl) GetTemplateByKey(c fiber.Ctx) error {
 // UpsertTemplateByKey godoc
 //
 //	@Summary		Create or replace a template addressed by key
-//	@Description	Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once. Writes the contract Required variables when sent, and keeps them when not. The HTML content must parse as a Go template and reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.
+//	@Description	Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once. Writes the contract Required variables when sent, and keeps them when not. The subject and the HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.
 //	@Tags			Templates
 //	@Accept			json
 //	@Produce		json
@@ -403,7 +419,7 @@ func (h *templateHandlerImpl) GetTemplateByKey(c fiber.Ctx) error {
 //	@Param			template	body		requests.UpsertTemplateByKey	true	"Template details"
 //	@Success		200			{object}	database.Template
 //	@Failure		400			{object}	apperrors.AppError	"Bad Request"
-//	@Failure		422			{object}	apperrors.AppError	"The HTML content does not parse (template.body_unparseable) or drops a Required variable (template.required_variables_missing, params.missing names each with its set)"
+//	@Failure		422			{object}	apperrors.AppError	"The subject or the HTML content does not parse (template.unparseable, params.part) or drops a Required variable (template.required_variables_missing, params.missing names each with its set)"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates/by-key/{key} [put]
 func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
@@ -420,6 +436,11 @@ func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 		return err
 	}
 
+	contract, err := contractSet(params.ContractRequiredVariables)
+	if err != nil {
+		return err
+	}
+
 	// A Template seed's version is published at once. It is taken from the row
 	// the upsert leaves, so a subject the upsert kept is the subject recorded.
 	template, err := h.db.PublishTemplateWrite(c.Context(), versionAuthor(c, database.TemplateAuthorKindTemplateSeed), &params.Subject, checkedWrite(func(q *database.Queries) (database.Template, error) {
@@ -431,7 +452,7 @@ func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 			PlainTextContent:          params.PlainTextContent,
 			ReactEmailContent:         params.ReactEmailContent,
 			System:                    params.System,
-			ContractRequiredVariables: variableSet(params.ContractRequiredVariables),
+			ContractRequiredVariables: contract,
 		})
 	}))
 	if err != nil {

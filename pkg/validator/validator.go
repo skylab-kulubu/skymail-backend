@@ -82,13 +82,24 @@ func ParseValidationErrors(validationErrors validator.ValidationErrors) []FieldE
 	errs := make([]FieldError, len(validationErrors))
 	for i, ve := range validationErrors {
 		errs[i] = FieldError{
-			Field:  ve.Field(),
+			Field:  fieldPath(ve),
 			Code:   getErrorCode(ve),
 			Params: getErrorParams(ve),
 		}
 	}
 
 	return errs
+}
+
+// fieldPath names the field by its path in the request body — name, or
+// contract_required_variables[1].name for a field of a list's entry — rather
+// than by its own name alone, which an entry's field shares with the body's.
+func fieldPath(e validator.FieldError) string {
+	namespace := e.Namespace()
+	if _, path, nested := strings.Cut(namespace, "."); nested {
+		return path
+	}
+	return e.Field()
 }
 
 func getErrorCode(e validator.FieldError) string {

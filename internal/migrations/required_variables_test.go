@@ -39,7 +39,7 @@ func TestRequiredVariableMigrationStartsEveryTemplateWithEmptySets(t *testing.T)
 	}
 	var withSets, total int
 	if err := database.Pool.QueryRow(ctx, `
-		SELECT count(*) FILTER (WHERE contract_required_variables = '{}' AND operator_required_variables = '{}'), count(*)
+		SELECT count(*) FILTER (WHERE contract_required_variables = '[]' AND operator_required_variables = '{}'), count(*)
 		FROM templates`).Scan(&withSets, &total); err != nil {
 		t.Fatal(err)
 	}
@@ -50,12 +50,18 @@ func TestRequiredVariableMigrationStartsEveryTemplateWithEmptySets(t *testing.T)
 		t.Fatalf("the migration changed template rows:\nbefore %v\nafter  %v", rowsBefore, rows)
 	}
 
-	// The two sets never share a name, and hold only names a body can reach.
+	// The two sets never share a name, and hold only names a body can reach;
+	// a contract entry is a name with a text or null reason, each name once.
 	for statement, violated := range map[string]string{
-		`UPDATE templates SET contract_required_variables = '{link}', operator_required_variables = '{link}'`: "templates_required_variables_disjoint",
-		`UPDATE templates SET operator_required_variables = '{"not a name"}'`:                                 "templates_required_variable_names",
-		`UPDATE templates SET contract_required_variables = '{1link}'`:                                        "templates_required_variable_names",
-		`UPDATE templates SET contract_required_variables = ARRAY[NULL]::text[]`:                              "templates_required_variable_names",
+		`UPDATE templates SET contract_required_variables = '[{"name":"link"}]', operator_required_variables = '{link}'`: "templates_required_variables_disjoint",
+		`UPDATE templates SET operator_required_variables = '{"not a name"}'`:                                            "templates_operator_required_variables_valid",
+		`UPDATE templates SET operator_required_variables = ARRAY[NULL]::text[]`:                                         "templates_operator_required_variables_valid",
+		`UPDATE templates SET contract_required_variables = '[{"name":"1link"}]'`:                                        "templates_contract_required_variables_valid",
+		`UPDATE templates SET contract_required_variables = '["link"]'`:                                                  "templates_contract_required_variables_valid",
+		`UPDATE templates SET contract_required_variables = '{"name":"link"}'`:                                           "templates_contract_required_variables_valid",
+		`UPDATE templates SET contract_required_variables = '[{"name":"link"},{"name":"link","reason":null}]'`:           "templates_contract_required_variables_valid",
+		`UPDATE templates SET contract_required_variables = '[{"name":"link","reason":3}]'`:                              "templates_contract_required_variables_valid",
+		`UPDATE templates SET contract_required_variables = '[{"reason":"neden"}]'`:                                      "templates_contract_required_variables_valid",
 	} {
 		_, err := database.Pool.Exec(ctx, statement)
 		var pgErr *pgconn.PgError
@@ -63,13 +69,19 @@ func TestRequiredVariableMigrationStartsEveryTemplateWithEmptySets(t *testing.T)
 			t.Errorf("%s: err = %v, want a violation of %s", statement, err, violated)
 		}
 	}
+	if _, err := database.Pool.Exec(ctx, `UPDATE templates SET contract_required_variables = '[{"name":"link","reason":"Bağlantı"},{"name":"code","reason":null},{"name":"VerifyURL"}]', operator_required_variables = '{firstName}'`); err != nil {
+		t.Fatalf("well-formed sets refused: %v", err)
+	}
+	if _, err := database.Pool.Exec(ctx, `UPDATE templates SET contract_required_variables = '[]', operator_required_variables = '{}'`); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := runner.Migrate(templateVersions); err != nil {
 		t.Fatalf("down: %v", err)
 	}
 	for _, leftover := range []string{
 		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'templates' AND column_name LIKE '%required_variables')`,
-		`SELECT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'required_variable_names_valid')`,
+		`SELECT EXISTS (SELECT 1 FROM pg_proc WHERE proname IN ('required_variable_names_valid', 'contract_variable_names', 'contract_variables_valid'))`,
 	} {
 		var exists bool
 		if err := database.Pool.QueryRow(ctx, leftover).Scan(&exists); err != nil {

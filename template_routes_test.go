@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/bytedance/sonic"
 	"github.com/gofiber/fiber/v3"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
@@ -17,9 +19,9 @@ import (
 )
 
 // templateRoutesApp serves the template routes as production registers them —
-// the real permission middleware, handler, validator, error handler and
-// database — with only Keycloak's token check replaced by the roles under
-// test. It returns a template with one version to ask about.
+// the real permission middleware, handler, validator, JSON codec, error
+// handler and database — with only Keycloak's token check replaced by the
+// roles under test. It returns a template with one version to ask about.
 func templateRoutesApp(t *testing.T, roles ...string) (*fiber.App, database.Template) {
 	t.Helper()
 	postgres := testpostgres.StartDatabase(t)
@@ -37,7 +39,12 @@ func templateRoutesApp(t *testing.T, roles ...string) (*fiber.App, database.Temp
 		t.Fatal(err)
 	}
 
-	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
+	app := fiber.New(fiber.Config{
+		ErrorHandler:    errorHandler,
+		StructValidator: validator.NewStructValidator(),
+		JSONDecoder:     sonic.Unmarshal,
+		JSONEncoder:     sonic.Marshal,
+	})
 	api := app.Group("/v1")
 	api.Use(func(c fiber.Ctx) error {
 		c.Locals("user_id", "31ef736f-72da-4a40-8791-d523199cf9f0")
@@ -196,7 +203,12 @@ func TestMalformedRequiredVariableNamesAreRefused(t *testing.T) {
 		{fiber.MethodPut, "/v1/templates/by-key/keycloak.reset-password", map[string]any{
 			"name": "Parola", "subject": "Parola", "html_content": "<p>{{.link}}</p>", "plain_text_content": "{{.link}}",
 			"react_email_content": "// kaynak", "system": true, "contract_required_variables": []string{"link", "reset link"},
-		}, "invalid_variable_name", "contract_required_variables[1]"},
+		}, "invalid_variable_name", "contract_required_variables[1].name"},
+		{fiber.MethodPut, "/v1/templates/by-key/keycloak.reset-password", map[string]any{
+			"name": "Parola", "subject": "Parola", "html_content": "<p>{{.link}}</p>", "plain_text_content": "{{.link}}",
+			"react_email_content": "// kaynak", "system": true,
+			"contract_required_variables": []any{map[string]any{"name": "link", "reason": strings.Repeat("uzun ", 61)}},
+		}, "max_length", "contract_required_variables[0].reason"},
 	} {
 		status, body := sendRoute(t, app, tc.method, tc.path, tc.body)
 		e := read(body)
@@ -209,5 +221,35 @@ func TestMalformedRequiredVariableNamesAreRefused(t *testing.T) {
 	status, body := sendRoute(t, app, fiber.MethodDelete, path+"/not-a-name", nil)
 	if e := read(body); status != fiber.StatusBadRequest || e.Code != "template.invalid_variable_name" {
 		t.Errorf("DELETE not-a-name = %d %s, want 400 template.invalid_variable_name", status, body)
+	}
+}
+
+// The seed sends each contract variable with its reason; the seed on main
+// today sends names alone. Production's JSON decoder takes both, in one list.
+func TestTheSeedSendsContractVariablesWithOrWithoutReasons(t *testing.T) {
+	app, _ := templateRoutesApp(t, "skymail:access", "skymail:templates:write", "skymail:templates:read")
+
+	status, body := sendRoute(t, app, fiber.MethodPut, "/v1/templates/by-key/keycloak.reset-password", map[string]any{
+		"name": "Parola", "subject": "Parola", "html_content": `<a href="{{.link}}">{{.firstName}}</a>`, "plain_text_content": "{{.link}}",
+		"react_email_content": "// kaynak", "system": true,
+		"contract_required_variables": []any{"firstName", map[string]any{"name": "link", "reason": "Parola sıfırlama bağlantısı."}},
+	})
+	if status != fiber.StatusOK {
+		t.Fatalf("seed = %d %s", status, body)
+	}
+	var served struct {
+		Contract []struct {
+			Name   string  `json:"name"`
+			Reason *string `json:"reason"`
+		} `json:"contract_required_variables"`
+		Operator []string `json:"operator_required_variables"`
+	}
+	if err := json.Unmarshal(body, &served); err != nil {
+		t.Fatalf("%s: %v", body, err)
+	}
+	if len(served.Contract) != 2 || served.Contract[0].Name != "firstName" || served.Contract[0].Reason != nil ||
+		served.Contract[1].Name != "link" || served.Contract[1].Reason == nil || *served.Contract[1].Reason != "Parola sıfırlama bağlantısı." ||
+		served.Operator == nil || len(served.Operator) != 0 {
+		t.Fatalf("served %s, want firstName without a reason and link with one, and no operator variables", body)
 	}
 }

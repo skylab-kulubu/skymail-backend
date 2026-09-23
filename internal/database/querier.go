@@ -11,6 +11,10 @@ import (
 )
 
 type Querier interface {
+	// Required variable sets are sorted byte by byte (COLLATE "C"), the order the
+	// handler sorts a contract set in and a missing list comes in, whatever the
+	// database's collation.
+	//
 	// Marks a variable of a template in use as required by operators. A name
 	// already in either set changes nothing: one the contract declares is required
 	// already, and stays the contract's. Takes the row's lock, so the caller can

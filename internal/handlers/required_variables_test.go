@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
 )
 
 // requiredVariablesApp is templateVersionsApp with the operator's Required
@@ -31,13 +34,15 @@ type refusal struct {
 	Params struct {
 		Missing []missingVariable `json:"missing"`
 		Error   string            `json:"error"`
+		Part    string            `json:"part"`
 		Name    string            `json:"name"`
 	} `json:"params"`
 }
 
 type missingVariable struct {
-	Name   string `json:"name"`
-	Source string `json:"source"`
+	Name   string  `json:"name"`
+	Source string  `json:"source"`
+	Reason *string `json:"reason"`
 }
 
 func refusalOf(t *testing.T, body []byte) refusal {
@@ -49,23 +54,57 @@ func refusalOf(t *testing.T, body []byte) refusal {
 	return r
 }
 
-func templateOf(t *testing.T, body []byte) database.Template {
+// servedTemplate is a template as its routes serve it, read field by field
+// the way the panel reads it.
+type servedTemplate struct {
+	ID                uuid.UUID `json:"id"`
+	Name              string    `json:"name"`
+	Subject           string    `json:"subject"`
+	HtmlContent       string    `json:"html_content"`
+	ReactEmailContent string    `json:"react_email_content"`
+	// Each contract variable with why the mail needs it.
+	Contract []contractVariable `json:"contract_required_variables"`
+	Operator []string           `json:"operator_required_variables"`
+}
+
+type contractVariable struct {
+	Name   string  `json:"name"`
+	Reason *string `json:"reason"`
+}
+
+func templateOf(t *testing.T, body []byte) servedTemplate {
 	t.Helper()
 	assertTemplateShape(t, body)
-	var template database.Template
+	var template servedTemplate
 	if err := json.Unmarshal(body, &template); err != nil {
 		t.Fatalf("template %s: %v", body, err)
 	}
 	return template
 }
 
-func assertSets(t *testing.T, template database.Template, contract, operator []string) {
+// readTemplate is the template as GET /templates/:id serves it now.
+func readTemplate(t *testing.T, app *fiber.App, id uuid.UUID) servedTemplate {
 	t.Helper()
-	if !reflect.DeepEqual(template.ContractRequiredVariables, contract) || !reflect.DeepEqual(template.OperatorRequiredVariables, operator) {
+	response, body := sendJSON(t, app, fiber.MethodGet, "/templates/"+id.String(), nil)
+	if response.StatusCode != fiber.StatusOK {
+		t.Fatalf("GET template = %d %s", response.StatusCode, body)
+	}
+	return templateOf(t, body)
+}
+
+func assertSets(t *testing.T, template servedTemplate, contract, operator []string) {
+	t.Helper()
+	names := make([]string, 0, len(template.Contract))
+	for _, variable := range template.Contract {
+		names = append(names, variable.Name)
+	}
+	if !reflect.DeepEqual(names, contract) || !reflect.DeepEqual(template.Operator, operator) {
 		t.Fatalf("Required variables = contract %q operator %q, want contract %q operator %q",
-			template.ContractRequiredVariables, template.OperatorRequiredVariables, contract, operator)
+			names, template.Operator, contract, operator)
 	}
 }
+
+func reason(text string) *string { return &text }
 
 // resetPasswordSeed is the Template seed's payload for the password reset,
 // the mail that cannot do its job without its link.
@@ -115,15 +154,7 @@ func TestTheTemplateSeedWritesTheContractSet(t *testing.T) {
 	seeded := templateOf(t, body)
 	assertSets(t, seeded, []string{"link"}, []string{})
 
-	getResponse, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/templates/"+seeded.ID.String(), nil))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var read database.Template
-	if err := json.NewDecoder(getResponse.Body).Decode(&read); err != nil {
-		t.Fatal(err)
-	}
-	assertSets(t, read, []string{"link"}, []string{})
+	assertSets(t, readTemplate(t, app, seeded.ID), []string{"link"}, []string{})
 
 	// The seed on main today sends no contract set.
 	if status, body = seedResetPassword(t, app, resetPasswordBody, nil); status != fiber.StatusOK {
@@ -141,6 +172,49 @@ func TestTheTemplateSeedWritesTheContractSet(t *testing.T) {
 		t.Fatalf("seed with an empty contract set = %d %s", status, body)
 	}
 	assertSets(t, templateOf(t, body), []string{}, []string{})
+}
+
+// A contract variable comes with why the mail needs it, a sentence the repo
+// declares beside the name; the panel shows it, and so does a refusal. A seed
+// that sends names alone — the seed on main today — is still taken, the
+// reasons then unknown.
+func TestAContractVariableCarriesWhyTheMailNeedsIt(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := requiredVariablesApp(t, db)
+
+	const why = "Parola sıfırlama bağlantısı; kaldırılırsa mail işe yaramaz."
+	status, body := seedResetPassword(t, app, resetPasswordBody, []map[string]any{
+		{"name": "link", "reason": why},
+		{"name": "firstName"},
+	})
+	if status != fiber.StatusOK {
+		t.Fatalf("seed = %d %s", status, body)
+	}
+	seeded := templateOf(t, body)
+	want := []contractVariable{{"firstName", nil}, {"link", reason(why)}}
+	if got := readTemplate(t, app, seeded.ID).Contract; !reflect.DeepEqual(got, want) {
+		t.Fatalf("contract = %+v, want %+v", got, want)
+	}
+
+	payload := resetPasswordSeed(`<p>Parolanı sıfırla.</p>`, nil)
+	response, body := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/keycloak.reset-password", payload)
+	if response.StatusCode != fiber.StatusUnprocessableEntity {
+		t.Fatalf("seed without the link = %d %s", response.StatusCode, body)
+	}
+	wantMissing := []missingVariable{{"firstName", "contract", nil}, {"link", "contract", reason(why)}}
+	if r := refusalOf(t, body); !reflect.DeepEqual(r.Params.Missing, wantMissing) {
+		t.Fatalf("missing = %+v, want %+v", r.Params.Missing, wantMissing)
+	}
+
+	// Names alone, and names beside entries, in one list.
+	status, body = seedResetPassword(t, app, resetPasswordBody, []any{"link", map[string]any{"name": "firstName", "reason": "Selamlama"}})
+	if status != fiber.StatusOK {
+		t.Fatalf("seed with names = %d %s", status, body)
+	}
+	want = []contractVariable{{"firstName", reason("Selamlama")}, {"link", nil}}
+	if got := templateOf(t, body).Contract; !reflect.DeepEqual(got, want) {
+		t.Fatalf("contract = %+v, want %+v", got, want)
+	}
 }
 
 // A seed whose body drops a Required variable is refused like anyone else's
@@ -162,8 +236,8 @@ func TestASeedWhoseBodyDropsARequiredVariableIsRefused(t *testing.T) {
 		contract any
 		want     []missingVariable
 	}{
-		"the contract set it keeps": {nil, []missingVariable{{"firstName", "operator"}, {"link", "contract"}}},
-		"the contract set it sends": {[]string{"link", "code"}, []missingVariable{{"code", "contract"}, {"firstName", "operator"}, {"link", "contract"}}},
+		"the contract set it keeps": {nil, []missingVariable{{"firstName", "operator", nil}, {"link", "contract", nil}}},
+		"the contract set it sends": {[]string{"link", "code"}, []missingVariable{{"code", "contract", nil}, {"firstName", "operator", nil}, {"link", "contract", nil}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			status, body := seedResetPassword(t, app, `<p>Bağlantısız bir gövde</p>`, tc.contract)
@@ -176,10 +250,7 @@ func TestASeedWhoseBodyDropsARequiredVariableIsRefused(t *testing.T) {
 		})
 	}
 
-	row, err := db.GetTemplateById(context.Background(), seeded.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	row := readTemplate(t, app, seeded.ID)
 	if row.HtmlContent != resetPasswordBody {
 		t.Fatalf("a refused seed changed the body to %q", row.HtmlContent)
 	}
@@ -223,7 +294,7 @@ func TestAnOperatorAddsAndRemovesRequiredVariables(t *testing.T) {
 		"plain_text_content":  "Merhaba {{.FullName}}",
 		"react_email_content": panelSource,
 	})
-	assertSets(t, created, []string{}, []string{})
+	assertSets(t, readTemplate(t, app, created.ID), []string{}, []string{})
 
 	steps := []struct {
 		do       func() (int, []byte)
@@ -276,11 +347,7 @@ func TestTheOperatorsRouteLeavesTheContractSetAlone(t *testing.T) {
 	}
 	assertSets(t, templateOf(t, body), []string{"link"}, []string{})
 
-	row, err := db.GetTemplateById(context.Background(), seeded.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertSets(t, row, []string{"link"}, []string{})
+	assertSets(t, readTemplate(t, app, seeded.ID), []string{"link"}, []string{})
 }
 
 // A variable is required of the mail being sent, so it can only be marked
@@ -302,7 +369,7 @@ func TestAnOperatorCannotRequireAVariableThePublishedBodyDoesNotReference(t *tes
 		if status != fiber.StatusUnprocessableEntity {
 			t.Fatalf("add %s = %d %s, want 422", name, status, body)
 		}
-		if r := refusalOf(t, body); r.Code != "template.required_variables_missing" || !reflect.DeepEqual(r.Params.Missing, []missingVariable{{name, "operator"}}) {
+		if r := refusalOf(t, body); r.Code != "template.required_variables_missing" || !reflect.DeepEqual(r.Params.Missing, []missingVariable{{name, "operator", nil}}) {
 			t.Fatalf("add %s refusal = %+v", name, r)
 		}
 	}
@@ -312,11 +379,7 @@ func TestAnOperatorCannotRequireAVariableThePublishedBodyDoesNotReference(t *tes
 		}
 	}
 
-	row, err := db.GetTemplateById(context.Background(), created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertSets(t, row, []string{}, []string{"EventName", "Tickets"})
+	assertSets(t, readTemplate(t, app, created.ID), []string{}, []string{"EventName", "Tickets"})
 }
 
 // Every save is checked the same way: a body that no longer references a
@@ -352,12 +415,13 @@ func TestAPanelEditIsCheckedAgainstTheRequiredVariables(t *testing.T) {
 	}{
 		{"both inside conditional sections", `{{if .firstName}}{{.firstName}}{{end}}{{if .link}}<a href="{{.link}}">Sıfırla</a>{{end}}`, nil},
 		{"$ inside a range", `{{range .Steps}}{{$.firstName}} <a href="{{$.link}}">{{.Label}}</a>{{end}}`, nil},
-		{"the link only in a comment", `<p>{{.firstName}}</p>{{/* <a href="{{.link}}">Sıfırla</a> */}}`, []missingVariable{{"link", "contract"}}},
-		{"the link only as text", `<p>{{.firstName}}</p><p>.link {.link} link</p>`, []missingVariable{{"link", "contract"}}},
-		{"the link as a range element's field", `<p>{{.firstName}}</p>{{range .Links}}<a href="{{.link}}">Sıfırla</a>{{end}}`, []missingVariable{{"link", "contract"}}},
-		{"the link as a with's field", `<p>{{.firstName}}</p>{{with .Account}}<a href="{{.link}}">Sıfırla</a>{{end}}`, []missingVariable{{"link", "contract"}}},
-		{"the link through index", `<p>{{.firstName}}</p><a href="{{index . "link"}}">Sıfırla</a>`, []missingVariable{{"link", "contract"}}},
-		{"neither", `<p>Parolanı sıfırla.</p>`, []missingVariable{{"firstName", "operator"}, {"link", "contract"}}},
+		{"the link only in a comment", `<p>{{.firstName}}</p>{{/* <a href="{{.link}}">Sıfırla</a> */}}`, []missingVariable{{"link", "contract", nil}}},
+		{"the link only in an HTML comment", `<p>{{.firstName}}</p><!-- <a href="{{.link}}">Sıfırla</a> -->`, []missingVariable{{"link", "contract", nil}}},
+		{"the link only as text", `<p>{{.firstName}}</p><p>.link {.link} link</p>`, []missingVariable{{"link", "contract", nil}}},
+		{"the link as a range element's field", `<p>{{.firstName}}</p>{{range .Links}}<a href="{{.link}}">Sıfırla</a>{{end}}`, []missingVariable{{"link", "contract", nil}}},
+		{"the link as a with's field", `<p>{{.firstName}}</p>{{with .Account}}<a href="{{.link}}">Sıfırla</a>{{end}}`, []missingVariable{{"link", "contract", nil}}},
+		{"the link through index", `<p>{{.firstName}}</p><a href="{{index . "link"}}">Sıfırla</a>`, []missingVariable{{"link", "contract", nil}}},
+		{"neither", `<p>Parolanı sıfırla.</p>`, []missingVariable{{"firstName", "operator", nil}, {"link", "contract", nil}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before, err := db.GetTemplateById(context.Background(), seeded.ID)
@@ -393,50 +457,64 @@ func TestAPanelEditIsCheckedAgainstTheRequiredVariables(t *testing.T) {
 	}
 }
 
-// A body the mailer cannot parse could not be sent at all, and the check could
-// not say what it references. Every writer is refused with its own error,
-// carrying the parser's words, and nothing is written.
-func TestABodyThatIsNotAGoTemplateIsRefused(t *testing.T) {
+// A body or a subject the mailer cannot parse could not be sent at all — the
+// mailer parses both before every send — and the check could not say what
+// the body references. Every writer is refused with one error naming the part
+// and carrying the parser's words, and nothing is written.
+func TestAPartTheMailerCannotParseIsRefused(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	app := requiredVariablesApp(t, db)
 
-	assertUnparseable := func(t *testing.T, status int, body []byte) {
+	assertUnparseable := func(t *testing.T, status int, body []byte, part string) {
 		t.Helper()
 		if status != fiber.StatusUnprocessableEntity {
 			t.Fatalf("status = %d %s, want 422", status, body)
 		}
-		if r := refusalOf(t, body); r.Code != "template.body_unparseable" || r.Params.Error == "" {
-			t.Fatalf("refusal = %+v, want template.body_unparseable with the parser's error", r)
+		if r := refusalOf(t, body); r.Code != "template.unparseable" || r.Params.Part != part || r.Params.Error == "" {
+			t.Fatalf("refusal = %+v, want template.unparseable of the %s with the parser's error", r, part)
 		}
 	}
 
-	response, body := sendJSON(t, app, fiber.MethodPost, "/templates", map[string]any{
-		"name": "Kırık", "subject": "Kırık", "html_content": `<a href="{{.link">Git</a>`,
-		"plain_text_content": "Kırık", "react_email_content": panelSource,
-	})
-	assertUnparseable(t, response.StatusCode, body)
+	for _, tc := range []struct{ part, subject, html string }{
+		{"html", "Kırık", `<a href="{{.link">Git</a>`},
+		{"subject", "Merhaba {{.FullName", `<p>{{.FullName}}</p>`},
+	} {
+		response, body := sendJSON(t, app, fiber.MethodPost, "/templates", map[string]any{
+			"name": "Kırık", "subject": tc.subject, "html_content": tc.html,
+			"plain_text_content": "Kırık", "react_email_content": panelSource,
+		})
+		assertUnparseable(t, response.StatusCode, body, tc.part)
+	}
 	if count, err := db.CountAllTemplatesIncludingArchived(context.Background()); err != nil || count != 0 {
-		t.Fatalf("templates after a refused create = %d, %v", count, err)
+		t.Fatalf("templates after refused creates = %d, %v", count, err)
 	}
 
 	created := createTemplate(t, app, map[string]any{
 		"name": "Sağlam", "subject": "Sağlam", "html_content": `<p>{{.FullName}}</p>`,
 		"plain_text_content": "Sağlam", "react_email_content": panelSource,
 	})
-	response, body = sendJSON(t, app, fiber.MethodPatch, "/templates/"+created.ID.String(), map[string]any{
-		"name": "Sağlam", "subject": "Sağlam", "html_content": `{{if .FullName}}<p>{{.FullName}}</p>`,
-		"plain_text_content": "Sağlam", "react_email_content": panelSource,
-	})
-	assertUnparseable(t, response.StatusCode, body)
-
-	status, body := seedResetPassword(t, app, `<a href="{{shout .link}}">Sıfırla</a>`, []string{"link"})
-	assertUnparseable(t, status, body)
-	if _, err := db.GetTemplateByKey(context.Background(), ptr("keycloak.reset-password")); err == nil {
-		t.Fatal("a refused seed created its template")
+	for _, tc := range []struct{ part, subject, html string }{
+		{"html", "Sağlam", `{{if .FullName}}<p>{{.FullName}}</p>`},
+		{"subject", "{{if .FullName}}Sağlam", `<p>{{.FullName}}</p>`},
+	} {
+		response, body := sendJSON(t, app, fiber.MethodPatch, "/templates/"+created.ID.String(), map[string]any{
+			"name": "Sağlam", "subject": tc.subject, "html_content": tc.html,
+			"plain_text_content": "Sağlam", "react_email_content": panelSource,
+		})
+		assertUnparseable(t, response.StatusCode, body, tc.part)
+	}
+	if row, err := db.GetTemplateById(context.Background(), created.ID); err != nil || row.HtmlContent != `<p>{{.FullName}}</p>` || row.Subject != "Sağlam" {
+		t.Fatalf("a refused edit changed the row: %q %q %v", row.Subject, row.HtmlContent, err)
 	}
 
-	if row, err := db.GetTemplateById(context.Background(), created.ID); err != nil || row.HtmlContent != `<p>{{.FullName}}</p>` {
-		t.Fatalf("a refused edit changed the row: %q %v", row.HtmlContent, err)
+	status, body := seedResetPassword(t, app, `<a href="{{shout .link}}">Sıfırla</a>`, []string{"link"})
+	assertUnparseable(t, status, body, "html")
+	payload := resetPasswordSeed(resetPasswordBody, []string{"link"})
+	payload["subject"] = "{{.realmDisplayName} parola sıfırlama"
+	response, body := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/keycloak.reset-password", payload)
+	assertUnparseable(t, response.StatusCode, body, "subject")
+	if _, err := db.GetTemplateByKey(context.Background(), ptr("keycloak.reset-password")); err == nil {
+		t.Fatal("a refused seed created its template")
 	}
 }
 
@@ -467,3 +545,79 @@ func TestRequiredVariablesOfAnArchivedOrUnknownTemplate(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// collatedHandlerStore is lifecycleHandlerStore on a database whose text order
+// is en-US's, as a glibc or ICU database's is — link before Link before
+// VerifyURL — rather than the byte order the musl-based test image sorts in.
+func collatedHandlerStore(t *testing.T) *database.Store {
+	t.Helper()
+	ctx := context.Background()
+	postgres := testpostgres.StartDatabase(t)
+	if _, err := postgres.Pool.Exec(ctx, `CREATE DATABASE collated TEMPLATE template0 LOCALE_PROVIDER icu ICU_LOCALE 'en-US' LOCALE 'C'`); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, strings.Replace(postgres.URL, "/skymailtest?", "/collated?", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	var order []string
+	if err := pool.QueryRow(ctx, `SELECT array(SELECT n FROM unnest('{VerifyURL,Link,link}'::text[]) AS n ORDER BY n)`).Scan(&order); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(order, []string{"link", "Link", "VerifyURL"}) {
+		t.Fatalf("the collated database sorts %q; the test needs one that does not sort byte by byte", order)
+	}
+
+	applyMigrationFiles(t, pool)
+	return database.NewStore(pool)
+}
+
+// Both sets are kept in one order, byte by byte — the order the server sorts
+// in and the order a missing list comes in — whatever the database's own
+// collation, so names that differ only in case stay put.
+func TestRequiredVariablesAreKeptInOneOrder(t *testing.T) {
+	db := collatedHandlerStore(t)
+	app := requiredVariablesApp(t, db)
+
+	body := `<a href="{{.link}}">{{.Link}}</a> {{.VerifyURL}} {{.a}} {{.B}}`
+	seed := func(contract any) servedTemplate {
+		t.Helper()
+		response, raw := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/core.certificate", map[string]any{
+			"name": "Sertifika", "subject": "Sertifikan", "html_content": body, "plain_text_content": "Sertifikan",
+			"react_email_content": seedPointerComment("core.certificate"), "system": true, "contract_required_variables": contract,
+		})
+		if response.StatusCode != fiber.StatusOK {
+			t.Fatalf("seed = %d %s", response.StatusCode, raw)
+		}
+		return templateOf(t, raw)
+	}
+
+	seeded := seed([]string{})
+	var last []byte
+	for _, name := range []string{"link", "VerifyURL", "Link", "a", "B"} {
+		status, raw := addRequired(t, app, seeded.ID, name)
+		if status != fiber.StatusOK {
+			t.Fatalf("add %s = %d %s", name, status, raw)
+		}
+		last = raw
+	}
+	assertSets(t, templateOf(t, last), []string{}, []string{"B", "Link", "VerifyURL", "a", "link"})
+
+	// The operators' set keeps its order when the contract takes names from it.
+	assertSets(t, seed([]string{"a"}), []string{"a"}, []string{"B", "Link", "VerifyURL", "link"})
+	assertSets(t, seed([]string{"link", "VerifyURL", "Link"}), []string{"Link", "VerifyURL", "link"}, []string{"B"})
+
+	response, raw := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/core.certificate", map[string]any{
+		"name": "Sertifika", "subject": "Sertifikan", "html_content": `<p>{{.B}}</p>`, "plain_text_content": "Sertifikan",
+		"react_email_content": seedPointerComment("core.certificate"), "system": true,
+	})
+	if response.StatusCode != fiber.StatusUnprocessableEntity {
+		t.Fatalf("seed without the contract's names = %d %s", response.StatusCode, raw)
+	}
+	want := []missingVariable{{"Link", "contract", nil}, {"VerifyURL", "contract", nil}, {"link", "contract", nil}}
+	if r := refusalOf(t, raw); !reflect.DeepEqual(r.Params.Missing, want) {
+		t.Fatalf("missing = %+v, want %+v", r.Params.Missing, want)
+	}
+}

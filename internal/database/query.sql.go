@@ -15,11 +15,11 @@ import (
 const addOperatorRequiredVariable = `-- name: AddOperatorRequiredVariable :one
 UPDATE templates
 SET operator_required_variables = CASE
-                                      WHEN $1::text = ANY (contract_required_variables)
+                                      WHEN $1::text = ANY (contract_variable_names(contract_required_variables))
                                           THEN operator_required_variables
-                                      ELSE ARRAY(SELECT DISTINCT n
+                                      ELSE ARRAY(SELECT DISTINCT n COLLATE "C"
                                                  FROM unnest(array_append(operator_required_variables, $1::text)) AS n
-                                                 ORDER BY n)
+                                                 ORDER BY n COLLATE "C")
     END
 WHERE id = $2
   AND archived_at IS NULL
@@ -31,6 +31,10 @@ type AddOperatorRequiredVariableParams struct {
 	ID   uuid.UUID `json:"id"`
 }
 
+// Required variable sets are sorted byte by byte (COLLATE "C"), the order the
+// handler sorts a contract set in and a missing list comes in, whatever the
+// database's collation.
+//
 // Marks a variable of a template in use as required by operators. A name
 // already in either set changes nothing: one the contract declares is required
 // already, and stays the contract's. Takes the row's lock, so the caller can
@@ -1978,7 +1982,7 @@ VALUES ($1::text,
         $5::text,
         $6::text,
         $7::boolean,
-        COALESCE($8::text[], '{}'))
+        COALESCE($8::jsonb, '[]'))
 ON CONFLICT (key) DO UPDATE
     SET name                = EXCLUDED.name,
         html_content        = EXCLUDED.html_content,
@@ -1986,16 +1990,18 @@ ON CONFLICT (key) DO UPDATE
         react_email_content = EXCLUDED.react_email_content,
         system              = EXCLUDED.system,
         -- The contract set is the seed's, like the key: a seed that sends one
-        -- replaces it, a seed that sends none (NULL) leaves it. A name the
-        -- contract now declares leaves the operators' set, so the two never
-        -- share one and it shows as locked.
-        contract_required_variables = COALESCE($8::text[],
+        -- replaces it (sorted, each name once, by the caller), a seed that
+        -- sends none (NULL) leaves it. A name the contract now declares leaves
+        -- the operators' set, so the two never share one and it shows as
+        -- locked.
+        contract_required_variables = COALESCE($8::jsonb,
                                                templates.contract_required_variables),
         operator_required_variables = ARRAY(SELECT name
                                             FROM unnest(templates.operator_required_variables) AS name
-                                            WHERE name <> ALL (COALESCE($8::text[],
-                                                                        templates.contract_required_variables))
-                                            ORDER BY name),
+                                            WHERE name <> ALL (contract_variable_names(
+                                                    COALESCE($8::jsonb,
+                                                             templates.contract_required_variables)))
+                                            ORDER BY name COLLATE "C"),
         archived_at         = NULL,
         archived_by         = NULL,
         updated_at          = NOW()
@@ -2003,14 +2009,14 @@ RETURNING id, name, html_content, plain_text_content, react_email_content, creat
 `
 
 type UpsertTemplateByKeyParams struct {
-	Key                       string   `json:"key"`
-	Name                      string   `json:"name"`
-	Subject                   string   `json:"subject"`
-	HtmlContent               string   `json:"html_content"`
-	PlainTextContent          string   `json:"plain_text_content"`
-	ReactEmailContent         string   `json:"react_email_content"`
-	System                    bool     `json:"system"`
-	ContractRequiredVariables []string `json:"contract_required_variables"`
+	Key                       string `json:"key"`
+	Name                      string `json:"name"`
+	Subject                   string `json:"subject"`
+	HtmlContent               string `json:"html_content"`
+	PlainTextContent          string `json:"plain_text_content"`
+	ReactEmailContent         string `json:"react_email_content"`
+	System                    bool   `json:"system"`
+	ContractRequiredVariables []byte `json:"contract_required_variables"`
 }
 
 // The seed owns a template's structure; an operator owns its subject. The repo

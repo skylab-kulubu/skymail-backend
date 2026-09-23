@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"slices"
-
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
@@ -25,7 +23,7 @@ import (
 //	@Failure		400			{object}	apperrors.AppError	"The name is not a variable name (validation.error)"
 //	@Failure		403			{object}	apperrors.AppError	"Forbidden"
 //	@Failure		404			{object}	apperrors.AppError	"No such template in use: unknown or archived"
-//	@Failure		422			{object}	apperrors.AppError	"The published body does not reference the variable (template.required_variables_missing) or does not parse (template.body_unparseable)"
+//	@Failure		422			{object}	apperrors.AppError	"The published body does not reference the variable (template.required_variables_missing) or does not parse (template.unparseable, params.part "html")"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates/{id}/required-variables [post]
 func (h *templateHandlerImpl) AddRequiredVariable(c fiber.Ctx) error {
@@ -36,9 +34,6 @@ func (h *templateHandlerImpl) AddRequiredVariable(c fiber.Ctx) error {
 	var params requests.AddRequiredVariable
 	if err := c.Bind().Body(&params); err != nil {
 		return err
-	}
-	if !validator.IsVariableName(params.Name) {
-		return errInvalidVariableName
 	}
 
 	var template database.Template
@@ -87,7 +82,7 @@ func (h *templateHandlerImpl) RemoveRequiredVariable(c fiber.Ctx) error {
 		if err != nil {
 			return err
 		}
-		if slices.Contains(released.ContractRequiredVariables, name) {
+		if _, inContract := released.ContractRequiredVariables.Find(name); inContract {
 			return errContractRequiredVariable.WithParams(map[string]interface{}{"name": name})
 		}
 		template = released

@@ -16,6 +16,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
@@ -72,6 +73,13 @@ func (lifecycleKeycloakStub) GetGroupMembers(context.Context, string) ([]*gocloa
 func lifecycleHandlerStore(t *testing.T) *database.Store {
 	t.Helper()
 	pool := testpostgres.Start(t)
+	applyMigrationFiles(t, pool)
+	return database.NewStore(pool)
+}
+
+// applyMigrationFiles runs every up migration in db/migrations on pool.
+func applyMigrationFiles(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
 	_, filename, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate lifecycle handler test")
@@ -91,7 +99,6 @@ func lifecycleHandlerStore(t *testing.T) *database.Store {
 			t.Fatalf("apply %s: %v", filepath.Base(file), err)
 		}
 	}
-	return database.NewStore(pool)
 }
 
 func lifecycleTestApp(t *testing.T, db *database.Store) *fiber.App {

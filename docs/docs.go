@@ -23,6 +23,19 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
+            "database.ContractVariable": {
+                "properties": {
+                    "name": {
+                        "description": "The variable, as the body reaches it with .Name.",
+                        "type": "string"
+                    },
+                    "reason": {
+                        "description": "Why the mail cannot do without it, a sentence the repo declares. Null when the Template seed sent the name alone.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "database.GetMailQueueItemsByTaskIdRow": {
                 "properties": {
                     "attempts": {
@@ -134,9 +147,9 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "contract_required_variables": {
-                        "description": "Required variables from the sending service's contract, sorted. Written only by the Template seed; locked in the panel.",
+                        "description": "Required variables from the sending service's contract, sorted by name, each with why the mail needs it. Written only by the Template seed; locked in the panel.",
                         "items": {
-                            "type": "string"
+                            "$ref": "#/components/schemas/database.ContractVariable"
                         },
                         "type": "array",
                         "uniqueItems": false
@@ -542,6 +555,25 @@ const docTemplate = `{
                 ],
                 "type": "object"
             },
+            "requests.ContractVariable": {
+                "properties": {
+                    "name": {
+                        "description": "The variable, as the body reaches it with .Name.",
+                        "example": "link",
+                        "type": "string"
+                    },
+                    "reason": {
+                        "description": "Why the mail cannot do without it, in a sentence an operator reads.",
+                        "example": "Parola sıfırlama bağlantısı; kaldırılırsa mail işe yaramaz.",
+                        "maxLength": 300,
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "name"
+                ],
+                "type": "object"
+            },
             "requests.CreateMailTask": {
                 "properties": {
                     "body_variables": {
@@ -670,12 +702,9 @@ const docTemplate = `{
             "requests.UpsertTemplateByKey": {
                 "properties": {
                     "contract_required_variables": {
-                        "description": "The Required variables the sending service's contract declares, which the body must keep referencing. They replace the template's contract set; a name among them leaves the operators' set. Leave the field out (or null) to keep the set the template has; send [] to clear it.",
-                        "example": [
-                            "link"
-                        ],
+                        "description": "The Required variables the sending service's contract declares, which the body must keep referencing, each with why the mail needs it. An entry may also be the name alone, as a string; its reason is then null. They replace the template's contract set; a name among them leaves the operators' set. Leave the field out (or null) to keep the set the template has; send [] to clear it.",
                         "items": {
-                            "type": "string"
+                            "$ref": "#/components/schemas/requests.ContractVariable"
                         },
                         "maxItems": 50,
                         "type": "array",
@@ -1838,7 +1867,7 @@ const docTemplate = `{
                 ]
             },
             "post": {
-                "description": "Create a new email template with the provided name, HTML content, and plain text content. Records the content as the template's first version: an operator's, published at once. The HTML content must parse as a Go template the way the mailer parses it.",
+                "description": "Create a new email template with the provided name, HTML content, and plain text content. Records the content as the template's first version: an operator's, published at once. The subject and the HTML content must parse as Go templates the way the mailer parses them.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -1888,7 +1917,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "The HTML content does not parse (template.body_unparseable)"
+                        "description": "The subject or the HTML content does not parse (template.unparseable, params.part)"
                     },
                     "500": {
                         "content": {
@@ -1949,7 +1978,7 @@ const docTemplate = `{
                 ]
             },
             "put": {
-                "description": "Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once. Writes the contract Required variables when sent, and keeps them when not. The HTML content must parse as a Go template and reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.",
+                "description": "Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once. Writes the contract Required variables when sent, and keeps them when not. The subject and the HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.",
                 "parameters": [
                     {
                         "description": "Template key",
@@ -2010,7 +2039,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "The HTML content does not parse (template.body_unparseable) or drops a Required variable (template.required_variables_missing, params.missing names each with its set)"
+                        "description": "The subject or the HTML content does not parse (template.unparseable, params.part) or drops a Required variable (template.required_variables_missing, params.missing names each with its set)"
                     },
                     "500": {
                         "content": {
@@ -2144,7 +2173,7 @@ const docTemplate = `{
                 ]
             },
             "patch": {
-                "description": "Update an existing email template with the provided ID and details. Records the content the template ends up with as an operator's version, published at once. The HTML content must parse as a Go template and reference every Required variable of the template, or nothing is written.",
+                "description": "Update an existing email template with the provided ID and details. Records the content the template ends up with as an operator's version, published at once. The subject and the HTML content must parse as Go templates, and the HTML content must reference every Required variable of the template, or nothing is written.",
                 "parameters": [
                     {
                         "description": "Template ID",
@@ -2215,7 +2244,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "The HTML content does not parse (template.body_unparseable) or drops a Required variable (template.required_variables_missing, params.missing names each with its set)"
+                        "description": "The subject or the HTML content does not parse (template.unparseable, params.part) or drops a Required variable (template.required_variables_missing, params.missing names each with its set)"
                     },
                     "500": {
                         "content": {
@@ -2317,7 +2346,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "The published body does not reference the variable (template.required_variables_missing) or does not parse (template.body_unparseable)"
+                        "description": "The published body does not reference the variable (template.required_variables_missing) or does not parse (template.unparseable, params.part \"html\")"
                     },
                     "500": {
                         "content": {
