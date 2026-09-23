@@ -11,7 +11,17 @@ import (
 // A template key is the stable handle a service addresses a system template by
 // (keycloak.verify-email, core.welcome). Lowercase so it is safe to compare and
 // to put in a URL, bounded so it stays readable in the admin list.
+//
+// The same shape is enforced in the database by the templates_key_format check
+// constraint. Keep the two in step: this one exists so a bad key is a 400 from
+// the handler rather than a constraint violation surfacing as a 500.
 var templateKeyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,62}[a-z0-9]$`)
+
+// IsTemplateKey reports whether a key is well formed. Handlers that take a key
+// from the path use it, since the struct tag only covers keys in a body.
+func IsTemplateKey(key string) bool {
+	return templateKeyPattern.MatchString(key)
+}
 
 type StructValidator interface {
 	Validate(out any) error
@@ -33,7 +43,7 @@ func NewStructValidator() StructValidator {
 	vld := validator.New()
 
 	_ = vld.RegisterValidation("templatekey", func(fl validator.FieldLevel) bool {
-		return templateKeyPattern.MatchString(fl.Field().String())
+		return IsTemplateKey(fl.Field().String())
 	})
 
 	vld.RegisterTagNameFunc(func(fld reflect.StructField) string {

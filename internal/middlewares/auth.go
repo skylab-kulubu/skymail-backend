@@ -63,14 +63,31 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) er
 
 	resp, err := req.Send()
 	if err != nil {
-		return err
+		// The caller's token may be perfectly good; we simply could not ask.
+		// That is our failure to report, not theirs to be blamed for.
+		a.logger.Error().Err(err).Msg("identity provider unreachable")
+		return apperrors.ErrServiceUnavailable
 	}
 
 	defer resp.Close()
 
+	// The status has to be read before the body. Keycloak answers an expired or
+	// revoked token with 401 and an EMPTY body, putting the reason in
+	// WWW-Authenticate, so parsing first turns "your session ended" into a JSON
+	// error and then into a 500 the operator reads as a broken server.
+	switch status := resp.StatusCode(); {
+	case status == fiber.StatusUnauthorized, status == fiber.StatusForbidden:
+		return apperrors.ErrUnauthorized
+	case status < 200 || status > 299:
+		a.logger.Error().Int("status", status).Msg("unexpected userinfo status")
+		return apperrors.ErrServiceUnavailable
+	}
+
 	var info userInfo
 	if err := resp.JSON(&info); err != nil {
-		return err
+		// A 2xx that does not carry the claims is genuinely our problem.
+		a.logger.Error().Err(err).Msg("userinfo body could not be read")
+		return apperrors.ErrStatusInternalServer
 	}
 
 	if info.ID == "" {

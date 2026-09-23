@@ -18,9 +18,14 @@ VALUES (sqlc.arg(key)::text,
         sqlc.arg(plain_text_content)::text,
         sqlc.arg(react_email_content)::text,
         sqlc.arg(system)::boolean)
+-- The seed owns a template's structure; an operator owns its subject. The repo
+-- seeds the subject once, on insert, and never writes over it again: ADR-0045
+-- moved Keycloak's system mail here so a wording change would stop costing a
+-- release, and re-seeding is frequent enough that overwriting the subject took
+-- that back silently. A subject fix made in the repo therefore does not reach a
+-- key that already exists; someone has to make it in SkyMail too.
 ON CONFLICT (key) DO UPDATE
     SET name                = EXCLUDED.name,
-        subject             = EXCLUDED.subject,
         html_content        = EXCLUDED.html_content,
         plain_text_content  = EXCLUDED.plain_text_content,
         react_email_content = EXCLUDED.react_email_content,

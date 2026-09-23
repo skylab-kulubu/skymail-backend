@@ -17,26 +17,34 @@ import (
 	"github.com/wneessen/go-mail"
 )
 
-var mailFuncs = map[string]any{
-	"add1": func(i int) int { return i + 1 },
-	// safeHTML lets a template interpolate markup instead of escaping it.
-	// html/template escapes every variable by default, which is what we want
-	// everywhere except the free-form template, whose body is rich text the
-	// sender wrote. That body is sanitised against an allowlist before it is
-	// ever stored, so what reaches here is already narrowed markup.
-	"safeHTML": func(v any) htmlt.HTML {
-		switch value := v.(type) {
-		case nil:
-			return ""
-		case htmlt.HTML:
-			return value
-		case string:
-			return htmlt.HTML(sanitizeEmailHTML(value))
-		default:
-			return htmlt.HTML(sanitizeEmailHTML(fmt.Sprint(value)))
-		}
-	},
-}
+// A mail carries the same template twice, once as markup and once as text, and
+// safeHTML has to mean a different thing in each. The two maps differ only in
+// that; everything else belongs in both.
+var (
+	htmlFuncs = map[string]any{
+		"add1": add1,
+		// safeHTML lets a template interpolate markup instead of escaping it.
+		// html/template escapes every variable by default, which is what we want
+		// everywhere except the free-form template, whose body is rich text the
+		// sender wrote. That body is sanitised against an allowlist before it is
+		// ever stored, so what reaches here is already narrowed markup.
+		"safeHTML": func(v any) htmlt.HTML {
+			return htmlt.HTML(sanitizeEmailHTML(textValue(v)))
+		},
+	}
+
+	textFuncs = map[string]any{
+		"add1": add1,
+		// The same body, for the plain-text alternative. Printing the markup
+		// there would show the recipient `<p>…</p>`, so it is turned into text
+		// the same shape html-to-text gives the rest of the mail.
+		"safeHTML": func(v any) string {
+			return plainTextFromHTML(sanitizeEmailHTML(textValue(v)))
+		},
+	}
+)
+
+func add1(i int) int { return i + 1 }
 
 const (
 	// A transient SMTP failure (greylisting, a dropped connection, a rate limit)
@@ -212,6 +220,34 @@ func (m *mailerImpl) EnqueueWithRecipients(ctx context.Context, params EnqueueWi
 	return task.ID, m.renderAndQueue(ctx, rows)
 }
 
+// mailTemplates holds one template's three parsed parts.
+type mailTemplates struct {
+	subject *textt.Template
+	text    *textt.Template
+	html    *htmlt.Template
+}
+
+// parseMailTemplates parses all three parts or returns the first failure,
+// naming the part that failed. Returning is the whole point: a Parse error
+// hands back a nil template, so a part whose error is merely logged reaches
+// Execute and dereferences nil. Keeping the three together means no caller can
+// reintroduce that by handling one of them differently.
+func parseMailTemplates(subject, plainText, html string) (mailTemplates, error) {
+	subjectTemplate, err := textt.New("subject").Funcs(textFuncs).Parse(subject)
+	if err != nil {
+		return mailTemplates{}, fmt.Errorf("invalid subject template: %w", err)
+	}
+	textTemplate, err := textt.New("text").Funcs(textFuncs).Parse(plainText)
+	if err != nil {
+		return mailTemplates{}, fmt.Errorf("invalid plain text template: %w", err)
+	}
+	htmlTemplate, err := htmlt.New("html").Funcs(htmlFuncs).Parse(html)
+	if err != nil {
+		return mailTemplates{}, fmt.Errorf("invalid html template: %w", err)
+	}
+	return mailTemplates{subject: subjectTemplate, text: textTemplate, html: htmlTemplate}, nil
+}
+
 func (m *mailerImpl) renderAndQueue(ctx context.Context, rows []commonMailRow) error {
 	if len(rows) == 0 {
 		return nil
@@ -222,18 +258,11 @@ func (m *mailerImpl) renderAndQueue(ctx context.Context, rows []commonMailRow) e
 		return fmt.Errorf("invalid json variables: %w", err)
 	}
 
-	subjectTemplate, err := textt.New("subject").Funcs(mailFuncs).Parse(rows[0].TemplateSubject)
+	parsed, err := parseMailTemplates(rows[0].TemplateSubject, rows[0].PlainTextContent, rows[0].HtmlContent)
 	if err != nil {
-		m.logger.Err(err).Msg("Failed to parse subject template")
+		return err
 	}
-	textTemplate, err := textt.New("text").Funcs(mailFuncs).Parse(rows[0].PlainTextContent)
-	if err != nil {
-		return fmt.Errorf("invalid template: %w", err)
-	}
-	htmlTemplate, err := htmlt.New("html").Funcs(mailFuncs).Parse(rows[0].HtmlContent)
-	if err != nil {
-		return fmt.Errorf("invalid template: %w", err)
-	}
+	subjectTemplate, textTemplate, htmlTemplate := parsed.subject, parsed.text, parsed.html
 
 	queueItems := make([]database.CreateMailQueueItemsParams, len(rows))
 	for i, row := range rows {
