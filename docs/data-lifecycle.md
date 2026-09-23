@@ -85,10 +85,12 @@ these holds; `params.rules` lists each one that does:
   Template seed version: an operator published since, or no seed ever wrote it.
 - `newer_operator_version` — an operator wrote a version numbered after the
   last seed version, a draft included. A discarded draft does not count.
-- `operator_subject` — the subject sent is an operator's: the last seed
-  version kept it instead of the subject it asked for, as seeds did before
-  this rule. A migration's first version does not know what the seed asked
-  for; there, a seed asking for another subject than the one sent counts.
+- `operator_subject` — the subject sent is an operator's and the seed would
+  overwrite it: it is neither the subject the last seed version asked for (that
+  seed kept it, as seeds did before this rule, or an operator published it
+  since) nor the one the seed asks for now. A migration's first version does
+  not know what the seed asked for; there, a seed asking for another subject
+  than the one sent counts.
 
 `params` also name the template (`key`, `template_id`), the versions involved
 (`published_version`, `last_seed_version`, `operator_versions`, each

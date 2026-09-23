@@ -249,10 +249,12 @@ func TestASeedIsRefusedWhenAnOperatorPublishedAfterTheLastSeed(t *testing.T) {
 		t.Fatalf("forced publish = %d %s", response.StatusCode, body)
 	}
 
+	// Their draft reworded the subject too, and the seed would put the repo's
+	// back: that is named as well.
 	conflict := refusedSeed(t, app, key, welcomeSeed("<p>Koyu tema ve logo {{.FullName}}</p>"))
 	p := conflict.Params
-	if !sameRules(p.Rules, "published_by_operator") || len(p.OperatorVersions) != 0 {
-		t.Fatalf("conflict rules %v, operator versions %+v; want [published_by_operator] and none newer than the seed", p.Rules, p.OperatorVersions)
+	if !sameRules(p.Rules, "published_by_operator", "operator_subject") || len(p.OperatorVersions) != 0 {
+		t.Fatalf("conflict rules %v, operator versions %+v; want [published_by_operator operator_subject] and none newer than the seed", p.Rules, p.OperatorVersions)
 	}
 	if p.PublishedVersion == nil || p.PublishedVersion.ID != draft.ID || p.PublishedVersion.Seq != 2 || p.PublishedVersion.PublishedAt == nil ||
 		p.PublishedVersion.Author.Kind != "operator" || p.LastSeedVersion == nil || p.LastSeedVersion.ID != lastSeed || p.LastSeedVersion.Seq != 3 {
@@ -266,8 +268,8 @@ func TestASeedIsRefusedWhenAnOperatorPublishedAfterTheLastSeed(t *testing.T) {
 	}
 	payload := welcomeSeed("<p>Koyu tema {{.FullName}}</p>")
 	conflict = refusedSeed(t, app, "core.certificate", payload)
-	if !sameRules(conflict.Params.Rules, "published_by_operator", "newer_operator_version") {
-		t.Fatalf("after an old panel edit, rules = %v, want [published_by_operator newer_operator_version]", conflict.Params.Rules)
+	if !sameRules(conflict.Params.Rules, "published_by_operator", "newer_operator_version", "operator_subject") {
+		t.Fatalf("after an old panel edit of the subject, rules = %v, want all three", conflict.Params.Rules)
 	}
 }
 
@@ -313,6 +315,15 @@ func TestASeedIsRefusedWhenTheLastSeedKeptAnOperatorsSubject(t *testing.T) {
 	}
 	if row := templateRow(t, db, seeded.ID); row.Subject != "Aramıza hoş geldin" {
 		t.Fatalf("subject after a refused seed = %q, want the operator's", row.Subject)
+	}
+
+	// The repo takes up the operator's wording: nothing of theirs is left for
+	// the seed to overwrite, so its body fix goes through.
+	adopted := welcomeSeed("<p>Koyu tema ve logo {{.FullName}}</p>")
+	adopted["subject"] = "Aramıza hoş geldin"
+	if response, reseeded, body := seedAs(t, app, key, adopted, false); response.StatusCode != fiber.StatusOK ||
+		reseeded.HtmlContent != adopted["html_content"] || reseeded.Subject != "Aramıza hoş geldin" {
+		t.Fatalf("a seed asking for the operator's subject = %d %s, want it written", response.StatusCode, body)
 	}
 }
 

@@ -23,8 +23,9 @@ const (
 	// An operator wrote a version after the last seed — a draft counts, a
 	// discarded one does not.
 	SeedConflictNewerOperatorVersion SeedConflictRule = "newer_operator_version"
-	// The subject sent now is an operator's: the last seed kept it rather than
-	// write its own.
+	// The subject sent now is an operator's, and the seed would overwrite it:
+	// it is neither the one the last seed asked for (that seed kept it, or an
+	// operator published it since) nor the one asked for now.
 	SeedConflictOperatorSubject SeedConflictRule = "operator_subject"
 )
 
@@ -157,7 +158,7 @@ func seedConflict(ctx context.Context, q *Queries, template Template, seed Templ
 	if len(conflict.OperatorVersions) > 0 {
 		conflict.Rules = append(conflict.Rules, SeedConflictNewerOperatorVersion)
 	}
-	if keptAnOperatorsSubject(conflict.LastSeedVersion, seed.Subject) {
+	if keptAnOperatorsSubject(conflict.LastSeedVersion, template.Subject, seed.Subject) {
 		conflict.Rules = append(conflict.Rules, SeedConflictOperatorSubject)
 	}
 	if len(conflict.Rules) == 0 {
@@ -174,22 +175,21 @@ func summaryID(version *TemplateVersionSummary) *uuid.UUID {
 	return &version.ID
 }
 
-// keptAnOperatorsSubject is whether a seed version kept the subject the
-// template had instead of the one it asked for, as the upsert did before this
-// rule (#18): that subject was an operator's.
+// keptAnOperatorsSubject is whether the subject a template sends is an
+// operator's that the seed now asking for requested would overwrite: the last
+// seed version asked for another subject than the one sent — it kept the
+// template's own, as the upsert did before this rule (#18) — and requested is
+// not that one either. A repo that has taken up the operator's subject leaves
+// nothing of theirs to overwrite.
 //
 // The migration's first versions do not know what the seed asked for
-// (requested_subject is null), and their subject may be one #18 kept. Such a
-// version counts as having kept an operator's subject when the seed now asks
-// for another one: refusing a subject the repo changed costs a force, while
-// writing over an operator's wording is what the rule exists to prevent.
-func keptAnOperatorsSubject(seed *TemplateVersionSummary, requested string) bool {
-	switch {
-	case seed == nil:
+// (requested_subject is null), and their subject may be one #18 kept. For
+// them, a seed asking for another subject than the one sent counts: refusing a
+// subject the repo changed costs a force, while writing over an operator's
+// wording is what the rule exists to prevent.
+func keptAnOperatorsSubject(lastSeed *TemplateVersionSummary, sent, requested string) bool {
+	if lastSeed == nil || sent == requested {
 		return false
-	case seed.RequestedSubject == nil:
-		return seed.Subject != requested
-	default:
-		return seed.Subject != *seed.RequestedSubject
 	}
+	return lastSeed.RequestedSubject == nil || sent != *lastSeed.RequestedSubject
 }
