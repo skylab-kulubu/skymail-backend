@@ -233,6 +233,8 @@ func (w *approvalWorld) advance(d time.Duration) {
 	w.clock = w.clock.Add(d)
 }
 
+// free.basic as the Template seed writes it, in short: the body the sender
+// writes goes through safeHTML in the markup and in the plain text alike.
 const freeBasicHTML = `<h1>{{.Heading}}</h1><div>{{safeHTML .BodyHtml}}</div><p>{{.FullName}}</p>`
 
 func newApprovalWorld(t *testing.T) *approvalWorld {
@@ -269,7 +271,7 @@ func newApprovalWorldWithPool(t *testing.T, poolSize int) *approvalWorld {
 		clock: time.Date(2026, time.September, 23, 10, 0, 0, 0, time.UTC),
 	}
 
-	w.freeBasic = w.seedTemplate("free.basic", "Serbest Gönderim", "{{.Subject}}", freeBasicHTML, "{{.BodyHtml}}",
+	w.freeBasic = w.seedTemplate("free.basic", "Serbest Gönderim", "{{.Subject}}", freeBasicHTML, "{{safeHTML .BodyHtml}}",
 		`[{"name":"BodyHtml","reason":null},{"name":"Subject","reason":"Konu gönderimde yazılır."}]`)
 	w.requested = w.seedTemplate("mail.approval-requested", "Mail Onayı · Onayını Bekliyor", "Onayını bekleyen bir gönderim var",
 		`<p>{{.RequesterName}} {{.TemplateName}} {{.AudienceName}} {{.RecipientCount}} {{.ApproveUrl}} {{.PreviewUrl}}</p>`, "{{.RequesterName}}", `[]`)
@@ -1371,7 +1373,7 @@ func TestARequestIsNotSentOverARepublishedTemplate(t *testing.T) {
 	submitted := w.submit("elif", w.listSend())
 
 	republished := w.seedTemplate("free.basic", "Serbest Gönderim", "{{.Subject}}",
-		`<h1>{{.Heading}}</h1><div>{{safeHTML .BodyHtml}}</div><footer>SKY LAB</footer>`, "{{.BodyHtml}}",
+		`<h1>{{.Heading}}</h1><div>{{safeHTML .BodyHtml}}</div><footer>SKY LAB</footer>`, "{{safeHTML .BodyHtml}}",
 		`[{"name":"BodyHtml","reason":null},{"name":"Subject","reason":"Konu gönderimde yazılır."}]`)
 	if *republished.PublishedVersionID == submitted.Template.VersionID {
 		t.Fatal("the reseed published no new version")
@@ -1632,5 +1634,88 @@ func TestAnApproverMayDecideTheirOwnRequest(t *testing.T) {
 	}
 	if status, answer, failure := w.act("yusuf", returned.ID, "accept", nil); status != fiber.StatusOK || answer.State != "approved" {
 		t.Errorf("yusuf accepting his own return = %d %+v", status, failure)
+	}
+}
+
+// An approver's edit reaches the free-form body through the same allowlist a
+// sender's does: markup it does not allow is gone from the preview and from
+// every recipient's mail, and the plain-text part carries text, not tags.
+func TestAnApproversEditIsSanitisedLikeASendersBody(t *testing.T) {
+	w := newApprovalWorld(t)
+	submitted := w.submit("elif", w.listSend())
+
+	edit := w.listSend()["body_variables"].(map[string]any)
+	edit["BodyHtml"] = `<p onclick="steal()">Başvurular <strong>açık</strong></p><script>alert(1)</script>` +
+		`<a href="javascript:steal()">tıkla</a><img src="https://tracker.example/pixel.gif">`
+	status, returned, failure := w.act("fatih", submitted.ID, "return", map[string]any{"body_variables": edit})
+	if status != fiber.StatusOK || returned.Preview == nil {
+		t.Fatalf("return = %d %+v", status, failure)
+	}
+	status, accepted, failure := w.act("elif", submitted.ID, "accept", nil)
+	if status != fiber.StatusOK {
+		t.Fatalf("accept = %d %+v", status, failure)
+	}
+	queued := w.queuedRows(*accepted.TaskID)["ayse@example.com"]
+
+	for name, html := range map[string]string{"preview": returned.Preview.HTML, "queued mail": *queued.BodyHtml} {
+		if !strings.Contains(html, "<p>Başvurular <strong>açık</strong></p>") {
+			t.Errorf("%s lost the allowed markup: %s", name, html)
+		}
+		for _, banned := range []string{"onclick", "<script", "alert(1)", "javascript:", "tracker.example"} {
+			if strings.Contains(html, banned) {
+				t.Errorf("%s keeps %q: %s", name, banned, html)
+			}
+		}
+	}
+	for name, text := range map[string]string{"preview": returned.Preview.PlainText, "queued mail": queued.Body} {
+		if strings.Contains(text, "<") || !strings.Contains(text, "Başvurular açık") {
+			t.Errorf("%s plain text = %q", name, text)
+		}
+	}
+}
+
+// The sweep and an action meet. A request an approver is sending when its
+// deadline passes is left to the approval: the sweep skips what is locked,
+// the send goes out once, and no expiry is written or mailed. The approval
+// took the request before its deadline; it is what decided it.
+func TestTheSweepLeavesARequestAnApproverIsSending(t *testing.T) {
+	w := newApprovalWorld(t)
+	submitted := w.submit("elif", w.listSend())
+	w.advance(7*24*time.Hour - time.Minute)
+	w.mail.gate = make(chan struct{})
+	w.mail.entered = make(chan struct{}, 1)
+
+	approved := make(chan int, 1)
+	go func() {
+		status, _, _ := w.act("fatih", submitted.ID, "approve", nil)
+		approved <- status
+	}()
+	select {
+	case <-w.mail.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the approval never reached the mailer")
+	}
+
+	w.advance(2 * time.Minute)
+	if expired, err := w.handler.ExpireDue(context.Background()); err != nil || expired != 0 {
+		t.Fatalf("sweep during the approval = %d, %v; want it to skip the locked request", expired, err)
+	}
+	close(w.mail.gate)
+	if status := <-approved; status != fiber.StatusOK {
+		t.Fatalf("approval = %d", status)
+	}
+	if expired, err := w.handler.ExpireDue(context.Background()); err != nil || expired != 0 {
+		t.Fatalf("sweep after the approval = %d, %v; want nothing to expire", expired, err)
+	}
+	if _, read := w.get("elif", submitted.ID); read.State != "approved" || read.kinds() != "submitted,approved" {
+		t.Fatalf("after the race: %s %s", read.State, read.kinds())
+	}
+	if n := len(w.mail.of(w.freeBasic.ID)); n != 1 {
+		t.Fatalf("sends = %d, want 1", n)
+	}
+	for _, notice := range w.mail.of(w.resolved.ID) {
+		if notice.variables["Decision"] == "expired" {
+			t.Fatalf("an expiry was mailed: %+v", notice)
+		}
 	}
 }
