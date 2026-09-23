@@ -201,3 +201,38 @@ func TestAuthenticatedNameIsTheTokensNameOrUsername(t *testing.T) {
 		})
 	}
 }
+
+// A Mail onayı decision is mailed to whoever submitted the request, also when
+// SkyMail itself expires it days later with no token to ask, so the address
+// the token carried is kept at submission. A token with none leaves it unset.
+func TestAuthenticatedEmailIsTheTokensEmail(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		claims string
+		want   any
+	}{
+		"person":  {`"name":"Ada Yılmaz","email":"ada@yildizskylab.com"`, "ada@yildizskylab.com"},
+		"blank":   {`"name":"Ada Yılmaz","email":" "`, nil},
+		"missing": {`"preferred_username":"service-account-skymail-seed"`, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := `{"sub":"11111111-1111-4111-8111-111111111111",` + tc.claims +
+				`,"resource_access":{"skymail":{"roles":["skymail:access"]}}}`
+			var got any
+			app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
+			app.Use(NewAuthMiddleware("skymail", userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body)).Authenticate)
+			app.Get("/probe", func(c fiber.Ctx) error {
+				got = c.Locals("user_email")
+				return c.SendStatus(fiber.StatusNoContent)
+			})
+
+			if response := requestWithToken(t, app, "good.token.value"); response.StatusCode != fiber.StatusNoContent {
+				t.Fatalf("status = %d, want 204", response.StatusCode)
+			}
+			if got != tc.want {
+				t.Fatalf("user_email = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}

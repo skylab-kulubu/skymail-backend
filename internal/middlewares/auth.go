@@ -27,6 +27,7 @@ type userInfo struct {
 	ID                string `json:"sub"`
 	Name              string `json:"name"`
 	PreferredUsername string `json:"preferred_username"`
+	Email             string `json:"email"`
 	ResourceAccess    map[string]struct {
 		Roles []string `json:"roles"`
 	} `json:"resource_access"`
@@ -110,12 +111,16 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) er
 	if name := info.displayName(); name != "" {
 		c.Locals("user_name", name)
 	}
+	if email := strings.TrimSpace(info.Email); email != "" {
+		c.Locals("user_email", email)
+	}
 	return c.Next()
 }
 
 // displayName is what the caller is called: a person's token carries their
 // name, a service account's only its username. Handlers read it as the
-// "user_name" local beside "user_id".
+// "user_name" local beside "user_id", and the address the token carries, if
+// any, as "user_email".
 func (info userInfo) displayName() string {
 	if name := strings.TrimSpace(info.Name); name != "" {
 		return name
