@@ -20,7 +20,7 @@ type TemplateVersionSummary struct {
 	// 1, 2, 3… within the template, in the order versions were written.
 	Seq     int    `json:"seq"`
 	Subject string `json:"subject"`
-	// The subject the Template seed sent for its version. It can differ from subject: until the seed's conflict rule, the seed keeps the subject a template already has. Null on an operator's version and on the first versions, made from templates written before versions were kept.
+	// The subject the Template seed sent for its version. A seed writes it, so it is the subject; a seed version written before the seed's conflict rule may differ, having kept the subject an operator gave the template. Null on an operator's version and on the first versions, made from templates written before versions were kept.
 	RequestedSubject *string `json:"requested_subject"`
 	// The Authoring mode whose source is the Main source: its render is what the version sends.
 	MainMode  string                 `json:"main_mode" enums:"jsx,visual,html"`

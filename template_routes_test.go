@@ -31,7 +31,7 @@ func templateRoutesApp(t *testing.T, roles ...string) (*fiber.App, database.Temp
 		t.Fatal(err)
 	}
 	store := database.NewStore(postgres.Pool)
-	template, err := store.PublishTemplateWrite(context.Background(), database.VersionAuthor{Kind: database.TemplateAuthorKindOperator}, nil,
+	template, err := store.PublishTemplateWrite(context.Background(), database.VersionAuthor{Kind: database.TemplateAuthorKindOperator},
 		func(q *database.Queries) (database.Template, error) {
 			return q.CreateTemplate(context.Background(), database.CreateTemplateParams{
 				Name: "Bülten", Subject: "SKY LAB", HtmlContent: "<p>Merhaba {{.FullName}}</p>", PlainTextContent: "Merhaba {{.FullName}}", ReactEmailContent: "",
@@ -380,5 +380,64 @@ func TestTheSeedSendsContractVariablesWithOrWithoutReasons(t *testing.T) {
 		served.Contract[1].Name != "link" || served.Contract[1].Reason == nil || *served.Contract[1].Reason != "Parola sıfırlama bağlantısı." ||
 		served.Operator == nil || len(served.Operator) != 0 {
 		t.Fatalf("served %s, want firstName without a reason and link with one, and no operator variables", body)
+	}
+}
+
+// A refused seed answers through production's error handler and JSON codec in
+// the API's error shape. The seed on main prints the first 200 bytes of an
+// error body and stops, so those bytes alone must say what happened and how to
+// force it. force passes through the route as a query parameter, and anything
+// but a boolean there is refused like any invalid field.
+func TestARefusedSeedAnswersInTheAPIsErrorShape(t *testing.T) {
+	app, _ := templateRoutesApp(t, "skymail:access", "skymail:templates:write", "skymail:templates:read")
+	const path = "/v1/templates/by-key/core.welcome"
+	seed := func(html string) map[string]any {
+		return map[string]any{
+			"name": "Hoş Geldin", "subject": "Hoş geldin", "html_content": html, "plain_text_content": "Hoş geldin",
+			"react_email_content": "// Kaynak: skymail-frontend/emails/core.welcome.tsx — burada düzenlersen repodaki kaynakla ayrışır.\n",
+			"system":              true,
+		}
+	}
+	status, body := sendJSON(t, app, fiber.MethodPut, path, seed("<p>İlk</p>"))
+	if status != fiber.StatusOK {
+		t.Fatalf("seed = %d %s", status, body)
+	}
+	var seeded database.Template
+	if err := json.Unmarshal(body, &seeded); err != nil {
+		t.Fatal(err)
+	}
+	if status, body := sendJSON(t, app, fiber.MethodPatch, "/v1/templates/"+seeded.ID.String(), map[string]any{
+		"name": seeded.Name, "subject": "Aramıza hoş geldin", "html_content": seeded.HtmlContent,
+		"plain_text_content": seeded.PlainTextContent, "react_email_content": seeded.ReactEmailContent, "key": "core.welcome",
+	}); status != fiber.StatusOK {
+		t.Fatalf("operator edit = %d %s", status, body)
+	}
+
+	status, body = sendJSON(t, app, fiber.MethodPut, path, seed("<p>Koyu tema</p>"))
+	var refused struct {
+		Code   string `json:"code"`
+		Params struct {
+			Key        string   `json:"key"`
+			TemplateID string   `json:"template_id"`
+			Rules      []string `json:"rules"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(body, &refused); err != nil {
+		t.Fatalf("refused seed body %s: %v", body, err)
+	}
+	if status != fiber.StatusConflict || refused.Code != "template.seed_conflict" || refused.Params.Key != "core.welcome" ||
+		refused.Params.TemplateID != seeded.ID.String() || len(refused.Params.Rules) == 0 {
+		t.Fatalf("refused seed = %d %s, want 409 template.seed_conflict naming the template and its rules", status, body)
+	}
+	if head := string(body[:min(200, len(body))]); !strings.Contains(head, "template.seed_conflict") || !strings.Contains(head, "?force=true") {
+		t.Fatalf("the first 200 bytes of the refusal, all main's seed prints, are %q: want the code and how to force", head)
+	}
+
+	if status, body := sendJSON(t, app, fiber.MethodPut, path+"?force=evet", seed("<p>Koyu tema</p>")); status != fiber.StatusBadRequest ||
+		!strings.Contains(string(body), `"field":"force"`) {
+		t.Fatalf("force=evet = %d %s, want 400 validation.error on force", status, body)
+	}
+	if status, body := sendJSON(t, app, fiber.MethodPut, path+"?force=true", seed("<p>Koyu tema</p>")); status != fiber.StatusOK {
+		t.Fatalf("forced seed = %d %s, want 200", status, body)
 	}
 }

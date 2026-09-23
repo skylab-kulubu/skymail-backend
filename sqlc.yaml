@@ -14,6 +14,14 @@ sql:
           - column: "templates.contract_required_variables"
             go_type:
               type: "ContractVariables"
+          # A refused seed is served as one object, seed_refusal, beside the row
+          # (handlers.Template), not as three loose fields.
+          - column: "templates.seed_refused_at"
+            go_struct_tag: 'json:"-"'
+          - column: "templates.seed_refused_rules"
+            go_struct_tag: 'json:"-"'
+          - column: "templates.seed_refused_payload_sha256"
+            go_struct_tag: 'json:"-"'
           - db_type: "uuid"
             go_type:
               type: "UUID"

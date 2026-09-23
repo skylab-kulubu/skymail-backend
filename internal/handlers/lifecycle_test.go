@@ -80,6 +80,13 @@ func lifecycleHandlerStore(t *testing.T) *database.Store {
 // applyMigrationFiles runs every up migration in db/migrations on pool.
 func applyMigrationFiles(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
+	applyMigrationFilesWhere(t, pool, func(string) bool { return true })
+}
+
+// applyMigrationFilesWhere runs the up migrations in db/migrations whose file
+// name apply accepts on pool, in order.
+func applyMigrationFilesWhere(t *testing.T, pool *pgxpool.Pool, apply func(file string) bool) {
+	t.Helper()
 	_, filename, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate lifecycle handler test")
@@ -91,6 +98,9 @@ func applyMigrationFiles(t *testing.T, pool *pgxpool.Pool) {
 	}
 	sort.Strings(files)
 	for _, file := range files {
+		if !apply(filepath.Base(file)) {
+			continue
+		}
 		migration, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)

@@ -205,7 +205,10 @@ type Template struct {
 	// Required variables from the sending service's contract, sorted by name, each with why the mail needs it. Written only by the Template seed; locked in the panel.
 	ContractRequiredVariables ContractVariables `json:"contract_required_variables"`
 	// Required variables operators marked, sorted. Never shares a name with contract_required_variables.
-	OperatorRequiredVariables []string `json:"operator_required_variables"`
+	OperatorRequiredVariables []string   `json:"operator_required_variables"`
+	SeedRefusedAt             *time.Time `json:"-"`
+	SeedRefusedRules          []string   `json:"-"`
+	SeedRefusedPayloadSha256  *string    `json:"-"`
 }
 
 type TemplateVersion struct {

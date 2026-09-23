@@ -20,14 +20,13 @@ VALUES (sqlc.arg(key)::text,
         sqlc.arg(react_email_content)::text,
         sqlc.arg(system)::boolean,
         COALESCE(sqlc.narg(contract_required_variables)::jsonb, '[]'))
--- The seed owns a template's structure; an operator owns its subject. The repo
--- seeds the subject once, on insert, and never writes over it again: ADR-0045
--- moved Keycloak's system mail here so a wording change would stop costing a
--- release, and re-seeding is frequent enough that overwriting the subject took
--- that back silently. A subject fix made in the repo therefore does not reach a
--- key that already exists; someone has to make it in SkyMail too.
+-- The seed writes everything it sends, the subject included. It is the
+-- caller that keeps an operator's change — the subject too — from being
+-- overwritten: it refuses the seed before it gets here unless it is forced
+-- (ADR-0047), which is what replaced leaving the subject alone on every seed.
 ON CONFLICT (key) DO UPDATE
     SET name                = EXCLUDED.name,
+        subject             = EXCLUDED.subject,
         html_content        = EXCLUDED.html_content,
         plain_text_content  = EXCLUDED.plain_text_content,
         react_email_content = EXCLUDED.react_email_content,
@@ -47,8 +46,26 @@ ON CONFLICT (key) DO UPDATE
                                             ORDER BY name COLLATE "C"),
         archived_at         = NULL,
         archived_by         = NULL,
+        -- A seed that goes through settles any seed refused before it.
+        seed_refused_at             = NULL,
+        seed_refused_rules          = NULL,
+        seed_refused_payload_sha256 = NULL,
         updated_at          = NOW()
 RETURNING *;
+
+-- Keeps on a template that a Template seed was refused, and why. Refusing the
+-- content refused last time again keeps when it was first refused; other
+-- content starts over. Nothing that is sent changes, so updated_at stays.
+-- name: RecordSeedRefusal :exec
+UPDATE templates
+SET seed_refused_at             = CASE
+                                      WHEN seed_refused_payload_sha256 = sqlc.arg(payload_sha256)::text
+                                          THEN seed_refused_at
+                                      ELSE NOW()
+    END,
+    seed_refused_rules          = sqlc.arg(rules)::text[],
+    seed_refused_payload_sha256 = sqlc.arg(payload_sha256)::text
+WHERE id = sqlc.arg(id);
 
 -- name: GetTemplateById :one
 SELECT *
@@ -165,7 +182,7 @@ RETURNING *;
 -- for the writers that still write the row directly — the old panel's create
 -- and edit, and the Template seed's by-key upsert: each runs this after its
 -- row write, in the same transaction, so the version is what the row ended up
--- with (a subject the upsert kept included), not what the request asked for.
+-- with, not what the request asked for.
 --
 -- Those writers send a subject, a render and at most a JSX source, so the
 -- version starts from the published one and replaces only what they changed:
@@ -295,6 +312,43 @@ FROM templates
 WHERE id = $1
   AND archived_at IS NULL
     FOR UPDATE;
+
+-- Takes the lock of the template a Template key names, archived or not, so
+-- the seed's upsert can judge the template before it writes: every other
+-- writer of the template waits until it has. No row: the key is new.
+-- name: LockTemplateByKey :one
+SELECT *
+FROM templates
+WHERE key = $1
+    FOR UPDATE;
+
+-- The last version a Template seed wrote of a template. Seed versions are
+-- always published, so this is the seed's last word on the template.
+-- name: LastTemplateSeedVersion :one
+SELECT *
+FROM template_version_summaries
+WHERE template_id = $1
+  AND author_kind = 'template_seed'
+ORDER BY seq DESC
+LIMIT 1;
+
+-- An operator's versions of a template numbered after the given one, oldest
+-- first, drafts included and discarded drafts left out: operator work a seed
+-- written after them would pass over.
+-- name: ListOperatorVersionsAfter :many
+SELECT *
+FROM template_version_summaries
+WHERE template_id = sqlc.arg(template_id)
+  AND author_kind = 'operator'
+  AND discarded_at IS NULL
+  AND seq > sqlc.arg(after_seq)::int
+ORDER BY seq;
+
+-- name: GetTemplateVersionSummary :one
+SELECT *
+FROM template_version_summaries
+WHERE template_id = $1
+  AND id = $2;
 
 -- Each operator's draft in progress on the given templates, newest first: the
 -- newest version an operator wrote of a template, when it is neither published

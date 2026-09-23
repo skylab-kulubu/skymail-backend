@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
@@ -327,7 +328,8 @@ func TestPublishingAStaleDraftIsRefusedUntilForced(t *testing.T) {
 
 // Only a Template seed that changes the template makes a draft stale: an
 // unchanged seed records no version (ticket 04), so it leaves the base
-// published and the draft publishes without force.
+// published and the draft publishes without force. A changing seed meets the
+// operator's work here, so it goes through only forced (ADR-0047).
 func TestOnlyAChangingSeedMakesADraftStale(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	app := templateVersionsApp(t, db)
@@ -353,7 +355,7 @@ func TestOnlyAChangingSeedMakesADraftStale(t *testing.T) {
 	}
 
 	second := draftOf("İkinci taslak", first.ID)
-	response, body := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/"+key, map[string]any{
+	response, body := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/"+key+"?force=true", map[string]any{
 		"name": "Hoş Geldin", "subject": "SKY LAB'e hoş geldin",
 		"html_content": "<p>Koyu temalı hoş geldin {{.FullName}}</p>", "plain_text_content": "Hoş geldin {{.FullName}}",
 		"react_email_content": seedPointerComment(key), "system": true,
@@ -957,8 +959,16 @@ func TestConcurrentSavesNumberVersionsInTurn(t *testing.T) {
 // servedTemplate is a template as the template routes serve it.
 type servedTemplate struct {
 	database.Template
-	MainMode *string         `json:"main_mode"`
-	Drafts   []servedVersion `json:"drafts"`
+	MainMode    *string         `json:"main_mode"`
+	Drafts      []servedVersion `json:"drafts"`
+	SeedRefusal *servedRefusal  `json:"seed_refusal"`
+}
+
+// servedRefusal is a refused Template seed as a template is served with it.
+type servedRefusal struct {
+	RefusedAt     time.Time `json:"refused_at"`
+	Rules         []string  `json:"rules"`
+	PayloadSHA256 string    `json:"payload_sha256"`
 }
 
 func getTemplate(t *testing.T, app *fiber.App, path string) servedTemplate {
@@ -1235,9 +1245,10 @@ func TestForcingOverAVersionTheOperatorDidNotSeeIsRefused(t *testing.T) {
 	if response.StatusCode != fiber.StatusCreated {
 		t.Fatalf("draft = %d %s", response.StatusCode, body)
 	}
+	// The draft in progress holds a seed back; these seeds are forced over it.
 	seedWith := func(html string) uuid.UUID {
 		t.Helper()
-		response, body := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/"+key, map[string]any{
+		response, body := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/"+key+"?force=true", map[string]any{
 			"name": "Hoş Geldin", "subject": "SKY LAB'e hoş geldin", "html_content": html, "plain_text_content": "Hoş geldin",
 			"react_email_content": seedPointerComment(key), "system": true,
 		})

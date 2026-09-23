@@ -62,6 +62,45 @@ written in that window has no version for that write: its row, which is what
 is sent, differs from the version marked current until the template's next
 write, which records the row as it then is.
 
+## Template seed
+
+The Template seed writes the Mail templates kept in skymail-frontend's
+`emails/` by key, through `PUT /v1/templates/by-key/{key}`. It and SkyMail's
+editor both write templates, and neither silently overwrites the other
+(ADR-0047). The seed writes everything it sends — the subject too — as a
+Template seed version, published at once; `react_email_content` holding a JSX
+source makes that source the version's JSX Main source (the seed's older
+pointer comment is no source, and its body is then the HTML Main source).
+
+Unless the request says `?force=true`, a seed that would change a template an
+operator changed since the last seed is refused with
+`409 template.seed_conflict`, and nothing is written. It is refused when any of
+these holds; `params.rules` lists each one that does:
+
+- `published_by_operator` — the version the template sends is not the last
+  Template seed version: an operator published since, or no seed ever wrote it.
+- `newer_operator_version` — an operator wrote a version numbered after the
+  last seed version, a draft included. A discarded draft does not count.
+- `operator_subject` — the subject sent is an operator's: the last seed
+  version kept it instead of the subject it asked for, as seeds did before
+  this rule. A migration's first version does not know what the seed asked
+  for; there, a seed asking for another subject than the one sent counts.
+
+`params` also name the template (`key`, `template_id`), the versions involved
+(`published_version`, `last_seed_version`, `operator_versions`, each
+`{id, seq, author, published_at}`) and the two subjects (`subject` sent now,
+`requested_subject` asked for). A seed that would leave the template as its
+published version already is overwrites nothing and is never refused. A forced
+seed is written like any other; the operator's versions stay in the history and
+can be restored as drafts.
+
+A refused seed records no version. The template keeps it as `seed_refusal`,
+`{"refused_at", "rules", "payload_sha256"}`, served with the template:
+`refused_at` is when that content was first refused (refused again, the time
+stays; other content starts over), and `payload_sha256` tells the content
+apart. The next seed that goes through — forced, or once nothing conflicts —
+clears it.
+
 ## Required variables
 
 A template's Required variables are the variables its HTML body must keep

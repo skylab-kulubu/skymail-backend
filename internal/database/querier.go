@@ -80,17 +80,25 @@ type Querier interface {
 	// One version of one template, whole. A version of another template is not
 	// found here.
 	GetTemplateVersion(ctx context.Context, arg GetTemplateVersionParams) (GetTemplateVersionRow, error)
+	GetTemplateVersionSummary(ctx context.Context, arg GetTemplateVersionSummaryParams) (TemplateVersionSummary, error)
 	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (MailTask, error)
 	// Whether text is a JSX source by the rule the migration and the old panel's
 	// writes read react_email_content with: something other than whitespace and
 	// comments is left in it.
 	IsJSXSource(ctx context.Context, content string) (bool, error)
+	// The last version a Template seed wrote of a template. Seed versions are
+	// always published, so this is the seed's last word on the template.
+	LastTemplateSeedVersion(ctx context.Context, templateID uuid.UUID) (TemplateVersionSummary, error)
 	// A send as every screen shows it — the home screen, the send list and a
 	// send's own page: the task, the template it used, who it went to, its status
 	// as mail_task_status derives it, and its recipients by status. A NULL task_id
 	// lists every send and a NULL status every status. The page is cut first so
 	// only its rows are counted.
 	ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error)
+	// An operator's versions of a template numbered after the given one, oldest
+	// first, drafts included and discarded drafts left out: operator work a seed
+	// written after them would pass over.
+	ListOperatorVersionsAfter(ctx context.Context, arg ListOperatorVersionsAfterParams) ([]TemplateVersionSummary, error)
 	// The Authoring mode of each template's Main source as it is sent: its
 	// published version's.
 	ListPublishedMainModes(ctx context.Context, templateIds []uuid.UUID) ([]ListPublishedMainModesRow, error)
@@ -112,6 +120,10 @@ type Querier interface {
 	// numbers its version in turn. An archived template is not found here, as it
 	// is not for any other write.
 	LockTemplate(ctx context.Context, id uuid.UUID) (Template, error)
+	// Takes the lock of the template a Template key names, archived or not, so
+	// the seed's upsert can judge the template before it writes: every other
+	// writer of the template waits until it has. No row: the key is new.
+	LockTemplateByKey(ctx context.Context, key *string) (Template, error)
 	ProcessQueueItems(ctx context.Context) ([]MailQueue, error)
 	// Publishes a draft: marks it published and copies it onto the template row,
 	// which the send path reads — its subject and its render. react_email_content,
@@ -125,6 +137,10 @@ type Querier interface {
 	// caller holds the row's lock and has checked that the version is a draft of
 	// this template.
 	PublishTemplateDraft(ctx context.Context, arg PublishTemplateDraftParams) (Template, error)
+	// Keeps on a template that a Template seed was refused, and why. Refusing the
+	// content refused last time again keeps when it was first refused; other
+	// content starts over. Nothing that is sent changes, so updated_at stays.
+	RecordSeedRefusal(ctx context.Context, arg RecordSeedRefusalParams) error
 	// Writes an operator's draft, numbered after the template's last version,
 	// unless the version it continues holds exactly this content already —
 	// subject, every source, Main source and render, a Visual document compared
@@ -137,7 +153,7 @@ type Querier interface {
 	// for the writers that still write the row directly — the old panel's create
 	// and edit, and the Template seed's by-key upsert: each runs this after its
 	// row write, in the same transaction, so the version is what the row ended up
-	// with (a subject the upsert kept included), not what the request asked for.
+	// with, not what the request asked for.
 	//
 	// Those writers send a subject, a render and at most a JSX source, so the
 	// version starts from the published one and replaces only what they changed:
@@ -177,12 +193,10 @@ type Querier interface {
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
 	UpdateRecipient(ctx context.Context, arg UpdateRecipientParams) (Recipient, error)
 	UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) (Template, error)
-	// The seed owns a template's structure; an operator owns its subject. The repo
-	// seeds the subject once, on insert, and never writes over it again: ADR-0045
-	// moved Keycloak's system mail here so a wording change would stop costing a
-	// release, and re-seeding is frequent enough that overwriting the subject took
-	// that back silently. A subject fix made in the repo therefore does not reach a
-	// key that already exists; someone has to make it in SkyMail too.
+	// The seed writes everything it sends, the subject included. It is the
+	// caller that keeps an operator's change — the subject too — from being
+	// overwritten: it refuses the seed before it gets here unless it is forced
+	// (ADR-0047), which is what replaced leaving the subject alone on every seed.
 	UpsertTemplateByKey(ctx context.Context, arg UpsertTemplateByKeyParams) (Template, error)
 }
 

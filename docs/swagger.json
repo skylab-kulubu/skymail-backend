@@ -255,6 +255,33 @@
                 },
                 "type": "object"
             },
+            "handlers.SeedRefusal": {
+                "description": "The Template seed refused since the last seed that went through, because an operator changed the template (ADR-0047): a repo change waiting on a decision. Null when no seed is refused.",
+                "properties": {
+                    "payload_sha256": {
+                        "description": "A SHA-256 of what the seed asked to write, in hex: the same content refused again has the same one.",
+                        "type": "string"
+                    },
+                    "refused_at": {
+                        "description": "When the Template seed was first refused with the content it asked for last; refused again with the same content, the time stays.",
+                        "type": "string"
+                    },
+                    "rules": {
+                        "description": "The conflict rules that held the last time: published_by_operator (the version sent is an operator's, not the last seed's), newer_operator_version (an operator wrote a version after the last seed, a draft included), operator_subject (the subject sent is an operator's).",
+                        "items": {
+                            "enum": [
+                                "published_by_operator",
+                                "newer_operator_version",
+                                "operator_subject"
+                            ],
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    }
+                },
+                "type": "object"
+            },
             "handlers.SendAudience": {
                 "properties": {
                     "kind": {
@@ -407,6 +434,9 @@
                     "react_email_content": {
                         "type": "string"
                     },
+                    "seed_refusal": {
+                        "$ref": "#/components/schemas/handlers.SeedRefusal"
+                    },
                     "subject": {
                         "type": "string"
                     },
@@ -472,7 +502,7 @@
                         "type": "string"
                     },
                     "requested_subject": {
-                        "description": "The subject the Template seed sent for its version. It can differ from subject: until the seed's conflict rule, the seed keeps the subject a template already has. Null on an operator's version and on the first versions, made from templates written before versions were kept.",
+                        "description": "The subject the Template seed sent for its version. A seed writes it, so it is the subject; a seed version written before the seed's conflict rule may differ, having kept the subject an operator gave the template. Null on an operator's version and on the first versions, made from templates written before versions were kept.",
                         "type": "string"
                     },
                     "seq": {
@@ -529,7 +559,7 @@
                         "type": "string"
                     },
                     "requested_subject": {
-                        "description": "The subject the Template seed sent for its version. It can differ from subject: until the seed's conflict rule, the seed keeps the subject a template already has. Null on an operator's version and on the first versions, made from templates written before versions were kept.",
+                        "description": "The subject the Template seed sent for its version. A seed writes it, so it is the subject; a seed version written before the seed's conflict rule may differ, having kept the subject an operator gave the template. Null on an operator's version and on the first versions, made from templates written before versions were kept.",
                         "type": "string"
                     },
                     "seq": {
@@ -806,6 +836,7 @@
                         "type": "string"
                     },
                     "react_email_content": {
+                        "description": "The template's JSX source: its .tsx file in the repo as it is, of which html_content and plain_text_content are the render. It becomes the version's JSX Main source, which the panel's JSX mode opens. Text with nothing but comments in it — the pointer comment the seed sent before it sent the source — is no source: html_content is then the HTML Main source.",
                         "type": "string"
                     },
                     "subject": {
@@ -2064,7 +2095,7 @@
                 ]
             },
             "put": {
-                "description": "Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once. Writes the contract Required variables when sent, and keeps them when not. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.",
+                "description": "The Template seed's path: creates the template when the key is new and replaces its content — the subject included — when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once; react_email_content holding a JSX source (anything but whitespace and comments, so not the seed's old pointer comment) makes it the version's JSX Main source, and otherwise the HTML content is the HTML Main source. Writes the contract Required variables when sent, and keeps them when not. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.\n\nNeither the seed nor an operator silently overwrites the other (ADR-0047). A template an operator changed since the last seed is refused with 409 template.seed_conflict and nothing is written, when any of these holds (params.rules lists each that does): published_by_operator — the version the template sends is not the last Template seed version; newer_operator_version — an operator wrote a version after the last seed version, a draft included and a discarded draft not; operator_subject — the subject sent is an operator's, one the last seed kept instead of the one it asked for (for a template whose last seed version is the migration's first one, which does not know what the seed asked for: the seed asks for a subject other than the one sent). The refusal is kept on the template as seed_refusal until a seed goes through. A seed that would leave the template as its published version already is overwrites nothing and is never refused. force=true writes over the operator's change anyway, as a published Template seed version; their versions stay in the history and can be restored.",
                 "parameters": [
                     {
                         "description": "Template key",
@@ -2073,6 +2104,14 @@
                         "required": true,
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Write even over an operator's change since the last seed",
+                        "in": "query",
+                        "name": "force",
+                        "schema": {
+                            "type": "boolean"
                         }
                     }
                 ],
@@ -2115,7 +2154,17 @@
                                 }
                             }
                         },
-                        "description": "Bad Request"
+                        "description": "Bad Request (validation.error, force included)"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "template.seed_conflict: an operator changed the template since the last seed; params: key, template_id, rules, published_version, last_seed_version, operator_versions (each {id, seq, author, published_at}), subject (sent now) and requested_subject (the seed's)"
                     },
                     "422": {
                         "content": {
