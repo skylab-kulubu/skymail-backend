@@ -55,6 +55,101 @@ func (ns NullAuthoringMode) Value() (driver.Value, error) {
 	return string(ns.AuthoringMode), nil
 }
 
+type MailApprovalEventKind string
+
+const (
+	MailApprovalEventKindSubmitted   MailApprovalEventKind = "submitted"
+	MailApprovalEventKindResubmitted MailApprovalEventKind = "resubmitted"
+	MailApprovalEventKindEdited      MailApprovalEventKind = "edited"
+	MailApprovalEventKindReturned    MailApprovalEventKind = "returned"
+	MailApprovalEventKindAccepted    MailApprovalEventKind = "accepted"
+	MailApprovalEventKindDeclined    MailApprovalEventKind = "declined"
+	MailApprovalEventKindApproved    MailApprovalEventKind = "approved"
+	MailApprovalEventKindRejected    MailApprovalEventKind = "rejected"
+	MailApprovalEventKindExpired     MailApprovalEventKind = "expired"
+)
+
+func (e *MailApprovalEventKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = MailApprovalEventKind(s)
+	case string:
+		*e = MailApprovalEventKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for MailApprovalEventKind: %T", src)
+	}
+	return nil
+}
+
+type NullMailApprovalEventKind struct {
+	MailApprovalEventKind MailApprovalEventKind `json:"mail_approval_event_kind"`
+	Valid                 bool                  `json:"valid"` // Valid is true if MailApprovalEventKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullMailApprovalEventKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.MailApprovalEventKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.MailApprovalEventKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullMailApprovalEventKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.MailApprovalEventKind), nil
+}
+
+type MailApprovalState string
+
+const (
+	MailApprovalStatePending  MailApprovalState = "pending"
+	MailApprovalStateReturned MailApprovalState = "returned"
+	MailApprovalStateApproved MailApprovalState = "approved"
+	MailApprovalStateRejected MailApprovalState = "rejected"
+	MailApprovalStateDeclined MailApprovalState = "declined"
+	MailApprovalStateExpired  MailApprovalState = "expired"
+)
+
+func (e *MailApprovalState) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = MailApprovalState(s)
+	case string:
+		*e = MailApprovalState(s)
+	default:
+		return fmt.Errorf("unsupported scan type for MailApprovalState: %T", src)
+	}
+	return nil
+}
+
+type NullMailApprovalState struct {
+	MailApprovalState MailApprovalState `json:"mail_approval_state"`
+	Valid             bool              `json:"valid"` // Valid is true if MailApprovalState is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullMailApprovalState) Scan(value interface{}) error {
+	if value == nil {
+		ns.MailApprovalState, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.MailApprovalState.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullMailApprovalState) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.MailApprovalState), nil
+}
+
 type MailQueueStatus string
 
 const (
@@ -139,6 +234,38 @@ func (ns NullTemplateAuthorKind) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.TemplateAuthorKind), nil
+}
+
+type MailApproval struct {
+	ID                uuid.UUID         `json:"id"`
+	SubmitterSub      string            `json:"submitter_sub"`
+	SubmitterName     *string           `json:"submitter_name"`
+	SubmitterEmail    *string           `json:"submitter_email"`
+	State             MailApprovalState `json:"state"`
+	TemplateID        uuid.UUID         `json:"template_id"`
+	TemplateVersionID uuid.UUID         `json:"template_version_id"`
+	MailListID        *uuid.UUID        `json:"mail_list_id"`
+	RecipientEmail    *string           `json:"recipient_email"`
+	RecipientFullName *string           `json:"recipient_full_name"`
+	BodyVariables     []byte            `json:"body_variables"`
+	CreatedAt         time.Time         `json:"created_at"`
+	SubmittedAt       time.Time         `json:"submitted_at"`
+	DeadlineAt        time.Time         `json:"deadline_at"`
+	UpdatedAt         time.Time         `json:"updated_at"`
+	TaskID            *uuid.UUID        `json:"task_id"`
+}
+
+type MailApprovalEvent struct {
+	ID         uuid.UUID             `json:"id"`
+	ApprovalID uuid.UUID             `json:"approval_id"`
+	Seq        int                   `json:"seq"`
+	Kind       MailApprovalEventKind `json:"kind"`
+	ActorSub   *string               `json:"actor_sub"`
+	ActorName  *string               `json:"actor_name"`
+	Note       *string               `json:"note"`
+	Changes    []byte                `json:"changes"`
+	TaskID     *uuid.UUID            `json:"task_id"`
+	CreatedAt  time.Time             `json:"created_at"`
 }
 
 type MailQueue struct {

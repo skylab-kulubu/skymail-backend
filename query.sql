@@ -835,3 +835,154 @@ SELECT count(*)
 FROM mail_tasks mt
 WHERE (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(status)::text);
 
+
+-- A new Mail onayı request, pending until its deadline. Every later write of
+-- a request runs in a transaction that first takes its row lock
+-- (LockMailApproval), so its checks, its state change and its events happen
+-- in turn, and an approval queues its send once.
+-- name: CreateMailApproval :one
+INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, template_id, template_version_id,
+                            mail_list_id, recipient_email, recipient_full_name, body_variables,
+                            created_at, submitted_at, deadline_at, updated_at)
+VALUES (sqlc.arg(submitter_sub), sqlc.narg(submitter_name), sqlc.narg(submitter_email), sqlc.arg(template_id),
+        sqlc.arg(template_version_id), sqlc.narg(mail_list_id), sqlc.narg(recipient_email),
+        sqlc.narg(recipient_full_name), sqlc.arg(body_variables), sqlc.arg(at), sqlc.arg(at), sqlc.arg(deadline_at),
+        sqlc.arg(at))
+RETURNING *;
+
+-- Takes a request's row lock without waiting for it: a request someone else is
+-- deciding right now is refused (55P03) rather than queued behind them — the
+-- lock is held while the send is queued, and a wait would hold a connection
+-- that send needs.
+-- name: LockMailApproval :one
+SELECT *
+FROM mail_approvals
+WHERE id = $1
+    FOR UPDATE NOWAIT;
+
+-- The next undecided request past its deadline that no one is deciding right
+-- now, locked for the expiry sweep.
+-- name: LockDueMailApproval :one
+SELECT *
+FROM mail_approvals
+WHERE state IN ('pending', 'returned')
+  AND deadline_at <= sqlc.arg(as_of)
+ORDER BY deadline_at, id
+LIMIT 1 FOR UPDATE SKIP LOCKED;
+
+-- name: SetMailApprovalState :one
+UPDATE mail_approvals
+SET state      = sqlc.arg(state),
+    task_id    = sqlc.narg(task_id),
+    updated_at = sqlc.arg(at)
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- name: SetMailApprovalVariables :one
+UPDATE mail_approvals
+SET body_variables = sqlc.arg(body_variables),
+    updated_at     = sqlc.arg(at)
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- A resubmission: what would be sent, as the submitter now fills it in,
+-- pinned to the version published now, pending again with a new deadline.
+-- name: ResubmitMailApproval :one
+UPDATE mail_approvals
+SET state               = 'pending',
+    template_id         = sqlc.arg(template_id),
+    template_version_id = sqlc.arg(template_version_id),
+    mail_list_id        = sqlc.narg(mail_list_id),
+    recipient_email     = sqlc.narg(recipient_email),
+    recipient_full_name = sqlc.narg(recipient_full_name),
+    body_variables      = sqlc.arg(body_variables),
+    submitted_at        = sqlc.arg(at),
+    deadline_at         = sqlc.arg(deadline_at),
+    updated_at          = sqlc.arg(at)
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- Numbered after the request's last event; the caller holds its row lock.
+-- name: RecordMailApprovalEvent :one
+INSERT INTO mail_approval_events (approval_id, seq, kind, actor_sub, actor_name, note, changes, task_id, created_at)
+SELECT sqlc.arg(approval_id),
+       COALESCE(max(e.seq), 0) + 1,
+       sqlc.arg(kind),
+       sqlc.narg(actor_sub),
+       sqlc.narg(actor_name),
+       sqlc.narg(note),
+       sqlc.narg(changes),
+       sqlc.narg(task_id),
+       sqlc.arg(at)
+FROM mail_approval_events e
+WHERE e.approval_id = sqlc.arg(approval_id)
+RETURNING *;
+
+-- A request as every screen shows it: with its template's name and key, the
+-- version the template publishes now, and its list's name when the list is an
+-- internal one (a Keycloak group's is Keycloak's to give).
+-- name: GetMailApproval :one
+SELECT a.*,
+       t.name                             AS template_name,
+       t.key                              AS template_key,
+       t.published_version_id             AS template_published_version_id,
+       (t.archived_at IS NOT NULL)::boolean AS template_archived,
+       ml.name                            AS mail_list_name,
+       (ml.id IS NOT NULL)::boolean       AS internal_mail_list
+FROM mail_approvals a
+         JOIN templates t ON t.id = a.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = a.mail_list_id
+WHERE a.id = $1;
+
+-- Requests newest submission first, the id breaking ties. A NULL submitter
+-- lists everyone's and a NULL state every state.
+-- name: ListMailApprovals :many
+SELECT a.*,
+       t.name                             AS template_name,
+       t.key                              AS template_key,
+       t.published_version_id             AS template_published_version_id,
+       (t.archived_at IS NOT NULL)::boolean AS template_archived,
+       ml.name                            AS mail_list_name,
+       (ml.id IS NOT NULL)::boolean       AS internal_mail_list
+FROM mail_approvals a
+         JOIN templates t ON t.id = a.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = a.mail_list_id
+WHERE (sqlc.narg(submitter_sub)::text IS NULL OR a.submitter_sub = sqlc.narg(submitter_sub)::text)
+  AND (sqlc.narg(state)::mail_approval_state IS NULL OR a.state = sqlc.narg(state)::mail_approval_state)
+ORDER BY a.submitted_at DESC, a.id DESC
+LIMIT $1 OFFSET $2;
+
+-- name: CountMailApprovals :one
+SELECT count(*)
+FROM mail_approvals a
+WHERE (sqlc.narg(submitter_sub)::text IS NULL OR a.submitter_sub = sqlc.narg(submitter_sub)::text)
+  AND (sqlc.narg(state)::mail_approval_state IS NULL OR a.state = sqlc.narg(state)::mail_approval_state);
+
+-- name: ListMailApprovalEvents :many
+SELECT *
+FROM mail_approval_events
+WHERE approval_id = $1
+ORDER BY seq;
+
+-- The last event of each of the requests, for the list.
+-- name: ListLastMailApprovalEvents :many
+SELECT DISTINCT ON (approval_id) *
+FROM mail_approval_events
+WHERE approval_id = ANY (sqlc.arg(approval_ids)::uuid[])
+ORDER BY approval_id, seq DESC;
+
+-- Keeps a template from being published over, archived or changed while a
+-- send of it is checked and queued; other sends of it share the lock.
+-- name: ShareLockTemplate :one
+SELECT *
+FROM templates
+WHERE id = $1
+    FOR SHARE;
+
+-- Keeps an internal list from being archived while a send to it is checked
+-- and queued. No row: the id is not an internal list's.
+-- name: ShareLockMailingList :one
+SELECT *
+FROM mailing_lists
+WHERE id = $1
+    FOR SHARE;

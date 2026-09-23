@@ -237,6 +237,25 @@ func (q *Queries) CountArchivedTemplates(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countMailApprovals = `-- name: CountMailApprovals :one
+SELECT count(*)
+FROM mail_approvals a
+WHERE ($1::text IS NULL OR a.submitter_sub = $1::text)
+  AND ($2::mail_approval_state IS NULL OR a.state = $2::mail_approval_state)
+`
+
+type CountMailApprovalsParams struct {
+	SubmitterSub *string               `json:"submitter_sub"`
+	State        NullMailApprovalState `json:"state"`
+}
+
+func (q *Queries) CountMailApprovals(ctx context.Context, arg CountMailApprovalsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countMailApprovals, arg.SubmitterSub, arg.State)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countMailQueueByStatus = `-- name: CountMailQueueByStatus :one
 SELECT (SELECT count(*) FROM mail_queue WHERE status = 'pending')    AS pending,
        (SELECT count(*) FROM mail_queue WHERE status = 'processing') AS processing,
@@ -400,6 +419,71 @@ func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const createMailApproval = `-- name: CreateMailApproval :one
+INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, template_id, template_version_id,
+                            mail_list_id, recipient_email, recipient_full_name, body_variables,
+                            created_at, submitted_at, deadline_at, updated_at)
+VALUES ($1, $2, $3, $4,
+        $5, $6, $7,
+        $8, $9, $10, $10, $11,
+        $10)
+RETURNING id, submitter_sub, submitter_name, submitter_email, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+`
+
+type CreateMailApprovalParams struct {
+	SubmitterSub      string     `json:"submitter_sub"`
+	SubmitterName     *string    `json:"submitter_name"`
+	SubmitterEmail    *string    `json:"submitter_email"`
+	TemplateID        uuid.UUID  `json:"template_id"`
+	TemplateVersionID uuid.UUID  `json:"template_version_id"`
+	MailListID        *uuid.UUID `json:"mail_list_id"`
+	RecipientEmail    *string    `json:"recipient_email"`
+	RecipientFullName *string    `json:"recipient_full_name"`
+	BodyVariables     []byte     `json:"body_variables"`
+	At                time.Time  `json:"at"`
+	DeadlineAt        time.Time  `json:"deadline_at"`
+}
+
+// A new Mail onayı request, pending until its deadline. Every later write of
+// a request runs in a transaction that first takes its row lock
+// (LockMailApproval), so its checks, its state change and its events happen
+// in turn, and an approval queues its send once.
+func (q *Queries) CreateMailApproval(ctx context.Context, arg CreateMailApprovalParams) (MailApproval, error) {
+	row := q.db.QueryRow(ctx, createMailApproval,
+		arg.SubmitterSub,
+		arg.SubmitterName,
+		arg.SubmitterEmail,
+		arg.TemplateID,
+		arg.TemplateVersionID,
+		arg.MailListID,
+		arg.RecipientEmail,
+		arg.RecipientFullName,
+		arg.BodyVariables,
+		arg.At,
+		arg.DeadlineAt,
+	)
+	var i MailApproval
+	err := row.Scan(
+		&i.ID,
+		&i.SubmitterSub,
+		&i.SubmitterName,
+		&i.SubmitterEmail,
+		&i.State,
+		&i.TemplateID,
+		&i.TemplateVersionID,
+		&i.MailListID,
+		&i.RecipientEmail,
+		&i.RecipientFullName,
+		&i.BodyVariables,
+		&i.CreatedAt,
+		&i.SubmittedAt,
+		&i.DeadlineAt,
+		&i.UpdatedAt,
+		&i.TaskID,
+	)
+	return i, err
 }
 
 type CreateMailQueueItemsParams struct {
@@ -977,6 +1061,78 @@ func (q *Queries) GetDailySentCounts(ctx context.Context, arg GetDailySentCounts
 	return items, nil
 }
 
+const getMailApproval = `-- name: GetMailApproval :one
+SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.recipient_email, a.recipient_full_name, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.task_id,
+       t.name                             AS template_name,
+       t.key                              AS template_key,
+       t.published_version_id             AS template_published_version_id,
+       (t.archived_at IS NOT NULL)::boolean AS template_archived,
+       ml.name                            AS mail_list_name,
+       (ml.id IS NOT NULL)::boolean       AS internal_mail_list
+FROM mail_approvals a
+         JOIN templates t ON t.id = a.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = a.mail_list_id
+WHERE a.id = $1
+`
+
+type GetMailApprovalRow struct {
+	ID                         uuid.UUID         `json:"id"`
+	SubmitterSub               string            `json:"submitter_sub"`
+	SubmitterName              *string           `json:"submitter_name"`
+	SubmitterEmail             *string           `json:"submitter_email"`
+	State                      MailApprovalState `json:"state"`
+	TemplateID                 uuid.UUID         `json:"template_id"`
+	TemplateVersionID          uuid.UUID         `json:"template_version_id"`
+	MailListID                 *uuid.UUID        `json:"mail_list_id"`
+	RecipientEmail             *string           `json:"recipient_email"`
+	RecipientFullName          *string           `json:"recipient_full_name"`
+	BodyVariables              []byte            `json:"body_variables"`
+	CreatedAt                  time.Time         `json:"created_at"`
+	SubmittedAt                time.Time         `json:"submitted_at"`
+	DeadlineAt                 time.Time         `json:"deadline_at"`
+	UpdatedAt                  time.Time         `json:"updated_at"`
+	TaskID                     *uuid.UUID        `json:"task_id"`
+	TemplateName               string            `json:"template_name"`
+	TemplateKey                *string           `json:"template_key"`
+	TemplatePublishedVersionID *uuid.UUID        `json:"template_published_version_id"`
+	TemplateArchived           bool              `json:"template_archived"`
+	MailListName               *string           `json:"mail_list_name"`
+	InternalMailList           bool              `json:"internal_mail_list"`
+}
+
+// A request as every screen shows it: with its template's name and key, the
+// version the template publishes now, and its list's name when the list is an
+// internal one (a Keycloak group's is Keycloak's to give).
+func (q *Queries) GetMailApproval(ctx context.Context, id uuid.UUID) (GetMailApprovalRow, error) {
+	row := q.db.QueryRow(ctx, getMailApproval, id)
+	var i GetMailApprovalRow
+	err := row.Scan(
+		&i.ID,
+		&i.SubmitterSub,
+		&i.SubmitterName,
+		&i.SubmitterEmail,
+		&i.State,
+		&i.TemplateID,
+		&i.TemplateVersionID,
+		&i.MailListID,
+		&i.RecipientEmail,
+		&i.RecipientFullName,
+		&i.BodyVariables,
+		&i.CreatedAt,
+		&i.SubmittedAt,
+		&i.DeadlineAt,
+		&i.UpdatedAt,
+		&i.TaskID,
+		&i.TemplateName,
+		&i.TemplateKey,
+		&i.TemplatePublishedVersionID,
+		&i.TemplateArchived,
+		&i.MailListName,
+		&i.InternalMailList,
+	)
+	return i, err
+}
+
 const getMailQueueItemsByTaskId = `-- name: GetMailQueueItemsByTaskId :many
 SELECT id, recipient_full_name, recipient_email, status, error, attempts, next_attempt_at, created_at
 FROM mail_queue
@@ -1494,6 +1650,182 @@ func (q *Queries) LastTemplateSeedVersion(ctx context.Context, templateID uuid.U
 	return i, err
 }
 
+const listLastMailApprovalEvents = `-- name: ListLastMailApprovalEvents :many
+SELECT DISTINCT ON (approval_id) id, approval_id, seq, kind, actor_sub, actor_name, note, changes, task_id, created_at
+FROM mail_approval_events
+WHERE approval_id = ANY ($1::uuid[])
+ORDER BY approval_id, seq DESC
+`
+
+// The last event of each of the requests, for the list.
+func (q *Queries) ListLastMailApprovalEvents(ctx context.Context, approvalIds []uuid.UUID) ([]MailApprovalEvent, error) {
+	rows, err := q.db.Query(ctx, listLastMailApprovalEvents, approvalIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MailApprovalEvent
+	for rows.Next() {
+		var i MailApprovalEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApprovalID,
+			&i.Seq,
+			&i.Kind,
+			&i.ActorSub,
+			&i.ActorName,
+			&i.Note,
+			&i.Changes,
+			&i.TaskID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMailApprovalEvents = `-- name: ListMailApprovalEvents :many
+SELECT id, approval_id, seq, kind, actor_sub, actor_name, note, changes, task_id, created_at
+FROM mail_approval_events
+WHERE approval_id = $1
+ORDER BY seq
+`
+
+func (q *Queries) ListMailApprovalEvents(ctx context.Context, approvalID uuid.UUID) ([]MailApprovalEvent, error) {
+	rows, err := q.db.Query(ctx, listMailApprovalEvents, approvalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MailApprovalEvent
+	for rows.Next() {
+		var i MailApprovalEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApprovalID,
+			&i.Seq,
+			&i.Kind,
+			&i.ActorSub,
+			&i.ActorName,
+			&i.Note,
+			&i.Changes,
+			&i.TaskID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMailApprovals = `-- name: ListMailApprovals :many
+SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.recipient_email, a.recipient_full_name, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.task_id,
+       t.name                             AS template_name,
+       t.key                              AS template_key,
+       t.published_version_id             AS template_published_version_id,
+       (t.archived_at IS NOT NULL)::boolean AS template_archived,
+       ml.name                            AS mail_list_name,
+       (ml.id IS NOT NULL)::boolean       AS internal_mail_list
+FROM mail_approvals a
+         JOIN templates t ON t.id = a.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = a.mail_list_id
+WHERE ($3::text IS NULL OR a.submitter_sub = $3::text)
+  AND ($4::mail_approval_state IS NULL OR a.state = $4::mail_approval_state)
+ORDER BY a.submitted_at DESC, a.id DESC
+LIMIT $1 OFFSET $2
+`
+
+type ListMailApprovalsParams struct {
+	Limit        int32                 `json:"limit"`
+	Offset       int32                 `json:"offset"`
+	SubmitterSub *string               `json:"submitter_sub"`
+	State        NullMailApprovalState `json:"state"`
+}
+
+type ListMailApprovalsRow struct {
+	ID                         uuid.UUID         `json:"id"`
+	SubmitterSub               string            `json:"submitter_sub"`
+	SubmitterName              *string           `json:"submitter_name"`
+	SubmitterEmail             *string           `json:"submitter_email"`
+	State                      MailApprovalState `json:"state"`
+	TemplateID                 uuid.UUID         `json:"template_id"`
+	TemplateVersionID          uuid.UUID         `json:"template_version_id"`
+	MailListID                 *uuid.UUID        `json:"mail_list_id"`
+	RecipientEmail             *string           `json:"recipient_email"`
+	RecipientFullName          *string           `json:"recipient_full_name"`
+	BodyVariables              []byte            `json:"body_variables"`
+	CreatedAt                  time.Time         `json:"created_at"`
+	SubmittedAt                time.Time         `json:"submitted_at"`
+	DeadlineAt                 time.Time         `json:"deadline_at"`
+	UpdatedAt                  time.Time         `json:"updated_at"`
+	TaskID                     *uuid.UUID        `json:"task_id"`
+	TemplateName               string            `json:"template_name"`
+	TemplateKey                *string           `json:"template_key"`
+	TemplatePublishedVersionID *uuid.UUID        `json:"template_published_version_id"`
+	TemplateArchived           bool              `json:"template_archived"`
+	MailListName               *string           `json:"mail_list_name"`
+	InternalMailList           bool              `json:"internal_mail_list"`
+}
+
+// Requests newest submission first, the id breaking ties. A NULL submitter
+// lists everyone's and a NULL state every state.
+func (q *Queries) ListMailApprovals(ctx context.Context, arg ListMailApprovalsParams) ([]ListMailApprovalsRow, error) {
+	rows, err := q.db.Query(ctx, listMailApprovals,
+		arg.Limit,
+		arg.Offset,
+		arg.SubmitterSub,
+		arg.State,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMailApprovalsRow
+	for rows.Next() {
+		var i ListMailApprovalsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SubmitterSub,
+			&i.SubmitterName,
+			&i.SubmitterEmail,
+			&i.State,
+			&i.TemplateID,
+			&i.TemplateVersionID,
+			&i.MailListID,
+			&i.RecipientEmail,
+			&i.RecipientFullName,
+			&i.BodyVariables,
+			&i.CreatedAt,
+			&i.SubmittedAt,
+			&i.DeadlineAt,
+			&i.UpdatedAt,
+			&i.TaskID,
+			&i.TemplateName,
+			&i.TemplateKey,
+			&i.TemplatePublishedVersionID,
+			&i.TemplateArchived,
+			&i.MailListName,
+			&i.InternalMailList,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMailTaskSends = `-- name: ListMailTaskSends :many
 WITH page AS (SELECT mt.id
               FROM mail_tasks mt
@@ -1816,6 +2148,76 @@ func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVers
 	return items, nil
 }
 
+const lockDueMailApproval = `-- name: LockDueMailApproval :one
+SELECT id, submitter_sub, submitter_name, submitter_email, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+FROM mail_approvals
+WHERE state IN ('pending', 'returned')
+  AND deadline_at <= $1
+ORDER BY deadline_at, id
+LIMIT 1 FOR UPDATE SKIP LOCKED
+`
+
+// The next undecided request past its deadline that no one is deciding right
+// now, locked for the expiry sweep.
+func (q *Queries) LockDueMailApproval(ctx context.Context, asOf time.Time) (MailApproval, error) {
+	row := q.db.QueryRow(ctx, lockDueMailApproval, asOf)
+	var i MailApproval
+	err := row.Scan(
+		&i.ID,
+		&i.SubmitterSub,
+		&i.SubmitterName,
+		&i.SubmitterEmail,
+		&i.State,
+		&i.TemplateID,
+		&i.TemplateVersionID,
+		&i.MailListID,
+		&i.RecipientEmail,
+		&i.RecipientFullName,
+		&i.BodyVariables,
+		&i.CreatedAt,
+		&i.SubmittedAt,
+		&i.DeadlineAt,
+		&i.UpdatedAt,
+		&i.TaskID,
+	)
+	return i, err
+}
+
+const lockMailApproval = `-- name: LockMailApproval :one
+SELECT id, submitter_sub, submitter_name, submitter_email, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+FROM mail_approvals
+WHERE id = $1
+    FOR UPDATE NOWAIT
+`
+
+// Takes a request's row lock without waiting for it: a request someone else is
+// deciding right now is refused (55P03) rather than queued behind them — the
+// lock is held while the send is queued, and a wait would hold a connection
+// that send needs.
+func (q *Queries) LockMailApproval(ctx context.Context, id uuid.UUID) (MailApproval, error) {
+	row := q.db.QueryRow(ctx, lockMailApproval, id)
+	var i MailApproval
+	err := row.Scan(
+		&i.ID,
+		&i.SubmitterSub,
+		&i.SubmitterName,
+		&i.SubmitterEmail,
+		&i.State,
+		&i.TemplateID,
+		&i.TemplateVersionID,
+		&i.MailListID,
+		&i.RecipientEmail,
+		&i.RecipientFullName,
+		&i.BodyVariables,
+		&i.CreatedAt,
+		&i.SubmittedAt,
+		&i.DeadlineAt,
+		&i.UpdatedAt,
+		&i.TaskID,
+	)
+	return i, err
+}
+
 const lockTemplate = `-- name: LockTemplate :one
 SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
 FROM templates
@@ -1997,6 +2399,61 @@ func (q *Queries) PublishTemplateDraft(ctx context.Context, arg PublishTemplateD
 		&i.SeedRefusedAt,
 		&i.SeedRefusedRules,
 		&i.SeedRefusedPayloadSha256,
+	)
+	return i, err
+}
+
+const recordMailApprovalEvent = `-- name: RecordMailApprovalEvent :one
+INSERT INTO mail_approval_events (approval_id, seq, kind, actor_sub, actor_name, note, changes, task_id, created_at)
+SELECT $1,
+       COALESCE(max(e.seq), 0) + 1,
+       $2,
+       $3,
+       $4,
+       $5,
+       $6,
+       $7,
+       $8
+FROM mail_approval_events e
+WHERE e.approval_id = $1
+RETURNING id, approval_id, seq, kind, actor_sub, actor_name, note, changes, task_id, created_at
+`
+
+type RecordMailApprovalEventParams struct {
+	ApprovalID uuid.UUID             `json:"approval_id"`
+	Kind       MailApprovalEventKind `json:"kind"`
+	ActorSub   *string               `json:"actor_sub"`
+	ActorName  *string               `json:"actor_name"`
+	Note       *string               `json:"note"`
+	Changes    []byte                `json:"changes"`
+	TaskID     *uuid.UUID            `json:"task_id"`
+	At         time.Time             `json:"at"`
+}
+
+// Numbered after the request's last event; the caller holds its row lock.
+func (q *Queries) RecordMailApprovalEvent(ctx context.Context, arg RecordMailApprovalEventParams) (MailApprovalEvent, error) {
+	row := q.db.QueryRow(ctx, recordMailApprovalEvent,
+		arg.ApprovalID,
+		arg.Kind,
+		arg.ActorSub,
+		arg.ActorName,
+		arg.Note,
+		arg.Changes,
+		arg.TaskID,
+		arg.At,
+	)
+	var i MailApprovalEvent
+	err := row.Scan(
+		&i.ID,
+		&i.ApprovalID,
+		&i.Seq,
+		&i.Kind,
+		&i.ActorSub,
+		&i.ActorName,
+		&i.Note,
+		&i.Changes,
+		&i.TaskID,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -2384,6 +2841,153 @@ func (q *Queries) RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, 
 	return i, err
 }
 
+const resubmitMailApproval = `-- name: ResubmitMailApproval :one
+UPDATE mail_approvals
+SET state               = 'pending',
+    template_id         = $1,
+    template_version_id = $2,
+    mail_list_id        = $3,
+    recipient_email     = $4,
+    recipient_full_name = $5,
+    body_variables      = $6,
+    submitted_at        = $7,
+    deadline_at         = $8,
+    updated_at          = $7
+WHERE id = $9
+RETURNING id, submitter_sub, submitter_name, submitter_email, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+`
+
+type ResubmitMailApprovalParams struct {
+	TemplateID        uuid.UUID  `json:"template_id"`
+	TemplateVersionID uuid.UUID  `json:"template_version_id"`
+	MailListID        *uuid.UUID `json:"mail_list_id"`
+	RecipientEmail    *string    `json:"recipient_email"`
+	RecipientFullName *string    `json:"recipient_full_name"`
+	BodyVariables     []byte     `json:"body_variables"`
+	At                time.Time  `json:"at"`
+	DeadlineAt        time.Time  `json:"deadline_at"`
+	ID                uuid.UUID  `json:"id"`
+}
+
+// A resubmission: what would be sent, as the submitter now fills it in,
+// pinned to the version published now, pending again with a new deadline.
+func (q *Queries) ResubmitMailApproval(ctx context.Context, arg ResubmitMailApprovalParams) (MailApproval, error) {
+	row := q.db.QueryRow(ctx, resubmitMailApproval,
+		arg.TemplateID,
+		arg.TemplateVersionID,
+		arg.MailListID,
+		arg.RecipientEmail,
+		arg.RecipientFullName,
+		arg.BodyVariables,
+		arg.At,
+		arg.DeadlineAt,
+		arg.ID,
+	)
+	var i MailApproval
+	err := row.Scan(
+		&i.ID,
+		&i.SubmitterSub,
+		&i.SubmitterName,
+		&i.SubmitterEmail,
+		&i.State,
+		&i.TemplateID,
+		&i.TemplateVersionID,
+		&i.MailListID,
+		&i.RecipientEmail,
+		&i.RecipientFullName,
+		&i.BodyVariables,
+		&i.CreatedAt,
+		&i.SubmittedAt,
+		&i.DeadlineAt,
+		&i.UpdatedAt,
+		&i.TaskID,
+	)
+	return i, err
+}
+
+const setMailApprovalState = `-- name: SetMailApprovalState :one
+UPDATE mail_approvals
+SET state      = $1,
+    task_id    = $2,
+    updated_at = $3
+WHERE id = $4
+RETURNING id, submitter_sub, submitter_name, submitter_email, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+`
+
+type SetMailApprovalStateParams struct {
+	State  MailApprovalState `json:"state"`
+	TaskID *uuid.UUID        `json:"task_id"`
+	At     time.Time         `json:"at"`
+	ID     uuid.UUID         `json:"id"`
+}
+
+func (q *Queries) SetMailApprovalState(ctx context.Context, arg SetMailApprovalStateParams) (MailApproval, error) {
+	row := q.db.QueryRow(ctx, setMailApprovalState,
+		arg.State,
+		arg.TaskID,
+		arg.At,
+		arg.ID,
+	)
+	var i MailApproval
+	err := row.Scan(
+		&i.ID,
+		&i.SubmitterSub,
+		&i.SubmitterName,
+		&i.SubmitterEmail,
+		&i.State,
+		&i.TemplateID,
+		&i.TemplateVersionID,
+		&i.MailListID,
+		&i.RecipientEmail,
+		&i.RecipientFullName,
+		&i.BodyVariables,
+		&i.CreatedAt,
+		&i.SubmittedAt,
+		&i.DeadlineAt,
+		&i.UpdatedAt,
+		&i.TaskID,
+	)
+	return i, err
+}
+
+const setMailApprovalVariables = `-- name: SetMailApprovalVariables :one
+UPDATE mail_approvals
+SET body_variables = $1,
+    updated_at     = $2
+WHERE id = $3
+RETURNING id, submitter_sub, submitter_name, submitter_email, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+`
+
+type SetMailApprovalVariablesParams struct {
+	BodyVariables []byte    `json:"body_variables"`
+	At            time.Time `json:"at"`
+	ID            uuid.UUID `json:"id"`
+}
+
+func (q *Queries) SetMailApprovalVariables(ctx context.Context, arg SetMailApprovalVariablesParams) (MailApproval, error) {
+	row := q.db.QueryRow(ctx, setMailApprovalVariables, arg.BodyVariables, arg.At, arg.ID)
+	var i MailApproval
+	err := row.Scan(
+		&i.ID,
+		&i.SubmitterSub,
+		&i.SubmitterName,
+		&i.SubmitterEmail,
+		&i.State,
+		&i.TemplateID,
+		&i.TemplateVersionID,
+		&i.MailListID,
+		&i.RecipientEmail,
+		&i.RecipientFullName,
+		&i.BodyVariables,
+		&i.CreatedAt,
+		&i.SubmittedAt,
+		&i.DeadlineAt,
+		&i.UpdatedAt,
+		&i.TaskID,
+	)
+	return i, err
+}
+
 const setMailQueueItemFailed = `-- name: SetMailQueueItemFailed :exec
 UPDATE mail_queue
 SET status    = 'failed',
@@ -2412,6 +3016,65 @@ WHERE id = $1
 func (q *Queries) SetMailQueueItemSent(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, setMailQueueItemSent, id)
 	return err
+}
+
+const shareLockMailingList = `-- name: ShareLockMailingList :one
+SELECT id, name, description, created_at, updated_at, archived_at, archived_by
+FROM mailing_lists
+WHERE id = $1
+    FOR SHARE
+`
+
+// Keeps an internal list from being archived while a send to it is checked
+// and queued. No row: the id is not an internal list's.
+func (q *Queries) ShareLockMailingList(ctx context.Context, id uuid.UUID) (MailingList, error) {
+	row := q.db.QueryRow(ctx, shareLockMailingList, id)
+	var i MailingList
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+	)
+	return i, err
+}
+
+const shareLockTemplate = `-- name: ShareLockTemplate :one
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
+FROM templates
+WHERE id = $1
+    FOR SHARE
+`
+
+// Keeps a template from being published over, archived or changed while a
+// send of it is checked and queued; other sends of it share the lock.
+func (q *Queries) ShareLockTemplate(ctx context.Context, id uuid.UUID) (Template, error) {
+	row := q.db.QueryRow(ctx, shareLockTemplate, id)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.Key,
+		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+		&i.SeedRefusedAt,
+		&i.SeedRefusedRules,
+		&i.SeedRefusedPayloadSha256,
+	)
+	return i, err
 }
 
 const updateMailingList = `-- name: UpdateMailingList :one
