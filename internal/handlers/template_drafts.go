@@ -57,7 +57,7 @@ var errNotADraft = apperrors.New(
 // beside what is published now and let the operator choose.
 var errStaleBase = apperrors.New(
 	"template.stale_base",
-	"A newer version was published after this draft was started. Compare the two; publish again with force to replace it.",
+	"A newer version was published after this draft was started. Compare the two; to replace it, publish again with force naming it: {\"force\": {\"over_version_id\": params.published_version_id}}.",
 	fiber.StatusConflict,
 )
 
