@@ -17,26 +17,34 @@ import (
 	"github.com/wneessen/go-mail"
 )
 
-var mailFuncs = map[string]any{
-	"add1": func(i int) int { return i + 1 },
-	// safeHTML lets a template interpolate markup instead of escaping it.
-	// html/template escapes every variable by default, which is what we want
-	// everywhere except the free-form template, whose body is rich text the
-	// sender wrote. That body is sanitised against an allowlist before it is
-	// ever stored, so what reaches here is already narrowed markup.
-	"safeHTML": func(v any) htmlt.HTML {
-		switch value := v.(type) {
-		case nil:
-			return ""
-		case htmlt.HTML:
-			return value
-		case string:
-			return htmlt.HTML(sanitizeEmailHTML(value))
-		default:
-			return htmlt.HTML(sanitizeEmailHTML(fmt.Sprint(value)))
-		}
-	},
-}
+// A mail carries the same template twice, once as markup and once as text, and
+// safeHTML has to mean a different thing in each. The two maps differ only in
+// that; everything else belongs in both.
+var (
+	htmlFuncs = map[string]any{
+		"add1": add1,
+		// safeHTML lets a template interpolate markup instead of escaping it.
+		// html/template escapes every variable by default, which is what we want
+		// everywhere except the free-form template, whose body is rich text the
+		// sender wrote. That body is sanitised against an allowlist before it is
+		// ever stored, so what reaches here is already narrowed markup.
+		"safeHTML": func(v any) htmlt.HTML {
+			return htmlt.HTML(sanitizeEmailHTML(textValue(v)))
+		},
+	}
+
+	textFuncs = map[string]any{
+		"add1": add1,
+		// The same body, for the plain-text alternative. Printing the markup
+		// there would show the recipient `<p>…</p>`, so it is turned into text
+		// the same shape html-to-text gives the rest of the mail.
+		"safeHTML": func(v any) string {
+			return plainTextFromHTML(sanitizeEmailHTML(textValue(v)))
+		},
+	}
+)
+
+func add1(i int) int { return i + 1 }
 
 const (
 	// A transient SMTP failure (greylisting, a dropped connection, a rate limit)
@@ -225,15 +233,15 @@ type mailTemplates struct {
 // Execute and dereferences nil. Keeping the three together means no caller can
 // reintroduce that by handling one of them differently.
 func parseMailTemplates(subject, plainText, html string) (mailTemplates, error) {
-	subjectTemplate, err := textt.New("subject").Funcs(mailFuncs).Parse(subject)
+	subjectTemplate, err := textt.New("subject").Funcs(textFuncs).Parse(subject)
 	if err != nil {
 		return mailTemplates{}, fmt.Errorf("invalid subject template: %w", err)
 	}
-	textTemplate, err := textt.New("text").Funcs(mailFuncs).Parse(plainText)
+	textTemplate, err := textt.New("text").Funcs(textFuncs).Parse(plainText)
 	if err != nil {
 		return mailTemplates{}, fmt.Errorf("invalid plain text template: %w", err)
 	}
-	htmlTemplate, err := htmlt.New("html").Funcs(mailFuncs).Parse(html)
+	htmlTemplate, err := htmlt.New("html").Funcs(htmlFuncs).Parse(html)
 	if err != nil {
 		return mailTemplates{}, fmt.Errorf("invalid html template: %w", err)
 	}
