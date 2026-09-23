@@ -271,14 +271,17 @@ type MailApprovalOptions struct {
 
 type mailApprovalHandlerImpl struct {
 	db       *database.Store
-	mailer   mailer.Mailer
+	mailer   mailer.Transactional
 	kc       keycloak.Client
 	clientID string
 	uiURL    string
 	now      func() time.Time
 }
 
-func NewMailApprovalHandler(db *database.Store, mail mailer.Mailer, kc keycloak.Client, opts MailApprovalOptions) MailApprovalHandler {
+// NewMailApprovalHandler serves Mail onayı. An approved send is queued with
+// mail's Queue, in the approval's own transaction; the notifications go
+// through mail's pool methods once the action has committed.
+func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc keycloak.Client, opts MailApprovalOptions) MailApprovalHandler {
 	h := &mailApprovalHandlerImpl{
 		db:       db,
 		mailer:   mail,

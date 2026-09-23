@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"reflect"
@@ -16,6 +17,7 @@ import (
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
@@ -100,10 +102,11 @@ type sentMail struct {
 
 // recordingMailer is the real mailer — it writes the send and its rendered
 // queue rows to Postgres, it only never dispatches them — with every call
-// recorded. gate, when set, holds a list send inside the mailer until it is
-// closed, so a test can act while an approval is mid-send.
+// recorded, those made inside a transaction included. gate, when set, holds a
+// list send inside the mailer until it is closed, so a test can act while an
+// approval is mid-send.
 type recordingMailer struct {
-	mailer.Mailer
+	mailer.Transactional
 	mu      sync.Mutex
 	sent    []sentMail
 	gate    chan struct{}
@@ -123,35 +126,57 @@ func (m *recordingMailer) record(s sentMail) {
 }
 
 func (m *recordingMailer) Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error) {
-	if m.gate != nil {
-		m.entered <- struct{}{}
-		<-m.gate
-	}
-	id, err := m.Mailer.Enqueue(ctx, arg)
-	if err == nil {
-		m.record(sentMail{kind: "list", templateID: *arg.TemplateID, sentBy: arg.SentBy, mailListID: arg.MailListID,
-			variables: decodeVariables(arg.BodyVariables), taskID: id})
-	}
-	return id, err
+	return recordingQueue{m, m.Transactional}.Enqueue(ctx, arg)
 }
 
 func (m *recordingMailer) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
-	id, err := m.Mailer.EnqueueSingle(ctx, arg)
+	return recordingQueue{m, m.Transactional}.EnqueueSingle(ctx, arg)
+}
+
+func (m *recordingMailer) EnqueueWithRecipients(ctx context.Context, params mailer.EnqueueWithRecipientsParams) (uuid.UUID, error) {
+	return recordingQueue{m, m.Transactional}.EnqueueWithRecipients(ctx, params)
+}
+
+func (m *recordingMailer) Queue(q *database.Queries) mailer.Queue {
+	return recordingQueue{m, m.Transactional.Queue(q)}
+}
+
+// recordingQueue records each send it queues through queue.
+type recordingQueue struct {
+	m     *recordingMailer
+	queue mailer.Queue
+}
+
+func (r recordingQueue) Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error) {
+	if r.m.gate != nil {
+		r.m.entered <- struct{}{}
+		<-r.m.gate
+	}
+	id, err := r.queue.Enqueue(ctx, arg)
 	if err == nil {
-		m.record(sentMail{kind: "single", templateID: *arg.TemplateID, sentBy: arg.SentBy, recipients: []string{arg.RecipientEmail},
+		r.m.record(sentMail{kind: "list", templateID: *arg.TemplateID, sentBy: arg.SentBy, mailListID: arg.MailListID,
 			variables: decodeVariables(arg.BodyVariables), taskID: id})
 	}
 	return id, err
 }
 
-func (m *recordingMailer) EnqueueWithRecipients(ctx context.Context, params mailer.EnqueueWithRecipientsParams) (uuid.UUID, error) {
-	id, err := m.Mailer.EnqueueWithRecipients(ctx, params)
+func (r recordingQueue) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
+	id, err := r.queue.EnqueueSingle(ctx, arg)
+	if err == nil {
+		r.m.record(sentMail{kind: "single", templateID: *arg.TemplateID, sentBy: arg.SentBy, recipients: []string{arg.RecipientEmail},
+			variables: decodeVariables(arg.BodyVariables), taskID: id})
+	}
+	return id, err
+}
+
+func (r recordingQueue) EnqueueWithRecipients(ctx context.Context, params mailer.EnqueueWithRecipientsParams) (uuid.UUID, error) {
+	id, err := r.queue.EnqueueWithRecipients(ctx, params)
 	if err == nil {
 		var to []string
-		for _, r := range params.Recipients {
-			to = append(to, r.Email)
+		for _, recipient := range params.Recipients {
+			to = append(to, recipient.Email)
 		}
-		m.record(sentMail{kind: "group", templateID: params.TemplateID, sentBy: params.SentBy, mailListID: params.MailListID,
+		r.m.record(sentMail{kind: "group", templateID: params.TemplateID, sentBy: params.SentBy, mailListID: params.MailListID,
 			recipients: to, variables: decodeVariables(params.BodyVariables), taskID: id})
 	}
 	return id, err
@@ -205,15 +230,31 @@ const freeBasicHTML = `<h1>{{.Heading}}</h1><div>{{safeHTML .BodyHtml}}</div><p>
 
 func newApprovalWorld(t *testing.T) *approvalWorld {
 	t.Helper()
+	return newApprovalWorldWithPool(t, 0)
+}
+
+// newApprovalWorldWithPool is an approval world whose connection pool holds at
+// most poolSize connections; 0 keeps pgxpool's default.
+func newApprovalWorldWithPool(t *testing.T, poolSize int) *approvalWorld {
+	t.Helper()
 	postgres := testpostgres.StartDatabase(t)
 	if _, err := migrations.Run(context.Background(), postgres.URL, 0); err != nil {
 		t.Fatal(err)
 	}
-	store := database.NewStore(postgres.Pool)
+	pool := postgres.Pool
+	if poolSize > 0 {
+		var err error
+		pool, err = pgxpool.New(context.Background(), fmt.Sprintf("%s&pool_max_conns=%d", postgres.URL, poolSize))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(pool.Close)
+	}
+	store := database.NewStore(pool)
 	w := &approvalWorld{
 		t:     t,
 		store: store,
-		mail:  &recordingMailer{Mailer: mailer.NewMailer(store, mailer.SMTPConfig{})},
+		mail:  &recordingMailer{Transactional: mailer.NewMailer(store, mailer.SMTPConfig{})},
 		directory: &approverDirectory{
 			approvers: []*gocloak.User{fatih.user(), yusuf.user()},
 			groups:    map[string][]*gocloak.User{},
@@ -1370,5 +1411,98 @@ func TestOpenAPIDocumentDescribesMailApproval(t *testing.T) {
 				t.Errorf("%s %s documented as %+v", method, path, operation)
 			}
 		}
+	}
+}
+
+// A send is queued in the approval's own transaction: when anything after the
+// queueing fails — here the COMMIT itself — the send is gone with the
+// approval, and approving again sends it once.
+func TestAnApprovalThatFailsToCommitQueuesNothing(t *testing.T) {
+	w := newApprovalWorld(t)
+	submitted := w.submit("elif", w.listSend())
+
+	// A deferred constraint trigger fails the first transaction that changes
+	// a request, at its COMMIT; a sequence counts outside the transaction, so
+	// the retry goes through.
+	if _, err := w.store.Conn.Exec(context.Background(), `
+		CREATE SEQUENCE fail_first_commit;
+		CREATE FUNCTION fail_first_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF nextval('fail_first_commit') = 1 THEN
+				RAISE EXCEPTION 'injected commit failure';
+			END IF;
+			RETURN NULL;
+		END $$;
+		CREATE CONSTRAINT TRIGGER fail_first_commit AFTER UPDATE ON mail_approvals
+			DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fail_first_commit();`); err != nil {
+		t.Fatal(err)
+	}
+
+	edit := w.listSend()["body_variables"].(map[string]any)
+	edit["Heading"] = "Düzenlendi"
+	status, _, failure := w.act("fatih", submitted.ID, "approve", map[string]any{"body_variables": edit})
+	if status != fiber.StatusInternalServerError {
+		t.Fatalf("approve with a failing commit = %d %+v, want 500", status, failure)
+	}
+	counts := func() (tasks, rows int64) {
+		t.Helper()
+		if err := w.store.Conn.QueryRow(context.Background(), `
+			SELECT (SELECT count(*) FROM mail_tasks WHERE template_id = $1),
+			       (SELECT count(*) FROM mail_queue q JOIN mail_tasks mt ON mt.id = q.task_id WHERE mt.template_id = $1)`,
+			w.freeBasic.ID).Scan(&tasks, &rows); err != nil {
+			t.Fatal(err)
+		}
+		return tasks, rows
+	}
+	if tasks, rows := counts(); tasks != 0 || rows != 0 {
+		t.Fatalf("after the failed commit: %d sends, %d queue rows; want none", tasks, rows)
+	}
+	if _, read := w.get("fatih", submitted.ID); read.State != "pending" || read.kinds() != "submitted" {
+		t.Fatalf("after the failed commit: %s %s", read.State, read.kinds())
+	}
+
+	status, approved, failure := w.act("fatih", submitted.ID, "approve", map[string]any{"body_variables": edit})
+	if status != fiber.StatusOK || approved.kinds() != "submitted,edited,approved" {
+		t.Fatalf("approving again = %d %+v %s", status, failure, approved.kinds())
+	}
+	if tasks, rows := counts(); tasks != 1 || rows != 2 {
+		t.Fatalf("after approving again: %d sends, %d queue rows; want one send to two", tasks, rows)
+	}
+}
+
+// An approval holds one connection, its transaction's, so a small pool
+// serves many approvals at once without them waiting on each other.
+func TestConcurrentApprovalsDoNotStarveASmallPool(t *testing.T) {
+	w := newApprovalWorldWithPool(t, 2)
+	const n = 6
+	ids := make([]uuid.UUID, n)
+	for i := range ids {
+		ids[i] = w.submit("elif", w.listSend()).ID
+	}
+
+	done := make(chan int, n)
+	for _, id := range ids {
+		go func(id uuid.UUID) {
+			status, _, _ := w.act("fatih", id, "approve", nil)
+			done <- status
+		}(id)
+	}
+	deadline := time.After(20 * time.Second)
+	for i := 0; i < n; i++ {
+		select {
+		case status := <-done:
+			if status != fiber.StatusOK {
+				t.Errorf("an approval = %d", status)
+			}
+		case <-deadline:
+			t.Fatalf("only %d of %d approvals finished: the pool is starved", i, n)
+		}
+	}
+	var tasks int64
+	if err := w.store.Conn.QueryRow(context.Background(), `SELECT count(*) FROM mail_tasks WHERE template_id = $1`, w.freeBasic.ID).Scan(&tasks); err != nil {
+		t.Fatal(err)
+	}
+	if tasks != n {
+		t.Fatalf("sends = %d, want %d", tasks, n)
 	}
 }

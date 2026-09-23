@@ -83,6 +83,29 @@ type Mailer interface {
 	EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error)
 }
 
+// Queue is the send path inside a caller's transaction: the same three ways
+// to queue a send as Mailer's, written through that transaction, so the send
+// and its queue rows exist only if it commits, and nothing is dispatched
+// before it has. The caller wakes the dispatcher once it has committed.
+type Queue interface {
+	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error)
+	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
+	EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error)
+}
+
+// Transactional is a Mailer that can also queue a send in a caller's
+// transaction. Mailer's own methods write through the pool, statement by
+// statement, and wake the dispatcher, as they always have.
+type Transactional interface {
+	Mailer
+	// Queue writes sends through q, a transaction's queries.
+	Queue(q *database.Queries) Queue
+	// Wake asks the dispatcher to look at the queue now. Call it after the
+	// transaction a Queue wrote in commits; the dispatcher's tick finds the
+	// rows anyway, only later.
+	Wake()
+}
+
 type mailerImpl struct {
 	db         *database.Store
 	jobs       chan database.MailQueue
@@ -101,7 +124,7 @@ type SMTPConfig struct {
 	Plain     bool
 }
 
-func NewMailer(db *database.Store, smtpConfig SMTPConfig) Mailer {
+func NewMailer(db *database.Store, smtpConfig SMTPConfig) Transactional {
 	logger := log.With().Str("service", "mailer").Logger()
 
 	return &mailerImpl{
@@ -138,16 +161,76 @@ type commonMailRow struct {
 	RecipientEmail    string
 }
 
+// queue writes sends through q: the pool's queries, or a transaction's.
+type queue struct {
+	q      *database.Queries
+	logger *zerolog.Logger
+}
+
+func (m *mailerImpl) Queue(q *database.Queries) Queue {
+	return &queue{q: q, logger: m.logger}
+}
+
+func (m *mailerImpl) Wake() { m.wake() }
+
+// pooled is a send written in a transaction of its own, which wakes the
+// dispatcher once rows are queued.
+func (m *mailerImpl) pooled() *queue {
+	return &queue{q: m.db.Queries, logger: m.logger}
+}
+
 func (m *mailerImpl) Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error) {
-	rows, err := m.db.CreateMailTask(ctx, arg)
+	id, queued, err := m.pooled().enqueue(ctx, arg)
+	m.wakeIf(queued)
+	return id, err
+}
+
+func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
+	id, queued, err := m.pooled().enqueueSingle(ctx, arg)
+	m.wakeIf(queued)
+	return id, err
+}
+
+func (m *mailerImpl) EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error) {
+	id, queued, err := m.pooled().enqueueWithRecipients(ctx, params)
+	m.wakeIf(queued)
+	return id, err
+}
+
+func (m *mailerImpl) wakeIf(queued bool) {
+	if queued {
+		m.wake()
+	}
+}
+
+func (q *queue) Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error) {
+	id, _, err := q.enqueue(ctx, arg)
+	return id, err
+}
+
+func (q *queue) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
+	id, _, err := q.enqueueSingle(ctx, arg)
+	return id, err
+}
+
+func (q *queue) EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error) {
+	id, _, err := q.enqueueWithRecipients(ctx, params)
+	return id, err
+}
+
+// The three ways to queue a send return the send and whether queue rows were
+// written, which is when the dispatcher has something to do.
+
+func (q *queue) enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, bool, error) {
+	rows, err := q.q.CreateMailTask(ctx, arg)
 	if err != nil {
-		m.logger.Err(err).Msg("Failed to enqueue mail task")
-		return uuid.Nil, err
+		q.logger.Err(err).Msg("Failed to enqueue mail task")
+		return uuid.Nil, false, err
 	}
 
 	if len(rows) == 0 {
-		m.logger.Warn().Msg("No mail queue items were created")
-		return uuid.Nil, nil
+		q.logger.Warn().Msg("No mail queue items were created")
+		return uuid.Nil, false, nil
 	}
 
 	commonRows := make([]commonMailRow, len(rows))
@@ -163,14 +246,15 @@ func (m *mailerImpl) Enqueue(ctx context.Context, arg database.CreateMailTaskPar
 		}
 	}
 
-	return rows[0].TaskID, m.renderAndQueue(ctx, commonRows)
+	queued, err := q.renderAndQueue(ctx, commonRows)
+	return rows[0].TaskID, queued, err
 }
 
-func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
-	row, err := m.db.CreateSingleMailTask(ctx, arg)
+func (q *queue) enqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, bool, error) {
+	row, err := q.q.CreateSingleMailTask(ctx, arg)
 	if err != nil {
-		m.logger.Err(err).Msg("Failed to enqueue single mail task")
-		return uuid.Nil, err
+		q.logger.Err(err).Msg("Failed to enqueue single mail task")
+		return uuid.Nil, false, err
 	}
 
 	commonRows := []commonMailRow{
@@ -185,23 +269,24 @@ func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingl
 		},
 	}
 
-	return row.TaskID, m.renderAndQueue(ctx, commonRows)
+	queued, err := q.renderAndQueue(ctx, commonRows)
+	return row.TaskID, queued, err
 }
 
-func (m *mailerImpl) EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error) {
-	task, err := m.db.InsertMailTask(ctx, database.InsertMailTaskParams{
+func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, bool, error) {
+	task, err := q.q.InsertMailTask(ctx, database.InsertMailTaskParams{
 		SentBy:        params.SentBy,
 		TemplateID:    &params.TemplateID,
 		MailListID:    params.MailListID,
 		BodyVariables: params.BodyVariables,
 	})
 	if err != nil {
-		return uuid.Nil, err
+		return uuid.Nil, false, err
 	}
 
-	tmpl, err := m.db.GetTemplateById(ctx, *task.TemplateID)
+	tmpl, err := q.q.GetTemplateById(ctx, *task.TemplateID)
 	if err != nil {
-		return uuid.Nil, err
+		return uuid.Nil, false, err
 	}
 
 	rows := make([]commonMailRow, 0, len(params.Recipients))
@@ -217,7 +302,8 @@ func (m *mailerImpl) EnqueueWithRecipients(ctx context.Context, params EnqueueWi
 		})
 	}
 
-	return task.ID, m.renderAndQueue(ctx, rows)
+	queued, err := q.renderAndQueue(ctx, rows)
+	return task.ID, queued, err
 }
 
 // mailTemplates holds one template's three parsed parts.
@@ -323,26 +409,28 @@ func (t mailTemplates) render(vars map[string]interface{}, recipient RecipientIn
 	return Rendered{Subject: subject.String(), PlainText: text.String(), HTML: html.String()}, nil
 }
 
-func (m *mailerImpl) renderAndQueue(ctx context.Context, rows []commonMailRow) error {
+// renderAndQueue renders each row's mail and writes the queue rows, saying
+// whether it wrote any.
+func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow) (bool, error) {
 	if len(rows) == 0 {
-		return nil
+		return false, nil
 	}
 
 	var taskVars map[string]interface{}
 	if err := json.Unmarshal(rows[0].BodyVariables, &taskVars); err != nil {
-		return fmt.Errorf("invalid json variables: %w", err)
+		return false, fmt.Errorf("invalid json variables: %w", err)
 	}
 
 	parsed, err := parseMailTemplates(rows[0].TemplateSubject, rows[0].PlainTextContent, rows[0].HtmlContent)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	queueItems := make([]database.CreateMailQueueItemsParams, len(rows))
 	for i, row := range rows {
 		rendered, err := parsed.render(taskVars, RecipientInfo{FullName: row.RecipientFullName, Email: row.RecipientEmail})
 		if err != nil {
-			m.logger.Err(err).Msg("Failed to render template")
+			q.logger.Err(err).Msg("Failed to render template")
 			continue
 		}
 
@@ -358,12 +446,10 @@ func (m *mailerImpl) renderAndQueue(ctx context.Context, rows []commonMailRow) e
 		}
 	}
 
-	if _, err = m.db.CreateMailQueueItems(ctx, queueItems); err != nil {
-		return err
+	if _, err = q.q.CreateMailQueueItems(ctx, queueItems); err != nil {
+		return false, err
 	}
-
-	m.wake()
-	return nil
+	return true, nil
 }
 
 func (m *mailerImpl) startDispatcher(ctx context.Context) {

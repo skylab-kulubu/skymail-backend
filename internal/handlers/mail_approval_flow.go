@@ -341,6 +341,9 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	if err != nil {
 		return err
 	}
+	if action.sends {
+		h.mailer.Wake()
+	}
 
 	if view, err = h.db.GetMailApproval(ctx, id); err != nil {
 		return err
@@ -466,10 +469,11 @@ func (h *mailApprovalHandlerImpl) edit(ctx context.Context, q *database.Queries,
 
 // send queues a request, locked, through the send path, sent by its
 // submitter: exactly its values, of the template version it is pinned to, to
-// its audience as it is now. The template and an internal list are
-// share-locked until the request's transaction ends, so neither can be
-// published over or archived between these checks and the queueing; the
-// mailer reads the template row, which is a copy of the pinned version.
+// its audience as it is now. It is queued in the request's transaction, so
+// the send exists only if the decision commits; act wakes the dispatcher
+// after. The template and an internal list are share-locked until then, so
+// neither can be published over or archived between these checks and the
+// queueing; the mailer reads the template row, a copy of the pinned version.
 func (h *mailApprovalHandlerImpl) send(ctx context.Context, q *database.Queries, a database.MailApproval, prepared approvalPrepared) (uuid.UUID, error) {
 	template, err := q.ShareLockTemplate(ctx, a.TemplateID)
 	if err != nil {
@@ -485,8 +489,9 @@ func (h *mailApprovalHandlerImpl) send(ctx context.Context, q *database.Queries,
 		})
 	}
 
+	sends := h.mailer.Queue(q)
 	if a.RecipientEmail != nil {
-		return h.mailer.EnqueueSingle(ctx, database.CreateSingleMailTaskParams{
+		return sends.EnqueueSingle(ctx, database.CreateSingleMailTaskParams{
 			SentBy:            a.SubmitterSub,
 			TemplateID:        &a.TemplateID,
 			BodyVariables:     a.BodyVariables,
@@ -508,7 +513,7 @@ func (h *mailApprovalHandlerImpl) send(ctx context.Context, q *database.Queries,
 		if recipients == 0 {
 			return uuid.Nil, errApprovalAudienceEmpty
 		}
-		taskID, err := h.mailer.Enqueue(ctx, database.CreateMailTaskParams{
+		taskID, err := sends.Enqueue(ctx, database.CreateMailTaskParams{
 			SentBy:        a.SubmitterSub,
 			TemplateID:    &a.TemplateID,
 			MailListID:    a.MailListID,
@@ -532,7 +537,7 @@ func (h *mailApprovalHandlerImpl) send(ctx context.Context, q *database.Queries,
 	if len(prepared.groupMembers) == 0 {
 		return uuid.Nil, errApprovalAudienceEmpty
 	}
-	return h.mailer.EnqueueWithRecipients(ctx, mailer.EnqueueWithRecipientsParams{
+	return sends.EnqueueWithRecipients(ctx, mailer.EnqueueWithRecipientsParams{
 		SentBy:        a.SubmitterSub,
 		TemplateID:    a.TemplateID,
 		MailListID:    a.MailListID,
