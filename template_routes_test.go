@@ -135,10 +135,14 @@ func sendJSON(t *testing.T, app *fiber.App, method, path string, body any) (int,
 	return response.StatusCode, raw
 }
 
-// Saving a draft, publishing and restoring a version are template writes:
-// they take skymail:templates:write, as every other template write does, and
-// no other role stands in for it.
+// Saving a draft, publishing, restoring a version and discarding a draft are
+// template writes: they take skymail:templates:write, as every other template
+// write does, and no other role stands in for it.
 func TestTemplateDraftWritesRequireTemplatesWrite(t *testing.T) {
+	type check struct {
+		name         string
+		status, want int
+	}
 	for _, tc := range []struct {
 		roles   []string
 		allowed bool
@@ -149,45 +153,40 @@ func TestTemplateDraftWritesRequireTemplatesWrite(t *testing.T) {
 		{[]string{"skymail:access", "skymail:templates:write"}, true},
 	} {
 		app, template := templateRoutesApp(t, tc.roles...)
-		base := template.ID.String() + "/versions/" + template.PublishedVersionID.String()
+		versions := "/v1/templates/" + template.ID.String() + "/versions/"
+		versionOf := func(status int, body []byte) handlers.TemplateVersion {
+			t.Helper()
+			var version handlers.TemplateVersion
+			if status == fiber.StatusCreated {
+				if err := json.Unmarshal(body, &version); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return version
+		}
 
+		var checks []check
 		status, body := sendJSON(t, app, fiber.MethodPost, "/v1/templates/"+template.ID.String()+"/drafts", map[string]any{
 			"subject": "Taslak", "main_mode": "html", "html_source": "<p>Taslak</p>",
 			"html_content": "<p>Taslak</p>", "plain_text_content": "Taslak", "base_version_id": template.PublishedVersionID,
 		})
-		var draft handlers.TemplateVersion
-		if status == fiber.StatusCreated {
-			if err := json.Unmarshal(body, &draft); err != nil {
-				t.Fatal(err)
-			}
-		}
-		checks := []struct {
-			name   string
-			status int
-			want   int
-		}{{"save a draft", status, fiber.StatusCreated}}
+		draft := versionOf(status, body)
+		checks = append(checks, check{"save a draft", status, fiber.StatusCreated})
+		status, _ = sendJSON(t, app, fiber.MethodPost, versions+draft.ID.String()+"/publish", nil)
+		checks = append(checks, check{"publish", status, fiber.StatusOK})
+		status, body = sendJSON(t, app, fiber.MethodPost, versions+template.PublishedVersionID.String()+"/restore", nil)
+		restored := versionOf(status, body)
+		checks = append(checks, check{"restore", status, fiber.StatusCreated})
+		status, _ = sendJSON(t, app, fiber.MethodPost, versions+restored.ID.String()+"/discard", nil)
+		checks = append(checks, check{"discard", status, fiber.StatusOK})
 
-		draftPath := template.ID.String() + "/versions/" + draft.ID.String()
-		status, _ = sendJSON(t, app, fiber.MethodPost, "/v1/templates/"+draftPath+"/publish", nil)
-		checks = append(checks, struct {
-			name   string
-			status int
-			want   int
-		}{"publish", status, fiber.StatusOK})
-		status, _ = sendJSON(t, app, fiber.MethodPost, "/v1/templates/"+base+"/restore", nil)
-		checks = append(checks, struct {
-			name   string
-			status int
-			want   int
-		}{"restore", status, fiber.StatusCreated})
-
-		for _, check := range checks {
-			want := check.want
+		for _, c := range checks {
+			want := c.want
 			if !tc.allowed {
 				want = fiber.StatusForbidden
 			}
-			if check.status != want {
-				t.Errorf("roles %v: %s = %d, want %d", tc.roles, check.name, check.status, want)
+			if c.status != want {
+				t.Errorf("roles %v: %s = %d, want %d", tc.roles, c.name, c.status, want)
 			}
 		}
 	}

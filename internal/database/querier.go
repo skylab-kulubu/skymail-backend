@@ -28,13 +28,18 @@ type Querier interface {
 	CountMailingLists(ctx context.Context) (int64, error)
 	CountRecipients(ctx context.Context) (int64, error)
 	CountRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) (int64, error)
-	CountTemplateVersions(ctx context.Context, templateID uuid.UUID) (int64, error)
+	CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error)
 	CountTemplates(ctx context.Context) (int64, error)
 	CreateMailQueueItems(ctx context.Context, arg []CreateMailQueueItemsParams) (int64, error)
 	CreateMailTask(ctx context.Context, arg CreateMailTaskParams) ([]CreateMailTaskRow, error)
 	CreateMailingList(ctx context.Context, name string) (MailingList, error)
 	CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error)
 	CreateTemplate(ctx context.Context, arg CreateTemplateParams) (Template, error)
+	// Discards a draft: it stays in the history, but it is nobody's draft in
+	// progress any more and it is never published. A draft discarded already
+	// keeps the time it was. The caller holds the template row's lock and has
+	// checked that the version is a draft of this template.
+	DiscardTemplateDraft(ctx context.Context, arg DiscardTemplateDraftParams) error
 	GetAllMailingLists(ctx context.Context, arg GetAllMailingListsParams) ([]MailingList, error)
 	GetAllMailingListsIncludingArchived(ctx context.Context, arg GetAllMailingListsIncludingArchivedParams) ([]MailingList, error)
 	GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams) ([]Template, error)
@@ -84,13 +89,15 @@ type Querier interface {
 	// published version's.
 	ListPublishedMainModes(ctx context.Context, templateIds []uuid.UUID) ([]ListPublishedMainModesRow, error)
 	// Each operator's draft in progress on the given templates, newest first: the
-	// newest version an operator wrote of a template, when it is not published.
-	// An operator's later version supersedes their earlier drafts, so those are
-	// not listed; a draft that someone else's publish made stale still is, until
-	// its author writes again.
+	// newest version an operator wrote of a template, when it is neither published
+	// nor discarded. An operator's later version supersedes their earlier drafts,
+	// so those are not listed, and discarding their newest leaves them none; a
+	// draft that someone else's publish made stale still is listed, until its
+	// author writes again or discards it.
 	ListTemplateDrafts(ctx context.Context, templateIds []uuid.UUID) ([]TemplateVersionSummary, error)
 	// A template's Mail template versions, newest first, without their sources or
-	// render.
+	// render. A NULL published lists every version; true only published ones,
+	// false only drafts, discarded ones included.
 	ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]TemplateVersionSummary, error)
 	// Takes a template row's lock for a write that does not change the row first —
 	// saving a draft, restoring a version, publishing, discarding. A version is

@@ -43,7 +43,7 @@ type Template struct {
 	database.Template
 	// The Authoring mode of the Main source the template sends: its published version's. Null for a template with no published version.
 	MainMode *string `json:"main_mode" enums:"jsx,visual,html"`
-	// Each operator's draft in progress, newest first: the newest version an operator wrote of the template, while it is unpublished. An operator's earlier drafts are superseded and not listed. A draft whose base_version_id is not published_version_id is stale: a newer version was published after it was started, and publishing it takes force.
+	// Each operator's draft in progress, newest first: the newest version an operator wrote of the template, while it is neither published nor discarded. An operator's earlier drafts are superseded and not listed. A draft whose base_version_id is not published_version_id is stale: a newer version was published after it was started, and publishing it takes force.
 	Drafts []TemplateVersionSummary `json:"drafts"`
 }
 
@@ -61,6 +61,7 @@ type TemplateHandler interface {
 	SaveTemplateDraft(c fiber.Ctx) error
 	PublishTemplateVersion(c fiber.Ctx) error
 	RestoreTemplateVersion(c fiber.Ctx) error
+	DiscardTemplateVersion(c fiber.Ctx) error
 }
 
 type templateHandlerImpl struct {

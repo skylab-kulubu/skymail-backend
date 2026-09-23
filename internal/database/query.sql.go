@@ -316,10 +316,16 @@ const countTemplateVersions = `-- name: CountTemplateVersions :one
 SELECT count(*)
 FROM template_versions
 WHERE template_id = $1
+  AND ($2::boolean IS NULL OR (published_at IS NOT NULL) = $2::boolean)
 `
 
-func (q *Queries) CountTemplateVersions(ctx context.Context, templateID uuid.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countTemplateVersions, templateID)
+type CountTemplateVersionsParams struct {
+	TemplateID uuid.UUID `json:"template_id"`
+	Published  *bool     `json:"published"`
+}
+
+func (q *Queries) CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countTemplateVersions, arg.TemplateID, arg.Published)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -552,6 +558,28 @@ func (q *Queries) CreateTemplate(ctx context.Context, arg CreateTemplateParams) 
 		&i.PublishedVersionID,
 	)
 	return i, err
+}
+
+const discardTemplateDraft = `-- name: DiscardTemplateDraft :exec
+UPDATE template_versions
+SET discarded_at = COALESCE(discarded_at, NOW())
+WHERE template_id = $1
+  AND id = $2
+  AND published_at IS NULL
+`
+
+type DiscardTemplateDraftParams struct {
+	TemplateID uuid.UUID `json:"template_id"`
+	ID         uuid.UUID `json:"id"`
+}
+
+// Discards a draft: it stays in the history, but it is nobody's draft in
+// progress any more and it is never published. A draft discarded already
+// keeps the time it was. The caller holds the template row's lock and has
+// checked that the version is a draft of this template.
+func (q *Queries) DiscardTemplateDraft(ctx context.Context, arg DiscardTemplateDraftParams) error {
+	_, err := q.db.Exec(ctx, discardTemplateDraft, arg.TemplateID, arg.ID)
+	return err
 }
 
 const getAllMailingLists = `-- name: GetAllMailingLists :many
@@ -1199,7 +1227,7 @@ func (q *Queries) GetTemplateByKey(ctx context.Context, key *string) (Template, 
 }
 
 const getTemplateVersion = `-- name: GetTemplateVersion :one
-SELECT s.id, s.template_id, s.seq, s.subject, s.requested_subject, s.main_mode, s.author_kind, s.author_sub, s.author_name, s.created_at, s.published_at, s.base_version_id, s.is_current,
+SELECT s.id, s.template_id, s.seq, s.subject, s.requested_subject, s.main_mode, s.author_kind, s.author_sub, s.author_name, s.created_at, s.published_at, s.base_version_id, s.is_current, s.discarded_at,
        v.jsx_source,
        v.visual_source,
        v.html_source,
@@ -1244,6 +1272,7 @@ func (q *Queries) GetTemplateVersion(ctx context.Context, arg GetTemplateVersion
 		&i.TemplateVersionSummary.PublishedAt,
 		&i.TemplateVersionSummary.BaseVersionID,
 		&i.TemplateVersionSummary.IsCurrent,
+		&i.TemplateVersionSummary.DiscardedAt,
 		&i.JsxSource,
 		&i.VisualSource,
 		&i.HtmlSource,
@@ -1511,7 +1540,7 @@ func (q *Queries) ListPublishedMainModes(ctx context.Context, templateIds []uuid
 }
 
 const listTemplateDrafts = `-- name: ListTemplateDrafts :many
-SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current
+SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at
 FROM template_version_summaries s
 WHERE s.id IN (SELECT DISTINCT ON (v.template_id, v.author_sub) v.id
                FROM template_versions v
@@ -1519,14 +1548,16 @@ WHERE s.id IN (SELECT DISTINCT ON (v.template_id, v.author_sub) v.id
                  AND v.author_kind = 'operator'
                ORDER BY v.template_id, v.author_sub, v.seq DESC)
   AND s.published_at IS NULL
+  AND s.discarded_at IS NULL
 ORDER BY s.template_id, s.seq DESC
 `
 
 // Each operator's draft in progress on the given templates, newest first: the
-// newest version an operator wrote of a template, when it is not published.
-// An operator's later version supersedes their earlier drafts, so those are
-// not listed; a draft that someone else's publish made stale still is, until
-// its author writes again.
+// newest version an operator wrote of a template, when it is neither published
+// nor discarded. An operator's later version supersedes their earlier drafts,
+// so those are not listed, and discarding their newest leaves them none; a
+// draft that someone else's publish made stale still is listed, until its
+// author writes again or discards it.
 func (q *Queries) ListTemplateDrafts(ctx context.Context, templateIds []uuid.UUID) ([]TemplateVersionSummary, error) {
 	rows, err := q.db.Query(ctx, listTemplateDrafts, templateIds)
 	if err != nil {
@@ -1550,6 +1581,7 @@ func (q *Queries) ListTemplateDrafts(ctx context.Context, templateIds []uuid.UUI
 			&i.PublishedAt,
 			&i.BaseVersionID,
 			&i.IsCurrent,
+			&i.DiscardedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1562,9 +1594,10 @@ func (q *Queries) ListTemplateDrafts(ctx context.Context, templateIds []uuid.UUI
 }
 
 const listTemplateVersions = `-- name: ListTemplateVersions :many
-SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current
+SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at
 FROM template_version_summaries
 WHERE template_id = $1
+  AND ($4::boolean IS NULL OR (published_at IS NOT NULL) = $4::boolean)
 ORDER BY seq DESC
 LIMIT $2 OFFSET $3
 `
@@ -1573,12 +1606,19 @@ type ListTemplateVersionsParams struct {
 	TemplateID uuid.UUID `json:"template_id"`
 	Limit      int32     `json:"limit"`
 	Offset     int32     `json:"offset"`
+	Published  *bool     `json:"published"`
 }
 
 // A template's Mail template versions, newest first, without their sources or
-// render.
+// render. A NULL published lists every version; true only published ones,
+// false only drafts, discarded ones included.
 func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]TemplateVersionSummary, error) {
-	rows, err := q.db.Query(ctx, listTemplateVersions, arg.TemplateID, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, listTemplateVersions,
+		arg.TemplateID,
+		arg.Limit,
+		arg.Offset,
+		arg.Published,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1600,6 +1640,7 @@ func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVers
 			&i.PublishedAt,
 			&i.BaseVersionID,
 			&i.IsCurrent,
+			&i.DiscardedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1698,6 +1739,7 @@ WITH published AS (
         WHERE v.id = $1
             AND v.template_id = $2
             AND v.published_at IS NULL
+            AND v.discarded_at IS NULL
         RETURNING v.id, v.template_id, v.subject, v.jsx_source, v.main_mode, v.html_content, v.plain_text_content)
 UPDATE templates t
 SET subject              = p.subject,

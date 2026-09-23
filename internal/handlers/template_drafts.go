@@ -40,6 +40,12 @@ var errUnparseable = apperrors.New(
 	fiber.StatusUnprocessableEntity,
 )
 
+var errDraftDiscarded = apperrors.New(
+	"template.draft_discarded",
+	"This draft was discarded, so it is not published. Restore it as a new draft to use it again.",
+	fiber.StatusConflict,
+)
+
 var errNotADraft = apperrors.New(
 	"template.not_a_draft",
 	"Only a draft is published. Restore this version as a draft to publish it again.",
@@ -120,7 +126,7 @@ func (h *templateHandlerImpl) SaveTemplateDraft(c fiber.Ctx) error {
 //	@Failure		400			{object}	apperrors.AppError	"validation.error"
 //	@Failure		403			{object}	apperrors.AppError	"Forbidden"
 //	@Failure		404			{object}	apperrors.AppError	"Not Found: no such template or version, or the template is archived"
-//	@Failure		409			{object}	apperrors.AppError	"template.stale_base or template.not_a_draft"
+//	@Failure		409			{object}	apperrors.AppError	"template.stale_base, template.not_a_draft or template.draft_discarded"
 //	@Failure		422			{object}	apperrors.AppError	"template.unparseable"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates/{id}/versions/{versionId}/publish [post]
@@ -269,6 +275,8 @@ func draftError(err error) error {
 		return errInvalidBase
 	case errors.Is(err, database.ErrNotADraft):
 		return errNotADraft
+	case errors.Is(err, database.ErrDraftDiscarded):
+		return errDraftDiscarded
 	case errors.Is(err, database.ErrNotJSXSource):
 		return apperrors.ErrValidation.WithParams(map[string]interface{}{
 			"errors": []validator.FieldError{{Field: "jsx_source", Code: "invalid"}},
@@ -309,4 +317,30 @@ func jsonValue(raw json.RawMessage) []byte {
 		return nil
 	}
 	return trimmed
+}
+
+// DiscardTemplateVersion godoc
+//
+//	@Summary		Discard a draft
+//	@Description	Gives up a draft: it stays in the history, readable and restorable, but it is nobody's draft in progress any more — it leaves the template's drafts, and the next save starts from the published version — and it is never published. Any operator with the write role can discard any draft. Discarding a discarded draft changes nothing and answers the same way. Answers with the version as discarding left it.
+//	@Tags			Templates
+//	@Produce		json
+//	@Param			id			path		string	true	"Template ID"
+//	@Param			versionId	path		string	true	"Version ID of the draft"
+//	@Success		200			{object}	handlers.TemplateVersion
+//	@Failure		403			{object}	apperrors.AppError	"Forbidden"
+//	@Failure		404			{object}	apperrors.AppError	"Not Found: no such template or version, or the template is archived"
+//	@Failure		409			{object}	apperrors.AppError	"template.not_a_draft: the version is published"
+//	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
+//	@Router			/templates/{id}/versions/{versionId}/discard [post]
+func (h *templateHandlerImpl) DiscardTemplateVersion(c fiber.Ctx) error {
+	templateID, versionID, err := versionPath(c)
+	if err != nil {
+		return err
+	}
+	discarded, err := h.db.DiscardTemplateDraft(c.Context(), templateID, versionID)
+	if err != nil {
+		return draftError(err)
+	}
+	return c.JSON(templateVersion(discarded))
 }

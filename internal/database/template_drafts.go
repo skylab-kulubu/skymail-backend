@@ -35,6 +35,9 @@ var (
 	// ErrNotADraft refuses to publish a version that was published before and
 	// has been replaced since: going back to it is restoring it as a draft.
 	ErrNotADraft = errors.New("the version is not a draft")
+	// ErrDraftDiscarded refuses to publish a draft its operator gave up on:
+	// using it again is restoring it as a new draft.
+	ErrDraftDiscarded = errors.New("the draft was discarded")
 	// ErrNotJSXSource refuses a JSX source with nothing but whitespace and
 	// comments in it — nothing in it renders. Stored, it would also not come
 	// back through the old panel's react_email_content as the same source.
@@ -159,6 +162,9 @@ func (s *Store) PublishTemplateDraft(ctx context.Context, templateID, versionID 
 			}
 			return ErrNotADraft
 		}
+		if version.TemplateVersionSummary.DiscardedAt != nil {
+			return ErrDraftDiscarded
+		}
 		base := version.TemplateVersionSummary.BaseVersionID
 		if !sameVersion(base, template.PublishedVersionID) && (over == nil || !sameVersion(over, template.PublishedVersionID)) {
 			return &StaleBaseError{VersionID: versionID, BaseVersionID: base, PublishedVersionID: template.PublishedVersionID}
@@ -172,6 +178,35 @@ func (s *Store) PublishTemplateDraft(ctx context.Context, templateID, versionID 
 		return err
 	})
 	return published, err
+}
+
+// DiscardTemplateDraft discards a draft of a template: it stays in the
+// history, readable and restorable, but it is nobody's draft in progress any
+// more and it is never published. Discarding a discarded draft changes
+// nothing; a published version is not a draft, ErrNotADraft. It returns the
+// version as discarding left it.
+func (s *Store) DiscardTemplateDraft(ctx context.Context, templateID, versionID uuid.UUID) (GetTemplateVersionRow, error) {
+	var discarded GetTemplateVersionRow
+	err := pgx.BeginFunc(ctx, s.Conn, func(tx pgx.Tx) error {
+		q := s.WithTx(tx)
+		template, err := q.LockTemplate(ctx, templateID)
+		if err != nil {
+			return err
+		}
+		version, err := q.GetTemplateVersion(ctx, GetTemplateVersionParams{TemplateID: template.ID, ID: versionID})
+		if err != nil {
+			return err
+		}
+		if version.TemplateVersionSummary.PublishedAt != nil {
+			return ErrNotADraft
+		}
+		if err := q.DiscardTemplateDraft(ctx, DiscardTemplateDraftParams{TemplateID: template.ID, ID: versionID}); err != nil {
+			return err
+		}
+		discarded, err = q.GetTemplateVersion(ctx, GetTemplateVersionParams{TemplateID: template.ID, ID: versionID})
+		return err
+	})
+	return discarded, err
 }
 
 // recordDraft writes content as author's draft of a locked template, started

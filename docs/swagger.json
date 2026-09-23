@@ -341,7 +341,7 @@
                         "type": "string"
                     },
                     "drafts": {
-                        "description": "Each operator's draft in progress, newest first: the newest version an operator wrote of the template, while it is unpublished. An operator's earlier drafts are superseded and not listed. A draft whose base_version_id is not published_version_id is stale: a newer version was published after it was started, and publishing it takes force.",
+                        "description": "Each operator's draft in progress, newest first: the newest version an operator wrote of the template, while it is neither published nor discarded. An operator's earlier drafts are superseded and not listed. A draft whose base_version_id is not published_version_id is stale: a newer version was published after it was started, and publishing it takes force.",
                         "items": {
                             "$ref": "#/components/schemas/handlers.TemplateVersionSummary"
                         },
@@ -404,6 +404,10 @@
                     },
                     "current": {
                         "description": "Whether this is the published version the template sends.",
+                        "type": "boolean"
+                    },
+                    "discarded": {
+                        "description": "Whether an operator gave this draft up: it stays in the history and can be restored, but it is nobody's draft in progress and is never published.",
                         "type": "boolean"
                     },
                     "html_content": {
@@ -473,6 +477,10 @@
                     },
                     "current": {
                         "description": "Whether this is the published version the template sends.",
+                        "type": "boolean"
+                    },
+                    "discarded": {
+                        "description": "Whether an operator gave this draft up: it stays in the history and can be restored, but it is nobody's draft in progress and is never published.",
                         "type": "boolean"
                     },
                     "id": {
@@ -2433,6 +2441,20 @@
                         "schema": {
                             "type": "integer"
                         }
+                    },
+                    {
+                        "description": "Which versions: published ones, drafts (discarded ones included, flagged), or all",
+                        "in": "query",
+                        "name": "state",
+                        "schema": {
+                            "default": "all",
+                            "enum": [
+                                "published",
+                                "draft",
+                                "all"
+                            ],
+                            "type": "string"
+                        }
                     }
                 ],
                 "responses": {
@@ -2450,12 +2472,22 @@
                         "description": "OK",
                         "headers": {
                             "X-Total-Count": {
-                                "description": "Number of versions the template has",
+                                "description": "Number of versions the template has in that state",
                                 "schema": {
                                     "type": "integer"
                                 }
                             }
                         }
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error: an unknown state"
                     },
                     "403": {
                         "content": {
@@ -2565,6 +2597,87 @@
                 ]
             }
         },
+        "/templates/{id}/versions/{versionId}/discard": {
+            "post": {
+                "description": "Gives up a draft: it stays in the history, readable and restorable, but it is nobody's draft in progress any more — it leaves the template's drafts, and the next save starts from the published version — and it is never published. Any operator with the write role can discard any draft. Discarding a discarded draft changes nothing and answers the same way. Answers with the version as discarding left it.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Version ID of the draft",
+                        "in": "path",
+                        "name": "versionId",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.TemplateVersion"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found: no such template or version, or the template is archived"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "template.not_a_draft: the version is published"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Discard a draft",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
         "/templates/{id}/versions/{versionId}/publish": {
             "post": {
                 "description": "Makes a draft the version the template sends: the draft is marked published and copied onto the template row — subject, HTML and plain text, and react_email_content: the JSX source when JSX is the Main source, an empty string otherwise, so the old panel never re-renders a JSX source that is not what is sent — in one transaction. Answers with the template as publishing left it. Publishing the version the template already sends changes nothing and answers the same way.\n\nA draft is stale when its base_version_id is not the template's published_version_id: someone published after it was started, and publishing it would quietly revert their version. That is refused with 409 template.stale_base, whose params name version_id (the draft), base_version_id (what it started from) and published_version_id (what is sent now), so both can be shown side by side. The operator's confirmation names the version they saw: {\"force\": {\"over_version_id\": \u003cpublished_version_id from the conflict\u003e}} publishes the draft over it, and the replaced version stays in the history. If another version was published since, the confirmation is refused with a fresh 409 naming it.",
@@ -2656,7 +2769,7 @@
                                 }
                             }
                         },
-                        "description": "template.stale_base or template.not_a_draft"
+                        "description": "template.stale_base, template.not_a_draft or template.draft_discarded"
                     },
                     "422": {
                         "content": {

@@ -236,10 +236,11 @@ components:
           type: string
         drafts:
           description: 'Each operator''s draft in progress, newest first: the newest
-            version an operator wrote of the template, while it is unpublished. An
-            operator''s earlier drafts are superseded and not listed. A draft whose
-            base_version_id is not published_version_id is stale: a newer version
-            was published after it was started, and publishing it takes force.'
+            version an operator wrote of the template, while it is neither published
+            nor discarded. An operator''s earlier drafts are superseded and not listed.
+            A draft whose base_version_id is not published_version_id is stale: a
+            newer version was published after it was started, and publishing it takes
+            force.'
           items:
             $ref: '#/components/schemas/handlers.TemplateVersionSummary'
           type: array
@@ -285,6 +286,11 @@ components:
           type: string
         current:
           description: Whether this is the published version the template sends.
+          type: boolean
+        discarded:
+          description: 'Whether an operator gave this draft up: it stays in the history
+            and can be restored, but it is nobody''s draft in progress and is never
+            published.'
           type: boolean
         html_content:
           description: The Main source rendered as HTML, as the browser or the Template
@@ -343,6 +349,11 @@ components:
           type: string
         current:
           description: Whether this is the published version the template sends.
+          type: boolean
+        discarded:
+          description: 'Whether an operator gave this draft up: it stays in the history
+            and can be restored, but it is nobody''s draft in progress and is never
+            published.'
           type: boolean
         id:
           type: string
@@ -1556,6 +1567,17 @@ paths:
         name: _end
         schema:
           type: integer
+      - description: 'Which versions: published ones, drafts (discarded ones included,
+          flagged), or all'
+        in: query
+        name: state
+        schema:
+          default: all
+          enum:
+          - published
+          - draft
+          - all
+          type: string
       responses:
         "200":
           content:
@@ -1567,9 +1589,15 @@ paths:
           description: OK
           headers:
             X-Total-Count:
-              description: Number of versions the template has
+              description: Number of versions the template has in that state
               schema:
                 type: integer
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'validation.error: an unknown state'
         "403":
           content:
             application/json:
@@ -1638,6 +1666,62 @@ paths:
       summary: Read one version of a template
       tags:
       - Templates
+  /templates/{id}/versions/{versionId}/discard:
+    post:
+      description: 'Gives up a draft: it stays in the history, readable and restorable,
+        but it is nobody''s draft in progress any more — it leaves the template''s
+        drafts, and the next save starts from the published version — and it is never
+        published. Any operator with the write role can discard any draft. Discarding
+        a discarded draft changes nothing and answers the same way. Answers with the
+        version as discarding left it.'
+      parameters:
+      - description: Template ID
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      - description: Version ID of the draft
+        in: path
+        name: versionId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.TemplateVersion'
+          description: OK
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'Not Found: no such template or version, or the template is
+            archived'
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'template.not_a_draft: the version is published'
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Internal Server Error
+      summary: Discard a draft
+      tags:
+      - Templates
   /templates/{id}/versions/{versionId}/publish:
     post:
       description: |-
@@ -1698,7 +1782,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/apperrors.AppError'
-          description: template.stale_base or template.not_a_draft
+          description: template.stale_base, template.not_a_draft or template.draft_discarded
         "422":
           content:
             application/json:

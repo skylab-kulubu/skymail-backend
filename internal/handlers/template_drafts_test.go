@@ -1123,7 +1123,8 @@ func TestDraftResponsesAreServedAsDocumented(t *testing.T) {
 		"subject": "Taslak", "main_mode": "jsx", "html_content": "<p>Taslak</p>", "plain_text_content": "Taslak",
 		"base_version_id": created.PublishedVersionID,
 	})
-	_, _, restored := restore(t, app, created.ID, *created.PublishedVersionID)
+	_, restoredDraft, restored := restore(t, app, created.ID, *created.PublishedVersionID)
+	_, _, discarded := discard(t, app, created.ID, restoredDraft.ID)
 	_, _, published := publish(t, app, created.ID, draft.ID, nil)
 
 	for _, tc := range []struct {
@@ -1134,6 +1135,7 @@ func TestDraftResponsesAreServedAsDocumented(t *testing.T) {
 		{"/templates/{id}/drafts", "200", unchanged},
 		{"/templates/{id}/versions/{versionId}/restore", "201", restored},
 		{"/templates/{id}/versions/{versionId}/publish", "200", published},
+		{"/templates/{id}/versions/{versionId}/discard", "200", discarded},
 	} {
 		documented, served := documentedResponseFields(t, "post", tc.path, tc.status), fieldsOf(t, tc.served)
 		if fmt.Sprint(documented) != fmt.Sprint(served) {
@@ -1301,5 +1303,174 @@ func TestForcingOverAVersionTheOperatorDidNotSeeIsRefused(t *testing.T) {
 	response, published, body := publish(t, app, seeded.ID, draft.ID, &later)
 	if response.StatusCode != fiber.StatusOK || published.PublishedVersionID == nil || *published.PublishedVersionID != draft.ID {
 		t.Fatalf("forcing over what is published now = %d %s, want the draft published", response.StatusCode, body)
+	}
+}
+
+// discard discards a version of a template as the operator the headers name,
+// and decodes the version it answers with when it answers with one.
+func discard(t *testing.T, app *fiber.App, templateID, versionID uuid.UUID, headers ...string) (*http.Response, servedDiscardable, []byte) {
+	t.Helper()
+	path := "/templates/" + templateID.String() + "/versions/" + versionID.String() + "/discard"
+	response, body := sendJSONAs(t, app, fiber.MethodPost, path, nil, headers...)
+	var version servedDiscardable
+	if response.StatusCode == fiber.StatusOK {
+		if err := json.Unmarshal(body, &version); err != nil {
+			t.Fatalf("discard answer %s: %v", body, err)
+		}
+	}
+	return response, version, body
+}
+
+// servedDiscardable is a version as served, with whether it was discarded.
+type servedDiscardable struct {
+	servedDraft
+	Discarded bool `json:"discarded"`
+}
+
+// An operator can give up a draft. Discarding keeps it in the history,
+// readable and restorable, but it is nobody's draft in progress any more:
+// the template list stops showing it, the next save starts from the published
+// version, and it is never published. Discarding again changes nothing; only
+// a draft is discarded.
+func TestDiscardingADraft(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+	path := "/templates/" + created.ID.String()
+	draftBody := map[string]any{
+		"subject": "Vazgeçilen", "main_mode": "html", "html_source": "<p>Vazgeçilen</p>",
+		"html_content": "<p>Vazgeçilen</p>", "plain_text_content": "Vazgeçilen", "base_version_id": created.PublishedVersionID,
+	}
+	response, draft, body := saveDraft(t, app, created.ID, draftBody)
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("draft = %d %s", response.StatusCode, body)
+	}
+	before := templateRow(t, db, created.ID)
+
+	response, discarded, body := discard(t, app, created.ID, draft.ID)
+	if response.StatusCode != fiber.StatusOK || !discarded.Discarded || discarded.ID != draft.ID || discarded.PublishedAt != nil ||
+		discarded.Subject != "Vazgeçilen" || !sameString(discarded.HTMLSource, "<p>Vazgeçilen</p>") {
+		t.Fatalf("discard = %d %s, want 200 answering the draft, discarded and whole", response.StatusCode, body)
+	}
+	if served := getTemplate(t, app, path); len(served.Drafts) != 0 {
+		t.Fatalf("drafts after discarding = %v, want none", draftIDs(served.Drafts))
+	}
+	if after := templateRow(t, db, created.ID); !reflect.DeepEqual(before, after) {
+		t.Fatalf("discarding changed the row: %+v", after)
+	}
+	if response, again, body := discard(t, app, created.ID, draft.ID); response.StatusCode != fiber.StatusOK || !again.Discarded {
+		t.Fatalf("discarding again = %d %s, want 200, nothing changed", response.StatusCode, body)
+	}
+
+	response, _, body = publish(t, app, created.ID, draft.ID, nil)
+	if response.StatusCode != fiber.StatusConflict || decodeError(t, body).Code != "template.draft_discarded" {
+		t.Fatalf("publishing a discarded draft = %d %s, want 409 template.draft_discarded", response.StatusCode, body)
+	}
+
+	// The same content saved again is a new draft: nothing continues the
+	// discarded one.
+	response, fresh, body := saveDraft(t, app, created.ID, draftBody)
+	if response.StatusCode != fiber.StatusCreated || fresh.ID == draft.ID {
+		t.Fatalf("saving after discarding = %d %s, want a new draft", response.StatusCode, body)
+	}
+	if served := getTemplate(t, app, path); fmt.Sprint(draftIDs(served.Drafts)) != fmt.Sprint([]uuid.UUID{fresh.ID}) {
+		t.Fatalf("drafts = %v, want only the new one", draftIDs(served.Drafts))
+	}
+	// Another operator may discard it too, and it can be restored after.
+	if response, _, body := discard(t, app, created.ID, fresh.ID, canDemir...); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("another operator discarding = %d %s", response.StatusCode, body)
+	}
+	response, restored, body := restore(t, app, created.ID, draft.ID)
+	if response.StatusCode != fiber.StatusCreated || restored.Subject != "Vazgeçilen" {
+		t.Fatalf("restoring a discarded draft = %d %s, want a new draft of it", response.StatusCode, body)
+	}
+
+	other := panelTemplate(t, app)
+	for name, tc := range map[string]struct {
+		template, version uuid.UUID
+		status            int
+		code              string
+	}{
+		"a published version":            {created.ID, *created.PublishedVersionID, fiber.StatusConflict, "template.not_a_draft"},
+		"another template's draft":       {other.ID, restored.ID, fiber.StatusNotFound, ""},
+		"an unknown version":             {created.ID, uuid.New(), fiber.StatusNotFound, ""},
+		"a draft of an unknown template": {uuid.New(), restored.ID, fiber.StatusNotFound, ""},
+	} {
+		response, _, body := discard(t, app, tc.template, tc.version)
+		if response.StatusCode != tc.status || (tc.code != "" && decodeError(t, body).Code != tc.code) {
+			t.Errorf("discarding %s = %d %s, want %d %s", name, response.StatusCode, body, tc.status, tc.code)
+		}
+	}
+
+	// An archived template's drafts are not found, like the template.
+	if response, err := app.Test(httptest.NewRequest(fiber.MethodDelete, path, nil)); err != nil || response.StatusCode != fiber.StatusNoContent {
+		t.Fatalf("archive: %v %v", response, err)
+	}
+	if response, _, body := discard(t, app, created.ID, restored.ID); response.StatusCode != fiber.StatusNotFound {
+		t.Fatalf("discarding on an archived template = %d %s, want 404", response.StatusCode, body)
+	}
+}
+
+// A template's history can be read whole or by state: only what was
+// published, or only drafts — discarded ones included, flagged — each counted
+// in X-Total-Count.
+func TestTemplateHistoryFiltersByState(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app) // version 1, published
+	save := func(subject string) servedDraft {
+		t.Helper()
+		response, draft, body := saveDraft(t, app, created.ID, map[string]any{
+			"subject": subject, "main_mode": "jsx", "html_content": "<p>" + subject + "</p>", "plain_text_content": subject,
+			"base_version_id": created.PublishedVersionID,
+		})
+		if response.StatusCode != fiber.StatusCreated {
+			t.Fatalf("draft = %d %s", response.StatusCode, body)
+		}
+		return draft
+	}
+	published := save("Yayımlanacak") // version 2
+	if response, _, body := publish(t, app, created.ID, published.ID, nil); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("publish = %d %s", response.StatusCode, body)
+	}
+	given := save("Vazgeçilecek") // version 3
+	if response, _, body := discard(t, app, created.ID, given.ID); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("discard = %d %s", response.StatusCode, body)
+	}
+	save("Süren") // version 4
+
+	type listed struct {
+		Seq       int  `json:"seq"`
+		Discarded bool `json:"discarded"`
+	}
+	list := func(query string) (int, []listed, string) {
+		t.Helper()
+		response, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/templates/"+created.ID.String()+"/versions"+query, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(response.Body)
+		var versions []listed
+		if response.StatusCode == fiber.StatusOK {
+			if err := json.Unmarshal(body, &versions); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return response.StatusCode, versions, response.Header.Get("X-Total-Count")
+	}
+	for query, want := range map[string]string{
+		"":                             "[{4 false} {3 true} {2 false} {1 false}] 4",
+		"?state=all":                   "[{4 false} {3 true} {2 false} {1 false}] 4",
+		"?state=published":             "[{2 false} {1 false}] 2",
+		"?state=draft":                 "[{4 false} {3 true}] 2",
+		"?state=draft&_start=1&_end=2": "[{3 true}] 2",
+	} {
+		status, versions, total := list(query)
+		if got := fmt.Sprint(versions, " ", total); status != fiber.StatusOK || got != want {
+			t.Errorf("versions%s = %d %s, want %s", query, status, got, want)
+		}
+	}
+	if status, _, _ := list("?state=taslak"); status != fiber.StatusBadRequest {
+		t.Errorf("an unknown state = %d, want 400", status)
 	}
 }

@@ -191,6 +191,7 @@ func registerTemplateRoutes(api fiber.Router, auth middlewares.AuthMiddleware, t
 	templates.Post("/:id/drafts", auth.RequireAnyPermission("skymail:templates:write"), template.SaveTemplateDraft)
 	templates.Post("/:id/versions/:versionId/publish", auth.RequireAnyPermission("skymail:templates:write"), template.PublishTemplateVersion)
 	templates.Post("/:id/versions/:versionId/restore", auth.RequireAnyPermission("skymail:templates:write"), template.RestoreTemplateVersion)
+	templates.Post("/:id/versions/:versionId/discard", auth.RequireAnyPermission("skymail:templates:write"), template.DiscardTemplateVersion)
 }
 
 func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, mail handlers.MailHandler) {

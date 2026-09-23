@@ -46,8 +46,11 @@ unpublished version; publishing one
 (`POST /v1/templates/{id}/versions/{versionId}/publish`) marks it published
 and copies it onto the row. An operator's newest version of a template, while
 unpublished, is their draft in progress; their earlier drafts stay in the
-history, superseded, and so does a draft nobody publishes. Nothing discards a
-draft. They are not the ephemeral "expired drafts" ADR-0042 has hard-deleted:
+history, superseded, and so does a draft nobody publishes. Discarding a draft
+(`POST /v1/templates/{id}/versions/{versionId}/discard`) sets its
+`discarded_at`: it stays in the history, readable and restorable, but it is
+nobody's draft in progress and is never published. Drafts are not the
+ephemeral "expired drafts" ADR-0042 has hard-deleted:
 a Mail template draft is part of the template's history (ADR-0046), and no
 version is deleted. Like any other update, saving, restoring or publishing a
 version of an archived template answers `404` until the template is

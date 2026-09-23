@@ -207,18 +207,21 @@ FROM version
 WHERE t.id = version.template_id;
 
 -- A template's Mail template versions, newest first, without their sources or
--- render.
+-- render. A NULL published lists every version; true only published ones,
+-- false only drafts, discarded ones included.
 -- name: ListTemplateVersions :many
 SELECT *
 FROM template_version_summaries
 WHERE template_id = $1
+  AND (sqlc.narg(published)::boolean IS NULL OR (published_at IS NOT NULL) = sqlc.narg(published)::boolean)
 ORDER BY seq DESC
 LIMIT $2 OFFSET $3;
 
 -- name: CountTemplateVersions :one
 SELECT count(*)
 FROM template_versions
-WHERE template_id = $1;
+WHERE template_id = $1
+  AND (sqlc.narg(published)::boolean IS NULL OR (published_at IS NOT NULL) = sqlc.narg(published)::boolean);
 
 -- One version of one template, whole. A version of another template is not
 -- found here.
@@ -248,10 +251,11 @@ WHERE id = $1
     FOR UPDATE;
 
 -- Each operator's draft in progress on the given templates, newest first: the
--- newest version an operator wrote of a template, when it is not published.
--- An operator's later version supersedes their earlier drafts, so those are
--- not listed; a draft that someone else's publish made stale still is, until
--- its author writes again.
+-- newest version an operator wrote of a template, when it is neither published
+-- nor discarded. An operator's later version supersedes their earlier drafts,
+-- so those are not listed, and discarding their newest leaves them none; a
+-- draft that someone else's publish made stale still is listed, until its
+-- author writes again or discards it.
 -- name: ListTemplateDrafts :many
 SELECT *
 FROM template_version_summaries s
@@ -261,6 +265,7 @@ WHERE s.id IN (SELECT DISTINCT ON (v.template_id, v.author_sub) v.id
                  AND v.author_kind = 'operator'
                ORDER BY v.template_id, v.author_sub, v.seq DESC)
   AND s.published_at IS NULL
+  AND s.discarded_at IS NULL
 ORDER BY s.template_id, s.seq DESC;
 
 -- The Authoring mode of each template's Main source as it is sent: its
@@ -327,6 +332,7 @@ WITH published AS (
         WHERE v.id = sqlc.arg(version_id)
             AND v.template_id = sqlc.arg(template_id)
             AND v.published_at IS NULL
+            AND v.discarded_at IS NULL
         RETURNING v.id, v.template_id, v.subject, v.jsx_source, v.main_mode, v.html_content, v.plain_text_content)
 UPDATE templates t
 SET subject              = p.subject,
@@ -338,6 +344,17 @@ SET subject              = p.subject,
 FROM published p
 WHERE t.id = p.template_id
 RETURNING t.*;
+
+-- Discards a draft: it stays in the history, but it is nobody's draft in
+-- progress any more and it is never published. A draft discarded already
+-- keeps the time it was. The caller holds the template row's lock and has
+-- checked that the version is a draft of this template.
+-- name: DiscardTemplateDraft :exec
+UPDATE template_versions
+SET discarded_at = COALESCE(discarded_at, NOW())
+WHERE template_id = sqlc.arg(template_id)
+  AND id = sqlc.arg(id)
+  AND published_at IS NULL;
 
 -- name: CreateMailingList :one
 INSERT INTO mailing_lists (name)
@@ -702,3 +719,4 @@ FROM (SELECT mail_task_status(mt.id) AS status FROM mail_tasks mt) s;
 SELECT count(*)
 FROM mail_tasks mt
 WHERE (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(status)::text);
+
