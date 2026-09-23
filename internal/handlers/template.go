@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skymail-backend/internal/ptr"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 )
@@ -241,7 +242,7 @@ func (h *templateHandlerImpl) UpdateTemplate(c fiber.Ctx) error {
 	if existing.System {
 		// The content of a system template may be reworded freely; its key is the
 		// contract another service calls it by, so that stays put.
-		if !sameKey(key, existing.Key) {
+		if !ptr.Equal(key, existing.Key) {
 			return errSystemTemplateKey
 		}
 		key = existing.Key
@@ -380,13 +381,6 @@ func versionAuthor(c fiber.Ctx, kind database.TemplateAuthorKind) database.Versi
 		Sub:  localText(c, "user_id"),
 		Name: localText(c, "user_name"),
 	}
-}
-
-func sameKey(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
 }
 
 // GetTemplateByKey godoc

@@ -276,43 +276,53 @@ FROM templates t
          JOIN template_versions v ON v.id = t.published_version_id
 WHERE t.id = ANY (sqlc.arg(template_ids)::uuid[]);
 
--- Whether a version holds exactly this content: subject, every source, Main
--- source and render. A Visual document compares as JSON, not as text.
--- name: TemplateVersionHoldsContent :one
-SELECT ((v.subject, v.jsx_source, v.visual_source, v.html_source, v.main_mode, v.html_content, v.plain_text_content)
-    IS NOT DISTINCT FROM
-        (sqlc.arg(subject)::text, sqlc.narg(jsx_source)::text, sqlc.narg(visual_source)::jsonb,
-         sqlc.narg(html_source)::text, sqlc.arg(main_mode)::authoring_mode, sqlc.arg(html_content)::text,
-         sqlc.arg(plain_text_content)::text))::boolean AS holds
-FROM template_versions v
-WHERE v.id = sqlc.arg(id);
-
 -- Whether text is a JSX source by the rule the migration and the old panel's
 -- writes read react_email_content with: something other than whitespace and
 -- comments is left in it.
 -- name: IsJSXSource :one
 SELECT (template_jsx_source(sqlc.arg(content)::text) IS NOT NULL)::boolean AS is_source;
 
--- Writes an operator's draft, numbered after the template's last version. The
--- caller holds the template row's lock (LockTemplate).
--- name: InsertTemplateDraft :one
-INSERT INTO template_versions (template_id, seq, subject, jsx_source, visual_source, html_source, main_mode,
-                               html_content, plain_text_content, author_kind, author_sub, author_name,
-                               base_version_id)
-VALUES (sqlc.arg(template_id),
-        COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = sqlc.arg(template_id)), 0) + 1,
-        sqlc.arg(subject),
-        sqlc.narg(jsx_source),
-        sqlc.narg(visual_source),
-        sqlc.narg(html_source),
-        sqlc.arg(main_mode),
-        sqlc.arg(html_content),
-        sqlc.arg(plain_text_content),
-        'operator',
-        sqlc.narg(author_sub),
-        sqlc.narg(author_name),
-        sqlc.narg(base_version_id))
-RETURNING id;
+-- Writes an operator's draft, numbered after the template's last version,
+-- unless the version it continues holds exactly this content already —
+-- subject, every source, Main source and render, a Visual document compared
+-- as JSON rather than as text. Returns the draft it wrote, or the version it
+-- would have repeated, and whether it wrote one. The caller holds the template
+-- row's lock (LockTemplate).
+-- name: RecordTemplateDraft :one
+WITH repeated AS (SELECT v.id
+                  FROM template_versions v
+                  WHERE v.id = sqlc.narg(continued_id)::uuid
+                    AND (v.subject, v.jsx_source, v.visual_source, v.html_source, v.main_mode, v.html_content,
+                         v.plain_text_content)
+                      IS NOT DISTINCT FROM
+                        (sqlc.arg(subject)::text, sqlc.narg(jsx_source)::text, sqlc.narg(visual_source)::jsonb,
+                         sqlc.narg(html_source)::text, sqlc.arg(main_mode)::authoring_mode, sqlc.arg(html_content)::text,
+                         sqlc.arg(plain_text_content)::text)),
+     written AS (
+         INSERT INTO template_versions (template_id, seq, subject, jsx_source, visual_source, html_source, main_mode,
+                                        html_content, plain_text_content, author_kind, author_sub, author_name,
+                                        base_version_id)
+             SELECT sqlc.arg(template_id)::uuid,
+                    COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = sqlc.arg(template_id)::uuid),
+                             0) + 1,
+                    sqlc.arg(subject)::text,
+                    sqlc.narg(jsx_source)::text,
+                    sqlc.narg(visual_source)::jsonb,
+                    sqlc.narg(html_source)::text,
+                    sqlc.arg(main_mode)::authoring_mode,
+                    sqlc.arg(html_content)::text,
+                    sqlc.arg(plain_text_content)::text,
+                    'operator',
+                    sqlc.narg(author_sub)::text,
+                    sqlc.narg(author_name)::text,
+                    sqlc.narg(base_version_id)::uuid
+             WHERE NOT EXISTS (SELECT 1 FROM repeated)
+             RETURNING id)
+SELECT id, true AS written
+FROM written
+UNION ALL
+SELECT id, false AS written
+FROM repeated;
 
 -- Publishes a draft: marks it published and copies it onto the template row,
 -- which the send path reads — its subject and its render. react_email_content,

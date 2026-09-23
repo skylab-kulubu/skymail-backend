@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/skylab-kulubu/skymail-backend/internal/ptr"
 )
 
 // VersionContent is what a Mail template version holds apart from who wrote
@@ -76,9 +77,11 @@ func (e *StaleBaseError) Error() string {
 //
 // base is the published version the draft started from: a published version
 // of this template, or nil only when the template has none (ErrInvalidBase).
-// Sources content leaves out are kept from the version the save continues, and
-// a save that would repeat it records nothing (see recordDraft). It returns
-// the draft, or the version it repeated, and whether it was written.
+// The draft continues author's draft in progress when that started from the
+// same base, or else starts from the base; sources content leaves out are kept
+// from the version it continues. A save that would repeat that version records
+// nothing. It returns the draft, or the version it repeated, and whether it was
+// written.
 func (s *Store) SaveTemplateDraft(ctx context.Context, templateID uuid.UUID, author VersionAuthor, base *uuid.UUID, content VersionContent, check VersionCheck) (GetTemplateVersionRow, bool, error) {
 	var saved GetTemplateVersionRow
 	var created bool
@@ -88,19 +91,15 @@ func (s *Store) SaveTemplateDraft(ctx context.Context, templateID uuid.UUID, aut
 		if err != nil {
 			return err
 		}
-		if base == nil && template.PublishedVersionID != nil {
-			return ErrInvalidBase
+		baseVersion, err := publishedBase(ctx, q, template, base)
+		if err != nil {
+			return err
 		}
-		if base != nil {
-			version, err := q.GetTemplateVersion(ctx, GetTemplateVersionParams{TemplateID: template.ID, ID: *base})
-			if errors.Is(err, pgx.ErrNoRows) || (err == nil && version.TemplateVersionSummary.PublishedAt == nil) {
-				return ErrInvalidBase
-			}
-			if err != nil {
-				return err
-			}
+		continued, err := continuedVersion(ctx, q, template.ID, author, baseVersion)
+		if err != nil {
+			return err
 		}
-		saved, created, err = recordDraft(ctx, q, template, author, base, content, true, check)
+		saved, created, err = writeDraft(ctx, q, template, author, baseVersion, continued, content.keeping(continued), check)
 		return err
 	})
 	return saved, created, err
@@ -109,9 +108,11 @@ func (s *Store) SaveTemplateDraft(ctx context.Context, templateID uuid.UUID, aut
 // RestoreTemplateVersion records a copy of any version of a template — its
 // subject, sources, Main source and render — as an operator's draft started
 // from the version published now, once check has passed it as it would a
-// saved draft. The template row does not change.
+// saved draft. The template row does not change. A copy that would repeat the
+// version it continues records nothing.
 //
-// It returns the draft and whether it was written.
+// It returns the draft, or the version it repeated, and whether it was
+// written.
 func (s *Store) RestoreTemplateVersion(ctx context.Context, templateID, versionID uuid.UUID, author VersionAuthor, check VersionCheck) (GetTemplateVersionRow, bool, error) {
 	var restored GetTemplateVersionRow
 	var created bool
@@ -125,7 +126,15 @@ func (s *Store) RestoreTemplateVersion(ctx context.Context, templateID, versionI
 		if err != nil {
 			return err
 		}
-		restored, created, err = recordDraft(ctx, q, template, author, template.PublishedVersionID, contentOf(version), false, check)
+		current, err := publishedBase(ctx, q, template, template.PublishedVersionID)
+		if err != nil {
+			return err
+		}
+		continued, err := continuedVersion(ctx, q, template.ID, author, current)
+		if err != nil {
+			return err
+		}
+		restored, created, err = writeDraft(ctx, q, template, author, current, continued, contentOf(version), check)
 		return err
 	})
 	return restored, created, err
@@ -166,7 +175,7 @@ func (s *Store) PublishTemplateDraft(ctx context.Context, templateID, versionID 
 			return ErrDraftDiscarded
 		}
 		base := version.TemplateVersionSummary.BaseVersionID
-		if !sameVersion(base, template.PublishedVersionID) && (over == nil || !sameVersion(over, template.PublishedVersionID)) {
+		if !ptr.Equal(base, template.PublishedVersionID) && (over == nil || !ptr.Equal(over, template.PublishedVersionID)) {
 			return &StaleBaseError{VersionID: versionID, BaseVersionID: base, PublishedVersionID: template.PublishedVersionID}
 		}
 		if check != nil {
@@ -209,33 +218,44 @@ func (s *Store) DiscardTemplateDraft(ctx context.Context, templateID, versionID 
 	return discarded, err
 }
 
-// recordDraft writes content as author's draft of a locked template, started
-// from base, once check has passed it.
-//
-// The draft continues the version the author was working on: their draft in
-// progress when it started from the same base, or else the base itself. With
-// keep, the sources content leaves out are that version's. When the draft
-// would repeat what it continues, nothing is written and that version is
-// returned instead.
-func recordDraft(ctx context.Context, q *Queries, template Template, author VersionAuthor, base *uuid.UUID, content VersionContent, keep bool, check VersionCheck) (GetTemplateVersionRow, bool, error) {
-	draft, err := draftInProgress(ctx, q, template.ID, author)
-	if err != nil {
-		return GetTemplateVersionRow{}, false, err
-	}
-	continued := draft
-	if draft == nil || !sameVersion(draft.TemplateVersionSummary.BaseVersionID, base) {
-		continued = nil
-		if base != nil {
-			version, err := q.GetTemplateVersion(ctx, GetTemplateVersionParams{TemplateID: template.ID, ID: *base})
-			if err != nil {
-				return GetTemplateVersionRow{}, false, err
-			}
-			continued = &version
+// publishedBase is the version a draft started from, read once: a published
+// version of the template, or nil only when the template has none. Anything
+// else is ErrInvalidBase.
+func publishedBase(ctx context.Context, q *Queries, template Template, base *uuid.UUID) (*GetTemplateVersionRow, error) {
+	if base == nil {
+		if template.PublishedVersionID != nil {
+			return nil, ErrInvalidBase
 		}
+		return nil, nil
 	}
-	if keep {
-		content = content.keeping(continued)
+	version, err := q.GetTemplateVersion(ctx, GetTemplateVersionParams{TemplateID: template.ID, ID: *base})
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && version.TemplateVersionSummary.PublishedAt == nil) {
+		return nil, ErrInvalidBase
 	}
+	if err != nil {
+		return nil, err
+	}
+	return &version, nil
+}
+
+// continuedVersion is the version author's next draft of a template continues:
+// their draft in progress when it started from base, or else base itself.
+func continuedVersion(ctx context.Context, q *Queries, templateID uuid.UUID, author VersionAuthor, base *GetTemplateVersionRow) (*GetTemplateVersionRow, error) {
+	draft, err := draftInProgress(ctx, q, templateID, author)
+	if err != nil {
+		return nil, err
+	}
+	if draft != nil && ptr.Equal(draft.TemplateVersionSummary.BaseVersionID, idOf(base)) {
+		return draft, nil
+	}
+	return base, nil
+}
+
+// writeDraft writes content as author's draft of a locked template, started
+// from base, once its sources hold up and check has passed it — unless
+// continued holds exactly that content already: then nothing is written and
+// continued is returned. It reports whether it wrote the draft.
+func writeDraft(ctx context.Context, q *Queries, template Template, author VersionAuthor, base, continued *GetTemplateVersionRow, content VersionContent, check VersionCheck) (GetTemplateVersionRow, bool, error) {
 	if err := content.checkSources(ctx, q); err != nil {
 		return GetTemplateVersionRow{}, false, err
 	}
@@ -244,25 +264,9 @@ func recordDraft(ctx context.Context, q *Queries, template Template, author Vers
 			return GetTemplateVersionRow{}, false, err
 		}
 	}
-
-	if continued != nil {
-		repeats, err := q.TemplateVersionHoldsContent(ctx, TemplateVersionHoldsContentParams{
-			ID:               continued.TemplateVersionSummary.ID,
-			Subject:          content.Subject,
-			JsxSource:        content.JSXSource,
-			VisualSource:     content.VisualSource,
-			HtmlSource:       content.HTMLSource,
-			MainMode:         content.MainMode,
-			HtmlContent:      content.HTMLContent,
-			PlainTextContent: content.PlainTextContent,
-		})
-		if err != nil || repeats {
-			return *continued, false, err
-		}
-	}
-
-	id, err := q.InsertTemplateDraft(ctx, InsertTemplateDraftParams{
+	recorded, err := q.RecordTemplateDraft(ctx, RecordTemplateDraftParams{
 		TemplateID:       template.ID,
+		ContinuedID:      idOf(continued),
 		Subject:          content.Subject,
 		JsxSource:        content.JSXSource,
 		VisualSource:     content.VisualSource,
@@ -272,13 +276,13 @@ func recordDraft(ctx context.Context, q *Queries, template Template, author Vers
 		PlainTextContent: content.PlainTextContent,
 		AuthorSub:        author.Sub,
 		AuthorName:       author.Name,
-		BaseVersionID:    base,
+		BaseVersionID:    idOf(base),
 	})
 	if err != nil {
 		return GetTemplateVersionRow{}, false, err
 	}
-	written, err := q.GetTemplateVersion(ctx, GetTemplateVersionParams{TemplateID: template.ID, ID: id})
-	return written, err == nil, err
+	version, err := q.GetTemplateVersion(ctx, GetTemplateVersionParams{TemplateID: template.ID, ID: recorded.ID})
+	return version, recorded.Written, err
 }
 
 // draftInProgress is author's draft in progress on a template — their newest
@@ -289,7 +293,7 @@ func draftInProgress(ctx context.Context, q *Queries, templateID uuid.UUID, auth
 		return nil, err
 	}
 	for _, draft := range drafts {
-		if sameText(draft.AuthorSub, author.Sub) {
+		if ptr.Equal(draft.AuthorSub, author.Sub) {
 			version, err := q.GetTemplateVersion(ctx, GetTemplateVersionParams{TemplateID: templateID, ID: draft.ID})
 			if err != nil {
 				return nil, err
@@ -354,20 +358,13 @@ func contentOf(v GetTemplateVersionRow) VersionContent {
 	}
 }
 
-// sameVersion reports whether two optional version ids name the same version,
-// or both none: SQL's IS NOT DISTINCT FROM.
-func sameVersion(a, b *uuid.UUID) bool {
-	if a == nil || b == nil {
-		return a == b
+// idOf is a version's id, or nil for no version.
+func idOf(version *GetTemplateVersionRow) *uuid.UUID {
+	if version == nil {
+		return nil
 	}
-	return *a == *b
-}
-
-func sameText(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
+	id := version.TemplateVersionSummary.ID
+	return &id
 }
 
 func uuidText(id *uuid.UUID) string {

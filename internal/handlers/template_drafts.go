@@ -42,13 +42,13 @@ var errUnparseable = apperrors.New(
 
 var errDraftDiscarded = apperrors.New(
 	"template.draft_discarded",
-	"This draft was discarded, so it is not published. Restore it as a new draft to use it again.",
+	"This draft was discarded, so it is not published. To use it again, restore it as a new draft (POST /v1/templates/{id}/versions/{versionId}/restore).",
 	fiber.StatusConflict,
 )
 
 var errNotADraft = apperrors.New(
 	"template.not_a_draft",
-	"Only a draft is published. Restore this version as a draft to publish it again.",
+	"Only a draft is published. To publish this version again, restore it as a new draft (POST /v1/templates/{id}/versions/{versionId}/restore).",
 	fiber.StatusConflict,
 )
 

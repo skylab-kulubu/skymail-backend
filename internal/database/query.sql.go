@@ -1317,61 +1317,6 @@ func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) 
 	return i, err
 }
 
-const insertTemplateDraft = `-- name: InsertTemplateDraft :one
-INSERT INTO template_versions (template_id, seq, subject, jsx_source, visual_source, html_source, main_mode,
-                               html_content, plain_text_content, author_kind, author_sub, author_name,
-                               base_version_id)
-VALUES ($1,
-        COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = $1), 0) + 1,
-        $2,
-        $3,
-        $4,
-        $5,
-        $6,
-        $7,
-        $8,
-        'operator',
-        $9,
-        $10,
-        $11)
-RETURNING id
-`
-
-type InsertTemplateDraftParams struct {
-	TemplateID       uuid.UUID     `json:"template_id"`
-	Subject          string        `json:"subject"`
-	JsxSource        *string       `json:"jsx_source"`
-	VisualSource     []byte        `json:"visual_source"`
-	HtmlSource       *string       `json:"html_source"`
-	MainMode         AuthoringMode `json:"main_mode"`
-	HtmlContent      string        `json:"html_content"`
-	PlainTextContent string        `json:"plain_text_content"`
-	AuthorSub        *string       `json:"author_sub"`
-	AuthorName       *string       `json:"author_name"`
-	BaseVersionID    *uuid.UUID    `json:"base_version_id"`
-}
-
-// Writes an operator's draft, numbered after the template's last version. The
-// caller holds the template row's lock (LockTemplate).
-func (q *Queries) InsertTemplateDraft(ctx context.Context, arg InsertTemplateDraftParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, insertTemplateDraft,
-		arg.TemplateID,
-		arg.Subject,
-		arg.JsxSource,
-		arg.VisualSource,
-		arg.HtmlSource,
-		arg.MainMode,
-		arg.HtmlContent,
-		arg.PlainTextContent,
-		arg.AuthorSub,
-		arg.AuthorName,
-		arg.BaseVersionID,
-	)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
-}
-
 const isJSXSource = `-- name: IsJSXSource :one
 SELECT (template_jsx_source($1::text) IS NOT NULL)::boolean AS is_source
 `
@@ -1790,6 +1735,89 @@ func (q *Queries) PublishTemplateDraft(ctx context.Context, arg PublishTemplateD
 	return i, err
 }
 
+const recordTemplateDraft = `-- name: RecordTemplateDraft :one
+WITH repeated AS (SELECT v.id
+                  FROM template_versions v
+                  WHERE v.id = $1::uuid
+                    AND (v.subject, v.jsx_source, v.visual_source, v.html_source, v.main_mode, v.html_content,
+                         v.plain_text_content)
+                      IS NOT DISTINCT FROM
+                        ($2::text, $3::text, $4::jsonb,
+                         $5::text, $6::authoring_mode, $7::text,
+                         $8::text)),
+     written AS (
+         INSERT INTO template_versions (template_id, seq, subject, jsx_source, visual_source, html_source, main_mode,
+                                        html_content, plain_text_content, author_kind, author_sub, author_name,
+                                        base_version_id)
+             SELECT $9::uuid,
+                    COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = $9::uuid),
+                             0) + 1,
+                    $2::text,
+                    $3::text,
+                    $4::jsonb,
+                    $5::text,
+                    $6::authoring_mode,
+                    $7::text,
+                    $8::text,
+                    'operator',
+                    $10::text,
+                    $11::text,
+                    $12::uuid
+             WHERE NOT EXISTS (SELECT 1 FROM repeated)
+             RETURNING id)
+SELECT id, true AS written
+FROM written
+UNION ALL
+SELECT id, false AS written
+FROM repeated
+`
+
+type RecordTemplateDraftParams struct {
+	ContinuedID      *uuid.UUID    `json:"continued_id"`
+	Subject          string        `json:"subject"`
+	JsxSource        *string       `json:"jsx_source"`
+	VisualSource     []byte        `json:"visual_source"`
+	HtmlSource       *string       `json:"html_source"`
+	MainMode         AuthoringMode `json:"main_mode"`
+	HtmlContent      string        `json:"html_content"`
+	PlainTextContent string        `json:"plain_text_content"`
+	TemplateID       uuid.UUID     `json:"template_id"`
+	AuthorSub        *string       `json:"author_sub"`
+	AuthorName       *string       `json:"author_name"`
+	BaseVersionID    *uuid.UUID    `json:"base_version_id"`
+}
+
+type RecordTemplateDraftRow struct {
+	ID      uuid.UUID `json:"id"`
+	Written bool      `json:"written"`
+}
+
+// Writes an operator's draft, numbered after the template's last version,
+// unless the version it continues holds exactly this content already —
+// subject, every source, Main source and render, a Visual document compared
+// as JSON rather than as text. Returns the draft it wrote, or the version it
+// would have repeated, and whether it wrote one. The caller holds the template
+// row's lock (LockTemplate).
+func (q *Queries) RecordTemplateDraft(ctx context.Context, arg RecordTemplateDraftParams) (RecordTemplateDraftRow, error) {
+	row := q.db.QueryRow(ctx, recordTemplateDraft,
+		arg.ContinuedID,
+		arg.Subject,
+		arg.JsxSource,
+		arg.VisualSource,
+		arg.HtmlSource,
+		arg.MainMode,
+		arg.HtmlContent,
+		arg.PlainTextContent,
+		arg.TemplateID,
+		arg.AuthorSub,
+		arg.AuthorName,
+		arg.BaseVersionID,
+	)
+	var i RecordTemplateDraftRow
+	err := row.Scan(&i.ID, &i.Written)
+	return i, err
+}
+
 const recordTemplateRowAsVersion = `-- name: RecordTemplateRowAsVersion :execrows
 WITH written AS (SELECT t.id,
                         t.subject,
@@ -2039,45 +2067,6 @@ WHERE id = $1
 func (q *Queries) SetMailQueueItemSent(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, setMailQueueItemSent, id)
 	return err
-}
-
-const templateVersionHoldsContent = `-- name: TemplateVersionHoldsContent :one
-SELECT ((v.subject, v.jsx_source, v.visual_source, v.html_source, v.main_mode, v.html_content, v.plain_text_content)
-    IS NOT DISTINCT FROM
-        ($1::text, $2::text, $3::jsonb,
-         $4::text, $5::authoring_mode, $6::text,
-         $7::text))::boolean AS holds
-FROM template_versions v
-WHERE v.id = $8
-`
-
-type TemplateVersionHoldsContentParams struct {
-	Subject          string        `json:"subject"`
-	JsxSource        *string       `json:"jsx_source"`
-	VisualSource     []byte        `json:"visual_source"`
-	HtmlSource       *string       `json:"html_source"`
-	MainMode         AuthoringMode `json:"main_mode"`
-	HtmlContent      string        `json:"html_content"`
-	PlainTextContent string        `json:"plain_text_content"`
-	ID               uuid.UUID     `json:"id"`
-}
-
-// Whether a version holds exactly this content: subject, every source, Main
-// source and render. A Visual document compares as JSON, not as text.
-func (q *Queries) TemplateVersionHoldsContent(ctx context.Context, arg TemplateVersionHoldsContentParams) (bool, error) {
-	row := q.db.QueryRow(ctx, templateVersionHoldsContent,
-		arg.Subject,
-		arg.JsxSource,
-		arg.VisualSource,
-		arg.HtmlSource,
-		arg.MainMode,
-		arg.HtmlContent,
-		arg.PlainTextContent,
-		arg.ID,
-	)
-	var holds bool
-	err := row.Scan(&holds)
-	return holds, err
 }
 
 const updateMailingList = `-- name: UpdateMailingList :one

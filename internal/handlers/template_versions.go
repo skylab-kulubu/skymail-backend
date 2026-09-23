@@ -153,13 +153,9 @@ func parseVersionState(raw string) (*bool, error) {
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates/{id}/versions/{versionId} [get]
 func (h *templateHandlerImpl) GetTemplateVersion(c fiber.Ctx) error {
-	templateID, err := uuid.Parse(c.Params("id"))
+	templateID, versionID, err := versionPath(c)
 	if err != nil {
-		return apperrors.ErrStatusNotFound
-	}
-	versionID, err := uuid.Parse(c.Params("versionId"))
-	if err != nil {
-		return apperrors.ErrStatusNotFound
+		return err
 	}
 
 	row, err := h.db.GetTemplateVersion(c.Context(), database.GetTemplateVersionParams{

@@ -72,9 +72,6 @@ type Querier interface {
 	// found here.
 	GetTemplateVersion(ctx context.Context, arg GetTemplateVersionParams) (GetTemplateVersionRow, error)
 	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (MailTask, error)
-	// Writes an operator's draft, numbered after the template's last version. The
-	// caller holds the template row's lock (LockTemplate).
-	InsertTemplateDraft(ctx context.Context, arg InsertTemplateDraftParams) (uuid.UUID, error)
 	// Whether text is a JSX source by the rule the migration and the old panel's
 	// writes read react_email_content with: something other than whitespace and
 	// comments is left in it.
@@ -119,6 +116,13 @@ type Querier interface {
 	// caller holds the row's lock and has checked that the version is a draft of
 	// this template.
 	PublishTemplateDraft(ctx context.Context, arg PublishTemplateDraftParams) (Template, error)
+	// Writes an operator's draft, numbered after the template's last version,
+	// unless the version it continues holds exactly this content already —
+	// subject, every source, Main source and render, a Visual document compared
+	// as JSON rather than as text. Returns the draft it wrote, or the version it
+	// would have repeated, and whether it wrote one. The caller holds the template
+	// row's lock (LockTemplate).
+	RecordTemplateDraft(ctx context.Context, arg RecordTemplateDraftParams) (RecordTemplateDraftRow, error)
 	// Records what a template row now holds as a new Mail template version,
 	// published at once, and makes the row a copy of it. This is the expand step
 	// for the writers that still write the row directly — the old panel's create
@@ -157,9 +161,6 @@ type Querier interface {
 	RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, error)
 	SetMailQueueItemFailed(ctx context.Context, arg SetMailQueueItemFailedParams) error
 	SetMailQueueItemSent(ctx context.Context, id uuid.UUID) error
-	// Whether a version holds exactly this content: subject, every source, Main
-	// source and render. A Visual document compares as JSON, not as text.
-	TemplateVersionHoldsContent(ctx context.Context, arg TemplateVersionHoldsContentParams) (bool, error)
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
 	UpdateRecipient(ctx context.Context, arg UpdateRecipientParams) (Recipient, error)
 	UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) (Template, error)
