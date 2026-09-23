@@ -635,16 +635,16 @@ func TestSubmittingToAGroupOrOneRecipient(t *testing.T) {
 	}
 }
 
-// With no one else holding the approve role, or Keycloak unable to say who
-// does, the submission still stands, and the answer says no one was told.
+// With no one holding the approve role, or Keycloak unable to say who does,
+// the submission still stands, and the answer says no one was told.
 func TestSubmissionStandsWhenNoApproverCanBeTold(t *testing.T) {
 	w := newApprovalWorld(t)
 
-	w.directory.approvers = []*gocloak.User{elif.user()}
+	w.directory.approvers = []*gocloak.User{}
 	alone := w.submit("elif", w.listSend())
 	if alone.State != "pending" || alone.Notification == nil || alone.Notification.Notified != 0 ||
 		alone.Notification.Problem == nil || *alone.Notification.Problem != "no_approvers" {
-		t.Errorf("with only the submitter approving: %+v", alone.Notification)
+		t.Errorf("with no approvers: %+v", alone.Notification)
 	}
 
 	w.directory.lookupErr = context.DeadlineExceeded
@@ -1217,9 +1217,8 @@ func TestTwoApproversAtOnceSendOnce(t *testing.T) {
 	}
 }
 
-// Deciding takes the approver's role, and an approver does not decide their
-// own request. A submitter sees their own requests; an approver sees all; a
-// member who is neither sees none but their own.
+// Deciding takes the approver's role. A submitter sees their own requests;
+// an approver sees all; a member who is neither sees none but their own.
 func TestWhoMaySeeAndDecideARequest(t *testing.T) {
 	w := newApprovalWorld(t)
 	byElif := w.submit("elif", w.listSend())
@@ -1233,10 +1232,6 @@ func TestWhoMaySeeAndDecideARequest(t *testing.T) {
 			if status != fiber.StatusForbidden || failure.Code != "server.forbidden" {
 				t.Errorf("%s %s = %d %+v, want 403", who, action, status, failure)
 			}
-		}
-		status, _, failure := w.act("yusuf", byYusuf.ID, action, body)
-		if status != fiber.StatusForbidden || failure.Code != "mail_approval.own_request" {
-			t.Errorf("yusuf %s on his own = %d %+v", action, status, failure)
 		}
 	}
 	for _, action := range []string{"accept", "decline", "resubmit"} {
@@ -1533,5 +1528,40 @@ func TestAReturnedRequestGetsSevenDaysOfItsOwn(t *testing.T) {
 	w.advance(6 * 24 * time.Hour)
 	if status, accepted, failure := w.act("elif", submitted.ID, "accept", nil); status != fiber.StatusOK || accepted.State != "approved" {
 		t.Fatalf("accepting on the twelfth day = %d %+v", status, failure)
+	}
+}
+
+// An approver may decide a request they submitted themselves (Yusuf,
+// 2026-09-23). The history names them as both submitter and decider, so a
+// self-approval shows as one, and they are told of their own submission like
+// any approver.
+func TestAnApproverMayDecideTheirOwnRequest(t *testing.T) {
+	w := newApprovalWorld(t)
+
+	approved := w.submit("yusuf", w.listSend())
+	if got := strings.Join(emails(w.mail.of(w.requested.ID)), ","); got != "fatih@yildizskylab.com,yusuf@yildizskylab.com" {
+		t.Errorf("approval-requested for yusuf's own went to %s", got)
+	}
+	status, answer, failure := w.act("yusuf", approved.ID, "approve", nil)
+	if status != fiber.StatusOK || answer.State != "approved" || answer.History[0].Actor.Sub != yusuf.sub || answer.History[1].Actor.Sub != yusuf.sub {
+		t.Fatalf("yusuf approving his own = %d %+v %+v", status, failure, answer.History)
+	}
+	if n := len(w.mail.of(w.freeBasic.ID)); n != 1 {
+		t.Fatalf("sends = %d, want 1", n)
+	}
+
+	rejected := w.submit("yusuf", w.listSend())
+	if status, answer, failure := w.act("yusuf", rejected.ID, "reject", map[string]any{"reason": "Vazgeçtim."}); status != fiber.StatusOK || answer.State != "rejected" {
+		t.Errorf("yusuf rejecting his own = %d %+v", status, failure)
+	}
+
+	returned := w.submit("yusuf", w.listSend())
+	edit := w.listSend()["body_variables"].(map[string]any)
+	edit["Heading"] = "Kendi düzeltmem"
+	if status, answer, failure := w.act("yusuf", returned.ID, "return", map[string]any{"body_variables": edit}); status != fiber.StatusOK || answer.State != "returned" {
+		t.Fatalf("yusuf returning his own = %d %+v", status, failure)
+	}
+	if status, answer, failure := w.act("yusuf", returned.ID, "accept", nil); status != fiber.StatusOK || answer.State != "approved" {
+		t.Errorf("yusuf accepting his own return = %d %+v", status, failure)
 	}
 }

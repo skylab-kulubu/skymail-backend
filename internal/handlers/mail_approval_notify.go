@@ -18,7 +18,7 @@ type noticeKind int
 
 const (
 	noticeNone noticeKind = iota
-	// Every approver but the submitter, with mail.approval-requested.
+	// Every approver, with mail.approval-requested.
 	noticeRequested
 	// The submitter, with mail.approval-resolved.
 	noticeResolved
@@ -130,7 +130,7 @@ func (h *mailApprovalHandlerImpl) deliver(ctx context.Context, view database.Get
 }
 
 func (h *mailApprovalHandlerImpl) notifyApprovers(ctx context.Context, view database.GetMailApprovalRow, notice approvalNotice) *MailApprovalNotification {
-	approvers, problem := h.approvers(ctx, view.SubmitterSub)
+	approvers, problem := h.approvers(ctx)
 	if problem != "" {
 		return &MailApprovalNotification{TemplateKey: approvalRequestedKey, Problem: &problem}
 	}
@@ -173,9 +173,10 @@ func (h *mailApprovalHandlerImpl) notifySubmitter(ctx context.Context, view data
 	})
 }
 
-// approvers are the holders of MailApproverRole with an address, but the
-// submitter, each once; or why there are none to tell.
-func (h *mailApprovalHandlerImpl) approvers(ctx context.Context, submitter string) ([]mailer.RecipientInfo, string) {
+// approvers are the holders of MailApproverRole with an address, each once —
+// the submitter too, when they hold it: they can act on it — or why there are
+// none to tell.
+func (h *mailApprovalHandlerImpl) approvers(ctx context.Context) ([]mailer.RecipientInfo, string) {
 	ctx, cancel := context.WithTimeout(ctx, approvalKeycloakBudget)
 	defer cancel()
 	users, err := h.kc.ClientRoleMembers(ctx, h.clientID, MailApproverRole)
@@ -187,7 +188,7 @@ func (h *mailApprovalHandlerImpl) approvers(ctx context.Context, submitter strin
 	var approvers []mailer.RecipientInfo
 	for _, u := range users {
 		email := strings.TrimSpace(gocloak.PString(u.Email))
-		if gocloak.PString(u.ID) == submitter || email == "" || seen[strings.ToLower(email)] {
+		if email == "" || seen[strings.ToLower(email)] {
 			continue
 		}
 		seen[strings.ToLower(email)] = true

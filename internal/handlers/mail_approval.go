@@ -98,11 +98,6 @@ var (
 		"The template has published another version since the request was submitted, so sending it would not send what was submitted. Reject it; the submitter can resubmit it on the version published now.",
 		fiber.StatusConflict,
 	)
-	errApprovalOwnRequest = apperrors.New(
-		"mail_approval.own_request",
-		"An approver cannot decide a request they submitted.",
-		fiber.StatusForbidden,
-	)
 	errApprovalNotSubmitter = apperrors.New(
 		"mail_approval.not_submitter",
 		"Only the request's submitter can do this.",
@@ -225,7 +220,7 @@ type MailApprovalNotification struct {
 	TemplateKey string `json:"template_key" enums:"mail.approval-requested,mail.approval-resolved"`
 	// How many people it was queued to.
 	Notified int `json:"notified"`
-	// Why it reached no one or fewer than it was for: no_approvers (no one else holds skymail:mails:approve), approver_lookup_failed (Keycloak did not say in time), no_address (the submitter's token carried no e-mail), template_unavailable (the System template is not seeded), enqueue_failed. Null when it reached everyone.
+	// Why it reached no one or fewer than it was for: no_approvers (no one holding skymail:mails:approve has an address), approver_lookup_failed (Keycloak did not say in time), no_address (the submitter's token carried no e-mail), template_unavailable (the System template is not seeded), enqueue_failed. Null when it reached everyone.
 	Problem *string `json:"problem" enums:"no_approvers,approver_lookup_failed,no_address,template_unavailable,enqueue_failed"`
 }
 
@@ -304,7 +299,7 @@ func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc ke
 //	@Summary		Submit a send for approval
 //	@Description	Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or one recipient (as POST /mail_tasks/single takes them), never both — and nothing is sent until someone holding skymail:mails:approve approves it. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values. It waits seven days; undecided by then, it expires and is never sent.
 //	@Description
-//	@Description	Every approver but the submitter is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.
+//	@Description	Every approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.
 //	@Tags			Mail approval
 //	@Accept			json
 //	@Produce		json
@@ -499,7 +494,7 @@ func (h *mailApprovalHandlerImpl) Get(c fiber.Ctx) error {
 // Approve godoc
 //
 //	@Summary		Approve a request and send it
-//	@Description	An approver approves a pending request someone else submitted, and it is queued through the send path at once, sent by its submitter: without body_variables exactly as it stands, with them as the approver edited them — the edit is recorded (an edited event naming each variable changed, before and after) and told to the submitter. The send is of the template version the request is pinned to, to its audience as it is now. Approving is idempotent and race-safe: the request is locked while it is sent, someone else acting on it at that moment is refused (409 mail_approval.busy), and approving an approved request again without an edit sends nothing and answers it as it is.
+//	@Description	An approver approves a pending request — their own too, which its history then shows — and it is queued through the send path at once, sent by its submitter: without body_variables exactly as it stands, with them as the approver edited them — the edit is recorded (an edited event naming each variable changed, before and after) and told to the submitter. The send is of the template version the request is pinned to, to its audience as it is now. Approving is idempotent and race-safe: the request is locked while it is sent, someone else acting on it at that moment is refused (409 mail_approval.busy), and approving an approved request again without an edit sends nothing and answers it as it is.
 //	@Description
 //	@Description	The submitter is mailed the mail.approval-resolved System template with Decision "approved". A request past its deadline is expired instead (409 mail_approval.expired) and its submitter told.
 //	@Tags			Mail approval
@@ -509,7 +504,7 @@ func (h *mailApprovalHandlerImpl) Get(c fiber.Ctx) error {
 //	@Param			approval	body		requests.ApproveMailApproval	false	"An edit and a note, both optional"
 //	@Success		200			{object}	handlers.MailApproval			"The request, approved, with its task_id and notification"
 //	@Failure		400			{object}	apperrors.AppError				"validation.error"
-//	@Failure		403			{object}	apperrors.AppError				"Not an approver, or mail_approval.own_request"
+//	@Failure		403			{object}	apperrors.AppError				"Not an approver"
 //	@Failure		404			{object}	apperrors.AppError				"No such request"
 //	@Failure		409			{object}	apperrors.AppError				"mail_approval.state_conflict (params.state, params.allowed), mail_approval.expired, mail_approval.busy, mail_approval.template_republished (params.submitted_version_id, params.published_version_id), mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
 //	@Failure		422			{object}	apperrors.AppError				"The edit leaves a Required variable empty (mail_approval.required_variables_missing) or does not render (mail_approval.unrenderable)"
@@ -551,7 +546,7 @@ func (h *mailApprovalHandlerImpl) Approve(c fiber.Ctx) error {
 // Return godoc
 //
 //	@Summary		Return an edited request to its submitter
-//	@Description	An approver edits a pending request someone else submitted and hands it back: the edit is recorded (an edited event naming each variable changed, before and after), the request is returned with a new seven-day deadline — the decision is the submitter's now — and the submitter is mailed the mail.approval-resolved System template with Decision "returned" and the deadline. Nothing is sent. The submitter accepts it — and it goes out as edited — or declines it. body_variables is the whole edit and must differ from the request's.
+//	@Description	An approver edits a pending request and hands it back: the edit is recorded (an edited event naming each variable changed, before and after), the request is returned with a new seven-day deadline — the decision is the submitter's now — and the submitter is mailed the mail.approval-resolved System template with Decision "returned" and the deadline. Nothing is sent. The submitter accepts it — and it goes out as edited — or declines it. body_variables is the whole edit and must differ from the request's.
 //	@Tags			Mail approval
 //	@Accept			json
 //	@Produce		json
@@ -559,7 +554,7 @@ func (h *mailApprovalHandlerImpl) Approve(c fiber.Ctx) error {
 //	@Param			edit	body		requests.ReturnMailApproval	true	"The edit and a note"
 //	@Success		200		{object}	handlers.MailApproval		"The request, returned, with notification"
 //	@Failure		400		{object}	apperrors.AppError			"validation.error"
-//	@Failure		403		{object}	apperrors.AppError			"Not an approver, or mail_approval.own_request"
+//	@Failure		403		{object}	apperrors.AppError			"Not an approver"
 //	@Failure		404		{object}	apperrors.AppError			"No such request"
 //	@Failure		409		{object}	apperrors.AppError			"mail_approval.state_conflict, mail_approval.expired or mail_approval.busy"
 //	@Failure		422		{object}	apperrors.AppError			"mail_approval.no_edit, mail_approval.required_variables_missing or mail_approval.unrenderable"
@@ -597,7 +592,7 @@ func (h *mailApprovalHandlerImpl) Return(c fiber.Ctx) error {
 // Reject godoc
 //
 //	@Summary		Reject a request
-//	@Description	An approver refuses a pending request someone else submitted, with a reason. Nothing is sent. The submitter is mailed the mail.approval-resolved System template with Decision "rejected" and the reason as DecisionNote, and may edit and resubmit the request; the rejection stays in its history.
+//	@Description	An approver refuses a pending request, with a reason. Nothing is sent. The submitter is mailed the mail.approval-resolved System template with Decision "rejected" and the reason as DecisionNote, and may edit and resubmit the request; the rejection stays in its history.
 //	@Tags			Mail approval
 //	@Accept			json
 //	@Produce		json
@@ -605,7 +600,7 @@ func (h *mailApprovalHandlerImpl) Return(c fiber.Ctx) error {
 //	@Param			rejection	body		requests.RejectMailApproval	true	"The reason"
 //	@Success		200			{object}	handlers.MailApproval		"The request, rejected, with notification"
 //	@Failure		400			{object}	apperrors.AppError			"validation.error: no reason, or a blank one"
-//	@Failure		403			{object}	apperrors.AppError			"Not an approver, or mail_approval.own_request"
+//	@Failure		403			{object}	apperrors.AppError			"Not an approver"
 //	@Failure		404			{object}	apperrors.AppError			"No such request"
 //	@Failure		409			{object}	apperrors.AppError			"mail_approval.state_conflict, mail_approval.expired or mail_approval.busy"
 //	@Failure		500			{object}	apperrors.AppError			"Internal Server Error"
@@ -700,7 +695,7 @@ func (h *mailApprovalHandlerImpl) Decline(c fiber.Ctx) error {
 // Resubmit godoc
 //
 //	@Summary		Resubmit a rejected or declined request
-//	@Description	The submitter fills a rejected request, or one whose returned edit they declined, in again — whole, as a submission is — and it is pending again with a new seven-day deadline, pinned to the version its template publishes now. It is checked as a submission is. It stays the same request: a resubmitted event records what changed, and everything before it stays in the history. Every approver but the submitter is mailed mail.approval-requested again.
+//	@Description	The submitter fills a rejected request, or one whose returned edit they declined, in again — whole, as a submission is — and it is pending again with a new seven-day deadline, pinned to the version its template publishes now. It is checked as a submission is. It stays the same request: a resubmitted event records what changed, and everything before it stays in the history. Every approver is mailed mail.approval-requested again.
 //	@Tags			Mail approval
 //	@Accept			json
 //	@Produce		json

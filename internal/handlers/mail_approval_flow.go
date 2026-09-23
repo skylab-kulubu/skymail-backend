@@ -249,7 +249,7 @@ func checkApprovalValues(template database.Template, version database.GetTemplat
 type approvalActor int
 
 const (
-	// An approver, on a request someone else submitted.
+	// An approver, on any request.
 	byApprover approvalActor = iota
 	// The request's submitter.
 	bySubmitter
@@ -361,13 +361,14 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	return c.JSON(answer)
 }
 
-// authorizeApproval lets an approver act on requests others submitted, and a
-// submitter on their own. A request the caller may not even see is not found.
+// authorizeApproval lets an approver decide any request — their own too
+// (Yusuf, 2026-09-23): the history names who submitted and who decided, so a
+// self-approval shows as one — and a submitter act on their own. The route
+// has already required the approver's role. A request the caller may not even
+// see is not found.
 func authorizeApproval(caller approvalCaller, submitter string, by approvalActor) error {
 	own := submitter == caller.sub
 	switch {
-	case by == byApprover && own:
-		return errApprovalOwnRequest
 	case by == bySubmitter && !own && caller.approver:
 		return errApprovalNotSubmitter
 	case by == bySubmitter && !own:
