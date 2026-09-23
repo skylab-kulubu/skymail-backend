@@ -16,6 +16,11 @@ type Client interface {
 	ListGroups(ctx context.Context) ([]*gocloak.Group, error)
 	GetGroup(ctx context.Context, id string) (*gocloak.Group, error)
 	GetGroupMembers(ctx context.Context, id string) ([]*gocloak.User, error)
+	// ClientRoleMembers lists the enabled users who hold role on the client
+	// whose clientId is clientID: directly, or through a group they or a
+	// group above theirs is in. Each is listed once. A role given through a
+	// composite role is not followed.
+	ClientRoleMembers(ctx context.Context, clientID, role string) ([]*gocloak.User, error)
 }
 
 type clientImpl struct {
@@ -171,6 +176,13 @@ func (c *clientImpl) GetGroupMembers(ctx context.Context, id string) ([]*gocloak
 	if err != nil {
 		return nil, err
 	}
+	return c.groupMembers(ctx, token, id, map[string]struct{}{})
+}
+
+// groupMembers lists the members of a group and of every group below it, each
+// once; seen carries the users already listed, so several groups can be
+// gathered into one list.
+func (c *clientImpl) groupMembers(ctx context.Context, token, id string, seen map[string]struct{}) ([]*gocloak.User, error) {
 	root, err := c.gc.GetGroup(ctx, token, c.realm, id)
 	if err != nil {
 		return nil, err
@@ -179,7 +191,6 @@ func (c *clientImpl) GetGroupMembers(ctx context.Context, id string) ([]*gocloak
 	if err != nil {
 		return nil, err
 	}
-	seen := map[string]struct{}{}
 	out := make([]*gocloak.User, 0)
 	max := 10000
 	for _, g := range groups {
@@ -202,4 +213,71 @@ func (c *clientImpl) GetGroupMembers(ctx context.Context, id string) ([]*gocloak
 		}
 	}
 	return out, nil
+}
+
+func (c *clientImpl) ClientRoleMembers(ctx context.Context, clientID, role string) ([]*gocloak.User, error) {
+	token, err := c.getToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	clients, err := c.gc.GetClients(ctx, token, c.realm, gocloak.GetClientsParams{ClientID: &clientID})
+	if err != nil {
+		return nil, err
+	}
+	if len(clients) == 0 || clients[0] == nil || clients[0].ID == nil {
+		return nil, fmt.Errorf("keycloak: no client %q", clientID)
+	}
+	idOfClient := *clients[0].ID
+
+	seen := map[string]struct{}{}
+	holders := make([]*gocloak.User, 0)
+	const pageSize = 100
+	for first := 0; ; first += pageSize {
+		page, err := c.gc.GetUsersByClientRoleName(ctx, token, c.realm, idOfClient, role, gocloak.GetUsersByRoleParams{
+			First: gocloak.IntP(first),
+			Max:   gocloak.IntP(pageSize),
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, u := range page {
+			if u == nil || u.ID == nil {
+				continue
+			}
+			if _, ok := seen[*u.ID]; ok {
+				continue
+			}
+			seen[*u.ID] = struct{}{}
+			holders = append(holders, u)
+		}
+		if len(page) < pageSize {
+			break
+		}
+	}
+
+	// A group's role mapping reaches every group below it, which is what
+	// groupMembers walks.
+	groups, err := c.gc.GetGroupsByClientRole(ctx, token, c.realm, role, idOfClient)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range groups {
+		if g == nil || g.ID == nil {
+			continue
+		}
+		members, err := c.groupMembers(ctx, token, *g.ID, seen)
+		if err != nil {
+			return nil, err
+		}
+		holders = append(holders, members...)
+	}
+
+	enabled := make([]*gocloak.User, 0, len(holders))
+	for _, u := range holders {
+		if u.Enabled != nil && !*u.Enabled {
+			continue
+		}
+		enabled = append(enabled, u)
+	}
+	return enabled, nil
 }
