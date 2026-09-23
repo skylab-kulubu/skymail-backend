@@ -202,6 +202,10 @@ type Template struct {
 	Key                *string    `json:"key"`
 	System             bool       `json:"system"`
 	PublishedVersionID *uuid.UUID `json:"published_version_id"`
+	// Required variables from the sending service's contract, sorted by name, each with why the mail needs it. Written only by the Template seed; locked in the panel.
+	ContractRequiredVariables ContractVariables `json:"contract_required_variables"`
+	// Required variables operators marked, sorted. Never shares a name with contract_required_variables.
+	OperatorRequiredVariables []string `json:"operator_required_variables"`
 }
 
 type TemplateVersion struct {

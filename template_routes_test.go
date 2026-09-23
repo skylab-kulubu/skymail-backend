@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"io"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/bytedance/sonic"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
@@ -19,10 +21,9 @@ import (
 )
 
 // templateRoutesApp serves the template routes as production registers them —
-// the real permission middleware, handler, error handler, body validator and
-// database — with only Keycloak's token check replaced by the roles under
-// test. It returns a
-// template with one version to ask about.
+// the real permission middleware, handler, error handler, body validator,
+// JSON codec and database — with only Keycloak's token check replaced by the
+// roles under test. It returns a template with one version to ask about.
 func templateRoutesApp(t *testing.T, roles ...string) (*fiber.App, database.Template) {
 	t.Helper()
 	postgres := testpostgres.StartDatabase(t)
@@ -33,14 +34,19 @@ func templateRoutesApp(t *testing.T, roles ...string) (*fiber.App, database.Temp
 	template, err := store.PublishTemplateWrite(context.Background(), database.VersionAuthor{Kind: database.TemplateAuthorKindOperator}, nil,
 		func(q *database.Queries) (database.Template, error) {
 			return q.CreateTemplate(context.Background(), database.CreateTemplateParams{
-				Name: "Bülten", Subject: "SKY LAB", HtmlContent: "<p>SKY LAB</p>", PlainTextContent: "SKY LAB", ReactEmailContent: "",
+				Name: "Bülten", Subject: "SKY LAB", HtmlContent: "<p>Merhaba {{.FullName}}</p>", PlainTextContent: "Merhaba {{.FullName}}", ReactEmailContent: "",
 			})
 		})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
+	app := fiber.New(fiber.Config{
+		ErrorHandler:    errorHandler,
+		StructValidator: validator.NewStructValidator(),
+		JSONDecoder:     sonic.Unmarshal,
+		JSONEncoder:     sonic.Marshal,
+	})
 	api := app.Group("/v1")
 	api.Use(func(c fiber.Ctx) error {
 		c.Locals("user_id", "31ef736f-72da-4a40-8791-d523199cf9f0")
@@ -264,5 +270,115 @@ func TestTemplateDraftRefusalsAnswerInTheAPIsErrorShape(t *testing.T) {
 	})
 	if e := decode(body); status != fiber.StatusNotFound || e.Code != "server.not_found" {
 		t.Errorf("a draft of an unknown template = %d %s, want 404 server.not_found", status, body)
+	}
+}
+
+// The operator's Required variables are changed with the role every other
+// template write needs.
+func TestRequiredVariableRoutesRequireTemplatesWrite(t *testing.T) {
+	for _, tc := range []struct {
+		roles []string
+		want  int
+	}{
+		{[]string{"skymail:access"}, fiber.StatusForbidden},
+		{[]string{"skymail:access", "skymail:templates:read", "skymail:mails:write", "skymail:mails:send", "skymail:lists:write"}, fiber.StatusForbidden},
+		{[]string{"skymail:access", "skymail:templates:write"}, fiber.StatusOK},
+	} {
+		app, template := templateRoutesApp(t, tc.roles...)
+		path := "/v1/templates/" + template.ID.String() + "/required-variables"
+
+		if status, body := sendJSON(t, app, fiber.MethodPost, path, map[string]any{"name": "FullName"}); status != tc.want {
+			t.Errorf("roles %v: POST = %d %s, want %d", tc.roles, status, body, tc.want)
+		}
+		if status, body := sendJSON(t, app, fiber.MethodDelete, path+"/FullName", nil); status != tc.want {
+			t.Errorf("roles %v: DELETE = %d %s, want %d", tc.roles, status, body, tc.want)
+		}
+	}
+}
+
+// A name that is not one a body could reach is the caller's mistake: a 400 in
+// the API's error shape, from the body's validation or from the path.
+func TestMalformedRequiredVariableNamesAreRefused(t *testing.T) {
+	app, template := templateRoutesApp(t, "skymail:access", "skymail:templates:write")
+	path := "/v1/templates/" + template.ID.String() + "/required-variables"
+
+	type fieldError struct {
+		Field string `json:"field"`
+		Code  string `json:"code"`
+	}
+	type apiError struct {
+		Code   string `json:"code"`
+		Params struct {
+			Errors []fieldError `json:"errors"`
+		} `json:"params"`
+	}
+	read := func(body []byte) apiError {
+		t.Helper()
+		var e apiError
+		if err := json.Unmarshal(body, &e); err != nil {
+			t.Fatalf("error body %s: %v", body, err)
+		}
+		return e
+	}
+
+	for _, tc := range []struct {
+		method, path string
+		body         any
+		code, field  string
+	}{
+		{fiber.MethodPost, path, map[string]any{"name": "Full Name"}, "invalid_variable_name", "name"},
+		{fiber.MethodPost, path, map[string]any{"name": "1st"}, "invalid_variable_name", "name"},
+		{fiber.MethodPost, path, map[string]any{}, "required", "name"},
+		{fiber.MethodPut, "/v1/templates/by-key/keycloak.reset-password", map[string]any{
+			"name": "Parola", "subject": "Parola", "html_content": "<p>{{.link}}</p>", "plain_text_content": "{{.link}}",
+			"react_email_content": "// kaynak", "system": true, "contract_required_variables": []string{"link", "reset link"},
+		}, "invalid_variable_name", "contract_required_variables[1].name"},
+		{fiber.MethodPut, "/v1/templates/by-key/keycloak.reset-password", map[string]any{
+			"name": "Parola", "subject": "Parola", "html_content": "<p>{{.link}}</p>", "plain_text_content": "{{.link}}",
+			"react_email_content": "// kaynak", "system": true,
+			"contract_required_variables": []any{map[string]any{"name": "link", "reason": strings.Repeat("uzun ", 61)}},
+		}, "max_length", "contract_required_variables[0].reason"},
+	} {
+		status, body := sendJSON(t, app, tc.method, tc.path, tc.body)
+		e := read(body)
+		if status != fiber.StatusBadRequest || e.Code != "validation.error" || len(e.Params.Errors) != 1 ||
+			e.Params.Errors[0].Code != tc.code || e.Params.Errors[0].Field != tc.field {
+			t.Errorf("%s %s %v = %d %s, want 400 validation.error on %s (%s)", tc.method, tc.path, tc.body, status, body, tc.field, tc.code)
+		}
+	}
+
+	status, body := sendJSON(t, app, fiber.MethodDelete, path+"/not-a-name", nil)
+	if e := read(body); status != fiber.StatusBadRequest || e.Code != "template.invalid_variable_name" {
+		t.Errorf("DELETE not-a-name = %d %s, want 400 template.invalid_variable_name", status, body)
+	}
+}
+
+// The seed sends each contract variable with its reason; the seed on main
+// today sends names alone. Production's JSON decoder takes both, in one list.
+func TestTheSeedSendsContractVariablesWithOrWithoutReasons(t *testing.T) {
+	app, _ := templateRoutesApp(t, "skymail:access", "skymail:templates:write", "skymail:templates:read")
+
+	status, body := sendJSON(t, app, fiber.MethodPut, "/v1/templates/by-key/keycloak.reset-password", map[string]any{
+		"name": "Parola", "subject": "Parola", "html_content": `<a href="{{.link}}">{{.firstName}}</a>`, "plain_text_content": "{{.link}}",
+		"react_email_content": "// kaynak", "system": true,
+		"contract_required_variables": []any{"firstName", map[string]any{"name": "link", "reason": "Parola sıfırlama bağlantısı."}},
+	})
+	if status != fiber.StatusOK {
+		t.Fatalf("seed = %d %s", status, body)
+	}
+	var served struct {
+		Contract []struct {
+			Name   string  `json:"name"`
+			Reason *string `json:"reason"`
+		} `json:"contract_required_variables"`
+		Operator []string `json:"operator_required_variables"`
+	}
+	if err := json.Unmarshal(body, &served); err != nil {
+		t.Fatalf("%s: %v", body, err)
+	}
+	if len(served.Contract) != 2 || served.Contract[0].Name != "firstName" || served.Contract[0].Reason != nil ||
+		served.Contract[1].Name != "link" || served.Contract[1].Reason == nil || *served.Contract[1].Reason != "Parola sıfırlama bağlantısı." ||
+		served.Operator == nil || len(served.Operator) != 0 {
+		t.Fatalf("served %s, want firstName without a reason and link with one, and no operator variables", body)
 	}
 }

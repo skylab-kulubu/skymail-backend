@@ -812,9 +812,18 @@ func TestPublishesTheServerRefuses(t *testing.T) {
 	}
 
 	// The old panel wrote a body the mailer cannot parse before anything
-	// checked it, and it was fixed. Restoring it is saving a draft of it, and
-	// is refused like one.
-	broken := edit("<p>{{.FullName</p>")
+	// checked it (it refuses one now), and it was fixed. Restoring it is
+	// saving a draft of it, and is refused like one.
+	var broken uuid.UUID
+	if err := db.Conn.QueryRow(context.Background(), `
+		INSERT INTO template_versions (template_id, seq, subject, html_source, main_mode, html_content, plain_text_content,
+		                               author_kind, author_sub, author_name, published_at, base_version_id)
+		SELECT id, (SELECT max(seq) + 1 FROM template_versions WHERE template_id = $1), subject, '<p>{{.FullName</p>', 'html',
+		       '<p>{{.FullName</p>', 'Merhaba', 'operator', $2, 'Ada Yılmaz', NOW(), published_version_id
+		FROM templates WHERE id = $1
+		RETURNING id`, created.ID, operatorSub).Scan(&broken); err != nil {
+		t.Fatal(err)
+	}
 	edit("<p>Düzeldi</p>")
 	versions, _ := storedVersions(t, db, created.ID)
 	response, _, body = restore(t, app, created.ID, broken)

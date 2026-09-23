@@ -11,6 +11,15 @@ import (
 )
 
 type Querier interface {
+	// Required variable sets are sorted byte by byte (COLLATE "C"), the order the
+	// handler sorts a contract set in and a missing list comes in, whatever the
+	// database's collation.
+	//
+	// Marks a variable of a template in use as required by operators. A name
+	// already in either set changes nothing: one the contract declares is required
+	// already, and stays the contract's. Takes the row's lock, so the caller can
+	// check the body against the sets it returns before committing.
+	AddOperatorRequiredVariable(ctx context.Context, arg AddOperatorRequiredVariableParams) (Template, error)
 	AddRecipientToMailingList(ctx context.Context, arg AddRecipientToMailingListParams) (AddRecipientToMailingListRow, error)
 	ArchiveMailingList(ctx context.Context, arg ArchiveMailingListParams) (MailingList, error)
 	ArchiveTemplate(ctx context.Context, arg ArchiveTemplateParams) (Template, error)
@@ -154,6 +163,10 @@ type Querier interface {
 	//
 	// Affects one row when a version was recorded and none when not.
 	RecordTemplateRowAsVersion(ctx context.Context, arg RecordTemplateRowAsVersionParams) (int64, error)
+	// Releases a variable operators marked. It cannot release a contract one: the
+	// sets never share a name, so a contract name is simply not in the operators'
+	// set, and the caller sees it in the contract set it returns.
+	RemoveOperatorRequiredVariable(ctx context.Context, arg RemoveOperatorRequiredVariableParams) (Template, error)
 	RemoveRecipientFromMailingListByID(ctx context.Context, arg RemoveRecipientFromMailingListByIDParams) error
 	RescheduleMailQueueItem(ctx context.Context, arg RescheduleMailQueueItemParams) (int, error)
 	ResetDeadJobs(ctx context.Context) error

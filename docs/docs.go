@@ -23,6 +23,19 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
+            "database.ContractVariable": {
+                "properties": {
+                    "name": {
+                        "description": "The variable, as the body reaches it with .Name.",
+                        "type": "string"
+                    },
+                    "reason": {
+                        "description": "Why the mail cannot do without it, a sentence the repo declares. Null when the Template seed sent the name alone.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "database.GetMailQueueItemsByTaskIdRow": {
                 "properties": {
                     "attempts": {
@@ -344,6 +357,14 @@ const docTemplate = `{
                     "archived_by": {
                         "type": "string"
                     },
+                    "contract_required_variables": {
+                        "description": "Required variables from the sending service's contract, sorted by name, each with why the mail needs it. Written only by the Template seed; locked in the panel.",
+                        "items": {
+                            "$ref": "#/components/schemas/database.ContractVariable"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
                     "created_at": {
                         "type": "string"
                     },
@@ -375,6 +396,14 @@ const docTemplate = `{
                     },
                     "name": {
                         "type": "string"
+                    },
+                    "operator_required_variables": {
+                        "description": "Required variables operators marked, sorted. Never shares a name with contract_required_variables.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
                     },
                     "plain_text_content": {
                         "type": "string"
@@ -535,6 +564,38 @@ const docTemplate = `{
                 "required": [
                     "email",
                     "full_name"
+                ],
+                "type": "object"
+            },
+            "requests.AddRequiredVariable": {
+                "properties": {
+                    "name": {
+                        "description": "The variable, as the body reaches it with .Name.",
+                        "example": "EventUrl",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "name"
+                ],
+                "type": "object"
+            },
+            "requests.ContractVariable": {
+                "properties": {
+                    "name": {
+                        "description": "The variable, as the body reaches it with .Name.",
+                        "example": "link",
+                        "type": "string"
+                    },
+                    "reason": {
+                        "description": "Why the mail cannot do without it, in a sentence an operator reads.",
+                        "example": "Parola sıfırlama bağlantısı; kaldırılırsa mail işe yaramaz.",
+                        "maxLength": 300,
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "name"
                 ],
                 "type": "object"
             },
@@ -733,6 +794,15 @@ const docTemplate = `{
             },
             "requests.UpsertTemplateByKey": {
                 "properties": {
+                    "contract_required_variables": {
+                        "description": "The Required variables the sending service's contract declares, which the body must keep referencing, each with why the mail needs it. An entry may also be the name alone, as a string; its reason is then null. They replace the template's contract set; a name among them leaves the operators' set. Leave the field out (or null) to keep the set the template has; send [] to clear it.",
+                        "items": {
+                            "$ref": "#/components/schemas/requests.ContractVariable"
+                        },
+                        "maxItems": 50,
+                        "type": "array",
+                        "uniqueItems": false
+                    },
                     "html_content": {
                         "type": "string"
                     },
@@ -1890,7 +1960,7 @@ const docTemplate = `{
                 ]
             },
             "post": {
-                "description": "Create a new email template with the provided name, HTML content, and plain text content. Records the content as the template's first version: an operator's, published at once.",
+                "description": "Create a new email template with the provided name, HTML content, and plain text content. Records the content as the template's first version: an operator's, published at once. The subject, plain text and HTML content must parse as Go templates the way the mailer parses them.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -1931,6 +2001,16 @@ const docTemplate = `{
                             }
                         },
                         "description": "Bad Request"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The subject, plain text or HTML content does not parse (template.unparseable, params.part)"
                     },
                     "500": {
                         "content": {
@@ -1991,7 +2071,7 @@ const docTemplate = `{
                 ]
             },
             "put": {
-                "description": "Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once.",
+                "description": "Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once. Writes the contract Required variables when sent, and keeps them when not. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.",
                 "parameters": [
                     {
                         "description": "Template key",
@@ -2043,6 +2123,16 @@ const docTemplate = `{
                             }
                         },
                         "description": "Bad Request"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
                     },
                     "500": {
                         "content": {
@@ -2176,7 +2266,7 @@ const docTemplate = `{
                 ]
             },
             "patch": {
-                "description": "Update an existing email template with the provided ID and details. Records the content the template ends up with as an operator's version, published at once.",
+                "description": "Update an existing email template with the provided ID and details. Records the content the template ends up with as an operator's version, published at once. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable of the template, or nothing is written.",
                 "parameters": [
                     {
                         "description": "Template ID",
@@ -2239,6 +2329,16 @@ const docTemplate = `{
                         },
                         "description": "Not Found"
                     },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
+                    },
                     "500": {
                         "content": {
                             "application/json": {
@@ -2258,7 +2358,7 @@ const docTemplate = `{
         },
         "/templates/{id}/drafts": {
             "post": {
-                "description": "Records an operator's draft of a Mail template: a version that is sent to nobody until it is published. The template row, which is what is sent, does not change. Changing which source is the Main source is a save too: send the new main_mode and the render its source gives.\n\nThe editor renders the Main source; the server stores the render it is given. It checks what it can without rendering: the fields are there and not blank, the Main source's Authoring mode holds a source, the base is a published version of this template, a Visual source is a JSON object, a JSX source has code in it, and the subject, plain text and HTML parse as the mailer's Go templates (422 template.unparseable otherwise). An archived template is not found.\n\nEach save is a new version; an operator's newest version, while unpublished, is their draft in progress. A save continues it when it started from the same base, or else starts from the base. Sources left out, or null, are kept from the version the save continues, so a save never drops a source. A save that changes nothing records nothing and answers 200 with the version it continues.",
+                "description": "Records an operator's draft of a Mail template: a version that is sent to nobody until it is published. The template row, which is what is sent, does not change. Changing which source is the Main source is a save too: send the new main_mode and the render its source gives.\n\nThe editor renders the Main source; the server stores the render it is given. It checks what it can without rendering: the fields are there and not blank, the Main source's Authoring mode holds a source, the base is a published version of this template, a Visual source is a JSON object, a JSX source has code in it, and — as every write of a version is checked, by requiredvars — the subject, plain text and HTML parse as the mailer's Go templates (422 template.unparseable, params.part naming subject, plain_text or html) and the HTML references every Required variable of the template as it stands now (422 template.required_variables_missing, params.missing: [{name, source, reason}]). An archived template is not found.\n\nEach save is a new version; an operator's newest version, while unpublished, is their draft in progress. A save continues it when it started from the same base, or else starts from the base. Sources left out, or null, are kept from the version the save continues, so a save never drops a source. A save that changes nothing records nothing and answers 200 with the version it continues.",
                 "parameters": [
                     {
                         "description": "Template ID",
@@ -2349,7 +2449,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "template.unparseable: params.part (subject, plain_text or html) does not parse; params.error is the parser's message"
+                        "description": "template.unparseable: params.part (subject, plain_text or html) does not parse, params.error is the parser's message; or template.required_variables_missing: params.missing names each Required variable the HTML drops, with its source (contract or operator) and reason"
                     },
                     "500": {
                         "content": {
@@ -2363,6 +2463,199 @@ const docTemplate = `{
                     }
                 },
                 "summary": "Save a draft of a template",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/{id}/required-variables": {
+            "post": {
+                "description": "Adds a variable to the template's operator Required variables: from then on every save and publish must keep referencing it. The published body must reference it already — a Required variable is a promise about the mail being sent — counted as the save check counts (inside a conditional section counts; a comment, plain text, a range or with element's field, or index . do not). A variable the contract set holds is required already and stays the contract's; asking for one, or for one operators marked, changes nothing. Changes no version.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.AddRequiredVariable",
+                                        "summary": "variable",
+                                        "description": "The variable to require"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The variable to require",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.Template"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The name is not a variable name (validation.error)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such template in use: unknown or archived"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The published body does not reference the variable (template.required_variables_missing) or does not parse (template.unparseable, params.part \"html\")"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Mark a variable of a template required",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/{id}/required-variables/{name}": {
+            "delete": {
+                "description": "Removes a variable from the template's operator Required variables. A contract variable — the sending service's, written by the Template seed — cannot be released here. Releasing a variable that is not required changes nothing. Changes no version.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Variable name",
+                        "in": "path",
+                        "name": "name",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.Template"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The name is not a variable name (template.invalid_variable_name)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such template in use: unknown or archived"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The variable is in the contract set (template.required_variable_in_contract, params.name)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Release a variable operators marked required",
                 "tags": [
                     "Templates"
                 ]
@@ -2687,7 +2980,7 @@ const docTemplate = `{
         },
         "/templates/{id}/versions/{versionId}/publish": {
             "post": {
-                "description": "Makes a draft the version the template sends: the draft is marked published and copied onto the template row — subject, HTML and plain text, and react_email_content: the JSX source when JSX is the Main source, an empty string otherwise, so the old panel never re-renders a JSX source that is not what is sent — in one transaction. Answers with the template as publishing left it. Publishing the version the template already sends changes nothing and answers the same way.\n\nA draft is stale when its base_version_id is not the template's published_version_id: someone published after it was started, and publishing it would quietly revert their version. That is refused with 409 template.stale_base, whose params name version_id (the draft), base_version_id (what it started from) and published_version_id (what is sent now), so both can be shown side by side. The operator's confirmation names the version they saw: {\"force\": {\"over_version_id\": \u003cpublished_version_id from the conflict\u003e}} publishes the draft over it, and the replaced version stays in the history. If another version was published since, the confirmation is refused with a fresh 409 naming it.",
+                "description": "Makes a draft the version the template sends: the draft is marked published and copied onto the template row — subject, HTML and plain text, and react_email_content: the JSX source when JSX is the Main source, an empty string otherwise, so the old panel never re-renders a JSX source that is not what is sent — in one transaction. Answers with the template as publishing left it. Publishing the version the template already sends changes nothing and answers the same way. The draft is checked again as it was when saved, against the template's Required variables as they stand at publishing.\n\nA draft is stale when its base_version_id is not the template's published_version_id: someone published after it was started, and publishing it would quietly revert their version. That is refused with 409 template.stale_base, whose params name version_id (the draft), base_version_id (what it started from) and published_version_id (what is sent now), so both can be shown side by side. The operator's confirmation names the version they saw: {\"force\": {\"over_version_id\": \u003cpublished_version_id from the conflict\u003e}} publishes the draft over it, and the replaced version stays in the history. If another version was published since, the confirmation is refused with a fresh 409 naming it.",
                 "parameters": [
                     {
                         "description": "Template ID",
@@ -2786,7 +3079,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "template.unparseable"
+                        "description": "template.unparseable (params.part: subject, plain_text or html), or template.required_variables_missing: the draft drops a Required variable the template has now, a variable marked since it was saved included (params.missing: [{name, source, reason}])"
                     },
                     "500": {
                         "content": {
@@ -2877,7 +3170,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "template.unparseable: the copy would not parse, as a saved draft would not"
+                        "description": "template.unparseable: the copy would not parse; or template.required_variables_missing: it drops a Required variable the template has now (params.missing: [{name, source, reason}]) — checked as a saved draft is"
                     },
                     "500": {
                         "content": {

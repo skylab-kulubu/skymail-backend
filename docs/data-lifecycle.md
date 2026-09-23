@@ -62,6 +62,53 @@ written in that window has no version for that write: its row, which is what
 is sent, differs from the version marked current until the template's next
 write, which records the row as it then is.
 
+## Required variables
+
+A template's Required variables are the variables its HTML body must keep
+referencing because the mail cannot do its job without them. They are kept on
+the template row, not on its versions, so every version — a restored one
+included — is checked against the sets the template has now. Both are served
+with every template and kept sorted by name, byte by byte:
+
+- `contract_required_variables` — `[{"name", "reason"}]`, the sending service's
+  contract, declared in skymail-frontend beside the Template key and written
+  only by the Template seed through `PUT /v1/templates/by-key/{key}`
+  (`contract_required_variables`: entries, or names alone with a null reason;
+  left out, the set stays as it is; `[]` clears it). The panel cannot change it.
+- `operator_required_variables` — names operators mark and release:
+  - `POST /v1/templates/{id}/required-variables` with `{"name"}` marks one the
+    published body references. A name the contract holds changes nothing.
+  - `DELETE /v1/templates/{id}/required-variables/{name}` releases one. A
+    contract name is refused with `409 template.required_variable_in_contract`;
+    a name that is not required changes nothing.
+
+  Both need `skymail:templates:write`, answer with the template, record no
+  version and leave `updated_at` alone. An archived template is `404`.
+
+The two sets never share a name; a name the contract comes to declare leaves
+the operators' set.
+
+Every write of a version — the old panel's `POST /v1/templates` and
+`PATCH /v1/templates/{id}`, the seed's upsert, saving a draft
+(`POST /v1/templates/{id}/drafts`), restoring a version as one and publishing
+a draft — is checked inside its transaction, against the version's own
+subject, plain text and HTML and the template's sets as they stand at that
+moment; marking a variable checks the published body. A refused write leaves
+neither row nor version behind. The rules live in one place,
+`internal/requiredvars`:
+
+- `422 template.unparseable`, `params: {"part": "subject"|"plain_text"|"html",
+  "error"}` — the mailer, which parses all three before every send, could not
+  parse that part, so the version could not be sent at all.
+- `422 template.required_variables_missing`, `params: {"missing": [{"name",
+  "source": "contract"|"operator", "reason"}]}` — the body no longer references
+  these Required variables. A reference is a field of the mailer's data used
+  in an action: inside an `if` it counts; in a comment, an HTML comment, plain
+  text, a `range` or `with` element's field, or `index . "X"` it does not
+  (`internal/mailer/variables.go`, and the cases in
+  `internal/mailer/testdata/referenced-variables.json`, which skymail-frontend
+  holds a copy of).
+
 ## Personal data
 
 Three kinds of field keep an operator's Keycloak subject with no end date:

@@ -10,14 +10,16 @@ WHERE key = $1
   AND archived_at IS NULL;
 
 -- name: UpsertTemplateByKey :one
-INSERT INTO templates (key, name, subject, html_content, plain_text_content, react_email_content, system)
+INSERT INTO templates (key, name, subject, html_content, plain_text_content, react_email_content, system,
+                       contract_required_variables)
 VALUES (sqlc.arg(key)::text,
         sqlc.arg(name)::text,
         sqlc.arg(subject)::text,
         sqlc.arg(html_content)::text,
         sqlc.arg(plain_text_content)::text,
         sqlc.arg(react_email_content)::text,
-        sqlc.arg(system)::boolean)
+        sqlc.arg(system)::boolean,
+        COALESCE(sqlc.narg(contract_required_variables)::jsonb, '[]'))
 -- The seed owns a template's structure; an operator owns its subject. The repo
 -- seeds the subject once, on insert, and never writes over it again: ADR-0045
 -- moved Keycloak's system mail here so a wording change would stop costing a
@@ -30,6 +32,19 @@ ON CONFLICT (key) DO UPDATE
         plain_text_content  = EXCLUDED.plain_text_content,
         react_email_content = EXCLUDED.react_email_content,
         system              = EXCLUDED.system,
+        -- The contract set is the seed's, like the key: a seed that sends one
+        -- replaces it (sorted, each name once, by the caller), a seed that
+        -- sends none (NULL) leaves it. A name the contract now declares leaves
+        -- the operators' set, so the two never share one and it shows as
+        -- locked.
+        contract_required_variables = COALESCE(sqlc.narg(contract_required_variables)::jsonb,
+                                               templates.contract_required_variables),
+        operator_required_variables = ARRAY(SELECT name
+                                            FROM unnest(templates.operator_required_variables) AS name
+                                            WHERE name <> ALL (contract_variable_names(
+                                                    COALESCE(sqlc.narg(contract_required_variables)::jsonb,
+                                                             templates.contract_required_variables)))
+                                            ORDER BY name COLLATE "C"),
         archived_at         = NULL,
         archived_by         = NULL,
         updated_at          = NOW()
@@ -103,6 +118,37 @@ SET archived_by = CASE
     updated_at = CASE WHEN archived_at IS NULL THEN NOW() ELSE updated_at END
 WHERE id = sqlc.arg(id)
   AND system = false
+RETURNING *;
+
+-- Required variable sets are sorted byte by byte (COLLATE "C"), the order the
+-- handler sorts a contract set in and a missing list comes in, whatever the
+-- database's collation.
+--
+-- Marks a variable of a template in use as required by operators. A name
+-- already in either set changes nothing: one the contract declares is required
+-- already, and stays the contract's. Takes the row's lock, so the caller can
+-- check the body against the sets it returns before committing.
+-- name: AddOperatorRequiredVariable :one
+UPDATE templates
+SET operator_required_variables = CASE
+                                      WHEN sqlc.arg(name)::text = ANY (contract_variable_names(contract_required_variables))
+                                          THEN operator_required_variables
+                                      ELSE ARRAY(SELECT DISTINCT n COLLATE "C"
+                                                 FROM unnest(array_append(operator_required_variables, sqlc.arg(name)::text)) AS n
+                                                 ORDER BY n COLLATE "C")
+    END
+WHERE id = sqlc.arg(id)
+  AND archived_at IS NULL
+RETURNING *;
+
+-- Releases a variable operators marked. It cannot release a contract one: the
+-- sets never share a name, so a contract name is simply not in the operators'
+-- set, and the caller sees it in the contract set it returns.
+-- name: RemoveOperatorRequiredVariable :one
+UPDATE templates
+SET operator_required_variables = array_remove(operator_required_variables, sqlc.arg(name)::text)
+WHERE id = sqlc.arg(id)
+  AND archived_at IS NULL
 RETURNING *;
 
 -- name: RestoreTemplate :one
