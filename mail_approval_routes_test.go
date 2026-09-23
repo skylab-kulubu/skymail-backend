@@ -1118,3 +1118,192 @@ func TestAnUndecidedRequestExpiresAndIsNeverSent(t *testing.T) {
 		t.Errorf("listed request is %s", read.State)
 	}
 }
+
+// Two approvers approving at once send the mail once: the request is locked
+// while it is sent, and whoever comes second is told someone else is on it.
+func TestTwoApproversAtOnceSendOnce(t *testing.T) {
+	w := newApprovalWorld(t)
+	submitted := w.submit("elif", w.listSend())
+	w.mail.gate = make(chan struct{})
+	w.mail.entered = make(chan struct{}, 2)
+
+	type result struct {
+		status int
+		code   string
+	}
+	results := make(chan result, 2)
+	for _, who := range []string{"fatih", "yusuf"} {
+		go func(who string) {
+			status, _, failure := w.act(who, submitted.ID, "approve", nil)
+			results <- result{status, failure.Code}
+		}(who)
+	}
+
+	// One approval is inside the mailer with the request locked. The other
+	// finishes while it is, refused.
+	select {
+	case <-w.mail.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no approval reached the mailer")
+	}
+	first := <-results
+	if first.status != fiber.StatusConflict || first.code != "mail_approval.busy" {
+		t.Fatalf("the approval that came second = %+v, want 409 mail_approval.busy", first)
+	}
+	close(w.mail.gate)
+	if second := <-results; second.status != fiber.StatusOK {
+		t.Fatalf("the approval that came first = %+v", second)
+	}
+
+	if sent := w.mail.of(w.freeBasic.ID); len(sent) != 1 {
+		t.Fatalf("sends = %d, want 1", len(sent))
+	}
+	_, read := w.get("elif", submitted.ID)
+	if read.State != "approved" || read.kinds() != "submitted,approved" {
+		t.Fatalf("after two approvals: %s %s", read.State, read.kinds())
+	}
+	var tasks int64
+	if err := w.store.Conn.QueryRow(context.Background(), `SELECT count(*) FROM mail_tasks WHERE template_id = $1`, w.freeBasic.ID).Scan(&tasks); err != nil {
+		t.Fatal(err)
+	}
+	if tasks != 1 {
+		t.Fatalf("mail_tasks of the template = %d, want 1", tasks)
+	}
+}
+
+// Deciding takes the approver's role, and an approver does not decide their
+// own request. A submitter sees their own requests; an approver sees all; a
+// member who is neither sees none but their own.
+func TestWhoMaySeeAndDecideARequest(t *testing.T) {
+	w := newApprovalWorld(t)
+	byElif := w.submit("elif", w.listSend())
+	w.advance(time.Second)
+	byYusuf := w.submit("yusuf", w.listSend())
+
+	for _, action := range []string{"approve", "return", "reject"} {
+		body := map[string]any{"reason": "x", "body_variables": map[string]any{"Subject": "y", "BodyHtml": "z"}}
+		for _, who := range []string{"elif", "baska"} {
+			status, _, failure := w.act(who, byElif.ID, action, body)
+			if status != fiber.StatusForbidden || failure.Code != "server.forbidden" {
+				t.Errorf("%s %s = %d %+v, want 403", who, action, status, failure)
+			}
+		}
+		status, _, failure := w.act("yusuf", byYusuf.ID, action, body)
+		if status != fiber.StatusForbidden || failure.Code != "mail_approval.own_request" {
+			t.Errorf("yusuf %s on his own = %d %+v", action, status, failure)
+		}
+	}
+	for _, action := range []string{"accept", "decline", "resubmit"} {
+		if status, _, _ := w.act("baska", byElif.ID, action, w.listSend()); status != fiber.StatusNotFound {
+			t.Errorf("baska %s = %d, want 404", action, status)
+		}
+	}
+
+	if status, _ := w.get("baska", byElif.ID); status != fiber.StatusNotFound {
+		t.Errorf("baska reading elif's = %d, want 404", status)
+	}
+	if status, _ := w.get("elif", byYusuf.ID); status != fiber.StatusNotFound {
+		t.Errorf("elif reading yusuf's = %d, want 404", status)
+	}
+	if status, read := w.get("fatih", byElif.ID); status != fiber.StatusOK || read.Preview == nil || read.RecipientCount == nil || *read.RecipientCount != 2 {
+		t.Errorf("an approver reading = %d %+v", status, read)
+	}
+	if status, _ := w.get("elif", uuid.New()); status != fiber.StatusNotFound {
+		t.Errorf("an unknown request = %d", status)
+	}
+
+	list := func(who, query string) ([]uuid.UUID, string) {
+		t.Helper()
+		var items []approvalAnswer
+		request := httptest.NewRequest(fiber.MethodGet, "/v1/mail_approvals"+query, nil)
+		request.Header.Set("X-Test-User", who)
+		response, err := w.app.Test(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.NewDecoder(response.Body).Decode(&items); err != nil {
+			t.Fatalf("GET %s as %s = %d", query, who, response.StatusCode)
+		}
+		var ids []uuid.UUID
+		for _, item := range items {
+			ids = append(ids, item.ID)
+		}
+		return ids, response.Header.Get("X-Total-Count")
+	}
+	w.advance(time.Minute)
+	later := w.submit("elif", w.listSend())
+	w.act("fatih", byElif.ID, "reject", map[string]any{"reason": "Tekrar bak."})
+
+	for _, tc := range []struct {
+		who, query string
+		want       []uuid.UUID
+	}{
+		{"fatih", "", []uuid.UUID{later.ID, byYusuf.ID, byElif.ID}},
+		{"fatih", "?state=pending", []uuid.UUID{later.ID, byYusuf.ID}},
+		{"fatih", "?mine=true", nil},
+		{"yusuf", "?mine=true", []uuid.UUID{byYusuf.ID}},
+		{"elif", "", []uuid.UUID{later.ID, byElif.ID}},
+		{"elif", "?state=rejected", []uuid.UUID{byElif.ID}},
+		{"baska", "", nil},
+		{"fatih", "?_start=1&_end=2", []uuid.UUID{byYusuf.ID}},
+	} {
+		got, total := list(tc.who, tc.query)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s lists %q: %v, want %v", tc.who, tc.query, got, tc.want)
+		}
+		if tc.query == "?_start=1&_end=2" && total != "3" {
+			t.Errorf("X-Total-Count = %s, want 3", total)
+		}
+	}
+	var items []approvalAnswer
+	w.call("elif", fiber.MethodGet, "/v1/mail_approvals?state=rejected", nil, &items)
+	if len(items) != 1 || items[0].LastEvent == nil || items[0].LastEvent.Kind != "rejected" || *items[0].LastEvent.Note != "Tekrar bak." {
+		t.Errorf("a rejected request's last event in the list = %+v", items)
+	}
+	if status, raw := w.call("fatih", fiber.MethodGet, "/v1/mail_approvals?state=bogus", nil, nil); status != fiber.StatusBadRequest {
+		t.Errorf("an unknown state = %d %s", status, raw)
+	}
+}
+
+// A request is pinned to the version its template published when it was
+// submitted. Once the template publishes another, sending the request would
+// not send what was submitted, so approving it is refused until the submitter
+// resubmits on the new version.
+func TestARequestIsNotSentOverARepublishedTemplate(t *testing.T) {
+	w := newApprovalWorld(t)
+	submitted := w.submit("elif", w.listSend())
+
+	republished := w.seedTemplate("free.basic", "Serbest Gönderim", "{{.Subject}}",
+		`<h1>{{.Heading}}</h1><div>{{safeHTML .BodyHtml}}</div><footer>SKY LAB</footer>`, "{{.BodyHtml}}",
+		`[{"name":"BodyHtml","reason":null},{"name":"Subject","reason":"Konu gönderimde yazılır."}]`)
+	if *republished.PublishedVersionID == submitted.Template.VersionID {
+		t.Fatal("the reseed published no new version")
+	}
+
+	_, read := w.get("fatih", submitted.ID)
+	if !read.Template.Republished || read.Preview == nil || strings.Contains(read.Preview.HTML, "<footer>") {
+		t.Errorf("read after the republish: republished %v, preview %+v", read.Template.Republished, read.Preview)
+	}
+	status, _, failure := w.act("fatih", submitted.ID, "approve", nil)
+	if status != fiber.StatusConflict || failure.Code != "mail_approval.template_republished" ||
+		failure.Params["published_version_id"] != republished.PublishedVersionID.String() {
+		t.Fatalf("approve over a republished template = %d %+v", status, failure)
+	}
+	if _, read := w.get("fatih", submitted.ID); read.State != "pending" || len(w.mail.of(w.freeBasic.ID)) != 0 {
+		t.Fatalf("a refused approval left %s and %d sends", read.State, len(w.mail.of(w.freeBasic.ID)))
+	}
+
+	w.act("fatih", submitted.ID, "reject", map[string]any{"reason": "Şablon değişti, yeniden sun."})
+	_, resubmitted, _ := w.act("elif", submitted.ID, "resubmit", w.listSend())
+	if resubmitted.Template.VersionID != *republished.PublishedVersionID || resubmitted.Template.Republished ||
+		resubmitted.History[2].Changes[0].Field != "template" {
+		t.Fatalf("resubmitted on %s, changes %+v", resubmitted.Template.VersionID, resubmitted.History[2].Changes)
+	}
+	if status, _, failure := w.act("fatih", submitted.ID, "approve", nil); status != fiber.StatusOK {
+		t.Fatalf("approve after resubmitting = %d %+v", status, failure)
+	}
+	rows := w.queuedRows(w.mail.of(w.freeBasic.ID)[0].taskID)
+	if !strings.Contains(*rows["ayse@example.com"].BodyHtml, "<footer>SKY LAB</footer>") {
+		t.Errorf("sent %q, want the new version", *rows["ayse@example.com"].BodyHtml)
+	}
+}
