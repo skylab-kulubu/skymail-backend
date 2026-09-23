@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http/httptest"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -489,5 +490,274 @@ func TestSubmittingASendQueuesNothingAndTellsTheApprovers(t *testing.T) {
 	if answer.Notification == nil || answer.Notification.TemplateKey != "mail.approval-requested" ||
 		answer.Notification.Notified != 2 || answer.Notification.Problem != nil {
 		t.Errorf("notification = %+v", answer.Notification)
+	}
+}
+
+// A submission is checked as a send would be, and a refused one leaves no
+// request behind and tells no one.
+func TestSubmissionIsCheckedLikeASend(t *testing.T) {
+	w := newApprovalWorld(t)
+	ctx := context.Background()
+
+	archived, err := w.store.CreateMailingList(ctx, "Eski liste")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.store.ArchiveMailingList(ctx, database.ArchiveMailingListParams{ID: archived.ID}); err != nil {
+		t.Fatal(err)
+	}
+	with := func(change func(send map[string]any)) map[string]any {
+		send := w.listSend()
+		change(send)
+		return send
+	}
+	for name, tc := range map[string]struct {
+		send   map[string]any
+		status int
+		code   string
+	}{
+		"no template":         {with(func(s map[string]any) { delete(s, "template_id") }), 400, "validation.error"},
+		"unknown template":    {with(func(s map[string]any) { s["template_id"] = uuid.New() }), 422, "mail_approval.template_unavailable"},
+		"no audience":         {with(func(s map[string]any) { delete(s, "mail_list_id") }), 400, "validation.error"},
+		"two audiences":       {with(func(s map[string]any) { s["recipient_email"] = "uye@example.com" }), 400, "validation.error"},
+		"malformed recipient": {with(func(s map[string]any) { delete(s, "mail_list_id"); s["recipient_email"] = "uye" }), 400, "validation.error"},
+		"archived list":       {with(func(s map[string]any) { s["mail_list_id"] = archived.ID }), 422, "mail_approval.audience_unavailable"},
+		"unknown list":        {with(func(s map[string]any) { s["mail_list_id"] = uuid.New() }), 422, "mail_approval.audience_unavailable"},
+		"required variable blank": {with(func(s map[string]any) {
+			s["body_variables"].(map[string]any)["Subject"] = "  "
+		}), 422, "mail_approval.required_variables_missing"},
+		"template does not render": {with(func(s map[string]any) {
+			// add1 takes a number; a heading is text, so every send of it would fail.
+			s["template_id"] = w.seedTemplate("event.notice", "Etkinlik", "{{.Subject}}", "<p>{{add1 .Heading}}</p>{{.BodyHtml}}", "x", `[]`).ID
+		}), 422, "mail_approval.unrenderable"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var failure apiError
+			status, raw := w.call("elif", fiber.MethodPost, "/v1/mail_approvals", tc.send, &failure)
+			if status != tc.status || failure.Code != tc.code {
+				t.Fatalf("submit = %d %s, want %d %s", status, raw, tc.status, tc.code)
+			}
+		})
+	}
+
+	var failure apiError
+	send := w.listSend()
+	delete(send["body_variables"].(map[string]any), "BodyHtml")
+	w.call("elif", fiber.MethodPost, "/v1/mail_approvals", send, &failure)
+	missing, _ := json.Marshal(failure.Params["missing"])
+	if string(missing) != `[{"name":"BodyHtml","reason":null,"source":"contract"}]` {
+		t.Errorf("missing = %s", missing)
+	}
+
+	var count int64
+	if err := w.store.Conn.QueryRow(ctx, `SELECT count(*) FROM mail_approvals`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 || len(w.mail.sent) != 0 {
+		t.Fatalf("refused submissions left %d requests and %d mails", count, len(w.mail.sent))
+	}
+}
+
+// A Keycloak group and a single recipient are audiences too: they are
+// checked, and the request shows who it goes to.
+func TestSubmittingToAGroupOrOneRecipient(t *testing.T) {
+	w := newApprovalWorld(t)
+
+	send := w.listSend()
+	send["mail_list_id"] = w.group
+	toGroup := w.submit("elif", send)
+	if toGroup.Audience.Source == nil || *toGroup.Audience.Source != "keycloak" || toGroup.Audience.Name == nil ||
+		*toGroup.Audience.Name != "GECEKODU katılımcıları" {
+		t.Errorf("group audience = %+v", toGroup.Audience)
+	}
+	send["mail_list_id"] = uuid.New()
+	if status, raw := w.call("elif", fiber.MethodPost, "/v1/mail_approvals", send, nil); status != 422 || !strings.Contains(string(raw), "audience_unavailable") {
+		t.Errorf("a group Keycloak does not know = %d %s", status, raw)
+	}
+
+	delete(send, "mail_list_id")
+	send["recipient_email"] = "konusmaci@example.com"
+	send["recipient_full_name"] = "Konuşmacı"
+	toOne := w.submit("elif", send)
+	if toOne.Audience.Kind != "single" || *toOne.Audience.RecipientEmail != "konusmaci@example.com" {
+		t.Errorf("single audience = %+v", toOne.Audience)
+	}
+	// A single send's preview is that recipient's mail.
+	if toOne.Preview == nil || toOne.Preview.RenderedFor.Email != "konusmaci@example.com" ||
+		!strings.Contains(toOne.Preview.HTML, "<p>Konuşmacı</p>") {
+		t.Errorf("single preview = %+v", toOne.Preview)
+	}
+}
+
+// With no one else holding the approve role, or Keycloak unable to say who
+// does, the submission still stands, and the answer says no one was told.
+func TestSubmissionStandsWhenNoApproverCanBeTold(t *testing.T) {
+	w := newApprovalWorld(t)
+
+	w.directory.approvers = []*gocloak.User{elif.user()}
+	alone := w.submit("elif", w.listSend())
+	if alone.State != "pending" || alone.Notification == nil || alone.Notification.Notified != 0 ||
+		alone.Notification.Problem == nil || *alone.Notification.Problem != "no_approvers" {
+		t.Errorf("with only the submitter approving: %+v", alone.Notification)
+	}
+
+	w.directory.lookupErr = context.DeadlineExceeded
+	unknown := w.submit("elif", w.listSend())
+	if unknown.State != "pending" || unknown.Notification == nil ||
+		unknown.Notification.Problem == nil || *unknown.Notification.Problem != "approver_lookup_failed" {
+		t.Errorf("with Keycloak failing: %+v", unknown.Notification)
+	}
+	if got := w.directory.roleCalls; len(got) != 2 || got[0] != "skymail skymail:mails:approve" {
+		t.Errorf("role lookups = %v", got)
+	}
+	if n := len(w.mail.of(w.requested.ID)); n != 0 {
+		t.Errorf("%d approval-requested mails, want none", n)
+	}
+}
+
+// queuedRows is what the mailer queued for a send: one rendered row per
+// recipient, by address.
+func (w *approvalWorld) queuedRows(taskID uuid.UUID) map[string]database.MailQueue {
+	w.t.Helper()
+	rows, err := w.store.Conn.Query(context.Background(), `
+		SELECT recipient_email, subject, body, body_html FROM mail_queue WHERE task_id = $1`, taskID)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[string]database.MailQueue{}
+	for rows.Next() {
+		var row database.MailQueue
+		if err := rows.Scan(&row.RecipientEmail, &row.Subject, &row.Body, &row.BodyHtml); err != nil {
+			w.t.Fatal(err)
+		}
+		out[row.RecipientEmail] = row
+	}
+	return out
+}
+
+func (w *approvalWorld) task(taskID uuid.UUID) database.MailTask {
+	w.t.Helper()
+	var task database.MailTask
+	if err := w.store.Conn.QueryRow(context.Background(), `
+		SELECT id, sent_by, template_id, mail_list_id, body_variables FROM mail_tasks WHERE id = $1`, taskID).
+		Scan(&task.ID, &task.SentBy, &task.TemplateID, &task.MailListID, &task.BodyVariables); err != nil {
+		w.t.Fatal(err)
+	}
+	return task
+}
+
+func sameJSON(t *testing.T, got []byte, want any) bool {
+	t.Helper()
+	var a, b any
+	wantRaw, _ := json.Marshal(want)
+	if json.Unmarshal(got, &a) != nil || json.Unmarshal(wantRaw, &b) != nil {
+		return false
+	}
+	return reflect.DeepEqual(a, b)
+}
+
+// An approval without an edit sends the request exactly as submitted, once,
+// by its submitter through the send path — every recipient of the list gets
+// the mail rendered from those values — and the submitter hears it was
+// approved and by whom.
+func TestApprovingSendsExactlyWhatWasSubmittedOnce(t *testing.T) {
+	w := newApprovalWorld(t)
+	send := w.listSend()
+	submitted := w.submit("elif", send)
+	w.advance(time.Hour)
+
+	status, approved, failure := w.act("fatih", submitted.ID, "approve", map[string]any{"note": "Güzel olmuş."})
+	if status != fiber.StatusOK {
+		t.Fatalf("approve = %d %+v", status, failure)
+	}
+	if approved.State != "approved" || approved.TaskID == nil || approved.kinds() != "submitted,approved" {
+		t.Fatalf("approved = %s task %v history %s", approved.State, approved.TaskID, approved.kinds())
+	}
+	last := approved.History[1]
+	if last.Actor == nil || last.Actor.Sub != fatih.sub || last.Note == nil || *last.Note != "Güzel olmuş." ||
+		last.TaskID == nil || *last.TaskID != *approved.TaskID || !last.At.Equal(w.now()) {
+		t.Errorf("approved event = %+v", last)
+	}
+
+	sent := w.mail.of(w.freeBasic.ID)
+	if len(sent) != 1 || sent[0].kind != "list" || sent[0].taskID != *approved.TaskID {
+		t.Fatalf("sends of the template = %+v, want the one list send", sent)
+	}
+	task := w.task(*approved.TaskID)
+	if task.SentBy != elif.sub || *task.TemplateID != w.freeBasic.ID || *task.MailListID != w.list.ID ||
+		!sameJSON(t, task.BodyVariables, send["body_variables"]) {
+		t.Errorf("the send = %+v %s", task, task.BodyVariables)
+	}
+	rows := w.queuedRows(*approved.TaskID)
+	ayse := rows["ayse@example.com"]
+	if len(rows) != 2 || ayse.Subject != "GECEKODU başvuruları açıldı" || ayse.BodyHtml == nil ||
+		!strings.Contains(*ayse.BodyHtml, "<strong>5 Nisan</strong>") || !strings.Contains(*ayse.BodyHtml, "<p>Ayşe Kaya</p>") {
+		t.Errorf("queued = %+v", rows)
+	}
+	// The preview the approver read is the mail each recipient gets, but for
+	// who it is addressed to.
+	if approved.Preview == nil || strings.Replace(approved.Preview.HTML, "<p>Elif Yıldız</p>", "<p>Ayşe Kaya</p>", 1) != *ayse.BodyHtml {
+		t.Errorf("preview %q\nqueued  %q", approved.Preview.HTML, *ayse.BodyHtml)
+	}
+
+	notices := w.mail.of(w.resolved.ID)
+	if len(notices) != 1 || strings.Join(notices[0].recipients, ",") != elif.email || notices[0].sentBy != fatih.sub {
+		t.Fatalf("approval-resolved = %+v", notices)
+	}
+	vars := notices[0].variables
+	if vars["Decision"] != "approved" || vars["DecidedBy"] != "Fatih Naz" || vars["DecisionNote"] != "Güzel olmuş." ||
+		vars["TemplateName"] != "Serbest Gönderim" || vars["AudienceName"] != "Tüm üyeler" {
+		t.Errorf("approval-resolved variables = %v", vars)
+	}
+	if approved.Notification == nil || approved.Notification.TemplateKey != "mail.approval-resolved" || approved.Notification.Notified != 1 {
+		t.Errorf("notification = %+v", approved.Notification)
+	}
+
+	// Approving it again sends nothing; with an edit it is refused.
+	status, again, _ := w.act("yusuf", submitted.ID, "approve", nil)
+	if status != fiber.StatusOK || again.State != "approved" || *again.TaskID != *approved.TaskID || again.Notification != nil {
+		t.Errorf("approving again = %d %+v", status, again)
+	}
+	status, _, failure = w.act("yusuf", submitted.ID, "approve", map[string]any{"body_variables": map[string]any{"Subject": "x", "BodyHtml": "y"}})
+	if status != fiber.StatusConflict || failure.Code != "mail_approval.state_conflict" || failure.Params["state"] != "approved" {
+		t.Errorf("approving again with an edit = %d %+v", status, failure)
+	}
+	if n := len(w.mail.of(w.freeBasic.ID)); n != 1 {
+		t.Fatalf("sends after approving again = %d, want 1", n)
+	}
+}
+
+// Sends to a Keycloak group and to one recipient go through the same path a
+// direct send of each takes.
+func TestApprovingSendsToAGroupOrOneRecipient(t *testing.T) {
+	w := newApprovalWorld(t)
+
+	send := w.listSend()
+	send["mail_list_id"] = w.group
+	toGroup := w.submit("elif", send)
+	status, approved, failure := w.act("fatih", toGroup.ID, "approve", nil)
+	if status != fiber.StatusOK {
+		t.Fatalf("approve group send = %d %+v", status, failure)
+	}
+	sent := w.mail.of(w.freeBasic.ID)
+	if len(sent) != 1 || sent[0].kind != "group" || strings.Join(emails(sent), ",") != "baska@yildizskylab.com,elif@yildizskylab.com" ||
+		*sent[0].mailListID != w.group || sent[0].taskID != *approved.TaskID {
+		t.Fatalf("group send = %+v", sent)
+	}
+
+	delete(send, "mail_list_id")
+	send["recipient_email"] = "konusmaci@example.com"
+	send["recipient_full_name"] = "Konuşmacı"
+	toOne := w.submit("elif", send)
+	if status, _, failure := w.act("fatih", toOne.ID, "approve", nil); status != fiber.StatusOK {
+		t.Fatalf("approve single send = %d %+v", status, failure)
+	}
+	sent = w.mail.of(w.freeBasic.ID)
+	if len(sent) != 2 || sent[1].kind != "single" || sent[1].recipients[0] != "konusmaci@example.com" {
+		t.Fatalf("single send = %+v", sent)
+	}
+	if rows := w.queuedRows(sent[1].taskID); !strings.Contains(*rows["konusmaci@example.com"].BodyHtml, "<p>Konuşmacı</p>") {
+		t.Errorf("queued single = %+v", rows)
 	}
 }
