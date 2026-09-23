@@ -28,11 +28,15 @@ the authenticated Keycloak subject when available.
 ## Mail template versions
 
 From the release that adds `template_versions`, every write through the API
-that changes what a version holds — the subject, a source, which source is
-main, the rendered HTML or plain text — records a Mail template version, and
-versions are never deleted. A write that changes none of these (a repeated
-seed, an identical save, a rename) records none. The migration gives every
-template that exists then one published first version from its row.
+that changes what a version holds — the name, the subject, a source, which
+source is main, the rendered HTML or plain text — records a Mail template
+version, and versions are never deleted. A write that changes none of these (a
+repeated seed, an identical save) records none. The migration gives every
+template that exists then one published first version from its row. Names
+joined the versions later (migration `20260923230000`): the versions that
+existed then carry the name their template had at that moment, and from then
+on renaming a template — in the old panel, or through a draft's `name` — is a
+version like any other change.
 
 The template row is a copy of the published version, and
 `published_version_id` names it. Archiving and restoring a template changes
@@ -61,6 +65,50 @@ the old binary keeps writing rows without versions in between. A template
 written in that window has no version for that write: its row, which is what
 is sent, differs from the version marked current until the template's next
 write, which records the row as it then is.
+
+## Template seed
+
+The Template seed writes the Mail templates kept in skymail-frontend's
+`emails/` by key, through `PUT /v1/templates/by-key/{key}`. It and SkyMail's
+editor both write templates, and neither silently overwrites the other
+(ADR-0047). The seed writes everything it sends — the subject too — as a
+Template seed version, published at once; `react_email_content` holding a JSX
+source makes that source the version's JSX Main source (the seed's older
+pointer comment is no source, and its body is then the HTML Main source).
+
+Unless the request says `?force=true`, a seed that would change a template an
+operator changed since the last seed is refused with
+`409 template.seed_conflict`, and nothing is written. It is refused when any of
+these holds; `params.rules` lists each one that does:
+
+- `published_by_operator` — the version the template sends is not the last
+  Template seed version: an operator published since, or no seed ever wrote it.
+- `newer_operator_version` — an operator wrote a version numbered after the
+  last seed version, a draft included. A discarded draft does not count.
+- `operator_subject` — the subject sent is an operator's and the seed would
+  overwrite it: it is neither the subject the last seed version asked for (that
+  seed kept it, as seeds did before this rule, or an operator published it
+  since) nor the one the seed asks for now. A migration's first version does
+  not know what the seed asked for; there, a seed asking for another subject
+  than the one sent counts.
+
+`params` also name the template (`key`, `template_id`), the versions involved
+(`published_version`, `last_seed_version`, `operator_versions`, each a version
+summary as `GET /v1/templates/{id}/versions` serves it) and the two subjects
+(`subject` sent now, `requested_subject` asked for). A seed that would leave the
+template as its published version already is overwrites nothing and is never
+refused. A forced seed is written like any other; the operator's versions stay
+in the history and can be restored as drafts, and its answer — the template —
+carries `overrode: {rules, published_version, operator_versions}`, the same
+shapes, saying what it wrote over. A forced seed that overrode nothing has no
+`overrode`.
+
+A refused seed records no version. The template keeps it as `seed_refusal`,
+`{"refused_at", "rules", "payload_sha256"}`, served with the template:
+`refused_at` is when that content was first refused (refused again, the time
+stays; other content starts over), and `payload_sha256` tells the content
+apart. The next seed that goes through — forced, or once nothing conflicts —
+clears it.
 
 ## Required variables
 

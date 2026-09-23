@@ -62,7 +62,7 @@ func TestTemplateVersionConstraints(t *testing.T) {
 
 	create := func(name string) Template {
 		t.Helper()
-		template, err := db.PublishTemplateWrite(ctx, VersionAuthor{Kind: TemplateAuthorKindOperator}, nil, func(q *Queries) (Template, error) {
+		template, err := db.PublishTemplateWrite(ctx, VersionAuthor{Kind: TemplateAuthorKindOperator}, func(q *Queries) (Template, error) {
 			return q.CreateTemplate(ctx, CreateTemplateParams{
 				Name: name, Subject: name, HtmlContent: "<p>" + name + "</p>", PlainTextContent: name, ReactEmailContent: "",
 			})
@@ -76,8 +76,8 @@ func TestTemplateVersionConstraints(t *testing.T) {
 
 	insert := func(columns string, values ...any) error {
 		_, err := db.Conn.Exec(ctx, `
-			INSERT INTO template_versions (template_id, seq, subject, main_mode, html_content, plain_text_content, author_kind`+columns+`)
-			VALUES ($1, $2, 'Konu', $3, '<p>x</p>', 'x', 'operator'`+placeholders(4, len(values)-3)+`)`, values...)
+			INSERT INTO template_versions (template_id, seq, name, subject, main_mode, html_content, plain_text_content, author_kind`+columns+`)
+			VALUES ($1, $2, 'Ad', 'Konu', $3, '<p>x</p>', 'x', 'operator'`+placeholders(4, len(values)-3)+`)`, values...)
 		return err
 	}
 
@@ -136,7 +136,7 @@ func TestPublishTemplateWriteIsOneTransaction(t *testing.T) {
 	ctx := context.Background()
 	operator := VersionAuthor{Kind: TemplateAuthorKindOperator}
 
-	template, err := db.PublishTemplateWrite(ctx, operator, nil, func(q *Queries) (Template, error) {
+	template, err := db.PublishTemplateWrite(ctx, operator, func(q *Queries) (Template, error) {
 		return q.CreateTemplate(ctx, CreateTemplateParams{
 			Name: "Bülten", Subject: "Bülten", HtmlContent: "<p>Bülten</p>", PlainTextContent: "Bülten", ReactEmailContent: "",
 		})
@@ -147,7 +147,7 @@ func TestPublishTemplateWriteIsOneTransaction(t *testing.T) {
 
 	// The row write goes through, then there is no row to record a version
 	// of — the write names a template that does not exist.
-	if _, err := db.PublishTemplateWrite(ctx, operator, nil, func(q *Queries) (Template, error) {
+	if _, err := db.PublishTemplateWrite(ctx, operator, func(q *Queries) (Template, error) {
 		written, err := q.UpdateTemplate(ctx, UpdateTemplateParams{
 			ID: template.ID, Name: "Bülten", Subject: "Değişti", HtmlContent: "<p>Değişti</p>", PlainTextContent: "Değişti", ReactEmailContent: "",
 		})
@@ -168,7 +168,7 @@ func TestPublishTemplateWriteIsOneTransaction(t *testing.T) {
 	if _, err := db.ArchiveTemplate(ctx, ArchiveTemplateParams{ID: template.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.PublishTemplateWrite(ctx, operator, nil, func(q *Queries) (Template, error) {
+	if _, err := db.PublishTemplateWrite(ctx, operator, func(q *Queries) (Template, error) {
 		return q.UpdateTemplate(ctx, UpdateTemplateParams{
 			ID: template.ID, Name: "x", Subject: "x", HtmlContent: "x", PlainTextContent: "x", ReactEmailContent: "",
 		})
@@ -191,7 +191,7 @@ func TestConcurrentTemplateWritesNumberVersionsInTurn(t *testing.T) {
 	ctx := context.Background()
 	operator := VersionAuthor{Kind: TemplateAuthorKindOperator}
 
-	template, err := db.PublishTemplateWrite(ctx, operator, nil, func(q *Queries) (Template, error) {
+	template, err := db.PublishTemplateWrite(ctx, operator, func(q *Queries) (Template, error) {
 		return q.CreateTemplate(ctx, CreateTemplateParams{
 			Name: "Bülten", Subject: "0", HtmlContent: "<p>0</p>", PlainTextContent: "0", ReactEmailContent: "",
 		})
@@ -205,7 +205,7 @@ func TestConcurrentTemplateWritesNumberVersionsInTurn(t *testing.T) {
 	for i := 1; i <= writers; i++ {
 		go func(i int) {
 			subject := fmt.Sprint(i)
-			_, err := db.PublishTemplateWrite(ctx, operator, nil, func(q *Queries) (Template, error) {
+			_, err := db.PublishTemplateWrite(ctx, operator, func(q *Queries) (Template, error) {
 				return q.UpdateTemplate(ctx, UpdateTemplateParams{
 					ID: template.ID, Name: "Bülten", Subject: subject, HtmlContent: "<p>" + subject + "</p>", PlainTextContent: subject, ReactEmailContent: "",
 				})

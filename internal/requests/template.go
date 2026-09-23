@@ -27,10 +27,11 @@ type UpdateTemplate struct {
 // UpsertTemplateByKey is the seed payload: the key travels in the path, so the
 // body carries only the content and whether this key is a system template.
 type UpsertTemplateByKey struct {
-	Name              string `json:"name" validate:"required"`
-	Subject           string `json:"subject" validate:"required"`
-	HTMLContent       string `json:"html_content" validate:"required"`
-	PlainTextContent  string `json:"plain_text_content" validate:"required"`
+	Name             string `json:"name" validate:"required"`
+	Subject          string `json:"subject" validate:"required"`
+	HTMLContent      string `json:"html_content" validate:"required"`
+	PlainTextContent string `json:"plain_text_content" validate:"required"`
+	// The template's JSX source: its .tsx file in the repo as it is, of which html_content and plain_text_content are the render. It becomes the version's JSX Main source, which the panel's JSX mode opens. Text with nothing but comments in it — the pointer comment the seed sent before it sent the source — is no source: html_content is then the HTML Main source.
 	ReactEmailContent string `json:"react_email_content" validate:"required"`
 	System            bool   `json:"system"`
 	// The Required variables the sending service's contract declares, which the body must keep referencing, each with why the mail needs it. An entry may also be the name alone, as a string; its reason is then null. They replace the template's contract set; a name among them leaves the operators' set. Leave the field out (or null) to keep the set the template has; send [] to clear it.
@@ -69,7 +70,9 @@ type AddRequiredVariable struct {
 // is given. A source that is left out, or null, is kept from the version the
 // save continues, so a save never drops a source.
 type SaveTemplateDraft struct {
-	Subject string `json:"subject" validate:"required"`
+	// The template's name in this version: publishing the draft renames the template. Left out or null: kept from the version the save continues.
+	Name    *string `json:"name"`
+	Subject string  `json:"subject" validate:"required"`
 	// The Authoring mode whose source is the Main source: html_content and plain_text_content are its render.
 	MainMode string `json:"main_mode" validate:"required,oneof=jsx visual html" enums:"jsx,visual,html"`
 	// The JSX source, React Email code. Left out or null: kept as it is.

@@ -20,14 +20,13 @@ VALUES (sqlc.arg(key)::text,
         sqlc.arg(react_email_content)::text,
         sqlc.arg(system)::boolean,
         COALESCE(sqlc.narg(contract_required_variables)::jsonb, '[]'))
--- The seed owns a template's structure; an operator owns its subject. The repo
--- seeds the subject once, on insert, and never writes over it again: ADR-0045
--- moved Keycloak's system mail here so a wording change would stop costing a
--- release, and re-seeding is frequent enough that overwriting the subject took
--- that back silently. A subject fix made in the repo therefore does not reach a
--- key that already exists; someone has to make it in SkyMail too.
+-- The seed writes everything it sends, the subject included. It is the
+-- caller that keeps an operator's change — the subject too — from being
+-- overwritten: it refuses the seed before it gets here unless it is forced
+-- (ADR-0047), which is what replaced leaving the subject alone on every seed.
 ON CONFLICT (key) DO UPDATE
     SET name                = EXCLUDED.name,
+        subject             = EXCLUDED.subject,
         html_content        = EXCLUDED.html_content,
         plain_text_content  = EXCLUDED.plain_text_content,
         react_email_content = EXCLUDED.react_email_content,
@@ -47,8 +46,26 @@ ON CONFLICT (key) DO UPDATE
                                             ORDER BY name COLLATE "C"),
         archived_at         = NULL,
         archived_by         = NULL,
+        -- A seed that goes through settles any seed refused before it.
+        seed_refused_at             = NULL,
+        seed_refused_rules          = NULL,
+        seed_refused_payload_sha256 = NULL,
         updated_at          = NOW()
 RETURNING *;
+
+-- Keeps on a template that a Template seed was refused, and why. Refusing the
+-- content refused last time again keeps when it was first refused; other
+-- content starts over. Nothing that is sent changes, so updated_at stays.
+-- name: RecordSeedRefusal :exec
+UPDATE templates
+SET seed_refused_at             = CASE
+                                      WHEN seed_refused_payload_sha256 = sqlc.arg(payload_sha256)::text
+                                          THEN seed_refused_at
+                                      ELSE NOW()
+    END,
+    seed_refused_rules          = sqlc.arg(rules)::text[],
+    seed_refused_payload_sha256 = sqlc.arg(payload_sha256)::text
+WHERE id = sqlc.arg(id);
 
 -- name: GetTemplateById :one
 SELECT *
@@ -165,11 +182,11 @@ RETURNING *;
 -- for the writers that still write the row directly — the old panel's create
 -- and edit, and the Template seed's by-key upsert: each runs this after its
 -- row write, in the same transaction, so the version is what the row ended up
--- with (a subject the upsert kept included), not what the request asked for.
+-- with, not what the request asked for.
 --
 -- Those writers send a subject, a render and at most a JSX source, so the
 -- version starts from the published one and replaces only what they changed:
---   * The subject and the render are the row's.
+--   * The name, the subject and the render are the row's.
 --   * If the body — html_content, plain_text_content and the JSX source — is
 --     the published version's, the Main source and every source stay as they
 --     were: the old panel sends a stored body back untouched when only the
@@ -182,7 +199,7 @@ RETURNING *;
 -- A row with no published version yet — written before versions were kept,
 -- or by the old binary between the migration and this one — is taken as it
 -- now is. When the result is the published version over again, nothing is
--- recorded: the write changed nothing a version holds (name is not one).
+-- recorded: the write changed nothing a version holds.
 --
 -- The version is numbered after the template's last one; the row write before
 -- this holds the row's lock, so two writers cannot take the same number. Its
@@ -192,6 +209,7 @@ RETURNING *;
 -- Affects one row when a version was recorded and none when not.
 -- name: RecordTemplateRowAsVersion :execrows
 WITH written AS (SELECT t.id,
+                        t.name,
                         t.subject,
                         t.html_content,
                         t.plain_text_content,
@@ -200,6 +218,7 @@ WITH written AS (SELECT t.id,
                  FROM templates t
                  WHERE t.id = sqlc.arg(template_id)),
      candidate AS (SELECT w.id                                                        AS template_id,
+                          w.name,
                           w.subject,
                           COALESCE(w.jsx_source, p.jsx_source)                        AS jsx_source,
                           p.visual_source,
@@ -215,7 +234,7 @@ WITH written AS (SELECT t.id,
                           w.html_content,
                           w.plain_text_content,
                           p.id                                                        AS published_id,
-                          (p.subject, p.jsx_source, p.visual_source, p.html_source, p.main_mode,
+                          (p.name, p.subject, p.jsx_source, p.visual_source, p.html_source, p.main_mode,
                            p.html_content, p.plain_text_content)                      AS published_content
                    FROM written w
                             LEFT JOIN template_versions p ON p.id = w.published_version_id
@@ -224,11 +243,12 @@ WITH written AS (SELECT t.id,
                                                            AND w.plain_text_content = p.plain_text_content
                                                            AND w.jsx_source IS NOT DISTINCT FROM p.jsx_source AS kept) body),
      version AS (
-         INSERT INTO template_versions (template_id, seq, subject, jsx_source, visual_source, html_source, main_mode,
+         INSERT INTO template_versions (template_id, seq, name, subject, jsx_source, visual_source, html_source, main_mode,
                                         html_content, plain_text_content, author_kind, author_sub, author_name,
                                         requested_subject, published_at, base_version_id)
              SELECT c.template_id,
                     COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = c.template_id), 0) + 1,
+                    c.name,
                     c.subject,
                     c.jsx_source,
                     c.visual_source,
@@ -244,7 +264,7 @@ WITH written AS (SELECT t.id,
                     c.published_id
              FROM candidate c
              WHERE c.published_id IS NULL
-                OR (c.subject, c.jsx_source, c.visual_source, c.html_source, c.main_mode,
+                OR (c.name, c.subject, c.jsx_source, c.visual_source, c.html_source, c.main_mode,
                     c.html_content, c.plain_text_content) IS DISTINCT FROM c.published_content
              RETURNING id, template_id)
 UPDATE templates t
@@ -296,6 +316,43 @@ WHERE id = $1
   AND archived_at IS NULL
     FOR UPDATE;
 
+-- Takes the lock of the template a Template key names, archived or not, so
+-- the seed's upsert can judge the template before it writes: every other
+-- writer of the template waits until it has. No row: the key is new.
+-- name: LockTemplateByKey :one
+SELECT *
+FROM templates
+WHERE key = $1
+    FOR UPDATE;
+
+-- The last version a Template seed wrote of a template. Seed versions are
+-- always published, so this is the seed's last word on the template.
+-- name: LastTemplateSeedVersion :one
+SELECT *
+FROM template_version_summaries
+WHERE template_id = $1
+  AND author_kind = 'template_seed'
+ORDER BY seq DESC
+LIMIT 1;
+
+-- An operator's versions of a template numbered after the given one, oldest
+-- first, drafts included and discarded drafts left out: operator work a seed
+-- written after them would pass over.
+-- name: ListOperatorVersionsAfter :many
+SELECT *
+FROM template_version_summaries
+WHERE template_id = sqlc.arg(template_id)
+  AND author_kind = 'operator'
+  AND discarded_at IS NULL
+  AND seq > sqlc.arg(after_seq)::int
+ORDER BY seq;
+
+-- name: GetTemplateVersionSummary :one
+SELECT *
+FROM template_version_summaries
+WHERE template_id = $1
+  AND id = $2;
+
 -- Each operator's draft in progress on the given templates, newest first: the
 -- newest version an operator wrote of a template, when it is neither published
 -- nor discarded. An operator's later version supersedes their earlier drafts,
@@ -330,7 +387,7 @@ SELECT (template_jsx_source(sqlc.arg(content)::text) IS NOT NULL)::boolean AS is
 
 -- Writes an operator's draft, numbered after the template's last version,
 -- unless the version it continues holds exactly this content already —
--- subject, every source, Main source and render, a Visual document compared
+-- name, subject, every source, Main source and render, a Visual document compared
 -- as JSON rather than as text. Returns the draft it wrote, or the version it
 -- would have repeated, and whether it wrote one. The caller holds the template
 -- row's lock (LockTemplate).
@@ -338,19 +395,20 @@ SELECT (template_jsx_source(sqlc.arg(content)::text) IS NOT NULL)::boolean AS is
 WITH repeated AS (SELECT v.id
                   FROM template_versions v
                   WHERE v.id = sqlc.narg(continued_id)::uuid
-                    AND (v.subject, v.jsx_source, v.visual_source, v.html_source, v.main_mode, v.html_content,
+                    AND (v.name, v.subject, v.jsx_source, v.visual_source, v.html_source, v.main_mode, v.html_content,
                          v.plain_text_content)
                       IS NOT DISTINCT FROM
-                        (sqlc.arg(subject)::text, sqlc.narg(jsx_source)::text, sqlc.narg(visual_source)::jsonb,
+                        (sqlc.arg(name)::text, sqlc.arg(subject)::text, sqlc.narg(jsx_source)::text, sqlc.narg(visual_source)::jsonb,
                          sqlc.narg(html_source)::text, sqlc.arg(main_mode)::authoring_mode, sqlc.arg(html_content)::text,
                          sqlc.arg(plain_text_content)::text)),
      written AS (
-         INSERT INTO template_versions (template_id, seq, subject, jsx_source, visual_source, html_source, main_mode,
+         INSERT INTO template_versions (template_id, seq, name, subject, jsx_source, visual_source, html_source, main_mode,
                                         html_content, plain_text_content, author_kind, author_sub, author_name,
                                         base_version_id)
              SELECT sqlc.arg(template_id)::uuid,
                     COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = sqlc.arg(template_id)::uuid),
                              0) + 1,
+                    sqlc.arg(name)::text,
                     sqlc.arg(subject)::text,
                     sqlc.narg(jsx_source)::text,
                     sqlc.narg(visual_source)::jsonb,
@@ -371,7 +429,7 @@ SELECT id, false AS written
 FROM repeated;
 
 -- Publishes a draft: marks it published and copies it onto the template row,
--- which the send path reads — its subject and its render. react_email_content,
+-- which the send path reads — its name, subject and render. react_email_content,
 -- the column the old panel edits, gets the JSX source only when JSX is the
 -- Main source, and an empty string otherwise. The old panel re-renders any JSX
 -- it finds there and saves that render as the body, and the expand step would
@@ -389,9 +447,10 @@ WITH published AS (
             AND v.template_id = sqlc.arg(template_id)
             AND v.published_at IS NULL
             AND v.discarded_at IS NULL
-        RETURNING v.id, v.template_id, v.subject, v.jsx_source, v.main_mode, v.html_content, v.plain_text_content)
+        RETURNING v.id, v.template_id, v.name, v.subject, v.jsx_source, v.main_mode, v.html_content, v.plain_text_content)
 UPDATE templates t
-SET subject              = p.subject,
+SET name                 = p.name,
+    subject              = p.subject,
     html_content         = p.html_content,
     plain_text_content   = p.plain_text_content,
     react_email_content  = CASE WHEN p.main_mode = 'jsx' THEN p.jsx_source ELSE '' END,

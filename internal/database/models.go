@@ -205,7 +205,10 @@ type Template struct {
 	// Required variables from the sending service's contract, sorted by name, each with why the mail needs it. Written only by the Template seed; locked in the panel.
 	ContractRequiredVariables ContractVariables `json:"contract_required_variables"`
 	// Required variables operators marked, sorted. Never shares a name with contract_required_variables.
-	OperatorRequiredVariables []string `json:"operator_required_variables"`
+	OperatorRequiredVariables []string   `json:"operator_required_variables"`
+	SeedRefusedAt             *time.Time `json:"-"`
+	SeedRefusedRules          []string   `json:"-"`
+	SeedRefusedPayloadSha256  *string    `json:"-"`
 }
 
 type TemplateVersion struct {
@@ -227,6 +230,7 @@ type TemplateVersion struct {
 	PublishedAt      *time.Time         `json:"published_at"`
 	BaseVersionID    *uuid.UUID         `json:"base_version_id"`
 	DiscardedAt      *time.Time         `json:"discarded_at"`
+	Name             string             `json:"name"`
 }
 
 type TemplateVersionSummary struct {
@@ -244,4 +248,5 @@ type TemplateVersionSummary struct {
 	BaseVersionID    *uuid.UUID         `json:"base_version_id"`
 	IsCurrent        bool               `json:"is_current"`
 	DiscardedAt      *time.Time         `json:"discarded_at"`
+	Name             string             `json:"name"`
 }

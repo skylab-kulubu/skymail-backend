@@ -23,36 +23,45 @@ func (s TemplateVersionSummary) Author() VersionAuthor {
 }
 
 // PublishTemplateWrite runs write — a statement that writes a template row
-// directly: the old panel's create and edit, the Template seed's by-key
-// upsert — and records what the row then holds as a published Mail template
-// version, in one transaction. The row and its history cannot disagree, and a
-// write that fails leaves neither behind. A write that leaves the template as
-// its published version already is records nothing (see
-// RecordTemplateRowAsVersion for how the version is built).
-//
-// requestedSubject is the subject a Template seed sent, recorded beside the
-// one the row kept; nil for an operator's write.
+// directly: the old panel's create and edit — and records what the row then
+// holds as a published Mail template version, in one transaction. The row and
+// its history cannot disagree, and a write that fails leaves neither behind. A
+// write that leaves the template as its published version already is records
+// nothing (see RecordTemplateRowAsVersion for how the version is built). The
+// Template seed's by-key upsert does the same through SeedTemplate.
 //
 // It returns the row as the write left it, copy of whichever version is now
 // published.
-func (s *Store) PublishTemplateWrite(ctx context.Context, author VersionAuthor, requestedSubject *string, write func(*Queries) (Template, error)) (Template, error) {
+func (s *Store) PublishTemplateWrite(ctx context.Context, author VersionAuthor, write func(*Queries) (Template, error)) (Template, error) {
 	var published Template
 	err := s.InTx(ctx, func(queries *Queries) error {
-		written, err := write(queries)
-		if err != nil {
-			return err
-		}
-		if _, err := queries.RecordTemplateRowAsVersion(ctx, RecordTemplateRowAsVersionParams{
-			TemplateID:       written.ID,
-			AuthorKind:       author.Kind,
-			AuthorSub:        author.Sub,
-			AuthorName:       author.Name,
-			RequestedSubject: requestedSubject,
-		}); err != nil {
-			return err
-		}
-		published, err = queries.GetTemplateByIdIncludingArchived(ctx, written.ID)
+		var err error
+		published, _, err = recordWrite(ctx, queries, author, nil, write)
 		return err
 	})
 	return published, err
+}
+
+// recordWrite runs a row write and records what the row then holds as a
+// published version by author, requestedSubject beside it for a Template
+// seed's. It returns the row as it then is, and whether a version was
+// recorded: none is when the write left the template as its published
+// version already was.
+func recordWrite(ctx context.Context, q *Queries, author VersionAuthor, requestedSubject *string, write func(*Queries) (Template, error)) (Template, bool, error) {
+	written, err := write(q)
+	if err != nil {
+		return Template{}, false, err
+	}
+	recorded, err := q.RecordTemplateRowAsVersion(ctx, RecordTemplateRowAsVersionParams{
+		TemplateID:       written.ID,
+		AuthorKind:       author.Kind,
+		AuthorSub:        author.Sub,
+		AuthorName:       author.Name,
+		RequestedSubject: requestedSubject,
+	})
+	if err != nil {
+		return Template{}, false, err
+	}
+	row, err := q.GetTemplateByIdIncludingArchived(ctx, written.ID)
+	return row, recorded > 0, err
 }

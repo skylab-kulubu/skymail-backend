@@ -11,9 +11,12 @@ import (
 )
 
 // VersionContent is what a Mail template version holds apart from who wrote
-// it and when: its subject, at most one source per Authoring mode, which of
-// them is the Main source, and that source's render as HTML and plain text.
+// it and when: its name and subject, at most one source per Authoring mode,
+// which of them is the Main source, and that source's render as HTML and plain
+// text.
 type VersionContent struct {
+	// The template's name; empty in a save that leaves the name as it is.
+	Name             string
 	Subject          string
 	JSXSource        *string
 	VisualSource     []byte
@@ -99,7 +102,12 @@ func (s *Store) SaveTemplateDraft(ctx context.Context, templateID uuid.UUID, aut
 		if err != nil {
 			return err
 		}
-		saved, created, err = writeDraft(ctx, q, template, author, baseVersion, continued, content.keeping(continued), check)
+		content = content.keeping(continued)
+		if content.Name == "" {
+			// No version to keep the name from: the template's.
+			content.Name = template.Name
+		}
+		saved, created, err = writeDraft(ctx, q, template, author, baseVersion, continued, content, check)
 		return err
 	})
 	return saved, created, err
@@ -267,6 +275,7 @@ func writeDraft(ctx context.Context, q *Queries, template Template, author Versi
 	recorded, err := q.RecordTemplateDraft(ctx, RecordTemplateDraftParams{
 		TemplateID:       template.ID,
 		ContinuedID:      idOf(continued),
+		Name:             content.Name,
 		Subject:          content.Subject,
 		JsxSource:        content.JSXSource,
 		VisualSource:     content.VisualSource,
@@ -304,11 +313,15 @@ func draftInProgress(ctx context.Context, q *Queries, templateID uuid.UUID, auth
 	return nil, nil
 }
 
-// keeping is content with the sources it leaves out taken from the version a
-// save continues, so that a save never drops a source.
+// keeping is content with the name and sources it leaves out taken from the
+// version a save continues, so that a save never drops a source and renames
+// only when it says so.
 func (c VersionContent) keeping(from *GetTemplateVersionRow) VersionContent {
 	if from == nil {
 		return c
+	}
+	if c.Name == "" {
+		c.Name = from.TemplateVersionSummary.Name
 	}
 	if c.JSXSource == nil {
 		c.JSXSource = from.JsxSource
@@ -348,6 +361,7 @@ func (c VersionContent) checkSources(ctx context.Context, q *Queries) error {
 // contentOf is what a stored version holds.
 func contentOf(v GetTemplateVersionRow) VersionContent {
 	return VersionContent{
+		Name:             v.TemplateVersionSummary.Name,
 		Subject:          v.TemplateVersionSummary.Subject,
 		JSXSource:        v.JsxSource,
 		VisualSource:     v.VisualSource,
