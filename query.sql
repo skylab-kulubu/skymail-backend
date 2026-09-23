@@ -308,12 +308,16 @@ VALUES (sqlc.arg(template_id),
 RETURNING id;
 
 -- Publishes a draft: marks it published and copies it onto the template row,
--- which the send path reads — its subject and render, and its JSX source (an
--- empty string when it has none) as react_email_content. The old panel edits
--- that column and the expand step reads it back through template_jsx_source,
--- so it must hold the published version's JSX source or nothing. The caller
--- holds the row's lock and has checked that the version is a draft of this
--- template.
+-- which the send path reads — its subject and its render. react_email_content,
+-- the column the old panel edits, gets the JSX source only when JSX is the
+-- Main source, and an empty string otherwise. The old panel re-renders any JSX
+-- it finds there and saves that render as the body, and the expand step would
+-- then make JSX the Main source: a JSX source kept beside another Main source
+-- would reach live mail without anyone choosing it. With nothing there, the
+-- old panel refuses to save (it never saves an empty JSX source), so a
+-- template whose Main source is not JSX is edited in the editor only. The
+-- caller holds the row's lock and has checked that the version is a draft of
+-- this template.
 -- name: PublishTemplateDraft :one
 WITH published AS (
     UPDATE template_versions v
@@ -321,12 +325,12 @@ WITH published AS (
         WHERE v.id = sqlc.arg(version_id)
             AND v.template_id = sqlc.arg(template_id)
             AND v.published_at IS NULL
-        RETURNING v.id, v.template_id, v.subject, v.jsx_source, v.html_content, v.plain_text_content)
+        RETURNING v.id, v.template_id, v.subject, v.jsx_source, v.main_mode, v.html_content, v.plain_text_content)
 UPDATE templates t
 SET subject              = p.subject,
     html_content         = p.html_content,
     plain_text_content   = p.plain_text_content,
-    react_email_content  = COALESCE(p.jsx_source, ''),
+    react_email_content  = CASE WHEN p.main_mode = 'jsx' THEN p.jsx_source ELSE '' END,
     published_version_id = p.id,
     updated_at           = NOW()
 FROM published p

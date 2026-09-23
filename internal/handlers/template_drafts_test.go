@@ -188,9 +188,9 @@ func sendByKey(t *testing.T, app *fiber.App, key, email string) {
 }
 
 // Publishing a draft makes it the version that is sent: it is marked published
-// and copied onto the row — its subject, its render, and its JSX source as
-// react_email_content, which the old panel edits. A send then queues it, and a
-// newer draft lying unpublished beside it is not what a send queues.
+// and copied onto the row — its subject, its render, and its JSX Main source
+// as react_email_content, which the old panel edits. A send then queues it,
+// and a newer draft lying unpublished beside it is not what a send queues.
 func TestPublishingADraftCopiesItOntoTheRowAndSendsIt(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	app := templateVersionsApp(t, db)
@@ -198,7 +198,7 @@ func TestPublishingADraftCopiesItOntoTheRowAndSendsIt(t *testing.T) {
 	seeded := seededTemplate(t, app, key)
 
 	response, draft, body := saveDraft(t, app, seeded.ID, map[string]any{
-		"subject": "Aramıza hoş geldin, {{.FullName}}", "main_mode": "visual",
+		"subject": "Aramıza hoş geldin, {{.FullName}}", "main_mode": "jsx",
 		"visual_source": json.RawMessage(visualDocument), "jsx_source": panelSource,
 		"html_content": "<p>Aramıza hoş geldin {{.FullName}}</p>", "plain_text_content": "Aramıza hoş geldin {{.FullName}}",
 		"base_version_id": seeded.PublishedVersionID,
@@ -505,29 +505,18 @@ func TestChangingTheMainSourceKeepsTheOtherSources(t *testing.T) {
 		t.Fatalf("sources after the switch = jsx %v html %v visual %s, want them exactly as before", after.JSXSource, after.HTMLSource, after.VisualSource)
 	}
 
-	// Published, the switch sends the Visual render; the JSX source stays where
-	// the old panel reads it.
+	// Published, the switch sends the Visual render. The JSX source stays in
+	// the version, not on the row, where the old panel would re-render it.
 	response, row, body := publish(t, app, created.ID, switched.ID, false)
 	if response.StatusCode != fiber.StatusOK {
 		t.Fatalf("publish the switch = %d %s", response.StatusCode, body)
 	}
-	if row.HtmlContent != "<p>Görsel merhaba {{.FullName}}</p>" || row.ReactEmailContent != panelSource {
-		t.Fatalf("row = %+v, want the Visual render sent and the JSX source kept for the old panel", row)
-	}
-
-	// The old panel rewording it sends that body back, and the Visual source
-	// stays the Main source.
-	response, body = sendJSON(t, app, fiber.MethodPatch, "/templates/"+created.ID.String(), map[string]any{
-		"name": row.Name, "subject": "Selam {{.FullName}}", "html_content": row.HtmlContent,
-		"plain_text_content": row.PlainTextContent, "react_email_content": row.ReactEmailContent,
-	})
-	if response.StatusCode != fiber.StatusOK {
-		t.Fatalf("old panel reword = %d %s", response.StatusCode, body)
+	if row.HtmlContent != "<p>Görsel merhaba {{.FullName}}</p>" || row.ReactEmailContent != "" {
+		t.Fatalf("row = %+v, want the Visual render sent and no JSX handed to the old panel", row)
 	}
 	versions, _ = storedVersions(t, db, created.ID)
-	reworded := versions[len(versions)-1]
-	if reworded.Subject != "Selam {{.FullName}}" || reworded.MainMode != "visual" || string(reworded.VisualSource) != string(after.VisualSource) {
-		t.Fatalf("old panel reword = %+v, want the Visual Main source kept", reworded)
+	if sent := versions[len(versions)-1]; sent.ID != switched.ID || sent.PublishedAt == nil || !sameString(sent.JSXSource, panelSource) {
+		t.Fatalf("published switch = %+v, want it published with its JSX source kept", sent)
 	}
 }
 
@@ -1101,5 +1090,59 @@ func TestDraftResponsesAreServedAsDocumented(t *testing.T) {
 		if fmt.Sprint(documented) != fmt.Sprint(served) {
 			t.Errorf("POST %s %s documents %v but serves %v", tc.path, tc.status, documented, served)
 		}
+	}
+}
+
+// What the old panel renders panelSource to.
+const panelRender = "<p>Merhaba {{.FullName}}</p>"
+
+// oldPanelSave is the old panel saving a template it was opened on with a new
+// subject: it sends the row's react_email_content back and, whenever that
+// holds JSX that compiles, the JSX's render as the body. It never sees a
+// Visual or HTML source.
+func oldPanelSave(t *testing.T, app *fiber.App, row database.Template, subject string) (*http.Response, []byte) {
+	t.Helper()
+	body, plainText := row.HtmlContent, row.PlainTextContent
+	if row.ReactEmailContent == panelSource {
+		body, plainText = panelRender, "Merhaba {{.FullName}}"
+	}
+	return sendJSON(t, app, fiber.MethodPatch, "/templates/"+row.ID.String(), map[string]any{
+		"name": row.Name, "subject": subject, "html_content": body, "plain_text_content": plainText,
+		"react_email_content": row.ReactEmailContent, "key": row.Key,
+	})
+}
+
+// Publishing hands react_email_content, the column the old panel edits, the
+// JSX source only when JSX is the Main source. A JSX source kept beside an
+// HTML or Visual Main source is not what is sent; were it on the row, the old
+// panel would re-render it on the next subject edit and send its render, and
+// the old write path would make JSX the Main source — live mail changed
+// without anyone choosing it (ADR-0046).
+func TestPublishingAnotherMainSourceGivesTheOldPanelNoJSXToRerender(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app) // JSX is the Main source
+
+	response, draft, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": "HTML konu", "main_mode": "html", "html_source": "<p>HTML gövde</p>",
+		"html_content": "<p>HTML gövde</p>", "plain_text_content": "HTML gövde", "base_version_id": created.PublishedVersionID,
+	})
+	if response.StatusCode != fiber.StatusCreated || !sameString(draft.JSXSource, panelSource) {
+		t.Fatalf("draft = %d %s, want HTML the Main source with the JSX source kept beside it", response.StatusCode, body)
+	}
+	if response, _, body := publish(t, app, created.ID, draft.ID, false); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("publish = %d %s", response.StatusCode, body)
+	}
+	row := templateRow(t, db, created.ID)
+	if row.ReactEmailContent != "" || row.HtmlContent != "<p>HTML gövde</p>" {
+		t.Fatalf("row = %+v, want the HTML render sent and no JSX in react_email_content", row)
+	}
+
+	oldPanelSave(t, app, row, "Eski panelden konu")
+	versions, published := storedVersions(t, db, created.ID)
+	latest := versions[len(versions)-1]
+	if after := templateRow(t, db, created.ID); after.HtmlContent != "<p>HTML gövde</p>" || latest.ID != draft.ID ||
+		published == nil || *published != draft.ID || latest.MainMode != "html" {
+		t.Fatalf("after an old panel subject edit the row sends %q, latest version %s main %s; want the HTML draft still sent and Main", after.HtmlContent, latest.ID, latest.MainMode)
 	}
 }

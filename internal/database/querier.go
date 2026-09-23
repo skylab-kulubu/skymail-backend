@@ -100,12 +100,16 @@ type Querier interface {
 	LockTemplate(ctx context.Context, id uuid.UUID) (Template, error)
 	ProcessQueueItems(ctx context.Context) ([]MailQueue, error)
 	// Publishes a draft: marks it published and copies it onto the template row,
-	// which the send path reads — its subject and render, and its JSX source (an
-	// empty string when it has none) as react_email_content. The old panel edits
-	// that column and the expand step reads it back through template_jsx_source,
-	// so it must hold the published version's JSX source or nothing. The caller
-	// holds the row's lock and has checked that the version is a draft of this
-	// template.
+	// which the send path reads — its subject and its render. react_email_content,
+	// the column the old panel edits, gets the JSX source only when JSX is the
+	// Main source, and an empty string otherwise. The old panel re-renders any JSX
+	// it finds there and saves that render as the body, and the expand step would
+	// then make JSX the Main source: a JSX source kept beside another Main source
+	// would reach live mail without anyone choosing it. With nothing there, the
+	// old panel refuses to save (it never saves an empty JSX source), so a
+	// template whose Main source is not JSX is edited in the editor only. The
+	// caller holds the row's lock and has checked that the version is a draft of
+	// this template.
 	PublishTemplateDraft(ctx context.Context, arg PublishTemplateDraftParams) (Template, error)
 	// Records what a template row now holds as a new Mail template version,
 	// published at once, and makes the row a copy of it. This is the expand step
