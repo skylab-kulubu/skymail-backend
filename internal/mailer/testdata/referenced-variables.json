@@ -4,7 +4,9 @@
     "A reference is a field of the data the mailer passes (the send's variables, Email, FullName) used in a Go action:",
     ".X and $.X, in plain actions, if and else if conditions, function arguments and pipelines. Inside range and with",
     "bodies .X is the element's field and does not count, $.X does. index . \"X\", a comment, a string and the text",
-    "around the actions do not count. Nothing inside a define counts; a block given dot reads like the text around it.",
+    "around the actions do not count, and neither does an action inside an HTML comment (<!-- to the next --> in the text",
+    "between actions), which html/template leaves out of the mail. Nothing inside a define counts; a block given dot reads",
+    "like the text around it.",
     "The same file, byte for byte, is read by skymail-backend (internal/mailer/testdata/referenced-variables.json,",
     "which checks what the server refuses) and skymail-frontend (src/lib/mail-render/testdata/referenced-variables.json,",
     "which checks what the panel shows). Change both copies together."
@@ -120,6 +122,31 @@
       "name": "nothing from a comment that holds actions",
       "source": "{{/* {{if .X}}{{.Y}}{{end}} */}}<p>{{.Z}}</p>",
       "expect": ["Z"]
+    },
+    {
+      "name": "nothing from a reference only inside an HTML comment, which the mailer leaves out of the mail",
+      "source": "<p>Parolanı sıfırla.</p><!-- <a href=\"{{.link}}\">Sıfırla</a> -->",
+      "expect": []
+    },
+    {
+      "name": "a reference both inside and outside an HTML comment",
+      "source": "<!-- eski: <a href=\"{{.link}}\">Eski</a> --><a href=\"{{.link}}\">Sıfırla</a>",
+      "expect": ["link"]
+    },
+    {
+      "name": "the text after an HTML comment closes, and <!--> which does not close it",
+      "source": "<!--> {{.Hidden}} --> <p>{{.Shown}}</p><!-- {{.AlsoHidden}}",
+      "expect": ["Shown"]
+    },
+    {
+      "name": "a block whose actions sit in HTML comments still binds dot",
+      "source": "<!-- {{range .Items}} -->{{.Title}} {{$.Shown}}<!-- {{end}} -->",
+      "expect": ["Shown"]
+    },
+    {
+      "name": "nothing opened by a string that holds <!--",
+      "source": "{{if eq .Kind \"<!--\"}}x{{end}}<a href=\"{{.link}}\">Git</a>",
+      "expect": ["Kind", "link"]
     },
     {
       "name": "nothing from the text around the actions",

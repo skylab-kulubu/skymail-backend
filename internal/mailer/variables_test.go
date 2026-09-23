@@ -1,13 +1,32 @@
 package mailer
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+// The shared cases are one file kept in two repos: this copy, and
+// skymail-frontend's src/lib/mail-render/testdata/referenced-variables.json,
+// whose test pins the same hash. Changing either copy fails its own repo's
+// test until both copies, and both hashes, change together.
+const sharedCasesSHA256 = "b54be25614fedd3054e85589e27ea596b97d2023dc37817058a32d4c08d2bbab"
+
+func TestTheSharedCasesAreTheOnesTheFrontendHolds(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "referenced-variables.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum := fmt.Sprintf("%x", sha256.Sum256(raw)); sum != sharedCasesSHA256 {
+		t.Fatalf("testdata/referenced-variables.json hashes to %s, not the %s both repos pin: change skymail-frontend's copy (src/lib/mail-render/testdata/referenced-variables.json) to match, then both pins", sum, sharedCasesSHA256)
+	}
+}
 
 type referencedVariablesCase struct {
 	Name   string   `json:"name"`
@@ -84,5 +103,22 @@ func TestReferencedVariablesOfAnEmptyBody(t *testing.T) {
 	got, err := ReferencedVariables("")
 	if err != nil || len(got) != 0 || got == nil {
 		t.Errorf("ReferencedVariables(\"\") = %#v, %v; want an empty list", got, err)
+	}
+}
+
+// The mailer executes a body with html/template, which leaves an HTML comment —
+// and every action inside it — out of the mail it sends. A link kept only in a
+// comment reaches no one, which is why a reference there does not count.
+func TestTheMailerLeavesHTMLCommentsOutOfTheMail(t *testing.T) {
+	parsed, err := parseMailTemplates("Konu", "Metin", `<p>Parolanı sıfırla.</p><!-- <a href="{{.link}}">Sıfırla</a> --><p>{{.firstName}}</p>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := parsed.html.Execute(&out, map[string]any{"link": "https://e.example/reset", "firstName": "Ada"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); strings.Contains(got, "e.example") || strings.Contains(got, "<!--") || !strings.Contains(got, "Ada") {
+		t.Fatalf("executed body = %q, want the comment and the link in it left out, the rest kept", got)
 	}
 }
