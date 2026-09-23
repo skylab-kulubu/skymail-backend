@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/gofiber/fiber/v3"
@@ -42,6 +43,9 @@ var swaggerDocument = sync.OnceValue(docs.SwaggerInfo.ReadDoc)
 
 //	@tag.name			Lists
 //	@tag.description	Mailing list and recipient management operations
+
+//	@tag.name			Mail approval
+//	@tag.description	Mail onayı: sends submitted by members without send permission, held until an approver decides them
 
 //	@contact.name	Enes Genç
 //	@contact.url	https://enesgenc.dev
@@ -91,7 +95,7 @@ func main() {
 		Plain:     cfg.SMTPPlain,
 	})
 
-	authMiddleware := middlewares.NewAuthMiddleware("skymail", cfg.KeycloakRealmURL)
+	authMiddleware := middlewares.NewAuthMiddleware(cfg.KeycloakClientID, cfg.KeycloakRealmURL)
 	gateConfig, err := accessgate.ConfigFromEnv(config.Value, cfg.KeycloakRealmURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid account access gate configuration")
@@ -117,6 +121,10 @@ func main() {
 	templateHandler := handlers.NewTemplateHandler(db)
 	listHandler := handlers.NewListHandler(db, kcClient)
 	mailHandler := handlers.NewMailHandler(db, mailerService, kcClient)
+	approvalHandler := handlers.NewMailApprovalHandler(db, mailerService, kcClient, handlers.MailApprovalOptions{
+		ClientID: cfg.KeycloakClientID,
+		UIURL:    config.Value("SKYMAIL_UI_URL"),
+	})
 
 	// The reverse proxy in front of Skymail discards a caller-supplied
 	// X-Forwarded-For and writes its own, so ProxyHeader is only safe to read
@@ -149,15 +157,7 @@ func main() {
 
 	api := protectedAPI(app, authMiddleware, accountAccessGate)
 
-	templates := api.Group("/templates")
-	templates.Post("/", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.CreateTemplate)
-	templates.Get("/", authMiddleware.RequireAnyPermission("skymail:templates:read"), templateHandler.GetTemplates)
-	templates.Get("/:id", authMiddleware.RequireAnyPermission("skymail:templates:read"), templateHandler.GetTemplate)
-	templates.Patch("/:id", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.UpdateTemplate)
-	templates.Delete("/:id", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.DeleteTemplate)
-	templates.Get("/by-key/:key", authMiddleware.RequireAnyPermission("skymail:templates:read"), templateHandler.GetTemplateByKey)
-	templates.Put("/by-key/:key", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.UpsertTemplateByKey)
-	templates.Post("/:id/restore", authMiddleware.RequireAnyPermission("skymail:templates:write"), templateHandler.RestoreTemplate)
+	registerTemplateRoutes(api, authMiddleware, templateHandler)
 
 	lists := api.Group("/mailing_lists")
 	lists.Post("/", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.CreateList)
@@ -170,14 +170,11 @@ func main() {
 	lists.Get("/:id/recipients", authMiddleware.RequireAnyPermission("skymail:lists:read"), listHandler.GetRecipients)
 	lists.Delete("/:id/recipients/:recipientId", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.RemoveRecipient)
 
-	tasks := api.Group("/mail_tasks")
-	tasks.Post("/", authMiddleware.RequireAnyPermission("skymail:mails:write"), mailHandler.CreateTask)
-	tasks.Post("/single", authMiddleware.RequireAnyPermission("skymail:mails:send", "skymail:mails:write"), mailHandler.SendSingle)
-	tasks.Get("/", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTasks)
-	tasks.Get("/:id", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTask)
-	tasks.Get("/:id/queue", authMiddleware.RequireAnyPermission("skymail:mails:read"), mailHandler.GetTaskQueueItems)
+	registerMailTaskRoutes(api, authMiddleware, mailHandler)
+	registerMailApprovalRoutes(api, authMiddleware, approvalHandler)
 
 	mailerService.Start(ctx, 3)
+	go expireMailApprovals(ctx, approvalHandler, time.Minute)
 
 	addr := fmt.Sprintf(":%d", 3000)
 	if cfg.AppPort != 0 {
@@ -186,6 +183,79 @@ func main() {
 
 	if err = app.Listen(addr); err != nil {
 		log.Fatal().Err(err).Msg("error starting server")
+	}
+}
+
+func registerTemplateRoutes(api fiber.Router, auth middlewares.AuthMiddleware, template handlers.TemplateHandler) {
+	templates := api.Group("/templates")
+	templates.Post("/", auth.RequireAnyPermission("skymail:templates:write"), template.CreateTemplate)
+	templates.Get("/", auth.RequireAnyPermission("skymail:templates:read"), template.GetTemplates)
+	templates.Get("/:id", auth.RequireAnyPermission("skymail:templates:read"), template.GetTemplate)
+	templates.Patch("/:id", auth.RequireAnyPermission("skymail:templates:write"), template.UpdateTemplate)
+	templates.Delete("/:id", auth.RequireAnyPermission("skymail:templates:write"), template.DeleteTemplate)
+	templates.Get("/by-key/:key", auth.RequireAnyPermission("skymail:templates:read"), template.GetTemplateByKey)
+	templates.Put("/by-key/:key", auth.RequireAnyPermission("skymail:templates:write"), template.UpsertTemplateByKey)
+	templates.Post("/:id/restore", auth.RequireAnyPermission("skymail:templates:write"), template.RestoreTemplate)
+	templates.Get("/:id/versions", auth.RequireAnyPermission("skymail:templates:read"), template.ListTemplateVersions)
+	templates.Get("/:id/versions/:versionId", auth.RequireAnyPermission("skymail:templates:read"), template.GetTemplateVersion)
+	templates.Post("/:id/required-variables", auth.RequireAnyPermission("skymail:templates:write"), template.AddRequiredVariable)
+	templates.Delete("/:id/required-variables/:name", auth.RequireAnyPermission("skymail:templates:write"), template.RemoveRequiredVariable)
+	templates.Post("/:id/drafts", auth.RequireAnyPermission("skymail:templates:write"), template.SaveTemplateDraft)
+	templates.Post("/:id/versions/:versionId/publish", auth.RequireAnyPermission("skymail:templates:write"), template.PublishTemplateVersion)
+	templates.Post("/:id/versions/:versionId/restore", auth.RequireAnyPermission("skymail:templates:write"), template.RestoreTemplateVersion)
+	templates.Post("/:id/versions/:versionId/discard", auth.RequireAnyPermission("skymail:templates:write"), template.DiscardTemplateVersion)
+}
+
+func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, mail handlers.MailHandler) {
+	tasks := api.Group("/mail_tasks")
+	tasks.Post("/", auth.RequireAnyPermission("skymail:mails:write"), mail.CreateTask)
+	tasks.Post("/single", auth.RequireAnyPermission("skymail:mails:send", "skymail:mails:write"), mail.SendSingle)
+	tasks.Get("/", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTasks)
+	// Before /:id, which would otherwise take "summary" for a task id.
+	tasks.Get("/summary", auth.RequireAnyPermission("skymail:mails:read"), mail.GetSummary)
+	tasks.Get("/:id", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTask)
+	tasks.Get("/:id/queue", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTaskQueueItems)
+}
+
+// registerMailApprovalRoutes serves Mail onayı. Anyone who can use SkyMail —
+// the /v1 gate is skymail:access — submits and follows their own requests;
+// deciding one takes the approver's role, and the handler keeps an approver
+// off their own requests and a submitter's actions to the submitter.
+func registerMailApprovalRoutes(api fiber.Router, auth middlewares.AuthMiddleware, approvals handlers.MailApprovalHandler) {
+	requests := api.Group("/mail_approvals")
+	approver := auth.RequireAnyPermission(handlers.MailApproverRole)
+	requests.Post("/", approvals.Submit)
+	requests.Get("/", approvals.List)
+	requests.Get("/:id", approvals.Get)
+	requests.Post("/:id/approve", approver, approvals.Approve)
+	requests.Post("/:id/return", approver, approvals.Return)
+	requests.Post("/:id/reject", approver, approvals.Reject)
+	requests.Post("/:id/accept", approvals.Accept)
+	requests.Post("/:id/decline", approvals.Decline)
+	requests.Post("/:id/resubmit", approvals.Resubmit)
+}
+
+// expireMailApprovals expires the requests left undecided past their deadline
+// every interval, and tells each submitter. It is the only writer of an
+// expiry but one: an action on an overdue request expires it in its own
+// transaction and is refused. Reads write nothing; they report an overdue
+// request as expired, so nothing a reader sees waits on the sweep.
+func expireMailApprovals(ctx context.Context, approvals handlers.MailApprovalHandler, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			expired, err := approvals.ExpireDue(ctx)
+			if err != nil {
+				log.Error().Err(err).Msg("mail approval expiry sweep failed")
+			}
+			if expired > 0 {
+				log.Info().Int("expired", expired).Msg("expired mail approval requests past their deadline")
+			}
+		}
 	}
 }
 

@@ -12,6 +12,59 @@ import (
 	"github.com/google/uuid"
 )
 
+const addOperatorRequiredVariable = `-- name: AddOperatorRequiredVariable :one
+UPDATE templates
+SET operator_required_variables = CASE
+                                      WHEN $1::text = ANY (contract_variable_names(contract_required_variables))
+                                          THEN operator_required_variables
+                                      ELSE ARRAY(SELECT DISTINCT n COLLATE "C"
+                                                 FROM unnest(array_append(operator_required_variables, $1::text)) AS n
+                                                 ORDER BY n COLLATE "C")
+    END
+WHERE id = $2
+  AND archived_at IS NULL
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
+`
+
+type AddOperatorRequiredVariableParams struct {
+	Name string    `json:"name"`
+	ID   uuid.UUID `json:"id"`
+}
+
+// Required variable sets are sorted byte by byte (COLLATE "C"), the order the
+// handler sorts a contract set in and a missing list comes in, whatever the
+// database's collation.
+//
+// Marks a variable of a template in use as required by operators. A name
+// already in either set changes nothing: one the contract declares is required
+// already, and stays the contract's. Takes the row's lock, so the caller can
+// check the body against the sets it returns before committing.
+func (q *Queries) AddOperatorRequiredVariable(ctx context.Context, arg AddOperatorRequiredVariableParams) (Template, error) {
+	row := q.db.QueryRow(ctx, addOperatorRequiredVariable, arg.Name, arg.ID)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.Key,
+		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+		&i.SeedRefusedAt,
+		&i.SeedRefusedRules,
+		&i.SeedRefusedPayloadSha256,
+	)
+	return i, err
+}
+
 const addRecipientToMailingList = `-- name: AddRecipientToMailingList :one
 WITH target_list AS (
     SELECT mailing_lists.id
@@ -100,7 +153,7 @@ SET archived_by = CASE
     updated_at = CASE WHEN archived_at IS NULL THEN NOW() ELSE updated_at END
 WHERE id = $2
   AND system = false
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
 `
 
 type ArchiveTemplateParams struct {
@@ -124,6 +177,12 @@ func (q *Queries) ArchiveTemplate(ctx context.Context, arg ArchiveTemplateParams
 		&i.ArchivedBy,
 		&i.Key,
 		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+		&i.SeedRefusedAt,
+		&i.SeedRefusedRules,
+		&i.SeedRefusedPayloadSha256,
 	)
 	return i, err
 }
@@ -178,14 +237,81 @@ func (q *Queries) CountArchivedTemplates(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countMailApprovals = `-- name: CountMailApprovals :one
+SELECT count(*)
+FROM mail_approvals a
+WHERE ($1::text IS NULL OR a.submitter_sub = $1::text)
+  AND ($2::mail_approval_state IS NULL OR $2::mail_approval_state = (CASE
+        WHEN a.state IN ('pending', 'returned') AND a.deadline_at <= $3 THEN 'expired'
+        ELSE a.state END))
+`
+
+type CountMailApprovalsParams struct {
+	SubmitterSub *string               `json:"submitter_sub"`
+	State        NullMailApprovalState `json:"state"`
+	AsOf         time.Time             `json:"as_of"`
+}
+
+func (q *Queries) CountMailApprovals(ctx context.Context, arg CountMailApprovalsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countMailApprovals, arg.SubmitterSub, arg.State, arg.AsOf)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countMailQueueByStatus = `-- name: CountMailQueueByStatus :one
+SELECT (SELECT count(*) FROM mail_queue WHERE status = 'pending')    AS pending,
+       (SELECT count(*) FROM mail_queue WHERE status = 'processing') AS processing,
+       (SELECT count(*) FROM mail_queue WHERE status = 'sent')       AS sent,
+       (SELECT count(*) FROM mail_queue WHERE status = 'failed')     AS failed
+`
+
+type CountMailQueueByStatusRow struct {
+	Pending    int64 `json:"pending"`
+	Processing int64 `json:"processing"`
+	Sent       int64 `json:"sent"`
+	Failed     int64 `json:"failed"`
+}
+
+func (q *Queries) CountMailQueueByStatus(ctx context.Context) (CountMailQueueByStatusRow, error) {
+	row := q.db.QueryRow(ctx, countMailQueueByStatus)
+	var i CountMailQueueByStatusRow
+	err := row.Scan(
+		&i.Pending,
+		&i.Processing,
+		&i.Sent,
+		&i.Failed,
+	)
+	return i, err
+}
+
 const countMailQueueItemsByTaskId = `-- name: CountMailQueueItemsByTaskId :one
 SELECT count(*)
 FROM mail_queue
 WHERE task_id = $1
+  AND ($2::mail_queue_status IS NULL OR status = $2::mail_queue_status)
 `
 
-func (q *Queries) CountMailQueueItemsByTaskId(ctx context.Context, taskID uuid.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countMailQueueItemsByTaskId, taskID)
+type CountMailQueueItemsByTaskIdParams struct {
+	TaskID uuid.UUID           `json:"task_id"`
+	Status NullMailQueueStatus `json:"status"`
+}
+
+func (q *Queries) CountMailQueueItemsByTaskId(ctx context.Context, arg CountMailQueueItemsByTaskIdParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countMailQueueItemsByTaskId, arg.TaskID, arg.Status)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countMailTaskSends = `-- name: CountMailTaskSends :one
+SELECT count(*)
+FROM mail_tasks mt
+WHERE ($1::text IS NULL OR mail_task_status(mt.id) = $1::text)
+`
+
+func (q *Queries) CountMailTaskSends(ctx context.Context, status *string) (int64, error) {
+	row := q.db.QueryRow(ctx, countMailTaskSends, status)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -201,6 +327,28 @@ func (q *Queries) CountMailTasks(ctx context.Context) (int64, error) {
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const countMailTasksByStatus = `-- name: CountMailTasksByStatus :one
+SELECT count(*) FILTER (WHERE s.status = 'failed')  AS failed,
+       count(*) FILTER (WHERE s.status = 'sending') AS sending,
+       count(*) FILTER (WHERE s.status = 'sent')    AS sent
+FROM (SELECT mail_task_status(mt.id) AS status FROM mail_tasks mt) s
+`
+
+type CountMailTasksByStatusRow struct {
+	Failed  int64 `json:"failed"`
+	Sending int64 `json:"sending"`
+	Sent    int64 `json:"sent"`
+}
+
+// Sends by the status mail_task_status derives, over every send: the same
+// numbers CountMailTaskSends gives for each status filter.
+func (q *Queries) CountMailTasksByStatus(ctx context.Context) (CountMailTasksByStatusRow, error) {
+	row := q.db.QueryRow(ctx, countMailTasksByStatus)
+	var i CountMailTasksByStatusRow
+	err := row.Scan(&i.Failed, &i.Sending, &i.Sent)
+	return i, err
 }
 
 const countMailingLists = `-- name: CountMailingLists :one
@@ -244,6 +392,25 @@ func (q *Queries) CountRecipientsByMailingListId(ctx context.Context, mailListID
 	return count, err
 }
 
+const countTemplateVersions = `-- name: CountTemplateVersions :one
+SELECT count(*)
+FROM template_versions
+WHERE template_id = $1
+  AND ($2::boolean IS NULL OR (published_at IS NOT NULL) = $2::boolean)
+`
+
+type CountTemplateVersionsParams struct {
+	TemplateID uuid.UUID `json:"template_id"`
+	Published  *bool     `json:"published"`
+}
+
+func (q *Queries) CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countTemplateVersions, arg.TemplateID, arg.Published)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countTemplates = `-- name: CountTemplates :one
 SELECT count(*)
 FROM templates
@@ -255,6 +422,75 @@ func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const createMailApproval = `-- name: CreateMailApproval :one
+INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, submitter_email_unverified, template_id,
+                            template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables,
+                            created_at, submitted_at, deadline_at, updated_at)
+VALUES ($1, $2, $3,
+        $4, $5,
+        $6, $7, $8,
+        $9, $10, $11, $11, $12,
+        $11)
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+`
+
+type CreateMailApprovalParams struct {
+	SubmitterSub             string     `json:"submitter_sub"`
+	SubmitterName            *string    `json:"submitter_name"`
+	SubmitterEmail           *string    `json:"submitter_email"`
+	SubmitterEmailUnverified bool       `json:"submitter_email_unverified"`
+	TemplateID               uuid.UUID  `json:"template_id"`
+	TemplateVersionID        uuid.UUID  `json:"template_version_id"`
+	MailListID               *uuid.UUID `json:"mail_list_id"`
+	RecipientEmail           *string    `json:"recipient_email"`
+	RecipientFullName        *string    `json:"recipient_full_name"`
+	BodyVariables            []byte     `json:"body_variables"`
+	At                       time.Time  `json:"at"`
+	DeadlineAt               time.Time  `json:"deadline_at"`
+}
+
+// A new Mail onayı request, pending until its deadline. Every later write of
+// a request runs in a transaction that first takes its row lock
+// (LockMailApproval), so its checks, its state change and its events happen
+// in turn, and an approval queues its send once.
+func (q *Queries) CreateMailApproval(ctx context.Context, arg CreateMailApprovalParams) (MailApproval, error) {
+	row := q.db.QueryRow(ctx, createMailApproval,
+		arg.SubmitterSub,
+		arg.SubmitterName,
+		arg.SubmitterEmail,
+		arg.SubmitterEmailUnverified,
+		arg.TemplateID,
+		arg.TemplateVersionID,
+		arg.MailListID,
+		arg.RecipientEmail,
+		arg.RecipientFullName,
+		arg.BodyVariables,
+		arg.At,
+		arg.DeadlineAt,
+	)
+	var i MailApproval
+	err := row.Scan(
+		&i.ID,
+		&i.SubmitterSub,
+		&i.SubmitterName,
+		&i.SubmitterEmail,
+		&i.SubmitterEmailUnverified,
+		&i.State,
+		&i.TemplateID,
+		&i.TemplateVersionID,
+		&i.MailListID,
+		&i.RecipientEmail,
+		&i.RecipientFullName,
+		&i.BodyVariables,
+		&i.CreatedAt,
+		&i.SubmittedAt,
+		&i.DeadlineAt,
+		&i.UpdatedAt,
+		&i.TaskID,
+	)
+	return i, err
 }
 
 type CreateMailQueueItemsParams struct {
@@ -433,7 +669,7 @@ func (q *Queries) CreateSingleMailTask(ctx context.Context, arg CreateSingleMail
 const createTemplate = `-- name: CreateTemplate :one
 INSERT INTO templates (name, subject, html_content, plain_text_content, react_email_content, key)
 VALUES ($1, $2, $3, $4, $5, $6::text)
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
 `
 
 type CreateTemplateParams struct {
@@ -468,64 +704,36 @@ func (q *Queries) CreateTemplate(ctx context.Context, arg CreateTemplateParams) 
 		&i.ArchivedBy,
 		&i.Key,
 		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+		&i.SeedRefusedAt,
+		&i.SeedRefusedRules,
+		&i.SeedRefusedPayloadSha256,
 	)
 	return i, err
 }
 
-const getAllMailTasks = `-- name: GetAllMailTasks :many
-SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at,
-       t.name  AS template_name,
-       ml.name AS mail_list_name
-FROM mail_tasks mt
-         LEFT JOIN templates t ON mt.template_id = t.id
-         LEFT JOIN mailing_lists ml ON mt.mail_list_id = ml.id
-ORDER BY mt.created_at DESC
-LIMIT $1 OFFSET $2
+const discardTemplateDraft = `-- name: DiscardTemplateDraft :exec
+UPDATE template_versions
+SET discarded_at = COALESCE(discarded_at, NOW())
+WHERE template_id = $1
+  AND id = $2
+  AND published_at IS NULL
 `
 
-type GetAllMailTasksParams struct {
-	Limit  int32 `json:"limit"`
-	Offset int32 `json:"offset"`
+type DiscardTemplateDraftParams struct {
+	TemplateID uuid.UUID `json:"template_id"`
+	ID         uuid.UUID `json:"id"`
 }
 
-type GetAllMailTasksRow struct {
-	ID            uuid.UUID  `json:"id"`
-	SentBy        string     `json:"sent_by"`
-	TemplateID    *uuid.UUID `json:"template_id"`
-	MailListID    *uuid.UUID `json:"mail_list_id"`
-	BodyVariables []byte     `json:"body_variables"`
-	CreatedAt     time.Time  `json:"created_at"`
-	TemplateName  *string    `json:"template_name"`
-	MailListName  *string    `json:"mail_list_name"`
-}
-
-func (q *Queries) GetAllMailTasks(ctx context.Context, arg GetAllMailTasksParams) ([]GetAllMailTasksRow, error) {
-	rows, err := q.db.Query(ctx, getAllMailTasks, arg.Limit, arg.Offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []GetAllMailTasksRow
-	for rows.Next() {
-		var i GetAllMailTasksRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.SentBy,
-			&i.TemplateID,
-			&i.MailListID,
-			&i.BodyVariables,
-			&i.CreatedAt,
-			&i.TemplateName,
-			&i.MailListName,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+// Discards a draft: it stays in the history, but it is nobody's draft in
+// progress any more and it is never published. A draft discarded already
+// keeps the time it was. The caller holds the template row's lock and has
+// checked that the version is a draft of this template.
+func (q *Queries) DiscardTemplateDraft(ctx context.Context, arg DiscardTemplateDraftParams) error {
+	_, err := q.db.Exec(ctx, discardTemplateDraft, arg.TemplateID, arg.ID)
+	return err
 }
 
 const getAllMailingLists = `-- name: GetAllMailingLists :many
@@ -610,7 +818,7 @@ func (q *Queries) GetAllMailingListsIncludingArchived(ctx context.Context, arg G
 }
 
 const getAllTemplates = `-- name: GetAllTemplates :many
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
 FROM templates
 WHERE archived_at IS NULL
 ORDER BY created_at DESC
@@ -644,6 +852,12 @@ func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams
 			&i.ArchivedBy,
 			&i.Key,
 			&i.System,
+			&i.PublishedVersionID,
+			&i.ContractRequiredVariables,
+			&i.OperatorRequiredVariables,
+			&i.SeedRefusedAt,
+			&i.SeedRefusedRules,
+			&i.SeedRefusedPayloadSha256,
 		); err != nil {
 			return nil, err
 		}
@@ -656,7 +870,7 @@ func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams
 }
 
 const getAllTemplatesIncludingArchived = `-- name: GetAllTemplatesIncludingArchived :many
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
 FROM templates
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
@@ -689,6 +903,12 @@ func (q *Queries) GetAllTemplatesIncludingArchived(ctx context.Context, arg GetA
 			&i.ArchivedBy,
 			&i.Key,
 			&i.System,
+			&i.PublishedVersionID,
+			&i.ContractRequiredVariables,
+			&i.OperatorRequiredVariables,
+			&i.SeedRefusedAt,
+			&i.SeedRefusedRules,
+			&i.SeedRefusedPayloadSha256,
 		); err != nil {
 			return nil, err
 		}
@@ -742,7 +962,7 @@ func (q *Queries) GetArchivedMailingLists(ctx context.Context, arg GetArchivedMa
 }
 
 const getArchivedTemplates = `-- name: GetArchivedTemplates :many
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
 FROM templates
 WHERE archived_at IS NOT NULL
 ORDER BY archived_at DESC
@@ -776,6 +996,12 @@ func (q *Queries) GetArchivedTemplates(ctx context.Context, arg GetArchivedTempl
 			&i.ArchivedBy,
 			&i.Key,
 			&i.System,
+			&i.PublishedVersionID,
+			&i.ContractRequiredVariables,
+			&i.OperatorRequiredVariables,
+			&i.SeedRefusedAt,
+			&i.SeedRefusedRules,
+			&i.SeedRefusedPayloadSha256,
 		); err != nil {
 			return nil, err
 		}
@@ -787,18 +1013,133 @@ func (q *Queries) GetArchivedTemplates(ctx context.Context, arg GetArchivedTempl
 	return items, nil
 }
 
+const getDailySentCounts = `-- name: GetDailySentCounts :many
+WITH today AS (SELECT ($2::timestamptz AT TIME ZONE $1::text)::date AS day),
+     days AS (SELECT today.day - back AS day
+              FROM today,
+                   generate_series(0, $3::int - 1) AS back)
+SELECT d.day::date        AS day,
+       count(q.created_at) AS sent
+FROM days d
+         LEFT JOIN mail_queue q
+                   ON q.status = 'sent'
+                       AND q.created_at >= (d.day::timestamp AT TIME ZONE $1::text)
+                       AND q.created_at < ((d.day + 1)::timestamp AT TIME ZONE $1::text)
+GROUP BY d.day
+ORDER BY d.day
+`
+
+type GetDailySentCountsParams struct {
+	TimeZone string    `json:"time_zone"`
+	AsOf     time.Time `json:"as_of"`
+	Days     int       `json:"days"`
+}
+
+type GetDailySentCountsRow struct {
+	Day  time.Time `json:"day"`
+	Sent int64     `json:"sent"`
+}
+
+// A queue row has no sent time of its own. created_at — when that recipient's
+// mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
+// mail that goes through on its first attempt leaves within seconds, and only a
+// retried one (the ladder tops out under eight minutes) can land later.
+// next_attempt_at is not used: every row older than the retry migration holds
+// that migration's timestamp in it.
+// Days are calendar days in time_zone; the series ends on as_of's day and has
+// one row per day, zero-filled.
+func (q *Queries) GetDailySentCounts(ctx context.Context, arg GetDailySentCountsParams) ([]GetDailySentCountsRow, error) {
+	rows, err := q.db.Query(ctx, getDailySentCounts, arg.TimeZone, arg.AsOf, arg.Days)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetDailySentCountsRow
+	for rows.Next() {
+		var i GetDailySentCountsRow
+		if err := rows.Scan(&i.Day, &i.Sent); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getMailApproval = `-- name: GetMailApproval :one
+SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.recipient_email, a.recipient_full_name, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.task_id,
+       t.name                             AS template_name,
+       t.key                              AS template_key,
+       t.published_version_id             AS template_published_version_id,
+       (t.archived_at IS NOT NULL)::boolean AS template_archived,
+       ml.name                            AS mail_list_name,
+       (ml.id IS NOT NULL)::boolean       AS internal_mail_list
+FROM mail_approvals a
+         JOIN templates t ON t.id = a.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = a.mail_list_id
+WHERE a.id = $1
+`
+
+type GetMailApprovalRow struct {
+	MailApproval               MailApproval `json:"mail_approval"`
+	TemplateName               string       `json:"template_name"`
+	TemplateKey                *string      `json:"template_key"`
+	TemplatePublishedVersionID *uuid.UUID   `json:"template_published_version_id"`
+	TemplateArchived           bool         `json:"template_archived"`
+	MailListName               *string      `json:"mail_list_name"`
+	InternalMailList           bool         `json:"internal_mail_list"`
+}
+
+// A request as every screen shows it: with its template's name and key, the
+// version the template publishes now, and its list's name when the list is an
+// internal one (a Keycloak group's is Keycloak's to give).
+func (q *Queries) GetMailApproval(ctx context.Context, id uuid.UUID) (GetMailApprovalRow, error) {
+	row := q.db.QueryRow(ctx, getMailApproval, id)
+	var i GetMailApprovalRow
+	err := row.Scan(
+		&i.MailApproval.ID,
+		&i.MailApproval.SubmitterSub,
+		&i.MailApproval.SubmitterName,
+		&i.MailApproval.SubmitterEmail,
+		&i.MailApproval.SubmitterEmailUnverified,
+		&i.MailApproval.State,
+		&i.MailApproval.TemplateID,
+		&i.MailApproval.TemplateVersionID,
+		&i.MailApproval.MailListID,
+		&i.MailApproval.RecipientEmail,
+		&i.MailApproval.RecipientFullName,
+		&i.MailApproval.BodyVariables,
+		&i.MailApproval.CreatedAt,
+		&i.MailApproval.SubmittedAt,
+		&i.MailApproval.DeadlineAt,
+		&i.MailApproval.UpdatedAt,
+		&i.MailApproval.TaskID,
+		&i.TemplateName,
+		&i.TemplateKey,
+		&i.TemplatePublishedVersionID,
+		&i.TemplateArchived,
+		&i.MailListName,
+		&i.InternalMailList,
+	)
+	return i, err
+}
+
 const getMailQueueItemsByTaskId = `-- name: GetMailQueueItemsByTaskId :many
 SELECT id, recipient_full_name, recipient_email, status, error, attempts, next_attempt_at, created_at
 FROM mail_queue
 WHERE task_id = $1
-ORDER BY created_at DESC
+  AND ($4::mail_queue_status IS NULL OR status = $4::mail_queue_status)
+ORDER BY created_at DESC, id DESC
 LIMIT $2 OFFSET $3
 `
 
 type GetMailQueueItemsByTaskIdParams struct {
-	TaskID uuid.UUID `json:"task_id"`
-	Limit  int32     `json:"limit"`
-	Offset int32     `json:"offset"`
+	TaskID uuid.UUID           `json:"task_id"`
+	Limit  int32               `json:"limit"`
+	Offset int32               `json:"offset"`
+	Status NullMailQueueStatus `json:"status"`
 }
 
 type GetMailQueueItemsByTaskIdRow struct {
@@ -812,8 +1153,16 @@ type GetMailQueueItemsByTaskIdRow struct {
 	CreatedAt         *time.Time          `json:"created_at"`
 }
 
+// A send's recipients, newest first. A list send's rows come from one insert
+// and share a created_at, so the id breaks the tie: pages neither repeat nor
+// skip a recipient. A NULL status lists every recipient.
 func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueueItemsByTaskIdParams) ([]GetMailQueueItemsByTaskIdRow, error) {
-	rows, err := q.db.Query(ctx, getMailQueueItemsByTaskId, arg.TaskID, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, getMailQueueItemsByTaskId,
+		arg.TaskID,
+		arg.Limit,
+		arg.Offset,
+		arg.Status,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1022,7 +1371,7 @@ func (q *Queries) GetRecipientsByMailingListId(ctx context.Context, arg GetRecip
 }
 
 const getTemplateById = `-- name: GetTemplateById :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
 FROM templates
 WHERE id = $1
   AND archived_at IS NULL
@@ -1044,12 +1393,18 @@ func (q *Queries) GetTemplateById(ctx context.Context, id uuid.UUID) (Template, 
 		&i.ArchivedBy,
 		&i.Key,
 		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+		&i.SeedRefusedAt,
+		&i.SeedRefusedRules,
+		&i.SeedRefusedPayloadSha256,
 	)
 	return i, err
 }
 
 const getTemplateByIdIncludingArchived = `-- name: GetTemplateByIdIncludingArchived :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
 FROM templates
 WHERE id = $1
 `
@@ -1070,12 +1425,18 @@ func (q *Queries) GetTemplateByIdIncludingArchived(ctx context.Context, id uuid.
 		&i.ArchivedBy,
 		&i.Key,
 		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+		&i.SeedRefusedAt,
+		&i.SeedRefusedRules,
+		&i.SeedRefusedPayloadSha256,
 	)
 	return i, err
 }
 
 const getTemplateByKey = `-- name: GetTemplateByKey :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
 FROM templates
 WHERE key = $1
   AND archived_at IS NULL
@@ -1097,6 +1458,104 @@ func (q *Queries) GetTemplateByKey(ctx context.Context, key *string) (Template, 
 		&i.ArchivedBy,
 		&i.Key,
 		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+		&i.SeedRefusedAt,
+		&i.SeedRefusedRules,
+		&i.SeedRefusedPayloadSha256,
+	)
+	return i, err
+}
+
+const getTemplateVersion = `-- name: GetTemplateVersion :one
+SELECT s.id, s.template_id, s.seq, s.subject, s.requested_subject, s.main_mode, s.author_kind, s.author_sub, s.author_name, s.created_at, s.published_at, s.base_version_id, s.is_current, s.discarded_at, s.name,
+       v.jsx_source,
+       v.visual_source,
+       v.html_source,
+       v.html_content,
+       v.plain_text_content
+FROM template_version_summaries s
+         JOIN template_versions v ON v.id = s.id
+WHERE s.template_id = $1
+  AND s.id = $2
+`
+
+type GetTemplateVersionParams struct {
+	TemplateID uuid.UUID `json:"template_id"`
+	ID         uuid.UUID `json:"id"`
+}
+
+type GetTemplateVersionRow struct {
+	TemplateVersionSummary TemplateVersionSummary `json:"template_version_summary"`
+	JsxSource              *string                `json:"jsx_source"`
+	VisualSource           []byte                 `json:"visual_source"`
+	HtmlSource             *string                `json:"html_source"`
+	HtmlContent            string                 `json:"html_content"`
+	PlainTextContent       string                 `json:"plain_text_content"`
+}
+
+// One version of one template, whole. A version of another template is not
+// found here.
+func (q *Queries) GetTemplateVersion(ctx context.Context, arg GetTemplateVersionParams) (GetTemplateVersionRow, error) {
+	row := q.db.QueryRow(ctx, getTemplateVersion, arg.TemplateID, arg.ID)
+	var i GetTemplateVersionRow
+	err := row.Scan(
+		&i.TemplateVersionSummary.ID,
+		&i.TemplateVersionSummary.TemplateID,
+		&i.TemplateVersionSummary.Seq,
+		&i.TemplateVersionSummary.Subject,
+		&i.TemplateVersionSummary.RequestedSubject,
+		&i.TemplateVersionSummary.MainMode,
+		&i.TemplateVersionSummary.AuthorKind,
+		&i.TemplateVersionSummary.AuthorSub,
+		&i.TemplateVersionSummary.AuthorName,
+		&i.TemplateVersionSummary.CreatedAt,
+		&i.TemplateVersionSummary.PublishedAt,
+		&i.TemplateVersionSummary.BaseVersionID,
+		&i.TemplateVersionSummary.IsCurrent,
+		&i.TemplateVersionSummary.DiscardedAt,
+		&i.TemplateVersionSummary.Name,
+		&i.JsxSource,
+		&i.VisualSource,
+		&i.HtmlSource,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+	)
+	return i, err
+}
+
+const getTemplateVersionSummary = `-- name: GetTemplateVersionSummary :one
+SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at, name
+FROM template_version_summaries
+WHERE template_id = $1
+  AND id = $2
+`
+
+type GetTemplateVersionSummaryParams struct {
+	TemplateID uuid.UUID `json:"template_id"`
+	ID         uuid.UUID `json:"id"`
+}
+
+func (q *Queries) GetTemplateVersionSummary(ctx context.Context, arg GetTemplateVersionSummaryParams) (TemplateVersionSummary, error) {
+	row := q.db.QueryRow(ctx, getTemplateVersionSummary, arg.TemplateID, arg.ID)
+	var i TemplateVersionSummary
+	err := row.Scan(
+		&i.ID,
+		&i.TemplateID,
+		&i.Seq,
+		&i.Subject,
+		&i.RequestedSubject,
+		&i.MainMode,
+		&i.AuthorKind,
+		&i.AuthorSub,
+		&i.AuthorName,
+		&i.CreatedAt,
+		&i.PublishedAt,
+		&i.BaseVersionID,
+		&i.IsCurrent,
+		&i.DiscardedAt,
+		&i.Name,
 	)
 	return i, err
 }
@@ -1132,6 +1591,692 @@ func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) 
 		&i.MailListID,
 		&i.BodyVariables,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const isJSXSource = `-- name: IsJSXSource :one
+SELECT (template_jsx_source($1::text) IS NOT NULL)::boolean AS is_source
+`
+
+// Whether text is a JSX source by the rule the migration and the old panel's
+// writes read react_email_content with: something other than whitespace and
+// comments is left in it.
+func (q *Queries) IsJSXSource(ctx context.Context, content string) (bool, error) {
+	row := q.db.QueryRow(ctx, isJSXSource, content)
+	var is_source bool
+	err := row.Scan(&is_source)
+	return is_source, err
+}
+
+const lastTemplateSeedVersion = `-- name: LastTemplateSeedVersion :one
+SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at, name
+FROM template_version_summaries
+WHERE template_id = $1
+  AND author_kind = 'template_seed'
+ORDER BY seq DESC
+LIMIT 1
+`
+
+// The last version a Template seed wrote of a template. Seed versions are
+// always published, so this is the seed's last word on the template.
+func (q *Queries) LastTemplateSeedVersion(ctx context.Context, templateID uuid.UUID) (TemplateVersionSummary, error) {
+	row := q.db.QueryRow(ctx, lastTemplateSeedVersion, templateID)
+	var i TemplateVersionSummary
+	err := row.Scan(
+		&i.ID,
+		&i.TemplateID,
+		&i.Seq,
+		&i.Subject,
+		&i.RequestedSubject,
+		&i.MainMode,
+		&i.AuthorKind,
+		&i.AuthorSub,
+		&i.AuthorName,
+		&i.CreatedAt,
+		&i.PublishedAt,
+		&i.BaseVersionID,
+		&i.IsCurrent,
+		&i.DiscardedAt,
+		&i.Name,
+	)
+	return i, err
+}
+
+const listLastMailApprovalEvents = `-- name: ListLastMailApprovalEvents :many
+SELECT DISTINCT ON (approval_id) id, approval_id, seq, kind, actor_sub, actor_name, note, changes, task_id, created_at
+FROM mail_approval_events
+WHERE approval_id = ANY ($1::uuid[])
+ORDER BY approval_id, seq DESC
+`
+
+// The last event of each of the requests, for the list.
+func (q *Queries) ListLastMailApprovalEvents(ctx context.Context, approvalIds []uuid.UUID) ([]MailApprovalEvent, error) {
+	rows, err := q.db.Query(ctx, listLastMailApprovalEvents, approvalIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MailApprovalEvent
+	for rows.Next() {
+		var i MailApprovalEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApprovalID,
+			&i.Seq,
+			&i.Kind,
+			&i.ActorSub,
+			&i.ActorName,
+			&i.Note,
+			&i.Changes,
+			&i.TaskID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMailApprovalEvents = `-- name: ListMailApprovalEvents :many
+SELECT id, approval_id, seq, kind, actor_sub, actor_name, note, changes, task_id, created_at
+FROM mail_approval_events
+WHERE approval_id = $1
+ORDER BY seq
+`
+
+func (q *Queries) ListMailApprovalEvents(ctx context.Context, approvalID uuid.UUID) ([]MailApprovalEvent, error) {
+	rows, err := q.db.Query(ctx, listMailApprovalEvents, approvalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MailApprovalEvent
+	for rows.Next() {
+		var i MailApprovalEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApprovalID,
+			&i.Seq,
+			&i.Kind,
+			&i.ActorSub,
+			&i.ActorName,
+			&i.Note,
+			&i.Changes,
+			&i.TaskID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMailApprovals = `-- name: ListMailApprovals :many
+SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.recipient_email, a.recipient_full_name, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.task_id,
+       t.name                             AS template_name,
+       t.key                              AS template_key,
+       t.published_version_id             AS template_published_version_id,
+       (t.archived_at IS NOT NULL)::boolean AS template_archived,
+       ml.name                            AS mail_list_name,
+       (ml.id IS NOT NULL)::boolean       AS internal_mail_list
+FROM mail_approvals a
+         JOIN templates t ON t.id = a.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = a.mail_list_id
+WHERE ($3::text IS NULL OR a.submitter_sub = $3::text)
+  AND ($4::mail_approval_state IS NULL OR $4::mail_approval_state = (CASE
+        WHEN a.state IN ('pending', 'returned') AND a.deadline_at <= $5 THEN 'expired'
+        ELSE a.state END))
+ORDER BY a.submitted_at DESC, a.id DESC
+LIMIT $1 OFFSET $2
+`
+
+type ListMailApprovalsParams struct {
+	Limit        int32                 `json:"limit"`
+	Offset       int32                 `json:"offset"`
+	SubmitterSub *string               `json:"submitter_sub"`
+	State        NullMailApprovalState `json:"state"`
+	AsOf         time.Time             `json:"as_of"`
+}
+
+type ListMailApprovalsRow struct {
+	MailApproval               MailApproval `json:"mail_approval"`
+	TemplateName               string       `json:"template_name"`
+	TemplateKey                *string      `json:"template_key"`
+	TemplatePublishedVersionID *uuid.UUID   `json:"template_published_version_id"`
+	TemplateArchived           bool         `json:"template_archived"`
+	MailListName               *string      `json:"mail_list_name"`
+	InternalMailList           bool         `json:"internal_mail_list"`
+}
+
+// Requests newest submission first, the id breaking ties. A NULL submitter
+// lists everyone's and a NULL state every state. A request is filtered by the
+// state it is in as of as_of: one undecided past its deadline is expired,
+// whether or not the sweep has written it yet.
+func (q *Queries) ListMailApprovals(ctx context.Context, arg ListMailApprovalsParams) ([]ListMailApprovalsRow, error) {
+	rows, err := q.db.Query(ctx, listMailApprovals,
+		arg.Limit,
+		arg.Offset,
+		arg.SubmitterSub,
+		arg.State,
+		arg.AsOf,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMailApprovalsRow
+	for rows.Next() {
+		var i ListMailApprovalsRow
+		if err := rows.Scan(
+			&i.MailApproval.ID,
+			&i.MailApproval.SubmitterSub,
+			&i.MailApproval.SubmitterName,
+			&i.MailApproval.SubmitterEmail,
+			&i.MailApproval.SubmitterEmailUnverified,
+			&i.MailApproval.State,
+			&i.MailApproval.TemplateID,
+			&i.MailApproval.TemplateVersionID,
+			&i.MailApproval.MailListID,
+			&i.MailApproval.RecipientEmail,
+			&i.MailApproval.RecipientFullName,
+			&i.MailApproval.BodyVariables,
+			&i.MailApproval.CreatedAt,
+			&i.MailApproval.SubmittedAt,
+			&i.MailApproval.DeadlineAt,
+			&i.MailApproval.UpdatedAt,
+			&i.MailApproval.TaskID,
+			&i.TemplateName,
+			&i.TemplateKey,
+			&i.TemplatePublishedVersionID,
+			&i.TemplateArchived,
+			&i.MailListName,
+			&i.InternalMailList,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMailTaskSends = `-- name: ListMailTaskSends :many
+WITH page AS (SELECT mt.id
+              FROM mail_tasks mt
+              WHERE ($3::uuid IS NULL OR mt.id = $3::uuid)
+                AND ($4::text IS NULL OR mail_task_status(mt.id) = $4::text)
+              ORDER BY mt.created_at DESC, mt.id DESC
+              LIMIT $1 OFFSET $2)
+SELECT mt.id,
+       mt.sent_by,
+       mt.template_id,
+       mt.mail_list_id,
+       mt.body_variables,
+       mt.created_at,
+       t.name                       AS template_name,
+       t.key                        AS template_key,
+       ml.name                      AS mail_list_name,
+       (ml.id IS NOT NULL)::boolean AS internal_mail_list,
+       mail_task_status(mt.id)      AS status,
+       rc.pending,
+       rc.processing,
+       rc.sent,
+       rc.failed,
+       single.recipient_full_name   AS single_recipient_full_name,
+       single.recipient_email       AS single_recipient_email
+FROM page
+         JOIN mail_tasks mt ON mt.id = page.id
+         LEFT JOIN templates t ON mt.template_id = t.id
+         LEFT JOIN mailing_lists ml ON mt.mail_list_id = ml.id
+         CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE q.status = 'pending')    AS pending,
+                                    count(*) FILTER (WHERE q.status = 'processing') AS processing,
+                                    count(*) FILTER (WHERE q.status = 'sent')       AS sent,
+                                    count(*) FILTER (WHERE q.status = 'failed')     AS failed
+                             FROM mail_queue q
+                             WHERE q.task_id = mt.id) rc
+         LEFT JOIN mail_queue single
+                   ON single.id = (SELECT q.id
+                                   FROM mail_queue q
+                                   WHERE mt.mail_list_id IS NULL
+                                     AND q.task_id = mt.id
+                                   ORDER BY q.created_at, q.id
+                                   LIMIT 1)
+ORDER BY mt.created_at DESC, mt.id DESC
+`
+
+type ListMailTaskSendsParams struct {
+	Limit  int32      `json:"limit"`
+	Offset int32      `json:"offset"`
+	TaskID *uuid.UUID `json:"task_id"`
+	Status *string    `json:"status"`
+}
+
+type ListMailTaskSendsRow struct {
+	ID                      uuid.UUID  `json:"id"`
+	SentBy                  string     `json:"sent_by"`
+	TemplateID              *uuid.UUID `json:"template_id"`
+	MailListID              *uuid.UUID `json:"mail_list_id"`
+	BodyVariables           []byte     `json:"body_variables"`
+	CreatedAt               time.Time  `json:"created_at"`
+	TemplateName            *string    `json:"template_name"`
+	TemplateKey             *string    `json:"template_key"`
+	MailListName            *string    `json:"mail_list_name"`
+	InternalMailList        bool       `json:"internal_mail_list"`
+	Status                  string     `json:"status"`
+	Pending                 int64      `json:"pending"`
+	Processing              int64      `json:"processing"`
+	Sent                    int64      `json:"sent"`
+	Failed                  int64      `json:"failed"`
+	SingleRecipientFullName *string    `json:"single_recipient_full_name"`
+	SingleRecipientEmail    *string    `json:"single_recipient_email"`
+}
+
+// A send as every screen shows it — the home screen, the send list and a
+// send's own page: the task, the template it used, who it went to, its status
+// as mail_task_status derives it, and its recipients by status. A NULL task_id
+// lists every send and a NULL status every status. The page is cut first so
+// only its rows are counted.
+func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error) {
+	rows, err := q.db.Query(ctx, listMailTaskSends,
+		arg.Limit,
+		arg.Offset,
+		arg.TaskID,
+		arg.Status,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMailTaskSendsRow
+	for rows.Next() {
+		var i ListMailTaskSendsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SentBy,
+			&i.TemplateID,
+			&i.MailListID,
+			&i.BodyVariables,
+			&i.CreatedAt,
+			&i.TemplateName,
+			&i.TemplateKey,
+			&i.MailListName,
+			&i.InternalMailList,
+			&i.Status,
+			&i.Pending,
+			&i.Processing,
+			&i.Sent,
+			&i.Failed,
+			&i.SingleRecipientFullName,
+			&i.SingleRecipientEmail,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOperatorVersionsAfter = `-- name: ListOperatorVersionsAfter :many
+SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at, name
+FROM template_version_summaries
+WHERE template_id = $1
+  AND author_kind = 'operator'
+  AND discarded_at IS NULL
+  AND seq > $2::int
+ORDER BY seq
+`
+
+type ListOperatorVersionsAfterParams struct {
+	TemplateID uuid.UUID `json:"template_id"`
+	AfterSeq   int       `json:"after_seq"`
+}
+
+// An operator's versions of a template numbered after the given one, oldest
+// first, drafts included and discarded drafts left out: operator work a seed
+// written after them would pass over.
+func (q *Queries) ListOperatorVersionsAfter(ctx context.Context, arg ListOperatorVersionsAfterParams) ([]TemplateVersionSummary, error) {
+	rows, err := q.db.Query(ctx, listOperatorVersionsAfter, arg.TemplateID, arg.AfterSeq)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TemplateVersionSummary
+	for rows.Next() {
+		var i TemplateVersionSummary
+		if err := rows.Scan(
+			&i.ID,
+			&i.TemplateID,
+			&i.Seq,
+			&i.Subject,
+			&i.RequestedSubject,
+			&i.MainMode,
+			&i.AuthorKind,
+			&i.AuthorSub,
+			&i.AuthorName,
+			&i.CreatedAt,
+			&i.PublishedAt,
+			&i.BaseVersionID,
+			&i.IsCurrent,
+			&i.DiscardedAt,
+			&i.Name,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPublishedMainModes = `-- name: ListPublishedMainModes :many
+SELECT t.id AS template_id, v.main_mode
+FROM templates t
+         JOIN template_versions v ON v.id = t.published_version_id
+WHERE t.id = ANY ($1::uuid[])
+`
+
+type ListPublishedMainModesRow struct {
+	TemplateID uuid.UUID     `json:"template_id"`
+	MainMode   AuthoringMode `json:"main_mode"`
+}
+
+// The Authoring mode of each template's Main source as it is sent: its
+// published version's.
+func (q *Queries) ListPublishedMainModes(ctx context.Context, templateIds []uuid.UUID) ([]ListPublishedMainModesRow, error) {
+	rows, err := q.db.Query(ctx, listPublishedMainModes, templateIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPublishedMainModesRow
+	for rows.Next() {
+		var i ListPublishedMainModesRow
+		if err := rows.Scan(&i.TemplateID, &i.MainMode); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTemplateDrafts = `-- name: ListTemplateDrafts :many
+SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at, name
+FROM template_version_summaries s
+WHERE s.id IN (SELECT DISTINCT ON (v.template_id, v.author_sub) v.id
+               FROM template_versions v
+               WHERE v.template_id = ANY ($1::uuid[])
+                 AND v.author_kind = 'operator'
+               ORDER BY v.template_id, v.author_sub, v.seq DESC)
+  AND s.published_at IS NULL
+  AND s.discarded_at IS NULL
+ORDER BY s.template_id, s.seq DESC
+`
+
+// Each operator's draft in progress on the given templates, newest first: the
+// newest version an operator wrote of a template, when it is neither published
+// nor discarded. An operator's later version supersedes their earlier drafts,
+// so those are not listed, and discarding their newest leaves them none; a
+// draft that someone else's publish made stale still is listed, until its
+// author writes again or discards it.
+func (q *Queries) ListTemplateDrafts(ctx context.Context, templateIds []uuid.UUID) ([]TemplateVersionSummary, error) {
+	rows, err := q.db.Query(ctx, listTemplateDrafts, templateIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TemplateVersionSummary
+	for rows.Next() {
+		var i TemplateVersionSummary
+		if err := rows.Scan(
+			&i.ID,
+			&i.TemplateID,
+			&i.Seq,
+			&i.Subject,
+			&i.RequestedSubject,
+			&i.MainMode,
+			&i.AuthorKind,
+			&i.AuthorSub,
+			&i.AuthorName,
+			&i.CreatedAt,
+			&i.PublishedAt,
+			&i.BaseVersionID,
+			&i.IsCurrent,
+			&i.DiscardedAt,
+			&i.Name,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTemplateVersions = `-- name: ListTemplateVersions :many
+SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at, name
+FROM template_version_summaries
+WHERE template_id = $1
+  AND ($4::boolean IS NULL OR (published_at IS NOT NULL) = $4::boolean)
+ORDER BY seq DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListTemplateVersionsParams struct {
+	TemplateID uuid.UUID `json:"template_id"`
+	Limit      int32     `json:"limit"`
+	Offset     int32     `json:"offset"`
+	Published  *bool     `json:"published"`
+}
+
+// A template's Mail template versions, newest first, without their sources or
+// render. A NULL published lists every version; true only published ones,
+// false only drafts, discarded ones included.
+func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]TemplateVersionSummary, error) {
+	rows, err := q.db.Query(ctx, listTemplateVersions,
+		arg.TemplateID,
+		arg.Limit,
+		arg.Offset,
+		arg.Published,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TemplateVersionSummary
+	for rows.Next() {
+		var i TemplateVersionSummary
+		if err := rows.Scan(
+			&i.ID,
+			&i.TemplateID,
+			&i.Seq,
+			&i.Subject,
+			&i.RequestedSubject,
+			&i.MainMode,
+			&i.AuthorKind,
+			&i.AuthorSub,
+			&i.AuthorName,
+			&i.CreatedAt,
+			&i.PublishedAt,
+			&i.BaseVersionID,
+			&i.IsCurrent,
+			&i.DiscardedAt,
+			&i.Name,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockDueMailApproval = `-- name: LockDueMailApproval :one
+SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+FROM mail_approvals
+WHERE state IN ('pending', 'returned')
+  AND deadline_at <= $1
+ORDER BY deadline_at, id
+LIMIT 1 FOR UPDATE SKIP LOCKED
+`
+
+// The next undecided request past its deadline that no one is deciding right
+// now, locked for the expiry sweep.
+func (q *Queries) LockDueMailApproval(ctx context.Context, asOf time.Time) (MailApproval, error) {
+	row := q.db.QueryRow(ctx, lockDueMailApproval, asOf)
+	var i MailApproval
+	err := row.Scan(
+		&i.ID,
+		&i.SubmitterSub,
+		&i.SubmitterName,
+		&i.SubmitterEmail,
+		&i.SubmitterEmailUnverified,
+		&i.State,
+		&i.TemplateID,
+		&i.TemplateVersionID,
+		&i.MailListID,
+		&i.RecipientEmail,
+		&i.RecipientFullName,
+		&i.BodyVariables,
+		&i.CreatedAt,
+		&i.SubmittedAt,
+		&i.DeadlineAt,
+		&i.UpdatedAt,
+		&i.TaskID,
+	)
+	return i, err
+}
+
+const lockMailApproval = `-- name: LockMailApproval :one
+SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+FROM mail_approvals
+WHERE id = $1
+    FOR UPDATE NOWAIT
+`
+
+// Takes a request's row lock without waiting for it: a request someone else is
+// deciding right now is refused (55P03) rather than queued behind them — the
+// lock is held while the send is queued, and a wait would hold a connection
+// that send needs.
+func (q *Queries) LockMailApproval(ctx context.Context, id uuid.UUID) (MailApproval, error) {
+	row := q.db.QueryRow(ctx, lockMailApproval, id)
+	var i MailApproval
+	err := row.Scan(
+		&i.ID,
+		&i.SubmitterSub,
+		&i.SubmitterName,
+		&i.SubmitterEmail,
+		&i.SubmitterEmailUnverified,
+		&i.State,
+		&i.TemplateID,
+		&i.TemplateVersionID,
+		&i.MailListID,
+		&i.RecipientEmail,
+		&i.RecipientFullName,
+		&i.BodyVariables,
+		&i.CreatedAt,
+		&i.SubmittedAt,
+		&i.DeadlineAt,
+		&i.UpdatedAt,
+		&i.TaskID,
+	)
+	return i, err
+}
+
+const lockTemplate = `-- name: LockTemplate :one
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
+FROM templates
+WHERE id = $1
+  AND archived_at IS NULL
+    FOR UPDATE
+`
+
+// Takes a template row's lock for a write that does not change the row first —
+// saving a draft, restoring a version, publishing, discarding. A version is
+// numbered after the lock is taken, and the old panel's and the seed's writes
+// take the same lock by updating the row, so every writer of one template
+// numbers its version in turn. An archived template is not found here, as it
+// is not for any other write.
+func (q *Queries) LockTemplate(ctx context.Context, id uuid.UUID) (Template, error) {
+	row := q.db.QueryRow(ctx, lockTemplate, id)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.Key,
+		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+		&i.SeedRefusedAt,
+		&i.SeedRefusedRules,
+		&i.SeedRefusedPayloadSha256,
+	)
+	return i, err
+}
+
+const lockTemplateByKey = `-- name: LockTemplateByKey :one
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
+FROM templates
+WHERE key = $1
+    FOR UPDATE
+`
+
+// Takes the lock of the template a Template key names, archived or not, so
+// the seed's upsert can judge the template before it writes: every other
+// writer of the template waits until it has. No row: the key is new.
+func (q *Queries) LockTemplateByKey(ctx context.Context, key *string) (Template, error) {
+	row := q.db.QueryRow(ctx, lockTemplateByKey, key)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.Key,
+		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+		&i.SeedRefusedAt,
+		&i.SeedRefusedRules,
+		&i.SeedRefusedPayloadSha256,
 	)
 	return i, err
 }
@@ -1179,6 +2324,398 @@ func (q *Queries) ProcessQueueItems(ctx context.Context) ([]MailQueue, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const publishTemplateDraft = `-- name: PublishTemplateDraft :one
+WITH published AS (
+    UPDATE template_versions v
+        SET published_at = NOW()
+        WHERE v.id = $1
+            AND v.template_id = $2
+            AND v.published_at IS NULL
+            AND v.discarded_at IS NULL
+        RETURNING v.id, v.template_id, v.name, v.subject, v.jsx_source, v.main_mode, v.html_content, v.plain_text_content)
+UPDATE templates t
+SET name                 = p.name,
+    subject              = p.subject,
+    html_content         = p.html_content,
+    plain_text_content   = p.plain_text_content,
+    react_email_content  = CASE WHEN p.main_mode = 'jsx' THEN p.jsx_source ELSE '' END,
+    published_version_id = p.id,
+    updated_at           = NOW()
+FROM published p
+WHERE t.id = p.template_id
+RETURNING t.id, t.name, t.html_content, t.plain_text_content, t.react_email_content, t.created_at, t.updated_at, t.subject, t.archived_at, t.archived_by, t.key, t.system, t.published_version_id, t.contract_required_variables, t.operator_required_variables, t.seed_refused_at, t.seed_refused_rules, t.seed_refused_payload_sha256
+`
+
+type PublishTemplateDraftParams struct {
+	VersionID  uuid.UUID `json:"version_id"`
+	TemplateID uuid.UUID `json:"template_id"`
+}
+
+// Publishes a draft: marks it published and copies it onto the template row,
+// which the send path reads — its name, subject and render. react_email_content,
+// the column the old panel edits, gets the JSX source only when JSX is the
+// Main source, and an empty string otherwise. The old panel re-renders any JSX
+// it finds there and saves that render as the body, and the expand step would
+// then make JSX the Main source: a JSX source kept beside another Main source
+// would reach live mail without anyone choosing it. With nothing there, the
+// old panel refuses to save (it never saves an empty JSX source), so a
+// template whose Main source is not JSX is edited in the editor only. The
+// caller holds the row's lock and has checked that the version is a draft of
+// this template.
+func (q *Queries) PublishTemplateDraft(ctx context.Context, arg PublishTemplateDraftParams) (Template, error) {
+	row := q.db.QueryRow(ctx, publishTemplateDraft, arg.VersionID, arg.TemplateID)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.Key,
+		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+		&i.SeedRefusedAt,
+		&i.SeedRefusedRules,
+		&i.SeedRefusedPayloadSha256,
+	)
+	return i, err
+}
+
+const recordMailApprovalEvent = `-- name: RecordMailApprovalEvent :one
+INSERT INTO mail_approval_events (approval_id, seq, kind, actor_sub, actor_name, note, changes, task_id, created_at)
+SELECT $1,
+       COALESCE(max(e.seq), 0) + 1,
+       $2,
+       $3,
+       $4,
+       $5,
+       $6,
+       $7,
+       $8
+FROM mail_approval_events e
+WHERE e.approval_id = $1
+RETURNING id, approval_id, seq, kind, actor_sub, actor_name, note, changes, task_id, created_at
+`
+
+type RecordMailApprovalEventParams struct {
+	ApprovalID uuid.UUID             `json:"approval_id"`
+	Kind       MailApprovalEventKind `json:"kind"`
+	ActorSub   *string               `json:"actor_sub"`
+	ActorName  *string               `json:"actor_name"`
+	Note       *string               `json:"note"`
+	Changes    []byte                `json:"changes"`
+	TaskID     *uuid.UUID            `json:"task_id"`
+	At         time.Time             `json:"at"`
+}
+
+// Numbered after the request's last event; the caller holds its row lock.
+func (q *Queries) RecordMailApprovalEvent(ctx context.Context, arg RecordMailApprovalEventParams) (MailApprovalEvent, error) {
+	row := q.db.QueryRow(ctx, recordMailApprovalEvent,
+		arg.ApprovalID,
+		arg.Kind,
+		arg.ActorSub,
+		arg.ActorName,
+		arg.Note,
+		arg.Changes,
+		arg.TaskID,
+		arg.At,
+	)
+	var i MailApprovalEvent
+	err := row.Scan(
+		&i.ID,
+		&i.ApprovalID,
+		&i.Seq,
+		&i.Kind,
+		&i.ActorSub,
+		&i.ActorName,
+		&i.Note,
+		&i.Changes,
+		&i.TaskID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const recordSeedRefusal = `-- name: RecordSeedRefusal :exec
+UPDATE templates
+SET seed_refused_at             = CASE
+                                      WHEN seed_refused_payload_sha256 = $1::text
+                                          THEN seed_refused_at
+                                      ELSE NOW()
+    END,
+    seed_refused_rules          = $2::text[],
+    seed_refused_payload_sha256 = $1::text
+WHERE id = $3
+`
+
+type RecordSeedRefusalParams struct {
+	PayloadSha256 string    `json:"payload_sha256"`
+	Rules         []string  `json:"rules"`
+	ID            uuid.UUID `json:"id"`
+}
+
+// Keeps on a template that a Template seed was refused, and why. Refusing the
+// content refused last time again keeps when it was first refused; other
+// content starts over. Nothing that is sent changes, so updated_at stays.
+func (q *Queries) RecordSeedRefusal(ctx context.Context, arg RecordSeedRefusalParams) error {
+	_, err := q.db.Exec(ctx, recordSeedRefusal, arg.PayloadSha256, arg.Rules, arg.ID)
+	return err
+}
+
+const recordTemplateDraft = `-- name: RecordTemplateDraft :one
+WITH repeated AS (SELECT v.id
+                  FROM template_versions v
+                  WHERE v.id = $1::uuid
+                    AND (v.name, v.subject, v.jsx_source, v.visual_source, v.html_source, v.main_mode, v.html_content,
+                         v.plain_text_content)
+                      IS NOT DISTINCT FROM
+                        ($2::text, $3::text, $4::text, $5::jsonb,
+                         $6::text, $7::authoring_mode, $8::text,
+                         $9::text)),
+     written AS (
+         INSERT INTO template_versions (template_id, seq, name, subject, jsx_source, visual_source, html_source, main_mode,
+                                        html_content, plain_text_content, author_kind, author_sub, author_name,
+                                        base_version_id)
+             SELECT $10::uuid,
+                    COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = $10::uuid),
+                             0) + 1,
+                    $2::text,
+                    $3::text,
+                    $4::text,
+                    $5::jsonb,
+                    $6::text,
+                    $7::authoring_mode,
+                    $8::text,
+                    $9::text,
+                    'operator',
+                    $11::text,
+                    $12::text,
+                    $13::uuid
+             WHERE NOT EXISTS (SELECT 1 FROM repeated)
+             RETURNING id)
+SELECT id, true AS written
+FROM written
+UNION ALL
+SELECT id, false AS written
+FROM repeated
+`
+
+type RecordTemplateDraftParams struct {
+	ContinuedID      *uuid.UUID    `json:"continued_id"`
+	Name             string        `json:"name"`
+	Subject          string        `json:"subject"`
+	JsxSource        *string       `json:"jsx_source"`
+	VisualSource     []byte        `json:"visual_source"`
+	HtmlSource       *string       `json:"html_source"`
+	MainMode         AuthoringMode `json:"main_mode"`
+	HtmlContent      string        `json:"html_content"`
+	PlainTextContent string        `json:"plain_text_content"`
+	TemplateID       uuid.UUID     `json:"template_id"`
+	AuthorSub        *string       `json:"author_sub"`
+	AuthorName       *string       `json:"author_name"`
+	BaseVersionID    *uuid.UUID    `json:"base_version_id"`
+}
+
+type RecordTemplateDraftRow struct {
+	ID      uuid.UUID `json:"id"`
+	Written bool      `json:"written"`
+}
+
+// Writes an operator's draft, numbered after the template's last version,
+// unless the version it continues holds exactly this content already —
+// name, subject, every source, Main source and render, a Visual document compared
+// as JSON rather than as text. Returns the draft it wrote, or the version it
+// would have repeated, and whether it wrote one. The caller holds the template
+// row's lock (LockTemplate).
+func (q *Queries) RecordTemplateDraft(ctx context.Context, arg RecordTemplateDraftParams) (RecordTemplateDraftRow, error) {
+	row := q.db.QueryRow(ctx, recordTemplateDraft,
+		arg.ContinuedID,
+		arg.Name,
+		arg.Subject,
+		arg.JsxSource,
+		arg.VisualSource,
+		arg.HtmlSource,
+		arg.MainMode,
+		arg.HtmlContent,
+		arg.PlainTextContent,
+		arg.TemplateID,
+		arg.AuthorSub,
+		arg.AuthorName,
+		arg.BaseVersionID,
+	)
+	var i RecordTemplateDraftRow
+	err := row.Scan(&i.ID, &i.Written)
+	return i, err
+}
+
+const recordTemplateRowAsVersion = `-- name: RecordTemplateRowAsVersion :execrows
+WITH written AS (SELECT t.id,
+                        t.name,
+                        t.subject,
+                        t.html_content,
+                        t.plain_text_content,
+                        t.published_version_id,
+                        template_jsx_source(t.react_email_content) AS jsx_source
+                 FROM templates t
+                 WHERE t.id = $1),
+     candidate AS (SELECT w.id                                                        AS template_id,
+                          w.name,
+                          w.subject,
+                          COALESCE(w.jsx_source, p.jsx_source)                        AS jsx_source,
+                          p.visual_source,
+                          CASE
+                              WHEN body.kept OR w.jsx_source IS NOT NULL THEN p.html_source
+                              ELSE w.html_content
+                              END                                                     AS html_source,
+                          CASE
+                              WHEN body.kept THEN p.main_mode
+                              WHEN w.jsx_source IS NOT NULL THEN 'jsx'::authoring_mode
+                              ELSE 'html'::authoring_mode
+                              END                                                     AS main_mode,
+                          w.html_content,
+                          w.plain_text_content,
+                          p.id                                                        AS published_id,
+                          (p.name, p.subject, p.jsx_source, p.visual_source, p.html_source, p.main_mode,
+                           p.html_content, p.plain_text_content)                      AS published_content
+                   FROM written w
+                            LEFT JOIN template_versions p ON p.id = w.published_version_id
+                            CROSS JOIN LATERAL (SELECT p.id IS NOT NULL
+                                                           AND w.html_content = p.html_content
+                                                           AND w.plain_text_content = p.plain_text_content
+                                                           AND w.jsx_source IS NOT DISTINCT FROM p.jsx_source AS kept) body),
+     version AS (
+         INSERT INTO template_versions (template_id, seq, name, subject, jsx_source, visual_source, html_source, main_mode,
+                                        html_content, plain_text_content, author_kind, author_sub, author_name,
+                                        requested_subject, published_at, base_version_id)
+             SELECT c.template_id,
+                    COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = c.template_id), 0) + 1,
+                    c.name,
+                    c.subject,
+                    c.jsx_source,
+                    c.visual_source,
+                    c.html_source,
+                    c.main_mode,
+                    c.html_content,
+                    c.plain_text_content,
+                    $2::template_author_kind,
+                    $3::text,
+                    $4::text,
+                    $5::text,
+                    NOW(),
+                    c.published_id
+             FROM candidate c
+             WHERE c.published_id IS NULL
+                OR (c.name, c.subject, c.jsx_source, c.visual_source, c.html_source, c.main_mode,
+                    c.html_content, c.plain_text_content) IS DISTINCT FROM c.published_content
+             RETURNING id, template_id)
+UPDATE templates t
+SET published_version_id = version.id
+FROM version
+WHERE t.id = version.template_id
+`
+
+type RecordTemplateRowAsVersionParams struct {
+	TemplateID       uuid.UUID          `json:"template_id"`
+	AuthorKind       TemplateAuthorKind `json:"author_kind"`
+	AuthorSub        *string            `json:"author_sub"`
+	AuthorName       *string            `json:"author_name"`
+	RequestedSubject *string            `json:"requested_subject"`
+}
+
+// Records what a template row now holds as a new Mail template version,
+// published at once, and makes the row a copy of it. This is the expand step
+// for the writers that still write the row directly — the old panel's create
+// and edit, and the Template seed's by-key upsert: each runs this after its
+// row write, in the same transaction, so the version is what the row ended up
+// with, not what the request asked for.
+//
+// Those writers send a subject, a render and at most a JSX source, so the
+// version starts from the published one and replaces only what they changed:
+//   - The name, the subject and the render are the row's.
+//   - If the body — html_content, plain_text_content and the JSX source — is
+//     the published version's, the Main source and every source stay as they
+//     were: the old panel sends a stored body back untouched when only the
+//     wording around it changed.
+//   - Otherwise the body is new. react_email_content with a JSX source in it
+//     (template_jsx_source decides) makes JSX the Main source with that text;
+//     without one — the seed's pointer comment, or nothing — html_content is
+//     the HTML source and the Main source.
+//   - Sources in the other Authoring modes are carried over.
+//
+// A row with no published version yet — written before versions were kept,
+// or by the old binary between the migration and this one — is taken as it
+// now is. When the result is the published version over again, nothing is
+// recorded: the write changed nothing a version holds.
+//
+// The version is numbered after the template's last one; the row write before
+// this holds the row's lock, so two writers cannot take the same number. Its
+// base is the version the row was a copy of until now. A Template seed's
+// version also keeps the subject the seed sent, requested_subject.
+//
+// Affects one row when a version was recorded and none when not.
+func (q *Queries) RecordTemplateRowAsVersion(ctx context.Context, arg RecordTemplateRowAsVersionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, recordTemplateRowAsVersion,
+		arg.TemplateID,
+		arg.AuthorKind,
+		arg.AuthorSub,
+		arg.AuthorName,
+		arg.RequestedSubject,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const removeOperatorRequiredVariable = `-- name: RemoveOperatorRequiredVariable :one
+UPDATE templates
+SET operator_required_variables = array_remove(operator_required_variables, $1::text)
+WHERE id = $2
+  AND archived_at IS NULL
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
+`
+
+type RemoveOperatorRequiredVariableParams struct {
+	Name string    `json:"name"`
+	ID   uuid.UUID `json:"id"`
+}
+
+// Releases a variable operators marked. It cannot release a contract one: the
+// sets never share a name, so a contract name is simply not in the operators'
+// set, and the caller sees it in the contract set it returns.
+func (q *Queries) RemoveOperatorRequiredVariable(ctx context.Context, arg RemoveOperatorRequiredVariableParams) (Template, error) {
+	row := q.db.QueryRow(ctx, removeOperatorRequiredVariable, arg.Name, arg.ID)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.Key,
+		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+		&i.SeedRefusedAt,
+		&i.SeedRefusedRules,
+		&i.SeedRefusedPayloadSha256,
+	)
+	return i, err
 }
 
 const removeRecipientFromMailingListByID = `-- name: RemoveRecipientFromMailingListByID :exec
@@ -1262,7 +2799,7 @@ SET archived_at = NULL,
     archived_by = NULL,
     updated_at = CASE WHEN archived_at IS NULL THEN updated_at ELSE NOW() END
 WHERE id = $1
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
 `
 
 func (q *Queries) RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, error) {
@@ -1281,6 +2818,166 @@ func (q *Queries) RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, 
 		&i.ArchivedBy,
 		&i.Key,
 		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+		&i.SeedRefusedAt,
+		&i.SeedRefusedRules,
+		&i.SeedRefusedPayloadSha256,
+	)
+	return i, err
+}
+
+const resubmitMailApproval = `-- name: ResubmitMailApproval :one
+UPDATE mail_approvals
+SET state               = 'pending',
+    template_id         = $1,
+    template_version_id = $2,
+    mail_list_id        = $3,
+    recipient_email     = $4,
+    recipient_full_name = $5,
+    body_variables      = $6,
+    submitted_at        = $7,
+    deadline_at         = $8,
+    updated_at          = $7
+WHERE id = $9
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+`
+
+type ResubmitMailApprovalParams struct {
+	TemplateID        uuid.UUID  `json:"template_id"`
+	TemplateVersionID uuid.UUID  `json:"template_version_id"`
+	MailListID        *uuid.UUID `json:"mail_list_id"`
+	RecipientEmail    *string    `json:"recipient_email"`
+	RecipientFullName *string    `json:"recipient_full_name"`
+	BodyVariables     []byte     `json:"body_variables"`
+	At                time.Time  `json:"at"`
+	DeadlineAt        time.Time  `json:"deadline_at"`
+	ID                uuid.UUID  `json:"id"`
+}
+
+// A resubmission: what would be sent, as the submitter now fills it in,
+// pinned to the version published now, pending again with a new deadline.
+func (q *Queries) ResubmitMailApproval(ctx context.Context, arg ResubmitMailApprovalParams) (MailApproval, error) {
+	row := q.db.QueryRow(ctx, resubmitMailApproval,
+		arg.TemplateID,
+		arg.TemplateVersionID,
+		arg.MailListID,
+		arg.RecipientEmail,
+		arg.RecipientFullName,
+		arg.BodyVariables,
+		arg.At,
+		arg.DeadlineAt,
+		arg.ID,
+	)
+	var i MailApproval
+	err := row.Scan(
+		&i.ID,
+		&i.SubmitterSub,
+		&i.SubmitterName,
+		&i.SubmitterEmail,
+		&i.SubmitterEmailUnverified,
+		&i.State,
+		&i.TemplateID,
+		&i.TemplateVersionID,
+		&i.MailListID,
+		&i.RecipientEmail,
+		&i.RecipientFullName,
+		&i.BodyVariables,
+		&i.CreatedAt,
+		&i.SubmittedAt,
+		&i.DeadlineAt,
+		&i.UpdatedAt,
+		&i.TaskID,
+	)
+	return i, err
+}
+
+const setMailApprovalState = `-- name: SetMailApprovalState :one
+UPDATE mail_approvals
+SET state       = $1,
+    task_id     = $2,
+    deadline_at = COALESCE($3, deadline_at),
+    updated_at  = $4
+WHERE id = $5
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+`
+
+type SetMailApprovalStateParams struct {
+	State      MailApprovalState `json:"state"`
+	TaskID     *uuid.UUID        `json:"task_id"`
+	DeadlineAt *time.Time        `json:"deadline_at"`
+	At         time.Time         `json:"at"`
+	ID         uuid.UUID         `json:"id"`
+}
+
+// A NULL deadline leaves the request's deadline as it is.
+func (q *Queries) SetMailApprovalState(ctx context.Context, arg SetMailApprovalStateParams) (MailApproval, error) {
+	row := q.db.QueryRow(ctx, setMailApprovalState,
+		arg.State,
+		arg.TaskID,
+		arg.DeadlineAt,
+		arg.At,
+		arg.ID,
+	)
+	var i MailApproval
+	err := row.Scan(
+		&i.ID,
+		&i.SubmitterSub,
+		&i.SubmitterName,
+		&i.SubmitterEmail,
+		&i.SubmitterEmailUnverified,
+		&i.State,
+		&i.TemplateID,
+		&i.TemplateVersionID,
+		&i.MailListID,
+		&i.RecipientEmail,
+		&i.RecipientFullName,
+		&i.BodyVariables,
+		&i.CreatedAt,
+		&i.SubmittedAt,
+		&i.DeadlineAt,
+		&i.UpdatedAt,
+		&i.TaskID,
+	)
+	return i, err
+}
+
+const setMailApprovalVariables = `-- name: SetMailApprovalVariables :one
+UPDATE mail_approvals
+SET body_variables = $1,
+    updated_at     = $2
+WHERE id = $3
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
+`
+
+type SetMailApprovalVariablesParams struct {
+	BodyVariables []byte    `json:"body_variables"`
+	At            time.Time `json:"at"`
+	ID            uuid.UUID `json:"id"`
+}
+
+func (q *Queries) SetMailApprovalVariables(ctx context.Context, arg SetMailApprovalVariablesParams) (MailApproval, error) {
+	row := q.db.QueryRow(ctx, setMailApprovalVariables, arg.BodyVariables, arg.At, arg.ID)
+	var i MailApproval
+	err := row.Scan(
+		&i.ID,
+		&i.SubmitterSub,
+		&i.SubmitterName,
+		&i.SubmitterEmail,
+		&i.SubmitterEmailUnverified,
+		&i.State,
+		&i.TemplateID,
+		&i.TemplateVersionID,
+		&i.MailListID,
+		&i.RecipientEmail,
+		&i.RecipientFullName,
+		&i.BodyVariables,
+		&i.CreatedAt,
+		&i.SubmittedAt,
+		&i.DeadlineAt,
+		&i.UpdatedAt,
+		&i.TaskID,
 	)
 	return i, err
 }
@@ -1313,6 +3010,65 @@ WHERE id = $1
 func (q *Queries) SetMailQueueItemSent(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, setMailQueueItemSent, id)
 	return err
+}
+
+const shareLockMailingList = `-- name: ShareLockMailingList :one
+SELECT id, name, description, created_at, updated_at, archived_at, archived_by
+FROM mailing_lists
+WHERE id = $1
+    FOR SHARE
+`
+
+// Keeps an internal list from being archived while a send to it is checked
+// and queued. No row: the id is not an internal list's.
+func (q *Queries) ShareLockMailingList(ctx context.Context, id uuid.UUID) (MailingList, error) {
+	row := q.db.QueryRow(ctx, shareLockMailingList, id)
+	var i MailingList
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+	)
+	return i, err
+}
+
+const shareLockTemplate = `-- name: ShareLockTemplate :one
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
+FROM templates
+WHERE id = $1
+    FOR SHARE
+`
+
+// Keeps a template from being published over, archived or changed while a
+// send of it is checked and queued; other sends of it share the lock.
+func (q *Queries) ShareLockTemplate(ctx context.Context, id uuid.UUID) (Template, error) {
+	row := q.db.QueryRow(ctx, shareLockTemplate, id)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.Key,
+		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+		&i.SeedRefusedAt,
+		&i.SeedRefusedRules,
+		&i.SeedRefusedPayloadSha256,
+	)
+	return i, err
 }
 
 const updateMailingList = `-- name: UpdateMailingList :one
@@ -1383,7 +3139,7 @@ SET name                = $2,
     updated_at          = NOW()
 WHERE id = $1
   AND archived_at IS NULL
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
 `
 
 type UpdateTemplateParams struct {
@@ -1420,47 +3176,72 @@ func (q *Queries) UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) 
 		&i.ArchivedBy,
 		&i.Key,
 		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+		&i.SeedRefusedAt,
+		&i.SeedRefusedRules,
+		&i.SeedRefusedPayloadSha256,
 	)
 	return i, err
 }
 
 const upsertTemplateByKey = `-- name: UpsertTemplateByKey :one
-INSERT INTO templates (key, name, subject, html_content, plain_text_content, react_email_content, system)
+INSERT INTO templates (key, name, subject, html_content, plain_text_content, react_email_content, system,
+                       contract_required_variables)
 VALUES ($1::text,
         $2::text,
         $3::text,
         $4::text,
         $5::text,
         $6::text,
-        $7::boolean)
+        $7::boolean,
+        COALESCE($8::jsonb, '[]'))
 ON CONFLICT (key) DO UPDATE
     SET name                = EXCLUDED.name,
+        subject             = EXCLUDED.subject,
         html_content        = EXCLUDED.html_content,
         plain_text_content  = EXCLUDED.plain_text_content,
         react_email_content = EXCLUDED.react_email_content,
         system              = EXCLUDED.system,
+        -- The contract set is the seed's, like the key: a seed that sends one
+        -- replaces it (sorted, each name once, by the caller), a seed that
+        -- sends none (NULL) leaves it. A name the contract now declares leaves
+        -- the operators' set, so the two never share one and it shows as
+        -- locked.
+        contract_required_variables = COALESCE($8::jsonb,
+                                               templates.contract_required_variables),
+        operator_required_variables = ARRAY(SELECT name
+                                            FROM unnest(templates.operator_required_variables) AS name
+                                            WHERE name <> ALL (contract_variable_names(
+                                                    COALESCE($8::jsonb,
+                                                             templates.contract_required_variables)))
+                                            ORDER BY name COLLATE "C"),
         archived_at         = NULL,
         archived_by         = NULL,
+        -- A seed that goes through settles any seed refused before it.
+        seed_refused_at             = NULL,
+        seed_refused_rules          = NULL,
+        seed_refused_payload_sha256 = NULL,
         updated_at          = NOW()
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
 `
 
 type UpsertTemplateByKeyParams struct {
-	Key               string `json:"key"`
-	Name              string `json:"name"`
-	Subject           string `json:"subject"`
-	HtmlContent       string `json:"html_content"`
-	PlainTextContent  string `json:"plain_text_content"`
-	ReactEmailContent string `json:"react_email_content"`
-	System            bool   `json:"system"`
+	Key                       string `json:"key"`
+	Name                      string `json:"name"`
+	Subject                   string `json:"subject"`
+	HtmlContent               string `json:"html_content"`
+	PlainTextContent          string `json:"plain_text_content"`
+	ReactEmailContent         string `json:"react_email_content"`
+	System                    bool   `json:"system"`
+	ContractRequiredVariables []byte `json:"contract_required_variables"`
 }
 
-// The seed owns a template's structure; an operator owns its subject. The repo
-// seeds the subject once, on insert, and never writes over it again: ADR-0045
-// moved Keycloak's system mail here so a wording change would stop costing a
-// release, and re-seeding is frequent enough that overwriting the subject took
-// that back silently. A subject fix made in the repo therefore does not reach a
-// key that already exists; someone has to make it in SkyMail too.
+// The seed writes everything it sends, the subject included. It is the
+// caller that keeps an operator's change — the subject too — from being
+// overwritten: it refuses the seed before it gets here unless it is forced
+// (ADR-0047), which is what replaced leaving the subject alone on every seed.
 func (q *Queries) UpsertTemplateByKey(ctx context.Context, arg UpsertTemplateByKeyParams) (Template, error) {
 	row := q.db.QueryRow(ctx, upsertTemplateByKey,
 		arg.Key,
@@ -1470,6 +3251,7 @@ func (q *Queries) UpsertTemplateByKey(ctx context.Context, arg UpsertTemplateByK
 		arg.PlainTextContent,
 		arg.ReactEmailContent,
 		arg.System,
+		arg.ContractRequiredVariables,
 	)
 	var i Template
 	err := row.Scan(
@@ -1485,6 +3267,12 @@ func (q *Queries) UpsertTemplateByKey(ctx context.Context, arg UpsertTemplateByK
 		&i.ArchivedBy,
 		&i.Key,
 		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+		&i.SeedRefusedAt,
+		&i.SeedRefusedRules,
+		&i.SeedRefusedPayloadSha256,
 	)
 	return i, err
 }

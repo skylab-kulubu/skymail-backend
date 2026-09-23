@@ -23,6 +23,17 @@ func IsTemplateKey(key string) bool {
 	return templateKeyPattern.MatchString(key)
 }
 
+// A Required variable is named as a body reaches it with .Name: letters,
+// digits and underscores, not starting with a digit. The
+// templates_required_variable_names check constraint holds the same shape;
+// this one makes a bad name a 400 rather than a 500.
+var variableNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+
+// IsVariableName reports whether a Required variable's name is well formed.
+func IsVariableName(name string) bool {
+	return variableNamePattern.MatchString(name)
+}
+
 type StructValidator interface {
 	Validate(out any) error
 }
@@ -46,6 +57,10 @@ func NewStructValidator() StructValidator {
 		return IsTemplateKey(fl.Field().String())
 	})
 
+	_ = vld.RegisterValidation("variablename", func(fl validator.FieldLevel) bool {
+		return IsVariableName(fl.Field().String())
+	})
+
 	vld.RegisterTagNameFunc(func(fld reflect.StructField) string {
 		name := strings.SplitN(fld.Tag.Get("json"), ",", 2)[0]
 		if name == "-" {
@@ -67,13 +82,24 @@ func ParseValidationErrors(validationErrors validator.ValidationErrors) []FieldE
 	errs := make([]FieldError, len(validationErrors))
 	for i, ve := range validationErrors {
 		errs[i] = FieldError{
-			Field:  ve.Field(),
+			Field:  fieldPath(ve),
 			Code:   getErrorCode(ve),
 			Params: getErrorParams(ve),
 		}
 	}
 
 	return errs
+}
+
+// fieldPath names the field by its path in the request body — name, or
+// contract_required_variables[1].name for a field of a list's entry — rather
+// than by its own name alone, which an entry's field shares with the body's.
+func fieldPath(e validator.FieldError) string {
+	namespace := e.Namespace()
+	if _, path, nested := strings.Cut(namespace, "."); nested {
+		return path
+	}
+	return e.Field()
 }
 
 func getErrorCode(e validator.FieldError) string {
@@ -88,6 +114,8 @@ func getErrorCode(e validator.FieldError) string {
 		return "max_length"
 	case "templatekey":
 		return "invalid_template_key"
+	case "variablename":
+		return "invalid_variable_name"
 	default:
 		return "invalid"
 	}

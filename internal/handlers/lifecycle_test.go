@@ -16,6 +16,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
@@ -72,6 +73,20 @@ func (lifecycleKeycloakStub) GetGroupMembers(context.Context, string) ([]*gocloa
 func lifecycleHandlerStore(t *testing.T) *database.Store {
 	t.Helper()
 	pool := testpostgres.Start(t)
+	applyMigrationFiles(t, pool)
+	return database.NewStore(pool)
+}
+
+// applyMigrationFiles runs every up migration in db/migrations on pool.
+func applyMigrationFiles(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	applyMigrationFilesWhere(t, pool, func(string) bool { return true })
+}
+
+// applyMigrationFilesWhere runs the up migrations in db/migrations whose file
+// name apply accepts on pool, in order.
+func applyMigrationFilesWhere(t *testing.T, pool *pgxpool.Pool, apply func(file string) bool) {
+	t.Helper()
 	_, filename, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate lifecycle handler test")
@@ -83,6 +98,9 @@ func lifecycleHandlerStore(t *testing.T) *database.Store {
 	}
 	sort.Strings(files)
 	for _, file := range files {
+		if !apply(filepath.Base(file)) {
+			continue
+		}
 		migration, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
@@ -91,7 +109,6 @@ func lifecycleHandlerStore(t *testing.T) *database.Store {
 			t.Fatalf("apply %s: %v", filepath.Base(file), err)
 		}
 	}
-	return database.NewStore(pool)
 }
 
 func lifecycleTestApp(t *testing.T, db *database.Store) *fiber.App {
@@ -390,4 +407,12 @@ func TestArchivedInternalListDoesNotFallThroughToKeycloak(t *testing.T) {
 	if mailerStub.enqueueCalls != 0 {
 		t.Fatalf("mailer enqueue calls = %d, want 0", mailerStub.enqueueCalls)
 	}
+}
+
+func (lifecycleKeycloakStub) ClientRoleMembers(context.Context, string, string) ([]*gocloak.User, error) {
+	return []*gocloak.User{}, nil
+}
+
+func (failingLifecycleKeycloakStub) ClientRoleMembers(context.Context, string, string) ([]*gocloak.User, error) {
+	return nil, errors.New("unexpected Keycloak role lookup")
 }

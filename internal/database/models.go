@@ -12,6 +12,144 @@ import (
 	"github.com/google/uuid"
 )
 
+type AuthoringMode string
+
+const (
+	AuthoringModeJsx    AuthoringMode = "jsx"
+	AuthoringModeVisual AuthoringMode = "visual"
+	AuthoringModeHtml   AuthoringMode = "html"
+)
+
+func (e *AuthoringMode) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = AuthoringMode(s)
+	case string:
+		*e = AuthoringMode(s)
+	default:
+		return fmt.Errorf("unsupported scan type for AuthoringMode: %T", src)
+	}
+	return nil
+}
+
+type NullAuthoringMode struct {
+	AuthoringMode AuthoringMode `json:"authoring_mode"`
+	Valid         bool          `json:"valid"` // Valid is true if AuthoringMode is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullAuthoringMode) Scan(value interface{}) error {
+	if value == nil {
+		ns.AuthoringMode, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.AuthoringMode.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullAuthoringMode) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.AuthoringMode), nil
+}
+
+type MailApprovalEventKind string
+
+const (
+	MailApprovalEventKindSubmitted   MailApprovalEventKind = "submitted"
+	MailApprovalEventKindResubmitted MailApprovalEventKind = "resubmitted"
+	MailApprovalEventKindEdited      MailApprovalEventKind = "edited"
+	MailApprovalEventKindReturned    MailApprovalEventKind = "returned"
+	MailApprovalEventKindAccepted    MailApprovalEventKind = "accepted"
+	MailApprovalEventKindDeclined    MailApprovalEventKind = "declined"
+	MailApprovalEventKindApproved    MailApprovalEventKind = "approved"
+	MailApprovalEventKindRejected    MailApprovalEventKind = "rejected"
+	MailApprovalEventKindExpired     MailApprovalEventKind = "expired"
+)
+
+func (e *MailApprovalEventKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = MailApprovalEventKind(s)
+	case string:
+		*e = MailApprovalEventKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for MailApprovalEventKind: %T", src)
+	}
+	return nil
+}
+
+type NullMailApprovalEventKind struct {
+	MailApprovalEventKind MailApprovalEventKind `json:"mail_approval_event_kind"`
+	Valid                 bool                  `json:"valid"` // Valid is true if MailApprovalEventKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullMailApprovalEventKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.MailApprovalEventKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.MailApprovalEventKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullMailApprovalEventKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.MailApprovalEventKind), nil
+}
+
+type MailApprovalState string
+
+const (
+	MailApprovalStatePending  MailApprovalState = "pending"
+	MailApprovalStateReturned MailApprovalState = "returned"
+	MailApprovalStateApproved MailApprovalState = "approved"
+	MailApprovalStateRejected MailApprovalState = "rejected"
+	MailApprovalStateDeclined MailApprovalState = "declined"
+	MailApprovalStateExpired  MailApprovalState = "expired"
+)
+
+func (e *MailApprovalState) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = MailApprovalState(s)
+	case string:
+		*e = MailApprovalState(s)
+	default:
+		return fmt.Errorf("unsupported scan type for MailApprovalState: %T", src)
+	}
+	return nil
+}
+
+type NullMailApprovalState struct {
+	MailApprovalState MailApprovalState `json:"mail_approval_state"`
+	Valid             bool              `json:"valid"` // Valid is true if MailApprovalState is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullMailApprovalState) Scan(value interface{}) error {
+	if value == nil {
+		ns.MailApprovalState, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.MailApprovalState.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullMailApprovalState) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.MailApprovalState), nil
+}
+
 type MailQueueStatus string
 
 const (
@@ -54,6 +192,81 @@ func (ns NullMailQueueStatus) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.MailQueueStatus), nil
+}
+
+type TemplateAuthorKind string
+
+const (
+	TemplateAuthorKindOperator     TemplateAuthorKind = "operator"
+	TemplateAuthorKindTemplateSeed TemplateAuthorKind = "template_seed"
+)
+
+func (e *TemplateAuthorKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TemplateAuthorKind(s)
+	case string:
+		*e = TemplateAuthorKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TemplateAuthorKind: %T", src)
+	}
+	return nil
+}
+
+type NullTemplateAuthorKind struct {
+	TemplateAuthorKind TemplateAuthorKind `json:"template_author_kind"`
+	Valid              bool               `json:"valid"` // Valid is true if TemplateAuthorKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTemplateAuthorKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.TemplateAuthorKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TemplateAuthorKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTemplateAuthorKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TemplateAuthorKind), nil
+}
+
+type MailApproval struct {
+	ID                       uuid.UUID         `json:"id"`
+	SubmitterSub             string            `json:"submitter_sub"`
+	SubmitterName            *string           `json:"submitter_name"`
+	SubmitterEmail           *string           `json:"submitter_email"`
+	SubmitterEmailUnverified bool              `json:"submitter_email_unverified"`
+	State                    MailApprovalState `json:"state"`
+	TemplateID               uuid.UUID         `json:"template_id"`
+	TemplateVersionID        uuid.UUID         `json:"template_version_id"`
+	MailListID               *uuid.UUID        `json:"mail_list_id"`
+	RecipientEmail           *string           `json:"recipient_email"`
+	RecipientFullName        *string           `json:"recipient_full_name"`
+	BodyVariables            []byte            `json:"body_variables"`
+	CreatedAt                time.Time         `json:"created_at"`
+	SubmittedAt              time.Time         `json:"submitted_at"`
+	DeadlineAt               time.Time         `json:"deadline_at"`
+	UpdatedAt                time.Time         `json:"updated_at"`
+	TaskID                   *uuid.UUID        `json:"task_id"`
+}
+
+type MailApprovalEvent struct {
+	ID         uuid.UUID             `json:"id"`
+	ApprovalID uuid.UUID             `json:"approval_id"`
+	Seq        int                   `json:"seq"`
+	Kind       MailApprovalEventKind `json:"kind"`
+	ActorSub   *string               `json:"actor_sub"`
+	ActorName  *string               `json:"actor_name"`
+	Note       *string               `json:"note"`
+	Changes    []byte                `json:"changes"`
+	TaskID     *uuid.UUID            `json:"task_id"`
+	CreatedAt  time.Time             `json:"created_at"`
 }
 
 type MailQueue struct {
@@ -104,16 +317,64 @@ type Recipient struct {
 }
 
 type Template struct {
-	ID                uuid.UUID  `json:"id"`
-	Name              string     `json:"name"`
-	HtmlContent       string     `json:"html_content"`
-	PlainTextContent  string     `json:"plain_text_content"`
-	ReactEmailContent string     `json:"react_email_content"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
-	Subject           string     `json:"subject"`
-	ArchivedAt        *time.Time `json:"archived_at"`
-	ArchivedBy        *string    `json:"archived_by"`
-	Key               *string    `json:"key"`
-	System            bool       `json:"system"`
+	ID                 uuid.UUID  `json:"id"`
+	Name               string     `json:"name"`
+	HtmlContent        string     `json:"html_content"`
+	PlainTextContent   string     `json:"plain_text_content"`
+	ReactEmailContent  string     `json:"react_email_content"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	Subject            string     `json:"subject"`
+	ArchivedAt         *time.Time `json:"archived_at"`
+	ArchivedBy         *string    `json:"archived_by"`
+	Key                *string    `json:"key"`
+	System             bool       `json:"system"`
+	PublishedVersionID *uuid.UUID `json:"published_version_id"`
+	// Required variables from the sending service's contract, sorted by name, each with why the mail needs it. Written only by the Template seed; locked in the panel.
+	ContractRequiredVariables ContractVariables `json:"contract_required_variables"`
+	// Required variables operators marked, sorted. Never shares a name with contract_required_variables.
+	OperatorRequiredVariables []string   `json:"operator_required_variables"`
+	SeedRefusedAt             *time.Time `json:"-"`
+	SeedRefusedRules          []string   `json:"-"`
+	SeedRefusedPayloadSha256  *string    `json:"-"`
+}
+
+type TemplateVersion struct {
+	ID               uuid.UUID          `json:"id"`
+	TemplateID       uuid.UUID          `json:"template_id"`
+	Seq              int                `json:"seq"`
+	Subject          string             `json:"subject"`
+	RequestedSubject *string            `json:"requested_subject"`
+	JsxSource        *string            `json:"jsx_source"`
+	VisualSource     []byte             `json:"visual_source"`
+	HtmlSource       *string            `json:"html_source"`
+	MainMode         AuthoringMode      `json:"main_mode"`
+	HtmlContent      string             `json:"html_content"`
+	PlainTextContent string             `json:"plain_text_content"`
+	AuthorKind       TemplateAuthorKind `json:"author_kind"`
+	AuthorSub        *string            `json:"author_sub"`
+	AuthorName       *string            `json:"author_name"`
+	CreatedAt        time.Time          `json:"created_at"`
+	PublishedAt      *time.Time         `json:"published_at"`
+	BaseVersionID    *uuid.UUID         `json:"base_version_id"`
+	DiscardedAt      *time.Time         `json:"discarded_at"`
+	Name             string             `json:"name"`
+}
+
+type TemplateVersionSummary struct {
+	ID               uuid.UUID          `json:"id"`
+	TemplateID       uuid.UUID          `json:"template_id"`
+	Seq              int                `json:"seq"`
+	Subject          string             `json:"subject"`
+	RequestedSubject *string            `json:"requested_subject"`
+	MainMode         AuthoringMode      `json:"main_mode"`
+	AuthorKind       TemplateAuthorKind `json:"author_kind"`
+	AuthorSub        *string            `json:"author_sub"`
+	AuthorName       *string            `json:"author_name"`
+	CreatedAt        time.Time          `json:"created_at"`
+	PublishedAt      *time.Time         `json:"published_at"`
+	BaseVersionID    *uuid.UUID         `json:"base_version_id"`
+	IsCurrent        bool               `json:"is_current"`
+	DiscardedAt      *time.Time         `json:"discarded_at"`
+	Name             string             `json:"name"`
 }

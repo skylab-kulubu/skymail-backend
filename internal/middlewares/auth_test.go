@@ -164,3 +164,80 @@ func TestMissingOrMalformedAuthorizationHeaderIsForbidden(t *testing.T) {
 		t.Fatalf("basic auth: status = %d, want 403", response.StatusCode)
 	}
 }
+
+// A Mail template version records who wrote it by name, and there is no user
+// directory to look a subject up in later, so the name is taken from the token
+// at the time: the person's name, or the username when the token carries no
+// name — a service account, the Template seed's client, has only that.
+func TestAuthenticatedNameIsTheTokensNameOrUsername(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		claims string
+		want   any
+	}{
+		"person":          {`"name":"Ada Yılmaz","preferred_username":"ada.yilmaz"`, "Ada Yılmaz"},
+		"service account": {`"preferred_username":"service-account-skymail-seed"`, "service-account-skymail-seed"},
+		"blank name":      {`"name":"  ","preferred_username":"ada.yilmaz"`, "ada.yilmaz"},
+		"neither":         {`"email":"ada@yildizskylab.com"`, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := `{"sub":"11111111-1111-4111-8111-111111111111",` + tc.claims +
+				`,"resource_access":{"skymail":{"roles":["skymail:access"]}}}`
+			var got any
+			app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
+			app.Use(NewAuthMiddleware("skymail", userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body)).Authenticate)
+			app.Get("/probe", func(c fiber.Ctx) error {
+				got = c.Locals("user_name")
+				return c.SendStatus(fiber.StatusNoContent)
+			})
+
+			if response := requestWithToken(t, app, "good.token.value"); response.StatusCode != fiber.StatusNoContent {
+				t.Fatalf("status = %d, want 204", response.StatusCode)
+			}
+			if got != tc.want {
+				t.Fatalf("user_name = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A Mail onayı decision is mailed to whoever submitted the request, also when
+// SkyMail itself expires it days later with no token to ask, so the address
+// the token carried is kept at submission — only one Keycloak has verified:
+// an unverified one is taken as none, and "user_email_unverified" says why.
+func TestAuthenticatedEmailIsTheTokensVerifiedEmail(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		claims     string
+		want       any
+		unverified any
+	}{
+		"verified":   {`"name":"Ada Yılmaz","email":"ada@yildizskylab.com","email_verified":true`, "ada@yildizskylab.com", nil},
+		"unverified": {`"name":"Ada Yılmaz","email":"ada@yildizskylab.com","email_verified":false`, nil, true},
+		"unsaid":     {`"name":"Ada Yılmaz","email":"ada@yildizskylab.com"`, nil, true},
+		"blank":      {`"name":"Ada Yılmaz","email":" ","email_verified":true`, nil, nil},
+		"missing":    {`"preferred_username":"service-account-skymail-seed"`, nil, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := `{"sub":"11111111-1111-4111-8111-111111111111",` + tc.claims +
+				`,"resource_access":{"skymail":{"roles":["skymail:access"]}}}`
+			var got, unverified any
+			app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
+			app.Use(NewAuthMiddleware("skymail", userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body)).Authenticate)
+			app.Get("/probe", func(c fiber.Ctx) error {
+				got = c.Locals("user_email")
+				unverified = c.Locals("user_email_unverified")
+				return c.SendStatus(fiber.StatusNoContent)
+			})
+
+			if response := requestWithToken(t, app, "good.token.value"); response.StatusCode != fiber.StatusNoContent {
+				t.Fatalf("status = %d, want 204", response.StatusCode)
+			}
+			if got != tc.want || unverified != tc.unverified {
+				t.Fatalf("user_email = %#v, user_email_unverified = %#v; want %#v, %#v", got, unverified, tc.want, tc.unverified)
+			}
+		})
+	}
+}
