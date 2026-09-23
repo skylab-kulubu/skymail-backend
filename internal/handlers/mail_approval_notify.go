@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/rs/zerolog/log"
@@ -23,30 +24,76 @@ const (
 	noticeResolved
 )
 
+// approvalDecision is how mail.approval-resolved's Decision names what
+// happened to a request.
+type approvalDecision string
+
+const (
+	decisionApproved approvalDecision = "approved"
+	decisionRejected approvalDecision = "rejected"
+	decisionReturned approvalDecision = "returned"
+	decisionExpired  approvalDecision = "expired"
+	// The submitter declined a returned edit. Nothing mails it yet: the
+	// approver has nothing to do until the submitter resubmits, which tells
+	// every approver again.
+	decisionDeclined approvalDecision = "declined"
+)
+
 // approvalNotice is the mail an action owes once its transaction commits.
 type approvalNotice struct {
 	kind noticeKind
 	// Who acted: the sender of the mail.
 	by string
-	// mail.approval-resolved's Decision, DecidedBy and DecisionNote.
-	decision  string
+	// mail.approval-resolved's Decision and DecidedBy.
+	decision  approvalDecision
 	decidedBy string
-	note      string
+	// What an approver's edit changed, and the note they or a rejection left.
+	changes []MailApprovalChange
+	note    string
 }
 
-func resolvedNotice(decision string, caller approvalCaller, note string) approvalNotice {
+func resolvedNotice(decision approvalDecision, caller approvalCaller, changes []MailApprovalChange, note string) approvalNotice {
 	decidedBy := deref(caller.name)
 	if decidedBy == "" {
 		decidedBy = caller.sub
 	}
-	return approvalNotice{kind: noticeResolved, by: caller.sub, decision: decision, decidedBy: decidedBy, note: note}
+	return approvalNotice{kind: noticeResolved, by: caller.sub, decision: decision, decidedBy: decidedBy, changes: changes, note: note}
 }
 
-// The notes mail.approval-resolved carries as DecisionNote. The template
-// renders Decision "approved" as an approval and anything else as a
-// rejection, so until it learns "returned" and "expired" the note is what
-// tells those apart.
-const expiredNote = "Yedi gün içinde karar verilmediği için talebin süresi doldu; gönderim yapılmadı ve yapılmayacak."
+// mailTimeZone is where the people reading these mails are.
+var mailTimeZone = func() *time.Location {
+	if zone, err := time.LoadLocation(summaryTimeZone); err == nil {
+		return zone
+	}
+	// Turkey has kept UTC+3 all year since 2016.
+	return time.FixedZone(summaryTimeZone, 3*60*60)
+}()
+
+// mailTime is a time as the mails write it: Istanbul's day and hour.
+func mailTime(t time.Time) string {
+	return t.In(mailTimeZone).Format("02.01.2006 15:04")
+}
+
+// decisionNote is mail.approval-resolved's DecisionNote for notice on the
+// request as it now stands. The template renders Decision "approved" as an
+// approval and anything else as a rejection, so until it learns "returned"
+// and "expired" the note is what tells those apart.
+func (notice approvalNotice) decisionNote(view database.GetMailApprovalRow) string {
+	switch notice.decision {
+	case decisionApproved:
+		if len(notice.changes) == 0 {
+			return strings.TrimSpace(notice.note)
+		}
+		return withNote("Onaycı göndermeden önce şunları değiştirdi: "+changedVariables(notice.changes)+".", notice.note)
+	case decisionReturned:
+		return withNote("Onaycı şunları değiştirip gönderimi onayına geri gönderdi: "+changedVariables(notice.changes)+
+			". Kabul edersen bu hâliyle gider; etmezsen düzenleyip yeniden sunabilirsin. "+
+			mailTime(view.DeadlineAt)+" tarihine kadar karar vermezsen talebin süresi dolar.", notice.note)
+	case decisionExpired:
+		return "Talebe " + mailTime(view.DeadlineAt) + " tarihine kadar karar verilmediği için süresi doldu; gönderim yapılmadı ve yapılmayacak."
+	}
+	return strings.TrimSpace(notice.note)
+}
 
 func changedVariables(changes []MailApprovalChange) string {
 	names := make([]string, 0, len(changes))
@@ -67,18 +114,6 @@ func withNote(text, note string) string {
 		return text
 	}
 	return text + " Not: " + note
-}
-
-func approvedNote(changes []MailApprovalChange, note string) string {
-	if len(changes) == 0 {
-		return strings.TrimSpace(note)
-	}
-	return withNote("Onaycı göndermeden önce şunları değiştirdi: "+changedVariables(changes)+".", note)
-}
-
-func returnedNote(changes []MailApprovalChange, note string) string {
-	return withNote("Onaycı şunları değiştirip gönderimi onayına geri gönderdi: "+changedVariables(changes)+
-		". Kabul edersen bu hâliyle gider; etmezsen düzenleyip yeniden sunabilirsin.", note)
 }
 
 // deliver sends the mail notice owes, through the mailer like any other
@@ -131,9 +166,10 @@ func (h *mailApprovalHandlerImpl) notifySubmitter(ctx context.Context, view data
 	return h.notify(ctx, approvalResolvedKey, sender, submitter, map[string]interface{}{
 		"TemplateName": view.TemplateName,
 		"AudienceName": h.audienceName(ctx, view),
-		"Decision":     notice.decision,
+		"Decision":     string(notice.decision),
 		"DecidedBy":    notice.decidedBy,
-		"DecisionNote": notice.note,
+		"DecisionNote": notice.decisionNote(view),
+		"DeadlineAt":   mailTime(view.DeadlineAt),
 	})
 }
 

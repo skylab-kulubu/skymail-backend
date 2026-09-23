@@ -15,7 +15,7 @@
 --   declined  the submitter refused an approver's edit; they may edit and
 --             resubmit it;
 --   expired   undecided — pending or returned — at its deadline, seven days
---             after it was last submitted. It never goes out.
+--             after it was last submitted or returned. It never goes out.
 --
 -- A resubmission is the same request, pending again with a new deadline; the
 -- events keep everything that happened before it.

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/gofiber/fiber/v3"
@@ -546,18 +547,31 @@ func (h *mailApprovalHandlerImpl) send(ctx context.Context, q *database.Queries,
 	})
 }
 
-// decide moves a request, locked, to state and records the event that did.
-func (h *mailApprovalHandlerImpl) decide(ctx context.Context, q *database.Queries, a database.MailApproval, state database.MailApprovalState, kind database.MailApprovalEventKind, caller approvalCaller, note string, taskID *uuid.UUID) error {
-	if _, err := q.SetMailApprovalState(ctx, database.SetMailApprovalStateParams{State: state, TaskID: taskID, At: h.now(), ID: a.ID}); err != nil {
+// approvalStep is what a decision does to a request: the state it moves it
+// to, the event that records it with its note and send, and — for a return —
+// the new deadline.
+type approvalStep struct {
+	state    database.MailApprovalState
+	kind     database.MailApprovalEventKind
+	note     string
+	taskID   *uuid.UUID
+	deadline *time.Time
+}
+
+// decide takes step on a request, locked, by caller.
+func (h *mailApprovalHandlerImpl) decide(ctx context.Context, q *database.Queries, a database.MailApproval, caller approvalCaller, step approvalStep) error {
+	if _, err := q.SetMailApprovalState(ctx, database.SetMailApprovalStateParams{
+		State: step.state, TaskID: step.taskID, DeadlineAt: step.deadline, At: h.now(), ID: a.ID,
+	}); err != nil {
 		return err
 	}
 	_, err := q.RecordMailApprovalEvent(ctx, database.RecordMailApprovalEventParams{
 		ApprovalID: a.ID,
-		Kind:       kind,
+		Kind:       step.kind,
 		ActorSub:   &caller.sub,
 		ActorName:  caller.name,
-		Note:       optionalText(note),
-		TaskID:     taskID,
+		Note:       optionalText(step.note),
+		TaskID:     step.taskID,
 		At:         h.now(),
 	})
 	return err
@@ -685,7 +699,7 @@ func (h *mailApprovalHandlerImpl) expireLocked(ctx context.Context, q *database.
 		Kind:       database.MailApprovalEventKindExpired,
 		At:         h.now(),
 	})
-	return approvalNotice{kind: noticeResolved, decision: "expired", decidedBy: "SkyMail", note: expiredNote}, err
+	return approvalNotice{kind: noticeResolved, decision: decisionExpired, decidedBy: "SkyMail"}, err
 }
 
 // expireIfDue expires one request if it is undecided past its deadline and

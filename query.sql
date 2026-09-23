@@ -870,11 +870,13 @@ WHERE state IN ('pending', 'returned')
 ORDER BY deadline_at, id
 LIMIT 1 FOR UPDATE SKIP LOCKED;
 
+-- A NULL deadline leaves the request's deadline as it is.
 -- name: SetMailApprovalState :one
 UPDATE mail_approvals
-SET state      = sqlc.arg(state),
-    task_id    = sqlc.narg(task_id),
-    updated_at = sqlc.arg(at)
+SET state       = sqlc.arg(state),
+    task_id     = sqlc.narg(task_id),
+    deadline_at = COALESCE(sqlc.narg(deadline_at), deadline_at),
+    updated_at  = sqlc.arg(at)
 WHERE id = sqlc.arg(id)
 RETURNING *;
 

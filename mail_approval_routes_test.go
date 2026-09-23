@@ -1506,3 +1506,32 @@ func TestConcurrentApprovalsDoNotStarveASmallPool(t *testing.T) {
 		t.Fatalf("sends = %d, want %d", tasks, n)
 	}
 }
+
+// Returning an edit hands the decision to the submitter, so it gives them
+// seven days of their own: a request returned on its sixth day can still be
+// accepted six days later, and the submitter is told until when.
+func TestAReturnedRequestGetsSevenDaysOfItsOwn(t *testing.T) {
+	w := newApprovalWorld(t)
+	submitted := w.submit("elif", w.listSend())
+
+	w.advance(6 * 24 * time.Hour)
+	edit := w.listSend()["body_variables"].(map[string]any)
+	edit["Heading"] = "Son hafta"
+	status, returned, failure := w.act("fatih", submitted.ID, "return", map[string]any{"body_variables": edit})
+	if status != fiber.StatusOK {
+		t.Fatalf("return = %d %+v", status, failure)
+	}
+	if want := w.now().Add(7 * 24 * time.Hour); !returned.DeadlineAt.Equal(want) {
+		t.Fatalf("deadline after the return = %s, want %s", returned.DeadlineAt, want)
+	}
+	notice := w.mail.of(w.resolved.ID)[0].variables
+	// 23 September 10:00 UTC, six days on and seven more, in Istanbul.
+	if notice["DeadlineAt"] != "06.10.2026 13:00" || !strings.Contains(notice["DecisionNote"].(string), "06.10.2026 13:00") {
+		t.Errorf("returned notice = %v", notice)
+	}
+
+	w.advance(6 * 24 * time.Hour)
+	if status, accepted, failure := w.act("elif", submitted.ID, "accept", nil); status != fiber.StatusOK || accepted.State != "approved" {
+		t.Fatalf("accepting on the twelfth day = %d %+v", status, failure)
+	}
+}

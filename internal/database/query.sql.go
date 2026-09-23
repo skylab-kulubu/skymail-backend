@@ -2907,24 +2907,28 @@ func (q *Queries) ResubmitMailApproval(ctx context.Context, arg ResubmitMailAppr
 
 const setMailApprovalState = `-- name: SetMailApprovalState :one
 UPDATE mail_approvals
-SET state      = $1,
-    task_id    = $2,
-    updated_at = $3
-WHERE id = $4
+SET state       = $1,
+    task_id     = $2,
+    deadline_at = COALESCE($3, deadline_at),
+    updated_at  = $4
+WHERE id = $5
 RETURNING id, submitter_sub, submitter_name, submitter_email, state, template_id, template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables, created_at, submitted_at, deadline_at, updated_at, task_id
 `
 
 type SetMailApprovalStateParams struct {
-	State  MailApprovalState `json:"state"`
-	TaskID *uuid.UUID        `json:"task_id"`
-	At     time.Time         `json:"at"`
-	ID     uuid.UUID         `json:"id"`
+	State      MailApprovalState `json:"state"`
+	TaskID     *uuid.UUID        `json:"task_id"`
+	DeadlineAt *time.Time        `json:"deadline_at"`
+	At         time.Time         `json:"at"`
+	ID         uuid.UUID         `json:"id"`
 }
 
+// A NULL deadline leaves the request's deadline as it is.
 func (q *Queries) SetMailApprovalState(ctx context.Context, arg SetMailApprovalStateParams) (MailApproval, error) {
 	row := q.db.QueryRow(ctx, setMailApprovalState,
 		arg.State,
 		arg.TaskID,
+		arg.DeadlineAt,
 		arg.At,
 		arg.ID,
 	)

@@ -538,10 +538,12 @@ func (h *mailApprovalHandlerImpl) Approve(c fiber.Ctx) error {
 			if err != nil {
 				return approvalNotice{}, err
 			}
-			if err := h.decide(ctx, q, a, database.MailApprovalStateApproved, database.MailApprovalEventKindApproved, caller, params.Note, &taskID); err != nil {
+			if err := h.decide(ctx, q, a, caller, approvalStep{
+				state: database.MailApprovalStateApproved, kind: database.MailApprovalEventKindApproved, note: params.Note, taskID: &taskID,
+			}); err != nil {
 				return approvalNotice{}, err
 			}
-			return resolvedNotice("approved", caller, approvedNote(changes, params.Note)), nil
+			return resolvedNotice(decisionApproved, caller, changes, params.Note), nil
 		},
 	})
 }
@@ -549,7 +551,7 @@ func (h *mailApprovalHandlerImpl) Approve(c fiber.Ctx) error {
 // Return godoc
 //
 //	@Summary		Return an edited request to its submitter
-//	@Description	An approver edits a pending request someone else submitted and hands it back: the edit is recorded (an edited event naming each variable changed, before and after), the request is returned, and the submitter is mailed the mail.approval-resolved System template with Decision "returned". Nothing is sent. The submitter accepts it — and it goes out as edited — or declines it. body_variables is the whole edit and must differ from the request's.
+//	@Description	An approver edits a pending request someone else submitted and hands it back: the edit is recorded (an edited event naming each variable changed, before and after), the request is returned with a new seven-day deadline — the decision is the submitter's now — and the submitter is mailed the mail.approval-resolved System template with Decision "returned" and the deadline. Nothing is sent. The submitter accepts it — and it goes out as edited — or declines it. body_variables is the whole edit and must differ from the request's.
 //	@Tags			Mail approval
 //	@Accept			json
 //	@Produce		json
@@ -579,10 +581,15 @@ func (h *mailApprovalHandlerImpl) Return(c fiber.Ctx) error {
 			if len(changes) == 0 {
 				return approvalNotice{}, errApprovalNoEdit
 			}
-			if err := h.decide(ctx, q, a, database.MailApprovalStateReturned, database.MailApprovalEventKindReturned, caller, params.Note, nil); err != nil {
+			// Returning hands the decision to the submitter, who gets seven
+			// days of their own to make it.
+			deadline := h.now().Add(mailApprovalDeadline)
+			if err := h.decide(ctx, q, a, caller, approvalStep{
+				state: database.MailApprovalStateReturned, kind: database.MailApprovalEventKindReturned, note: params.Note, deadline: &deadline,
+			}); err != nil {
 				return approvalNotice{}, err
 			}
-			return resolvedNotice("returned", caller, returnedNote(changes, params.Note)), nil
+			return resolvedNotice(decisionReturned, caller, changes, params.Note), nil
 		},
 	})
 }
@@ -616,10 +623,12 @@ func (h *mailApprovalHandlerImpl) Reject(c fiber.Ctx) error {
 		by:   byApprover,
 		from: []database.MailApprovalState{database.MailApprovalStatePending},
 		do: func(ctx context.Context, q *database.Queries, a database.MailApproval, caller approvalCaller, _ approvalPrepared) (approvalNotice, error) {
-			if err := h.decide(ctx, q, a, database.MailApprovalStateRejected, database.MailApprovalEventKindRejected, caller, reason, nil); err != nil {
+			if err := h.decide(ctx, q, a, caller, approvalStep{
+				state: database.MailApprovalStateRejected, kind: database.MailApprovalEventKindRejected, note: reason,
+			}); err != nil {
 				return approvalNotice{}, err
 			}
-			return resolvedNotice("rejected", caller, reason), nil
+			return resolvedNotice(decisionRejected, caller, nil, reason), nil
 		},
 	})
 }
@@ -647,7 +656,9 @@ func (h *mailApprovalHandlerImpl) Accept(c fiber.Ctx) error {
 			if err != nil {
 				return approvalNotice{}, err
 			}
-			return approvalNotice{}, h.decide(ctx, q, a, database.MailApprovalStateApproved, database.MailApprovalEventKindAccepted, caller, "", &taskID)
+			return approvalNotice{}, h.decide(ctx, q, a, caller, approvalStep{
+				state: database.MailApprovalStateApproved, kind: database.MailApprovalEventKindAccepted, taskID: &taskID,
+			})
 		},
 	})
 }
@@ -679,7 +690,9 @@ func (h *mailApprovalHandlerImpl) Decline(c fiber.Ctx) error {
 		by:   bySubmitter,
 		from: []database.MailApprovalState{database.MailApprovalStateReturned},
 		do: func(ctx context.Context, q *database.Queries, a database.MailApproval, caller approvalCaller, _ approvalPrepared) (approvalNotice, error) {
-			return approvalNotice{}, h.decide(ctx, q, a, database.MailApprovalStateDeclined, database.MailApprovalEventKindDeclined, caller, params.Note, nil)
+			return approvalNotice{}, h.decide(ctx, q, a, caller, approvalStep{
+				state: database.MailApprovalStateDeclined, kind: database.MailApprovalEventKindDeclined, note: params.Note,
+			})
 		},
 	})
 }
