@@ -1,0 +1,1676 @@
+package handlers
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"sort"
+	"testing"
+	"time"
+
+	"github.com/gofiber/fiber/v3"
+	"github.com/google/uuid"
+	"github.com/skylab-kulubu/skymail-backend/internal/database"
+)
+
+// servedDraft is one version whole, as the draft routes answer with it.
+type servedDraft struct {
+	servedVersion
+	JSXSource        *string         `json:"jsx_source"`
+	VisualSource     json.RawMessage `json:"visual_source"`
+	HTMLSource       *string         `json:"html_source"`
+	HTMLContent      string          `json:"html_content"`
+	PlainTextContent string          `json:"plain_text_content"`
+}
+
+// saveDraft saves a draft of a template as the operator the headers name, and
+// decodes the version it answers with when it answers with one.
+func saveDraft(t *testing.T, app *fiber.App, templateID uuid.UUID, draft map[string]any, headers ...string) (*http.Response, servedDraft, []byte) {
+	t.Helper()
+	response, body := sendJSONAs(t, app, fiber.MethodPost, "/templates/"+templateID.String()+"/drafts", draft, headers...)
+	var version servedDraft
+	if response.StatusCode == fiber.StatusOK || response.StatusCode == fiber.StatusCreated {
+		if err := json.Unmarshal(body, &version); err != nil {
+			t.Fatalf("draft answer %s: %v", body, err)
+		}
+	}
+	return response, version, body
+}
+
+// sendJSONAs is sendJSON with request headers, given as name, value pairs.
+func sendJSONAs(t *testing.T, app *fiber.App, method, path string, body any, headers ...string) (*http.Response, []byte) {
+	t.Helper()
+	if len(headers) == 0 {
+		return sendJSON(t, app, method, path, body)
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(method, path, bytes.NewReader(payload))
+	request.Header.Set("Content-Type", "application/json")
+	for i := 0; i+1 < len(headers); i += 2 {
+		request.Header.Set(headers[i], headers[i+1])
+	}
+	response, err := app.Test(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(response.Body)
+	return response, raw
+}
+
+// templateRow is a template's row as the send path reads it.
+func templateRow(t *testing.T, db *database.Store, id uuid.UUID) database.Template {
+	t.Helper()
+	row, err := db.GetTemplateByIdIncludingArchived(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+// A template made in the old panel: one published operator version, JSX its
+// Main source.
+func panelTemplate(t *testing.T, app *fiber.App) database.Template {
+	t.Helper()
+	return createTemplate(t, app, map[string]any{
+		"name": "Etkinlik duyurusu", "subject": "Merhaba {{.FullName}}",
+		"html_content": "<p>Merhaba {{.FullName}}</p>", "plain_text_content": "Merhaba {{.FullName}}",
+		"react_email_content": panelSource,
+	})
+}
+
+// Saving writes a draft: a version that is sent to nobody until it is
+// published. The row, which is what the send path reads, stays exactly as it
+// was and still names the version it is a copy of.
+func TestSavingADraftLeavesThePublishedTemplateAlone(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+	before := templateRow(t, db, created.ID)
+
+	edited := panelSource + "\n// taslak\n"
+	response, draft, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": "Selam {{.FullName}}", "main_mode": "jsx", "jsx_source": edited,
+		"html_content": "<p>Selam {{.FullName}}</p>", "plain_text_content": "Selam {{.FullName}}",
+		"base_version_id": created.PublishedVersionID,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("POST drafts = %d %s, want 201", response.StatusCode, body)
+	}
+	if draft.PublishedAt != nil || draft.Current || draft.Seq != 2 || draft.TemplateID != created.ID ||
+		draft.BaseVersionID == nil || *draft.BaseVersionID != *created.PublishedVersionID {
+		t.Fatalf("draft = %+v, want version 2 unpublished, started from the published one", draft.servedVersion)
+	}
+	if draft.Author.Kind != "operator" || !sameString(draft.Author.Sub, operatorSub) || !sameString(draft.Author.Name, operatorName) {
+		t.Fatalf("draft author = %+v, want the operator by subject and name", draft.Author)
+	}
+	if draft.Subject != "Selam {{.FullName}}" || draft.MainMode != "jsx" || !sameString(draft.JSXSource, edited) ||
+		draft.HTMLContent != "<p>Selam {{.FullName}}</p>" || draft.PlainTextContent != "Selam {{.FullName}}" {
+		t.Fatalf("draft content = %+v, want what was saved", draft)
+	}
+
+	if after := templateRow(t, db, created.ID); !reflect.DeepEqual(before, after) {
+		t.Fatalf("the row changed on a draft save:\nbefore %+v\nafter  %+v", before, after)
+	}
+	versions, published := storedVersions(t, db, created.ID)
+	if len(versions) != 2 || versions[1].ID != draft.ID || versions[1].PublishedAt != nil ||
+		published == nil || *published != *created.PublishedVersionID {
+		t.Fatalf("versions = %d (row copy of %v), want the first still published and the draft beside it", len(versions), published)
+	}
+}
+
+// publish publishes a version of a template — forced over the published
+// version over names, when it names one — and decodes the template it answers
+// with when it answers with one.
+func publish(t *testing.T, app *fiber.App, templateID, versionID uuid.UUID, over *uuid.UUID) (*http.Response, database.Template, []byte) {
+	t.Helper()
+	path := "/templates/" + templateID.String() + "/versions/" + versionID.String() + "/publish"
+	var body any
+	if over != nil {
+		body = map[string]any{"force": map[string]any{"over_version_id": over}}
+	}
+	response, raw := sendJSON(t, app, fiber.MethodPost, path, body)
+	var template database.Template
+	if response.StatusCode == fiber.StatusOK {
+		if err := json.Unmarshal(raw, &template); err != nil {
+			t.Fatalf("publish answer %s: %v", raw, err)
+		}
+	}
+	return response, template, raw
+}
+
+// A Visual document as the block editor saves one.
+const visualDocument = `{"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Aramıza hoş geldin"}]}]}`
+
+// seededTemplate is a System template the Template seed wrote: one published
+// seed version, HTML its Main source.
+func seededTemplate(t *testing.T, app *fiber.App, key string) database.Template {
+	t.Helper()
+	response, body := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/"+key, map[string]any{
+		"name": "Hoş Geldin", "subject": "SKY LAB'e hoş geldin",
+		"html_content": "<p>Hoş geldin {{.FullName}}</p>", "plain_text_content": "Hoş geldin {{.FullName}}",
+		"react_email_content": seedPointerComment(key), "system": true,
+	})
+	if response.StatusCode != fiber.StatusOK {
+		t.Fatalf("seed = %d %s", response.StatusCode, body)
+	}
+	var seeded database.Template
+	if err := json.Unmarshal(body, &seeded); err != nil {
+		t.Fatal(err)
+	}
+	return seeded
+}
+
+// queuedFor is what a single send queued for a recipient.
+func queuedFor(t *testing.T, db *database.Store, email string) (subject, text, html string) {
+	t.Helper()
+	if err := db.Conn.QueryRow(context.Background(), `SELECT subject, body, body_html FROM mail_queue WHERE recipient_email = $1`, email).
+		Scan(&subject, &text, &html); err != nil {
+		t.Fatal(err)
+	}
+	return subject, text, html
+}
+
+func sendByKey(t *testing.T, app *fiber.App, key, email string) {
+	t.Helper()
+	response, body := sendJSON(t, app, fiber.MethodPost, "/mail_tasks/single", map[string]any{
+		"template_key": key, "recipient_email": email, "recipient_full_name": "Deniz Kaya",
+		"body_variables": map[string]string{},
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("send = %d %s", response.StatusCode, body)
+	}
+}
+
+// Publishing a draft makes it the version that is sent: it is marked published
+// and copied onto the row — its subject, its render, and its JSX Main source
+// as react_email_content, which the old panel edits. A send then queues it,
+// and a newer draft lying unpublished beside it is not what a send queues.
+func TestPublishingADraftCopiesItOntoTheRowAndSendsIt(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	const key = "core.welcome"
+	seeded := seededTemplate(t, app, key)
+
+	response, draft, body := saveDraft(t, app, seeded.ID, map[string]any{
+		"subject": "Aramıza hoş geldin, {{.FullName}}", "main_mode": "jsx",
+		"visual_source": json.RawMessage(visualDocument), "jsx_source": panelSource,
+		"html_content": "<p>Aramıza hoş geldin {{.FullName}}</p>", "plain_text_content": "Aramıza hoş geldin {{.FullName}}",
+		"base_version_id": seeded.PublishedVersionID,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("save = %d %s", response.StatusCode, body)
+	}
+
+	response, published, body := publish(t, app, seeded.ID, draft.ID, nil)
+	if response.StatusCode != fiber.StatusOK {
+		t.Fatalf("publish = %d %s, want 200", response.StatusCode, body)
+	}
+	row := templateRow(t, db, seeded.ID)
+	for name, got := range map[string]database.Template{"answer": published, "row": row} {
+		if got.Subject != "Aramıza hoş geldin, {{.FullName}}" || got.HtmlContent != "<p>Aramıza hoş geldin {{.FullName}}</p>" ||
+			got.PlainTextContent != "Aramıza hoş geldin {{.FullName}}" || got.ReactEmailContent != panelSource ||
+			got.PublishedVersionID == nil || *got.PublishedVersionID != draft.ID {
+			t.Fatalf("%s after publishing = %+v, want a copy of the draft, its JSX source as react_email_content", name, got)
+		}
+	}
+	if row.Name != seeded.Name || row.Key == nil || *row.Key != key || !row.System || !row.UpdatedAt.After(seeded.UpdatedAt) {
+		t.Fatalf("row after publishing = %+v, want only the version's fields copied and updated_at moved", row)
+	}
+	versions, _ := storedVersions(t, db, seeded.ID)
+	if len(versions) != 2 || versions[1].PublishedAt == nil || versions[1].PublishedAt.Before(versions[1].CreatedAt) {
+		t.Fatalf("versions = %+v, want the draft published in place", versions)
+	}
+	if versions[0].PublishedAt == nil {
+		t.Fatalf("the seed's version lost its publish time: %+v", versions[0])
+	}
+
+	// A newer draft, not published, beside the published one.
+	if response, _, body := saveDraft(t, app, seeded.ID, map[string]any{
+		"subject": "YARIM", "main_mode": "html", "html_source": "<p>YARIM</p>",
+		"html_content": "<p>YARIM</p>", "plain_text_content": "YARIM", "base_version_id": draft.ID,
+	}); response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("second draft = %d %s", response.StatusCode, body)
+	}
+	sendByKey(t, app, key, "uye@yildizskylab.com")
+	subject, text, html := queuedFor(t, db, "uye@yildizskylab.com")
+	if subject != "Aramıza hoş geldin, Deniz Kaya" || text != "Aramıza hoş geldin Deniz Kaya" || html != "<p>Aramıza hoş geldin Deniz Kaya</p>" {
+		t.Fatalf("queued %q / %q / %q, want the published draft rendered for the recipient", subject, text, html)
+	}
+}
+
+// appError is the API's error body.
+type appError struct {
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Params  map[string]any `json:"params"`
+}
+
+func decodeError(t *testing.T, body []byte) appError {
+	t.Helper()
+	var e appError
+	if err := json.Unmarshal(body, &e); err != nil {
+		t.Fatalf("error body %s: %v", body, err)
+	}
+	return e
+}
+
+// A draft is stale when another version was published after it was started.
+// Publishing it would quietly revert that version (ADR-0047, the other way
+// round), so it is refused with a conflict naming both — the version the
+// draft started from and the one published now — for the editor to show side
+// by side. Forced, it goes through, and the version it replaces stays in the
+// history.
+func TestPublishingAStaleDraftIsRefusedUntilForced(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+	started := *created.PublishedVersionID
+
+	response, draft, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": "Taslak konu", "main_mode": "jsx", "jsx_source": panelSource + "\n// taslak\n",
+		"html_content": "<p>Taslak</p>", "plain_text_content": "Taslak", "base_version_id": started,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("save = %d %s", response.StatusCode, body)
+	}
+
+	// Meanwhile another operator edits the template in the old panel, which
+	// publishes at once.
+	response, body = sendJSONAs(t, app, fiber.MethodPatch, "/templates/"+created.ID.String(), map[string]any{
+		"name": created.Name, "subject": "Başkasının konusu", "html_content": "<p>Başkası</p>",
+		"plain_text_content": "Başkası", "react_email_content": panelSource,
+	}, "X-Operator-Sub", "b7d1e7a2-3c1f-4c55-9d6e-0a1b2c3d4e5f", "X-Operator-Name", "Can Demir")
+	if response.StatusCode != fiber.StatusOK {
+		t.Fatalf("other operator's edit = %d %s", response.StatusCode, body)
+	}
+	theirs := *templateRow(t, db, created.ID).PublishedVersionID
+	before := templateRow(t, db, created.ID)
+
+	response, _, body = publish(t, app, created.ID, draft.ID, nil)
+	if response.StatusCode != fiber.StatusConflict {
+		t.Fatalf("publishing a stale draft = %d %s, want 409", response.StatusCode, body)
+	}
+	conflict := decodeError(t, body)
+	if conflict.Code != "template.stale_base" || conflict.Message == "" ||
+		conflict.Params["version_id"] != draft.ID.String() ||
+		conflict.Params["base_version_id"] != started.String() ||
+		conflict.Params["published_version_id"] != theirs.String() {
+		t.Fatalf("conflict = %+v, want template.stale_base naming the draft, its base %s and the published %s", conflict, started, theirs)
+	}
+	if after := templateRow(t, db, created.ID); !reflect.DeepEqual(before, after) {
+		t.Fatalf("a refused publish changed the row: %+v", after)
+	}
+	if versions, _ := storedVersions(t, db, created.ID); versions[1].ID != draft.ID || versions[1].PublishedAt != nil {
+		t.Fatalf("a refused publish published the draft: %+v", versions[1])
+	}
+
+	response, published, body := publish(t, app, created.ID, draft.ID, &theirs)
+	if response.StatusCode != fiber.StatusOK {
+		t.Fatalf("forced publish = %d %s, want 200", response.StatusCode, body)
+	}
+	if published.PublishedVersionID == nil || *published.PublishedVersionID != draft.ID || published.Subject != "Taslak konu" {
+		t.Fatalf("after a forced publish the row = %+v, want a copy of the draft", published)
+	}
+	versions, _ := storedVersions(t, db, created.ID)
+	replaced := versions[2]
+	if replaced.ID != theirs || replaced.PublishedAt == nil || replaced.Subject != "Başkasının konusu" || !sameString(replaced.AuthorName, "Can Demir") {
+		t.Fatalf("the replaced version = %+v, want it kept in the history as it was", replaced)
+	}
+}
+
+// Only a Template seed that changes the template makes a draft stale: an
+// unchanged seed records no version (ticket 04), so it leaves the base
+// published and the draft publishes without force. A changing seed meets the
+// operator's work here, so it goes through only forced (ADR-0047).
+func TestOnlyAChangingSeedMakesADraftStale(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	const key = "core.welcome"
+	seeded := seededTemplate(t, app, key)
+
+	draftOf := func(subject string, base uuid.UUID) servedDraft {
+		t.Helper()
+		response, draft, body := saveDraft(t, app, seeded.ID, map[string]any{
+			"subject": subject, "main_mode": "html", "html_source": "<p>" + subject + "</p>",
+			"html_content": "<p>" + subject + "</p>", "plain_text_content": subject, "base_version_id": base,
+		})
+		if response.StatusCode != fiber.StatusCreated {
+			t.Fatalf("save = %d %s", response.StatusCode, body)
+		}
+		return draft
+	}
+
+	first := draftOf("Birinci taslak", *seeded.PublishedVersionID)
+	seededTemplate(t, app, key) // the same seed again
+	if response, _, body := publish(t, app, seeded.ID, first.ID, nil); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("publishing after an unchanged seed = %d %s, want 200", response.StatusCode, body)
+	}
+
+	second := draftOf("İkinci taslak", first.ID)
+	response, body := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/"+key+"?force=true", map[string]any{
+		"name": "Hoş Geldin", "subject": "SKY LAB'e hoş geldin",
+		"html_content": "<p>Koyu temalı hoş geldin {{.FullName}}</p>", "plain_text_content": "Hoş geldin {{.FullName}}",
+		"react_email_content": seedPointerComment(key), "system": true,
+	})
+	if response.StatusCode != fiber.StatusOK {
+		t.Fatalf("changed seed = %d %s", response.StatusCode, body)
+	}
+	response, _, body = publish(t, app, seeded.ID, second.ID, nil)
+	if response.StatusCode != fiber.StatusConflict || decodeError(t, body).Code != "template.stale_base" {
+		t.Fatalf("publishing over a changed seed = %d %s, want 409 template.stale_base", response.StatusCode, body)
+	}
+}
+
+// restore restores a version of a template as a draft, as the operator the
+// headers name, and decodes the version it answers with when it answers with
+// one.
+func restore(t *testing.T, app *fiber.App, templateID, versionID uuid.UUID, headers ...string) (*http.Response, servedDraft, []byte) {
+	t.Helper()
+	path := "/templates/" + templateID.String() + "/versions/" + versionID.String() + "/restore"
+	response, body := sendJSONAs(t, app, fiber.MethodPost, path, nil, headers...)
+	var version servedDraft
+	if response.StatusCode == fiber.StatusOK || response.StatusCode == fiber.StatusCreated {
+		if err := json.Unmarshal(body, &version); err != nil {
+			t.Fatalf("restore answer %s: %v", body, err)
+		}
+	}
+	return response, version, body
+}
+
+// Any version can be restored as a new draft: its subject, its sources, which
+// one is main and its render are copied into a draft that starts from the
+// version published now. Restoring is undoing through publishing, so nothing
+// that is sent changes. Another operator's draft can be restored too.
+func TestRestoringAVersionWritesADraft(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	template, history := templateWithHistory(t, db, app) // seed, edit (published), Can Demir's draft
+	seed, edit, theirs := history[0], history[1], history[2]
+	before := templateRow(t, db, template.ID)
+
+	response, restored, body := restore(t, app, template.ID, seed.ID)
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("restoring the seed's version = %d %s, want 201", response.StatusCode, body)
+	}
+	if restored.Seq != 4 || restored.PublishedAt != nil || restored.Current || restored.BaseVersionID == nil || *restored.BaseVersionID != edit.ID ||
+		restored.Author.Kind != "operator" || !sameString(restored.Author.Sub, operatorSub) || restored.RequestedSubject != nil {
+		t.Fatalf("restored = %+v, want version 4, my draft, started from the published edit", restored.servedVersion)
+	}
+	if restored.Subject != seed.Subject || restored.MainMode != seed.MainMode || restored.JSXSource != nil || !absent(restored.VisualSource) ||
+		!sameString(restored.HTMLSource, *seed.HTMLSource) || restored.HTMLContent != seed.HTMLContent || restored.PlainTextContent != seed.PlainTextContent {
+		t.Fatalf("restored content = %+v, want the seed's version's", restored)
+	}
+	if after := templateRow(t, db, template.ID); !reflect.DeepEqual(before, after) {
+		t.Fatalf("restoring changed the row: %+v", after)
+	}
+
+	response, taken, body := restore(t, app, template.ID, theirs.ID)
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("restoring another operator's draft = %d %s, want 201", response.StatusCode, body)
+	}
+	if taken.Seq != 5 || !sameString(taken.Author.Sub, operatorSub) || taken.MainMode != "visual" || !sameString(taken.JSXSource, *theirs.JSXSource) ||
+		!jsonEqual(t, taken.VisualSource, theirs.VisualSource) || taken.Subject != theirs.Subject || taken.PublishedAt != nil {
+		t.Fatalf("restored draft = %+v, want Can Demir's content as my draft", taken)
+	}
+
+	other := createTemplate(t, app, map[string]any{
+		"name": "Başka", "subject": "Başka", "html_content": "<p>Başka</p>", "plain_text_content": "Başka",
+		"react_email_content": panelSource,
+	})
+	for name, path := range map[string][2]uuid.UUID{
+		"another template's version": {other.ID, edit.ID},
+		"an unknown version":         {template.ID, uuid.New()},
+		"an unknown template":        {uuid.New(), edit.ID},
+	} {
+		if response, _, body := restore(t, app, path[0], path[1]); response.StatusCode != fiber.StatusNotFound {
+			t.Errorf("restoring %s = %d %s, want 404", name, response.StatusCode, body)
+		}
+	}
+	if versions, _ := storedVersions(t, db, template.ID); len(versions) != 5 {
+		t.Fatalf("versions = %d, want the two restores and nothing else", len(versions))
+	}
+}
+
+// jsonEqual reports whether two JSON documents hold the same value.
+func jsonEqual(t *testing.T, a, b []byte) bool {
+	t.Helper()
+	var x, y any
+	if err := json.Unmarshal(a, &x); err != nil {
+		t.Fatalf("%s: %v", a, err)
+	}
+	if err := json.Unmarshal(b, &y); err != nil {
+		t.Fatalf("%s: %v", b, err)
+	}
+	return reflect.DeepEqual(x, y)
+}
+
+// absent reports whether a served JSON field is null.
+func absent(raw json.RawMessage) bool {
+	return len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null"
+}
+
+// Making another source the Main source writes a new version, and the other
+// sources stay exactly as they were (ADR-0046): a switch changes what is sent,
+// once published, never what is kept. A save need not send the sources it
+// leaves alone: one left out, or null, is kept from the version the save
+// continues, so a save never drops a source.
+func TestChangingTheMainSourceKeepsTheOtherSources(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app) // JSX is the Main source
+
+	// A draft adds a Visual and an HTML source beside the JSX one; the JSX
+	// source is not sent, and is kept.
+	response, withSources, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": "Merhaba {{.FullName}}", "main_mode": "jsx",
+		"visual_source": json.RawMessage(visualDocument), "html_source": "<p>HTML kaynağı</p>",
+		"html_content": "<p>Merhaba {{.FullName}}</p>", "plain_text_content": "Merhaba {{.FullName}}",
+		"base_version_id": created.PublishedVersionID,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("adding sources = %d %s", response.StatusCode, body)
+	}
+	if !sameString(withSources.JSXSource, panelSource) || withSources.MainMode != "jsx" {
+		t.Fatalf("draft = %+v, want the JSX source kept as the Main source", withSources)
+	}
+	if response, _, body := publish(t, app, created.ID, withSources.ID, nil); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("publish = %d %s", response.StatusCode, body)
+	}
+
+	// Visual becomes the Main source: the switch sends the mode, the render the
+	// Visual source gives, and nothing else — an explicit null included.
+	response, switched, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": "Merhaba {{.FullName}}", "main_mode": "visual", "html_source": nil,
+		"html_content": "<p>Görsel merhaba {{.FullName}}</p>", "plain_text_content": "Görsel merhaba {{.FullName}}",
+		"base_version_id": withSources.ID,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("switching the Main source = %d %s, want 201", response.StatusCode, body)
+	}
+	versions, _ := storedVersions(t, db, created.ID)
+	if len(versions) != 3 || versions[2].ID != switched.ID {
+		t.Fatalf("versions = %d, want the switch recorded as a third", len(versions))
+	}
+	before, after := versions[1], versions[2]
+	if after.MainMode != "visual" || after.HTMLContent != "<p>Görsel merhaba {{.FullName}}</p>" || after.PublishedAt != nil {
+		t.Fatalf("switch = %+v, want a Visual Main source draft with its render", after)
+	}
+	if !sameString(after.JSXSource, *before.JSXSource) || !sameString(after.HTMLSource, *before.HTMLSource) ||
+		string(after.VisualSource) != string(before.VisualSource) {
+		t.Fatalf("sources after the switch = jsx %v html %v visual %s, want them exactly as before", after.JSXSource, after.HTMLSource, after.VisualSource)
+	}
+
+	// Published, the switch sends the Visual render. The JSX source stays in
+	// the version, not on the row, where the old panel would re-render it.
+	response, row, body := publish(t, app, created.ID, switched.ID, nil)
+	if response.StatusCode != fiber.StatusOK {
+		t.Fatalf("publish the switch = %d %s", response.StatusCode, body)
+	}
+	if row.HtmlContent != "<p>Görsel merhaba {{.FullName}}</p>" || row.ReactEmailContent != "" {
+		t.Fatalf("row = %+v, want the Visual render sent and no JSX handed to the old panel", row)
+	}
+	versions, _ = storedVersions(t, db, created.ID)
+	if sent := versions[len(versions)-1]; sent.ID != switched.ID || sent.PublishedAt == nil || !sameString(sent.JSXSource, panelSource) {
+		t.Fatalf("published switch = %+v, want it published with its JSX source kept", sent)
+	}
+}
+
+// Another operator, as the test app takes one from the request headers.
+var canDemir = []string{"X-Operator-Sub", "b7d1e7a2-3c1f-4c55-9d6e-0a1b2c3d4e5f", "X-Operator-Name", "Can Demir"}
+
+// Each save writes a new version, and an operator's newest one, while it is
+// unpublished, is their draft in progress: the next save continues it. A save
+// that changes nothing records nothing — compared with the operator's draft in
+// progress, or with the version it starts from when they have none — and
+// answers with that version, 200 instead of 201.
+func TestASaveContinuesTheOperatorsDraftAndRecordsNothingUnchanged(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+	published := *created.PublishedVersionID
+	unchanged := map[string]any{
+		"subject": created.Subject, "main_mode": "jsx", "jsx_source": panelSource,
+		"html_content": created.HtmlContent, "plain_text_content": created.PlainTextContent, "base_version_id": published,
+	}
+	count := func() int {
+		t.Helper()
+		versions, _ := storedVersions(t, db, created.ID)
+		return len(versions)
+	}
+
+	response, answered, body := saveDraft(t, app, created.ID, unchanged)
+	if response.StatusCode != fiber.StatusOK || answered.ID != published || answered.PublishedAt == nil || count() != 1 {
+		t.Fatalf("saving the published content = %d %s (%d versions), want 200 answering the published version and nothing recorded", response.StatusCode, body, count())
+	}
+
+	withVisual := map[string]any{
+		"subject": created.Subject, "main_mode": "jsx", "visual_source": json.RawMessage(visualDocument),
+		"html_content": created.HtmlContent, "plain_text_content": created.PlainTextContent, "base_version_id": published,
+	}
+	response, draft, body := saveDraft(t, app, created.ID, withVisual)
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("draft = %d %s", response.StatusCode, body)
+	}
+	// The same document written differently is the same document.
+	withVisual["visual_source"] = json.RawMessage(`{"content":[{"content":[{"text":"Aramıza hoş geldin","type":"text"}],"type":"paragraph"}],"type":"doc"}`)
+	response, answered, body = saveDraft(t, app, created.ID, withVisual)
+	if response.StatusCode != fiber.StatusOK || answered.ID != draft.ID || count() != 2 {
+		t.Fatalf("saving the draft again = %d %s (%d versions), want 200 answering the draft and nothing recorded", response.StatusCode, body, count())
+	}
+
+	// The next save continues the draft: making Visual the Main source finds
+	// the Visual source in the draft, which the published version does not hold.
+	response, continued, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": created.Subject, "main_mode": "visual",
+		"html_content": "<p>Görsel</p>", "plain_text_content": "Görsel", "base_version_id": published,
+	})
+	if response.StatusCode != fiber.StatusCreated || continued.MainMode != "visual" || !jsonEqual(t, continued.VisualSource, []byte(visualDocument)) ||
+		!sameString(continued.JSXSource, panelSource) {
+		t.Fatalf("continuing the draft = %d %s, want a Visual Main source draft keeping both sources", response.StatusCode, body)
+	}
+
+	// Another operator's identical save is their own draft, not mine.
+	response, theirs, body := saveDraft(t, app, created.ID, withVisual, canDemir...)
+	if response.StatusCode != fiber.StatusCreated || theirs.ID == draft.ID || !sameString(theirs.Author.Name, "Can Demir") {
+		t.Fatalf("another operator's save = %d %s, want their own draft", response.StatusCode, body)
+	}
+
+	// Restoring records nothing either when it would change nothing: an
+	// operator with no draft restoring what is published, or one restoring
+	// what their draft already holds.
+	response, answered, body = restore(t, app, created.ID, published, "X-Operator-Sub", "0c9e5f1a-7c1e-4a8e-8f55-3b1c9d2e4f60", "X-Operator-Name", "Ece Ak")
+	if response.StatusCode != fiber.StatusOK || answered.ID != published {
+		t.Fatalf("restoring the published version with no draft = %d %s, want 200 answering it", response.StatusCode, body)
+	}
+	response, answered, body = restore(t, app, created.ID, theirs.ID, canDemir...)
+	if response.StatusCode != fiber.StatusOK || answered.ID != theirs.ID {
+		t.Fatalf("restoring one's own draft = %d %s, want 200 answering it", response.StatusCode, body)
+	}
+	if count() != 4 {
+		t.Fatalf("versions = %d, want the published one and three drafts", count())
+	}
+}
+
+// What the server checks of a draft it cannot render. The editor renders the
+// Main source; the server stores the render it is given, and refuses what it
+// can tell is wrong: a missing or blank field, a Main source whose Authoring
+// mode has no source, a base that is not a published version of this
+// template, a Visual source that is not a JSON object, a JSX source with no
+// code in it, and a subject, plain text or HTML the mailer could not parse —
+// every send of it would fail. A refused save records nothing.
+func TestDraftSavesTheServerRefuses(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app) // one published version, JSX its only source
+	published := *created.PublishedVersionID
+	other := createTemplate(t, app, map[string]any{
+		"name": "Başka", "subject": "Başka", "html_content": "<p>Başka</p>", "plain_text_content": "Başka",
+		"react_email_content": panelSource,
+	})
+	response, draft, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": "Taslak", "main_mode": "jsx", "html_content": "<p>Taslak</p>", "plain_text_content": "Taslak",
+		"base_version_id": published,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("draft = %d %s", response.StatusCode, body)
+	}
+	before := templateRow(t, db, created.ID)
+
+	valid := func(change map[string]any) map[string]any {
+		body := map[string]any{
+			"subject": "Merhaba {{.FullName}}", "main_mode": "jsx",
+			"html_content": "<p>Merhaba {{.FullName}}</p>", "plain_text_content": "Merhaba {{.FullName}}",
+			"base_version_id": published,
+		}
+		for field, value := range change {
+			if value == nil {
+				delete(body, field)
+				continue
+			}
+			body[field] = value
+		}
+		return body
+	}
+	for name, tc := range map[string]struct {
+		body  map[string]any
+		code  string
+		field string
+	}{
+		"no subject":                       {valid(map[string]any{"subject": nil}), "validation.error", "subject"},
+		"a blank subject":                  {valid(map[string]any{"subject": "  "}), "validation.error", "subject"},
+		"no Main source mode":              {valid(map[string]any{"main_mode": nil}), "validation.error", "main_mode"},
+		"an unknown Main source mode":      {valid(map[string]any{"main_mode": "markdown"}), "validation.error", "main_mode"},
+		"no HTML render":                   {valid(map[string]any{"html_content": nil}), "validation.error", "html_content"},
+		"a blank HTML render":              {valid(map[string]any{"html_content": "\n  "}), "validation.error", "html_content"},
+		"a blank plain text render":        {valid(map[string]any{"plain_text_content": " "}), "validation.error", "plain_text_content"},
+		"a Visual source not a object":     {valid(map[string]any{"visual_source": json.RawMessage(`["paragraph"]`)}), "validation.error", "visual_source"},
+		"a JSX source with no code":        {valid(map[string]any{"jsx_source": seedPointerComment("core.welcome")}), "validation.error", "jsx_source"},
+		"a blank HTML source":              {valid(map[string]any{"html_source": " "}), "validation.error", "html_source"},
+		"a base that is not a UUID":        {valid(map[string]any{"base_version_id": "sürüm-3"}), "validation.error", ""},
+		"a Main source with no source":     {valid(map[string]any{"main_mode": "html"}), "template.main_source_missing", ""},
+		"an unknown base":                  {valid(map[string]any{"base_version_id": uuid.New()}), "template.invalid_base", ""},
+		"no base, though one is published": {valid(map[string]any{"base_version_id": nil}), "template.invalid_base", ""},
+		"another template's base":          {valid(map[string]any{"base_version_id": other.PublishedVersionID}), "template.invalid_base", ""},
+		"a draft as the base":              {valid(map[string]any{"base_version_id": draft.ID}), "template.invalid_base", ""},
+		// A body the mailer cannot parse is refused as ticket 08 refuses one:
+		// 422, naming the part.
+		"a subject that does not parse":  {valid(map[string]any{"subject": "{{if .FullName}}Merhaba"}), "template.unparseable", "subject"},
+		"plain text that does not parse": {valid(map[string]any{"plain_text_content": "{{upper .FullName}}"}), "template.unparseable", "plain_text"},
+		"HTML that does not parse":       {valid(map[string]any{"html_content": "<p>{{.FullName</p>"}), "template.unparseable", "html"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			want := fiber.StatusBadRequest
+			if tc.code == "template.unparseable" {
+				want = fiber.StatusUnprocessableEntity
+			}
+			response, _, body := saveDraft(t, app, created.ID, tc.body)
+			if response.StatusCode != want {
+				t.Fatalf("save = %d %s, want %d", response.StatusCode, body, want)
+			}
+			refusal := decodeError(t, body)
+			if refusal.Code != tc.code || refusal.Message == "" {
+				t.Fatalf("refusal = %+v, want %s", refusal, tc.code)
+			}
+			if tc.field != "" && !namesField(refusal, tc.field) {
+				t.Fatalf("refusal = %+v, want it to name %s", refusal, tc.field)
+			}
+		})
+	}
+
+	// Every field a save gets wrong is named, in the same order every time.
+	for attempt := 0; attempt < 5; attempt++ {
+		response, _, body := saveDraft(t, app, created.ID, valid(map[string]any{
+			"subject": " ", "plain_text_content": "\t", "html_source": " ", "visual_source": json.RawMessage(`[]`),
+		}))
+		var refusal struct {
+			Params struct {
+				Errors []struct {
+					Field string `json:"field"`
+				} `json:"errors"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal(body, &refusal); err != nil {
+			t.Fatal(err)
+		}
+		var fields []string
+		for _, e := range refusal.Params.Errors {
+			fields = append(fields, e.Field)
+		}
+		if response.StatusCode != fiber.StatusBadRequest || fmt.Sprint(fields) != "[html_source plain_text_content subject visual_source]" {
+			t.Fatalf("a save with four problems = %d, fields %v; want 400 naming them sorted", response.StatusCode, fields)
+		}
+	}
+
+	// A body that is not JSON is the caller's mistake too.
+	request := httptest.NewRequest(fiber.MethodPost, "/templates/"+created.ID.String()+"/drafts", bytes.NewReader([]byte(`{"subject": `)))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := app.Test(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(response.Body)
+	if response.StatusCode != fiber.StatusBadRequest || decodeError(t, raw).Code != "validation.error" {
+		t.Fatalf("a malformed body = %d %s, want 400 validation.error", response.StatusCode, raw)
+	}
+
+	for name, id := range map[string]string{"an unknown template": uuid.NewString(), "a malformed template id": "not-a-uuid"} {
+		response, body := sendJSON(t, app, fiber.MethodPost, "/templates/"+id+"/drafts", valid(nil))
+		if response.StatusCode != fiber.StatusNotFound {
+			t.Errorf("saving a draft of %s = %d %s, want 404", name, response.StatusCode, body)
+		}
+	}
+
+	if versions, _ := storedVersions(t, db, created.ID); len(versions) != 2 {
+		t.Fatalf("versions = %d, want the refused saves to record nothing", len(versions))
+	}
+	if after := templateRow(t, db, created.ID); !reflect.DeepEqual(before, after) {
+		t.Fatalf("a refused save changed the row: %+v", after)
+	}
+}
+
+// namesField reports whether an API error names a request field or a part of
+// the body: in the field list of a validation error, or as the part it is
+// about.
+func namesField(e appError, field string) bool {
+	if e.Params["part"] == field && e.Params["error"] != "" && e.Params["error"] != nil {
+		return true
+	}
+	errs, _ := e.Params["errors"].([]any)
+	for _, item := range errs {
+		if entry, ok := item.(map[string]any); ok && entry["field"] == field {
+			return true
+		}
+	}
+	return false
+}
+
+// What publishing refuses. Only a draft of this template is published; the
+// version already sent may be published again, which changes nothing, so a
+// repeated request is safe. A draft the mailer could not parse is refused too:
+// it can only be a copy of a version written before anything checked. A
+// refused publish leaves the row as it was.
+func TestPublishesTheServerRefuses(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+	first := *created.PublishedVersionID
+	edit := func(html string) uuid.UUID {
+		t.Helper()
+		response, body := sendJSON(t, app, fiber.MethodPatch, "/templates/"+created.ID.String(), map[string]any{
+			"name": created.Name, "subject": created.Subject, "html_content": html,
+			"plain_text_content": "Merhaba", "react_email_content": panelSource,
+		})
+		if response.StatusCode != fiber.StatusOK {
+			t.Fatalf("old panel edit = %d %s", response.StatusCode, body)
+		}
+		return *templateRow(t, db, created.ID).PublishedVersionID
+	}
+	current := edit("<p>İkinci</p>")
+	before := templateRow(t, db, created.ID)
+
+	response, again, body := publish(t, app, created.ID, current, nil)
+	if response.StatusCode != fiber.StatusOK || again.PublishedVersionID == nil || *again.PublishedVersionID != current {
+		t.Fatalf("publishing the version already sent = %d %s, want 200 and nothing changed", response.StatusCode, body)
+	}
+	if after := templateRow(t, db, created.ID); !reflect.DeepEqual(before, after) {
+		t.Fatalf("publishing the version already sent changed the row: %+v", after)
+	}
+
+	response, _, body = publish(t, app, created.ID, first, nil)
+	if response.StatusCode != fiber.StatusConflict || decodeError(t, body).Code != "template.not_a_draft" {
+		t.Fatalf("publishing an earlier published version = %d %s, want 409 template.not_a_draft", response.StatusCode, body)
+	}
+
+	other := panelTemplate(t, app)
+	response, theirs, body := saveDraft(t, app, other.ID, map[string]any{
+		"subject": "Başka", "main_mode": "jsx", "html_content": "<p>Başka</p>", "plain_text_content": "Başka",
+		"base_version_id": other.PublishedVersionID,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("draft of another template = %d %s", response.StatusCode, body)
+	}
+	for name, path := range map[string]string{
+		"another template's draft": created.ID.String() + "/versions/" + theirs.ID.String(),
+		"an unknown version":       created.ID.String() + "/versions/" + uuid.NewString(),
+		"an unknown template":      uuid.NewString() + "/versions/" + theirs.ID.String(),
+		"a malformed version id":   created.ID.String() + "/versions/sürüm-2",
+		"a malformed template id":  "şablon/versions/" + theirs.ID.String(),
+	} {
+		if response, body := sendJSON(t, app, fiber.MethodPost, "/templates/"+path+"/publish", nil); response.StatusCode != fiber.StatusNotFound {
+			t.Errorf("publishing %s = %d %s, want 404", name, response.StatusCode, body)
+		}
+	}
+	if response, body := sendJSON(t, app, fiber.MethodPost, "/templates/"+other.ID.String()+"/versions/"+theirs.ID.String()+"/publish",
+		map[string]any{"force": "evet"}); response.StatusCode != fiber.StatusBadRequest || decodeError(t, body).Code != "validation.error" {
+		t.Errorf("publishing with a force that is not a boolean = %d %s, want 400 validation.error", response.StatusCode, body)
+	}
+
+	// The old panel wrote a body the mailer cannot parse before anything
+	// checked it (it refuses one now), and it was fixed. Restoring it is
+	// saving a draft of it, and is refused like one.
+	var broken uuid.UUID
+	if err := db.Conn.QueryRow(context.Background(), `
+		INSERT INTO template_versions (template_id, seq, name, subject, html_source, main_mode, html_content, plain_text_content,
+		                               author_kind, author_sub, author_name, published_at, base_version_id)
+		SELECT id, (SELECT max(seq) + 1 FROM template_versions WHERE template_id = $1), name, subject, '<p>{{.FullName</p>', 'html',
+		       '<p>{{.FullName</p>', 'Merhaba', 'operator', $2, 'Ada Yılmaz', NOW(), published_version_id
+		FROM templates WHERE id = $1
+		RETURNING id`, created.ID, operatorSub).Scan(&broken); err != nil {
+		t.Fatal(err)
+	}
+	edit("<p>Düzeldi</p>")
+	versions, _ := storedVersions(t, db, created.ID)
+	response, _, body = restore(t, app, created.ID, broken)
+	if refusal := decodeError(t, body); response.StatusCode != fiber.StatusUnprocessableEntity || refusal.Code != "template.unparseable" || !namesField(refusal, "html") {
+		t.Fatalf("restoring a body the mailer cannot parse = %d %s, want 422 template.unparseable naming html", response.StatusCode, body)
+	}
+	if after, _ := storedVersions(t, db, created.ID); len(after) != len(versions) {
+		t.Fatalf("a refused restore recorded a version")
+	}
+
+	// A draft written before anything checked is checked again on publishing.
+	var unchecked uuid.UUID
+	if err := db.Conn.QueryRow(context.Background(), `
+		INSERT INTO template_versions (template_id, seq, name, subject, html_source, main_mode, html_content, plain_text_content,
+		                               author_kind, author_sub, author_name, base_version_id)
+		SELECT id, (SELECT max(seq) + 1 FROM template_versions WHERE template_id = $1), name, 'Konu', '<p>{{.FullName</p>', 'html',
+		       '<p>{{.FullName</p>', 'Merhaba', 'operator', $2, 'Ada Yılmaz', published_version_id
+		FROM templates WHERE id = $1
+		RETURNING id`, created.ID, operatorSub).Scan(&unchecked); err != nil {
+		t.Fatal(err)
+	}
+	before = templateRow(t, db, created.ID)
+	response, _, body = publish(t, app, created.ID, unchecked, nil)
+	if refusal := decodeError(t, body); response.StatusCode != fiber.StatusUnprocessableEntity || refusal.Code != "template.unparseable" || !namesField(refusal, "html") {
+		t.Fatalf("publishing a body the mailer cannot parse = %d %s, want 422 template.unparseable naming html", response.StatusCode, body)
+	}
+	if after := templateRow(t, db, created.ID); !reflect.DeepEqual(before, after) {
+		t.Fatalf("a refused publish changed the row: %+v", after)
+	}
+}
+
+// An archived template takes no drafts, restores or publishes until it is
+// un-archived: like every other write (docs/data-lifecycle.md), these do not
+// find it. Its history stays readable.
+func TestAnArchivedTemplateTakesNoDraftsOrPublishes(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+	response, draft, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": "Taslak", "main_mode": "jsx", "html_content": "<p>Taslak</p>", "plain_text_content": "Taslak",
+		"base_version_id": created.PublishedVersionID,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("draft = %d %s", response.StatusCode, body)
+	}
+	if response, err := app.Test(httptest.NewRequest(fiber.MethodDelete, "/templates/"+created.ID.String(), nil)); err != nil || response.StatusCode != fiber.StatusNoContent {
+		t.Fatalf("archive: %v %v", response, err)
+	}
+	before := templateRow(t, db, created.ID)
+
+	refused := func(name string, response *http.Response, body []byte) {
+		t.Helper()
+		if response.StatusCode != fiber.StatusNotFound {
+			t.Errorf("%s of an archived template = %d %s, want 404", name, response.StatusCode, body)
+		}
+	}
+	response, _, body = saveDraft(t, app, created.ID, map[string]any{
+		"subject": "Yeni", "main_mode": "jsx", "html_content": "<p>Yeni</p>", "plain_text_content": "Yeni",
+		"base_version_id": created.PublishedVersionID,
+	})
+	refused("a draft", response, body)
+	response, _, body = restore(t, app, created.ID, *created.PublishedVersionID)
+	refused("a restore", response, body)
+	response, _, body = publish(t, app, created.ID, draft.ID, created.PublishedVersionID)
+	refused("a publish", response, body)
+
+	if after := templateRow(t, db, created.ID); !reflect.DeepEqual(before, after) {
+		t.Fatalf("refused writes changed the archived row: %+v", after)
+	}
+	if versions, _ := storedVersions(t, db, created.ID); len(versions) != 2 || versions[1].PublishedAt != nil {
+		t.Fatalf("versions = %+v, want the first and the unpublished draft only", versions)
+	}
+}
+
+// Every writer of a template takes its row's lock before it numbers a version,
+// so saves that meet — drafts of several operators and old panel edits beside
+// them — number their versions one after another: none lost, none twice, and
+// the row a copy of the last version published.
+func TestConcurrentSavesNumberVersionsInTurn(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+
+	const drafts, edits = 8, 4
+	var calls []call
+	for i := 0; i < drafts; i++ {
+		subject := fmt.Sprintf("Taslak %d", i)
+		calls = append(calls, call{"draft " + subject, fiber.MethodPost, "/templates/" + created.ID.String() + "/drafts", map[string]any{
+			"subject": subject, "main_mode": "jsx", "html_content": "<p>" + subject + "</p>", "plain_text_content": subject,
+			"base_version_id": created.PublishedVersionID,
+		}, []string{"X-Operator-Sub", uuid.NewString(), "X-Operator-Name", "Operatör " + fmt.Sprint(i)}})
+	}
+	for i := 0; i < edits; i++ {
+		subject := fmt.Sprintf("Düzenleme %d", i)
+		calls = append(calls, call{"edit " + subject, fiber.MethodPatch, "/templates/" + created.ID.String(), map[string]any{
+			"name": created.Name, "subject": subject, "html_content": "<p>" + subject + "</p>",
+			"plain_text_content": subject, "react_email_content": panelSource,
+		}, nil})
+	}
+	for _, a := range concurrently(app, calls...) {
+		if a.err != nil || (a.status != fiber.StatusCreated && a.status != fiber.StatusOK) {
+			t.Errorf("%s = %d %s %v", a.name, a.status, a.body, a.err)
+		}
+	}
+
+	versions, published := storedVersions(t, db, created.ID)
+	if len(versions) != 1+drafts+edits {
+		t.Fatalf("versions = %d, want %d", len(versions), 1+drafts+edits)
+	}
+	var unpublished int
+	var lastPublished storedVersion
+	for i, v := range versions {
+		if v.Seq != i+1 {
+			t.Fatalf("version %d is numbered %d; want 1…%d in turn", i+1, v.Seq, len(versions))
+		}
+		if v.PublishedAt == nil {
+			unpublished++
+		} else {
+			lastPublished = v
+		}
+	}
+	if unpublished != drafts {
+		t.Fatalf("drafts = %d, want %d", unpublished, drafts)
+	}
+	row := templateRow(t, db, created.ID)
+	if published == nil || *published != lastPublished.ID || row.Subject != lastPublished.Subject {
+		t.Fatalf("row = %q, copy of %v; want a copy of the last published version %q", row.Subject, published, lastPublished.Subject)
+	}
+}
+
+// servedTemplate is a template as the template routes serve it.
+type servedTemplate struct {
+	database.Template
+	MainMode    *string         `json:"main_mode"`
+	Drafts      []servedVersion `json:"drafts"`
+	SeedRefusal *servedRefusal  `json:"seed_refusal"`
+}
+
+// servedRefusal is a refused Template seed as a template is served with it.
+type servedRefusal struct {
+	RefusedAt     time.Time `json:"refused_at"`
+	Rules         []string  `json:"rules"`
+	PayloadSHA256 string    `json:"payload_sha256"`
+}
+
+func getTemplate(t *testing.T, app *fiber.App, path string) servedTemplate {
+	t.Helper()
+	response, err := app.Test(httptest.NewRequest(fiber.MethodGet, path, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	if response.StatusCode != fiber.StatusOK {
+		t.Fatalf("GET %s = %d %s", path, response.StatusCode, body)
+	}
+	assertTemplateShape(t, body)
+	var template servedTemplate
+	if err := json.Unmarshal(body, &template); err != nil {
+		t.Fatal(err)
+	}
+	return template
+}
+
+func draftIDs(drafts []servedVersion) []uuid.UUID {
+	ids := make([]uuid.UUID, 0, len(drafts))
+	for _, d := range drafts {
+		ids = append(ids, d.ID)
+	}
+	return ids
+}
+
+// A template is served with what the template list and the editor need beside
+// the row: the Authoring mode of the Main source it sends, and each operator's
+// draft in progress, newest first — who is editing it, since when, and from
+// which version. An operator's later version supersedes their earlier drafts;
+// a published draft is no longer in progress; a draft that someone else's
+// publish made stale still is, its base no longer the published version.
+func TestTemplatesAreServedWithTheirMainModeAndDraftsInProgress(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+	path := "/templates/" + created.ID.String()
+
+	served := getTemplate(t, app, path)
+	if served.MainMode == nil || *served.MainMode != "jsx" || served.Drafts == nil || len(served.Drafts) != 0 {
+		t.Fatalf("template = main %v drafts %v, want jsx and an empty list", served.MainMode, served.Drafts)
+	}
+
+	save := func(subject, mode string, headers ...string) servedDraft {
+		t.Helper()
+		response, draft, body := saveDraft(t, app, created.ID, map[string]any{
+			"subject": subject, "main_mode": mode, "html_source": "<p>" + subject + "</p>",
+			"html_content": "<p>" + subject + "</p>", "plain_text_content": subject, "base_version_id": created.PublishedVersionID,
+		}, headers...)
+		if response.StatusCode != fiber.StatusCreated {
+			t.Fatalf("save = %d %s", response.StatusCode, body)
+		}
+		return draft
+	}
+	save("Benim ilk taslağım", "jsx")
+	mine := save("Benim ikinci taslağım", "html")
+	theirs := save("Can'ın taslağı", "jsx", canDemir...)
+
+	served = getTemplate(t, app, path)
+	if ids := draftIDs(served.Drafts); fmt.Sprint(ids) != fmt.Sprint([]uuid.UUID{theirs.ID, mine.ID}) {
+		t.Fatalf("drafts = %v, want Can's (%s) then my latest (%s)", ids, theirs.ID, mine.ID)
+	}
+	if d := served.Drafts[0]; !sameString(d.Author.Name, "Can Demir") || d.PublishedAt != nil || d.Current ||
+		d.BaseVersionID == nil || *d.BaseVersionID != *created.PublishedVersionID || d.Subject != "Can'ın taslağı" {
+		t.Fatalf("Can's draft = %+v", d)
+	}
+	if served.PublishedVersionID == nil || *served.PublishedVersionID != *created.PublishedVersionID || *served.MainMode != "jsx" {
+		t.Fatalf("drafts changed what the template sends: %+v", served)
+	}
+
+	// My draft is published: it is sent, no longer in progress, and Can's is
+	// now stale.
+	response, body := sendJSON(t, app, fiber.MethodPost, path+"/versions/"+mine.ID.String()+"/publish", nil)
+	if response.StatusCode != fiber.StatusOK {
+		t.Fatalf("publish = %d %s", response.StatusCode, body)
+	}
+	assertTemplateShape(t, body)
+	var afterPublish servedTemplate
+	if err := json.Unmarshal(body, &afterPublish); err != nil {
+		t.Fatal(err)
+	}
+	for name, got := range map[string]servedTemplate{"publish answer": afterPublish, "read": getTemplate(t, app, path)} {
+		if got.MainMode == nil || *got.MainMode != "html" || fmt.Sprint(draftIDs(got.Drafts)) != fmt.Sprint([]uuid.UUID{theirs.ID}) ||
+			*got.Drafts[0].BaseVersionID == *got.PublishedVersionID {
+			t.Fatalf("%s after publishing = main %v drafts %+v, want html and only Can's draft, stale", name, got.MainMode, got.Drafts)
+		}
+	}
+
+	// The list serves every template the same way.
+	other := panelTemplate(t, app)
+	response, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/templates", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list []servedTemplate
+	if err := json.NewDecoder(response.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	byID := map[uuid.UUID]servedTemplate{}
+	for _, template := range list {
+		byID[template.ID] = template
+	}
+	if got := byID[created.ID]; got.MainMode == nil || *got.MainMode != "html" || fmt.Sprint(draftIDs(got.Drafts)) != fmt.Sprint([]uuid.UUID{theirs.ID}) {
+		t.Fatalf("listed template = main %v drafts %v", got.MainMode, draftIDs(got.Drafts))
+	}
+	if got := byID[other.ID]; got.MainMode == nil || *got.MainMode != "jsx" || got.Drafts == nil || len(got.Drafts) != 0 {
+		t.Fatalf("listed other template = main %v drafts %v, want jsx and none", got.MainMode, got.Drafts)
+	}
+}
+
+// fieldsOf is the top-level fields of a JSON object, sorted.
+func fieldsOf(t *testing.T, body []byte) []string {
+	t.Helper()
+	var object map[string]any
+	if err := json.Unmarshal(body, &object); err != nil {
+		t.Fatalf("%s: %v", body, err)
+	}
+	fields := make([]string, 0, len(object))
+	for field := range object {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	return fields
+}
+
+// The draft routes answer with what /docs/openapi.json says they do.
+func TestDraftResponsesAreServedAsDocumented(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+
+	response, draft, saved := saveDraft(t, app, created.ID, map[string]any{
+		"subject": "Taslak", "main_mode": "jsx", "html_content": "<p>Taslak</p>", "plain_text_content": "Taslak",
+		"base_version_id": created.PublishedVersionID,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("save = %d %s", response.StatusCode, saved)
+	}
+	_, _, unchanged := saveDraft(t, app, created.ID, map[string]any{
+		"subject": "Taslak", "main_mode": "jsx", "html_content": "<p>Taslak</p>", "plain_text_content": "Taslak",
+		"base_version_id": created.PublishedVersionID,
+	})
+	_, restoredDraft, restored := restore(t, app, created.ID, *created.PublishedVersionID)
+	_, _, discarded := discard(t, app, created.ID, restoredDraft.ID)
+	_, _, published := publish(t, app, created.ID, draft.ID, nil)
+
+	for _, tc := range []struct {
+		path, status string
+		served       []byte
+	}{
+		{"/templates/{id}/drafts", "201", saved},
+		{"/templates/{id}/drafts", "200", unchanged},
+		{"/templates/{id}/versions/{versionId}/restore", "201", restored},
+		{"/templates/{id}/versions/{versionId}/publish", "200", published},
+		{"/templates/{id}/versions/{versionId}/discard", "200", discarded},
+	} {
+		documented, served := documentedResponseFields(t, "post", tc.path, tc.status), fieldsOf(t, tc.served)
+		if fmt.Sprint(documented) != fmt.Sprint(served) {
+			t.Errorf("POST %s %s documents %v but serves %v", tc.path, tc.status, documented, served)
+		}
+	}
+}
+
+// What the old panel renders panelSource to.
+const panelRender = "<p>Merhaba {{.FullName}}</p>"
+
+// oldPanelSave is the old panel saving a template it was opened on with a new
+// subject: it sends the row's react_email_content back and, whenever that
+// holds JSX that compiles, the JSX's render as the body. It never sees a
+// Visual or HTML source.
+func oldPanelSave(t *testing.T, app *fiber.App, row database.Template, subject string) (*http.Response, []byte) {
+	t.Helper()
+	body, plainText := row.HtmlContent, row.PlainTextContent
+	if row.ReactEmailContent == panelSource {
+		body, plainText = panelRender, "Merhaba {{.FullName}}"
+	}
+	return sendJSON(t, app, fiber.MethodPatch, "/templates/"+row.ID.String(), map[string]any{
+		"name": row.Name, "subject": subject, "html_content": body, "plain_text_content": plainText,
+		"react_email_content": row.ReactEmailContent, "key": row.Key,
+	})
+}
+
+// Publishing hands react_email_content, the column the old panel edits, the
+// JSX source only when JSX is the Main source. A JSX source kept beside an
+// HTML or Visual Main source is not what is sent; were it on the row, the old
+// panel would re-render it on the next subject edit and send its render, and
+// the old write path would make JSX the Main source — live mail changed
+// without anyone choosing it (ADR-0046).
+func TestPublishingAnotherMainSourceGivesTheOldPanelNoJSXToRerender(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app) // JSX is the Main source
+
+	response, draft, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": "HTML konu", "main_mode": "html", "html_source": "<p>HTML gövde</p>",
+		"html_content": "<p>HTML gövde</p>", "plain_text_content": "HTML gövde", "base_version_id": created.PublishedVersionID,
+	})
+	if response.StatusCode != fiber.StatusCreated || !sameString(draft.JSXSource, panelSource) {
+		t.Fatalf("draft = %d %s, want HTML the Main source with the JSX source kept beside it", response.StatusCode, body)
+	}
+	if response, _, body := publish(t, app, created.ID, draft.ID, nil); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("publish = %d %s", response.StatusCode, body)
+	}
+	row := templateRow(t, db, created.ID)
+	if row.ReactEmailContent != "" || row.HtmlContent != "<p>HTML gövde</p>" {
+		t.Fatalf("row = %+v, want the HTML render sent and no JSX in react_email_content", row)
+	}
+
+	oldPanelSave(t, app, row, "Eski panelden konu")
+	versions, published := storedVersions(t, db, created.ID)
+	latest := versions[len(versions)-1]
+	if after := templateRow(t, db, created.ID); after.HtmlContent != "<p>HTML gövde</p>" || latest.ID != draft.ID ||
+		published == nil || *published != draft.ID || latest.MainMode != "html" {
+		t.Fatalf("after an old panel subject edit the row sends %q, latest version %s main %s; want the HTML draft still sent and Main", after.HtmlContent, latest.ID, latest.MainMode)
+	}
+}
+
+// A save that changes nothing writes nothing, whatever else the operator has
+// lying about: with a draft of theirs on an older base, a save of exactly the
+// version published now, started from it, answers with that version and
+// records no copy of it.
+func TestASaveThatRepeatsItsBaseRecordsNothingBesideAnOlderDraft(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+
+	response, _, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": "Eski taslak", "main_mode": "jsx", "html_content": "<p>Eski taslak</p>", "plain_text_content": "Eski taslak",
+		"base_version_id": created.PublishedVersionID,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("draft = %d %s", response.StatusCode, body)
+	}
+	// Another operator publishes through the old panel.
+	if response, body := sendJSONAs(t, app, fiber.MethodPatch, "/templates/"+created.ID.String(), map[string]any{
+		"name": created.Name, "subject": "Yeni yayımlanan konu", "html_content": "<p>Yeni</p>",
+		"plain_text_content": "Yeni", "react_email_content": panelSource,
+	}, canDemir...); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("other operator's edit = %d %s", response.StatusCode, body)
+	}
+	current := templateRow(t, db, created.ID)
+	versions, _ := storedVersions(t, db, created.ID)
+
+	response, answered, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": current.Subject, "main_mode": "jsx", "jsx_source": panelSource,
+		"html_content": current.HtmlContent, "plain_text_content": current.PlainTextContent,
+		"base_version_id": current.PublishedVersionID,
+	})
+	if response.StatusCode != fiber.StatusOK || answered.ID != *current.PublishedVersionID {
+		t.Fatalf("saving the published version unchanged = %d %s, want 200 answering it", response.StatusCode, body)
+	}
+	if after, _ := storedVersions(t, db, created.ID); len(after) != len(versions) {
+		t.Fatalf("versions = %d, want %d: nothing recorded", len(after), len(versions))
+	}
+}
+
+// Forcing names the version the operator saw and chose to replace: the
+// published_version_id of the conflict. If something else was published after
+// the conflict — a seed, another operator — forcing over what they saw would
+// quietly revert it, so it is refused again with a conflict naming the version
+// published now. Force that names no version is not force.
+func TestForcingOverAVersionTheOperatorDidNotSeeIsRefused(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	const key = "core.welcome"
+	seeded := seededTemplate(t, app, key)
+
+	response, draft, body := saveDraft(t, app, seeded.ID, map[string]any{
+		"subject": "Taslak", "main_mode": "html", "html_source": "<p>Taslak</p>",
+		"html_content": "<p>Taslak</p>", "plain_text_content": "Taslak", "base_version_id": seeded.PublishedVersionID,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("draft = %d %s", response.StatusCode, body)
+	}
+	// The draft in progress holds a seed back; these seeds are forced over it.
+	seedWith := func(html string) uuid.UUID {
+		t.Helper()
+		response, body := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/"+key+"?force=true", map[string]any{
+			"name": "Hoş Geldin", "subject": "SKY LAB'e hoş geldin", "html_content": html, "plain_text_content": "Hoş geldin",
+			"react_email_content": seedPointerComment(key), "system": true,
+		})
+		if response.StatusCode != fiber.StatusOK {
+			t.Fatalf("seed = %d %s", response.StatusCode, body)
+		}
+		return *templateRow(t, db, seeded.ID).PublishedVersionID
+	}
+	seen := seedWith("<p>Koyu tema</p>")
+
+	response, _, body = publish(t, app, seeded.ID, draft.ID, nil)
+	if conflict := decodeError(t, body); response.StatusCode != fiber.StatusConflict || conflict.Params["published_version_id"] != seen.String() {
+		t.Fatalf("publish = %d %s, want 409 naming %s", response.StatusCode, body, seen)
+	}
+
+	// Before the operator confirms, the seed runs again with another fix.
+	later := seedWith("<p>Koyu tema ve logo</p>")
+	before := templateRow(t, db, seeded.ID)
+	response, _, body = publish(t, app, seeded.ID, draft.ID, &seen)
+	conflict := decodeError(t, body)
+	if response.StatusCode != fiber.StatusConflict || conflict.Code != "template.stale_base" ||
+		conflict.Params["version_id"] != draft.ID.String() || conflict.Params["base_version_id"] != seeded.PublishedVersionID.String() ||
+		conflict.Params["published_version_id"] != later.String() {
+		t.Fatalf("forcing over %s after %s was published = %d %s, want a fresh 409 naming %s", seen, later, response.StatusCode, body, later)
+	}
+	if after := templateRow(t, db, seeded.ID); !reflect.DeepEqual(before, after) {
+		t.Fatalf("a refused force changed the row: %+v", after)
+	}
+
+	for name, force := range map[string]any{
+		"force: true":                 true,
+		"force naming no version":     map[string]any{},
+		"force naming a non-UUID":     map[string]any{"over_version_id": "sürüm"},
+		"force: null over_version_id": map[string]any{"over_version_id": nil},
+	} {
+		response, body := sendJSON(t, app, fiber.MethodPost, "/templates/"+seeded.ID.String()+"/versions/"+draft.ID.String()+"/publish",
+			map[string]any{"force": force})
+		if response.StatusCode != fiber.StatusBadRequest || decodeError(t, body).Code != "validation.error" {
+			t.Errorf("publishing with %s = %d %s, want 400 validation.error", name, response.StatusCode, body)
+		}
+	}
+
+	response, published, body := publish(t, app, seeded.ID, draft.ID, &later)
+	if response.StatusCode != fiber.StatusOK || published.PublishedVersionID == nil || *published.PublishedVersionID != draft.ID {
+		t.Fatalf("forcing over what is published now = %d %s, want the draft published", response.StatusCode, body)
+	}
+}
+
+// discard discards a version of a template as the operator the headers name,
+// and decodes the version it answers with when it answers with one.
+func discard(t *testing.T, app *fiber.App, templateID, versionID uuid.UUID, headers ...string) (*http.Response, servedDiscardable, []byte) {
+	t.Helper()
+	path := "/templates/" + templateID.String() + "/versions/" + versionID.String() + "/discard"
+	response, body := sendJSONAs(t, app, fiber.MethodPost, path, nil, headers...)
+	var version servedDiscardable
+	if response.StatusCode == fiber.StatusOK {
+		if err := json.Unmarshal(body, &version); err != nil {
+			t.Fatalf("discard answer %s: %v", body, err)
+		}
+	}
+	return response, version, body
+}
+
+// servedDiscardable is a version as served, with whether it was discarded.
+type servedDiscardable struct {
+	servedDraft
+	Discarded bool `json:"discarded"`
+}
+
+// An operator can give up a draft. Discarding keeps it in the history,
+// readable and restorable, but it is nobody's draft in progress any more:
+// the template list stops showing it, the next save starts from the published
+// version, and it is never published. Discarding again changes nothing; only
+// a draft is discarded.
+func TestDiscardingADraft(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+	path := "/templates/" + created.ID.String()
+	draftBody := map[string]any{
+		"subject": "Vazgeçilen", "main_mode": "html", "html_source": "<p>Vazgeçilen</p>",
+		"html_content": "<p>Vazgeçilen</p>", "plain_text_content": "Vazgeçilen", "base_version_id": created.PublishedVersionID,
+	}
+	response, draft, body := saveDraft(t, app, created.ID, draftBody)
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("draft = %d %s", response.StatusCode, body)
+	}
+	before := templateRow(t, db, created.ID)
+
+	response, discarded, body := discard(t, app, created.ID, draft.ID)
+	if response.StatusCode != fiber.StatusOK || !discarded.Discarded || discarded.ID != draft.ID || discarded.PublishedAt != nil ||
+		discarded.Subject != "Vazgeçilen" || !sameString(discarded.HTMLSource, "<p>Vazgeçilen</p>") {
+		t.Fatalf("discard = %d %s, want 200 answering the draft, discarded and whole", response.StatusCode, body)
+	}
+	if served := getTemplate(t, app, path); len(served.Drafts) != 0 {
+		t.Fatalf("drafts after discarding = %v, want none", draftIDs(served.Drafts))
+	}
+	if after := templateRow(t, db, created.ID); !reflect.DeepEqual(before, after) {
+		t.Fatalf("discarding changed the row: %+v", after)
+	}
+	if response, again, body := discard(t, app, created.ID, draft.ID); response.StatusCode != fiber.StatusOK || !again.Discarded {
+		t.Fatalf("discarding again = %d %s, want 200, nothing changed", response.StatusCode, body)
+	}
+
+	response, _, body = publish(t, app, created.ID, draft.ID, nil)
+	if response.StatusCode != fiber.StatusConflict || decodeError(t, body).Code != "template.draft_discarded" {
+		t.Fatalf("publishing a discarded draft = %d %s, want 409 template.draft_discarded", response.StatusCode, body)
+	}
+
+	// The same content saved again is a new draft: nothing continues the
+	// discarded one.
+	response, fresh, body := saveDraft(t, app, created.ID, draftBody)
+	if response.StatusCode != fiber.StatusCreated || fresh.ID == draft.ID {
+		t.Fatalf("saving after discarding = %d %s, want a new draft", response.StatusCode, body)
+	}
+	if served := getTemplate(t, app, path); fmt.Sprint(draftIDs(served.Drafts)) != fmt.Sprint([]uuid.UUID{fresh.ID}) {
+		t.Fatalf("drafts = %v, want only the new one", draftIDs(served.Drafts))
+	}
+	// Another operator may discard it too, and it can be restored after.
+	if response, _, body := discard(t, app, created.ID, fresh.ID, canDemir...); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("another operator discarding = %d %s", response.StatusCode, body)
+	}
+	response, restored, body := restore(t, app, created.ID, draft.ID)
+	if response.StatusCode != fiber.StatusCreated || restored.Subject != "Vazgeçilen" {
+		t.Fatalf("restoring a discarded draft = %d %s, want a new draft of it", response.StatusCode, body)
+	}
+
+	other := panelTemplate(t, app)
+	for name, tc := range map[string]struct {
+		template, version uuid.UUID
+		status            int
+		code              string
+	}{
+		"a published version":            {created.ID, *created.PublishedVersionID, fiber.StatusConflict, "template.not_a_draft"},
+		"another template's draft":       {other.ID, restored.ID, fiber.StatusNotFound, ""},
+		"an unknown version":             {created.ID, uuid.New(), fiber.StatusNotFound, ""},
+		"a draft of an unknown template": {uuid.New(), restored.ID, fiber.StatusNotFound, ""},
+	} {
+		response, _, body := discard(t, app, tc.template, tc.version)
+		if response.StatusCode != tc.status || (tc.code != "" && decodeError(t, body).Code != tc.code) {
+			t.Errorf("discarding %s = %d %s, want %d %s", name, response.StatusCode, body, tc.status, tc.code)
+		}
+	}
+
+	// An archived template's drafts are not found, like the template.
+	if response, err := app.Test(httptest.NewRequest(fiber.MethodDelete, path, nil)); err != nil || response.StatusCode != fiber.StatusNoContent {
+		t.Fatalf("archive: %v %v", response, err)
+	}
+	if response, _, body := discard(t, app, created.ID, restored.ID); response.StatusCode != fiber.StatusNotFound {
+		t.Fatalf("discarding on an archived template = %d %s, want 404", response.StatusCode, body)
+	}
+}
+
+// A template's history can be read whole or by state: only what was
+// published, or only drafts — discarded ones included, flagged — each counted
+// in X-Total-Count.
+func TestTemplateHistoryFiltersByState(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app) // version 1, published
+	save := func(subject string) servedDraft {
+		t.Helper()
+		response, draft, body := saveDraft(t, app, created.ID, map[string]any{
+			"subject": subject, "main_mode": "jsx", "html_content": "<p>" + subject + "</p>", "plain_text_content": subject,
+			"base_version_id": created.PublishedVersionID,
+		})
+		if response.StatusCode != fiber.StatusCreated {
+			t.Fatalf("draft = %d %s", response.StatusCode, body)
+		}
+		return draft
+	}
+	published := save("Yayımlanacak") // version 2
+	if response, _, body := publish(t, app, created.ID, published.ID, nil); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("publish = %d %s", response.StatusCode, body)
+	}
+	given := save("Vazgeçilecek") // version 3
+	if response, _, body := discard(t, app, created.ID, given.ID); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("discard = %d %s", response.StatusCode, body)
+	}
+	save("Süren") // version 4
+
+	type listed struct {
+		Seq       int  `json:"seq"`
+		Discarded bool `json:"discarded"`
+	}
+	list := func(query string) (int, []listed, string) {
+		t.Helper()
+		response, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/templates/"+created.ID.String()+"/versions"+query, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(response.Body)
+		var versions []listed
+		if response.StatusCode == fiber.StatusOK {
+			if err := json.Unmarshal(body, &versions); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return response.StatusCode, versions, response.Header.Get("X-Total-Count")
+	}
+	for query, want := range map[string]string{
+		"":                             "[{4 false} {3 true} {2 false} {1 false}] 4",
+		"?state=all":                   "[{4 false} {3 true} {2 false} {1 false}] 4",
+		"?state=published":             "[{2 false} {1 false}] 2",
+		"?state=draft":                 "[{4 false} {3 true}] 2",
+		"?state=draft&_start=1&_end=2": "[{3 true}] 2",
+	} {
+		status, versions, total := list(query)
+		if got := fmt.Sprint(versions, " ", total); status != fiber.StatusOK || got != want {
+			t.Errorf("versions%s = %d %s, want %s", query, status, got, want)
+		}
+	}
+	if status, _, _ := list("?state=taslak"); status != fiber.StatusBadRequest {
+		t.Errorf("an unknown state = %d, want 400", status)
+	}
+}
+
+// call is one request among several made at once.
+type call struct {
+	name, method, path string
+	body               any
+	headers            []string
+}
+
+// answer is what a call got back.
+type answer struct {
+	call
+	status int
+	body   []byte
+	err    error
+}
+
+// concurrently makes the calls at the same moment, each on its own goroutine,
+// and returns their answers in the order of the calls.
+func concurrently(app *fiber.App, calls ...call) []answer {
+	answers := make([]answer, len(calls))
+	start := make(chan struct{})
+	done := make(chan struct{}, len(calls))
+	for i, c := range calls {
+		go func(i int, c call) {
+			defer func() { done <- struct{}{} }()
+			answers[i].call = c
+			payload, err := json.Marshal(c.body)
+			if err != nil {
+				answers[i].err = err
+				return
+			}
+			request := httptest.NewRequest(c.method, c.path, bytes.NewReader(payload))
+			request.Header.Set("Content-Type", "application/json")
+			for j := 0; j+1 < len(c.headers); j += 2 {
+				request.Header.Set(c.headers[j], c.headers[j+1])
+			}
+			<-start
+			response, err := app.Test(request, fiber.TestConfig{Timeout: 0})
+			if err != nil {
+				answers[i].err = err
+				return
+			}
+			answers[i].status = response.StatusCode
+			answers[i].body, answers[i].err = io.ReadAll(response.Body)
+		}(i, c)
+	}
+	close(start)
+	for range calls {
+		<-done
+	}
+	return answers
+}
+
+// Two publishes that meet each take the template's lock in turn, so the
+// second sees what the first published. Two drafts started from the same
+// version: one is published, and the other is refused as stale, naming it.
+// The same draft twice: both succeed, the second a repeat that changes
+// nothing.
+func TestPublishesThatMeetTakeTurns(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+	save := func(subject string, headers ...string) servedDraft {
+		t.Helper()
+		response, draft, body := saveDraft(t, app, created.ID, map[string]any{
+			"subject": subject, "main_mode": "jsx", "html_content": "<p>" + subject + "</p>", "plain_text_content": subject,
+			"base_version_id": created.PublishedVersionID,
+		}, headers...)
+		if response.StatusCode != fiber.StatusCreated {
+			t.Fatalf("draft = %d %s", response.StatusCode, body)
+		}
+		return draft
+	}
+	publishCall := func(draft servedDraft) call {
+		return call{"publish " + draft.Subject, fiber.MethodPost, "/templates/" + created.ID.String() + "/versions/" + draft.ID.String() + "/publish", nil, nil}
+	}
+
+	mine, theirs := save("Benim"), save("Can'ın", canDemir...)
+	answers := concurrently(app, publishCall(mine), publishCall(theirs))
+	var won, lost answer
+	var winner servedDraft
+	switch {
+	case answers[0].status == fiber.StatusOK && answers[1].status == fiber.StatusConflict:
+		won, lost, winner = answers[0], answers[1], mine
+	case answers[1].status == fiber.StatusOK && answers[0].status == fiber.StatusConflict:
+		won, lost, winner = answers[1], answers[0], theirs
+	default:
+		t.Fatalf("two stale-to-each-other publishes = %d %s / %d %s, want one 200 and one 409", answers[0].status, answers[0].body, answers[1].status, answers[1].body)
+	}
+	if conflict := decodeError(t, lost.body); conflict.Code != "template.stale_base" || conflict.Params["published_version_id"] != winner.ID.String() {
+		t.Fatalf("the refused publish = %s, want template.stale_base naming the one published (%s)", lost.body, winner.ID)
+	}
+	if row := templateRow(t, db, created.ID); row.PublishedVersionID == nil || *row.PublishedVersionID != winner.ID || row.Subject != winner.Subject {
+		t.Fatalf("row = %+v after %s, want a copy of the winner", row, won.name)
+	}
+
+	// The same draft published twice at once.
+	next := save("Bir sonraki")
+	if response, _, body := publish(t, app, created.ID, next.ID, &winner.ID); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("publish = %d %s", response.StatusCode, body)
+	}
+	again := save("Yine")
+	answers = concurrently(app, publishCall(again), publishCall(again))
+	if answers[0].status != fiber.StatusConflict || answers[1].status != fiber.StatusConflict {
+		// again started from the first version: stale, both refused alike.
+		t.Fatalf("publishing a stale draft twice at once = %d / %d, want both refused", answers[0].status, answers[1].status)
+	}
+	current := *templateRow(t, db, created.ID).PublishedVersionID
+	response, fresh, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": "Güncel", "main_mode": "jsx", "html_content": "<p>Güncel</p>", "plain_text_content": "Güncel",
+		"base_version_id": current,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("draft = %d %s", response.StatusCode, body)
+	}
+	answers = concurrently(app, publishCall(fresh), publishCall(fresh))
+	if answers[0].status != fiber.StatusOK || answers[1].status != fiber.StatusOK {
+		t.Fatalf("one draft published twice at once = %d %s / %d %s, want both 200", answers[0].status, answers[0].body, answers[1].status, answers[1].body)
+	}
+	versions, published := storedVersions(t, db, created.ID)
+	if published == nil || *published != fresh.ID || versions[len(versions)-1].ID != fresh.ID || versions[len(versions)-1].PublishedAt == nil {
+		t.Fatalf("after publishing one draft twice the row is a copy of %v, want %s published once", published, fresh.ID)
+	}
+}
+
+// A publish and a save that meet take turns too, and either order ends the
+// same: the draft published is sent, and the save is a new draft beside it,
+// started from the version it named.
+func TestAPublishAndASaveThatMeetTakeTurns(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+	base := *created.PublishedVersionID
+	response, draft, body := saveDraft(t, app, created.ID, map[string]any{
+		"subject": "Yayımlanacak", "main_mode": "jsx", "html_content": "<p>Yayımlanacak</p>", "plain_text_content": "Yayımlanacak",
+		"base_version_id": base,
+	})
+	if response.StatusCode != fiber.StatusCreated {
+		t.Fatalf("draft = %d %s", response.StatusCode, body)
+	}
+
+	answers := concurrently(app,
+		call{"publish", fiber.MethodPost, "/templates/" + created.ID.String() + "/versions/" + draft.ID.String() + "/publish", nil, nil},
+		call{"save", fiber.MethodPost, "/templates/" + created.ID.String() + "/drafts", map[string]any{
+			"subject": "Sonraki taslak", "main_mode": "html", "html_source": "<p>Sonraki</p>",
+			"html_content": "<p>Sonraki</p>", "plain_text_content": "Sonraki", "base_version_id": base,
+		}, nil},
+	)
+	if answers[0].status != fiber.StatusOK || answers[1].status != fiber.StatusCreated {
+		t.Fatalf("publish = %d %s, save = %d %s; want 200 and 201", answers[0].status, answers[0].body, answers[1].status, answers[1].body)
+	}
+	var saved servedDraft
+	if err := json.Unmarshal(answers[1].body, &saved); err != nil {
+		t.Fatal(err)
+	}
+	versions, published := storedVersions(t, db, created.ID)
+	if len(versions) != 3 || published == nil || *published != draft.ID {
+		t.Fatalf("versions = %d, row copy of %v; want 3 and the published draft sent", len(versions), published)
+	}
+	if last := versions[2]; last.ID != saved.ID || last.PublishedAt != nil || last.BaseVersionID == nil || *last.BaseVersionID != base ||
+		last.MainMode != "html" || !sameString(last.JSXSource, panelSource) {
+		t.Fatalf("the save = %+v, want an unpublished HTML draft started from %s, the JSX source kept", last, base)
+	}
+	if row := templateRow(t, db, created.ID); row.Subject != "Yayımlanacak" {
+		t.Fatalf("row subject = %q, want the published draft's", row.Subject)
+	}
+}
+
+// The editor renames a template through a draft: the draft carries the name,
+// publishing it names the template, and a save that leaves the name out keeps
+// the one of the version it continues. A name is part of what a save compares,
+// so renaming alone is a new draft, and a blank name is refused.
+func TestADraftRenamesTheTemplateWhenPublished(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+	base := created.PublishedVersionID
+	draft := func(fields map[string]any) (*http.Response, servedDraft, []byte) {
+		t.Helper()
+		body := map[string]any{
+			"subject": "Merhaba {{.FullName}}", "main_mode": "jsx",
+			"html_content": "<p>Merhaba {{.FullName}}</p>", "plain_text_content": "Merhaba {{.FullName}}", "base_version_id": base,
+		}
+		for field, value := range fields {
+			body[field] = value
+		}
+		return saveDraft(t, app, created.ID, body)
+	}
+
+	response, renamed, body := draft(map[string]any{"name": "Ekim duyurusu"})
+	if response.StatusCode != fiber.StatusCreated || renamed.Name != "Ekim duyurusu" {
+		t.Fatalf("a draft that only renames = %d %s, want 201 with the new name", response.StatusCode, body)
+	}
+	if row := templateRow(t, db, created.ID); row.Name != created.Name {
+		t.Fatalf("saving a renaming draft renamed the template to %q", row.Name)
+	}
+	response, kept, body := draft(map[string]any{"subject": "Selam {{.FullName}}"})
+	if response.StatusCode != fiber.StatusCreated || kept.Name != "Ekim duyurusu" || kept.Seq != renamed.Seq+1 {
+		t.Fatalf("a save without a name = %d %s, want the name its draft had", response.StatusCode, body)
+	}
+	if response, _, body := draft(map[string]any{"name": "  "}); response.StatusCode != fiber.StatusBadRequest || !namesField(decodeError(t, body), "name") {
+		t.Fatalf("a blank name = %d %s, want 400 on name", response.StatusCode, body)
+	}
+
+	response, published, body := publish(t, app, created.ID, kept.ID, nil)
+	if response.StatusCode != fiber.StatusOK || published.Name != "Ekim duyurusu" || templateRow(t, db, created.ID).Name != "Ekim duyurusu" {
+		t.Fatalf("publishing the draft = %d %s, want the template renamed", response.StatusCode, body)
+	}
+}

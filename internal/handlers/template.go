@@ -1,13 +1,19 @@
 package handlers
 
 import (
+	"context"
+	"encoding/json"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skymail-backend/internal/ptr"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
+	"github.com/skylab-kulubu/skymail-backend/internal/requiredvars"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 )
 
@@ -35,6 +41,34 @@ var errInvalidTemplateKey = apperrors.New(
 	fiber.StatusBadRequest,
 )
 
+// A contract variable is the sending service's, declared in the repo and
+// written by the Template seed; like the Template key, the panel cannot
+// release it.
+var errContractRequiredVariable = apperrors.New(
+	"template.required_variable_in_contract",
+	"The variable is required by the sending service's contract; only the Template seed changes that set.",
+	fiber.StatusConflict,
+)
+
+var errInvalidVariableName = apperrors.New(
+	"template.invalid_variable_name",
+	"A variable name is 1–64 letters, digits and underscores, not starting with a digit.",
+	fiber.StatusBadRequest,
+)
+
+// Template is a Mail template as the template routes serve it: its row — a
+// copy of the published version, which is what is sent — with the Authoring
+// mode of that version's Main source and each operator's draft in progress.
+type Template struct {
+	database.Template
+	// The Authoring mode of the Main source the template sends: its published version's. Null for a template with no published version.
+	MainMode *string `json:"main_mode" enums:"jsx,visual,html"`
+	// Each operator's draft in progress, newest first: the newest version an operator wrote of the template, while it is neither published nor discarded. An operator's earlier drafts are superseded and not listed. A draft whose base_version_id is not published_version_id is stale: a newer version was published after it was started, and publishing it takes force.
+	Drafts []TemplateVersionSummary `json:"drafts"`
+	// The Template seed refused since the last seed that went through, because an operator changed the template (ADR-0047): a repo change waiting on a decision. Null when no seed is refused.
+	SeedRefusal *SeedRefusal `json:"seed_refusal"`
+}
+
 type TemplateHandler interface {
 	CreateTemplate(c fiber.Ctx) error
 	GetTemplates(c fiber.Ctx) error
@@ -44,6 +78,14 @@ type TemplateHandler interface {
 	RestoreTemplate(c fiber.Ctx) error
 	GetTemplateByKey(c fiber.Ctx) error
 	UpsertTemplateByKey(c fiber.Ctx) error
+	ListTemplateVersions(c fiber.Ctx) error
+	GetTemplateVersion(c fiber.Ctx) error
+	AddRequiredVariable(c fiber.Ctx) error
+	RemoveRequiredVariable(c fiber.Ctx) error
+	SaveTemplateDraft(c fiber.Ctx) error
+	PublishTemplateVersion(c fiber.Ctx) error
+	RestoreTemplateVersion(c fiber.Ctx) error
+	DiscardTemplateVersion(c fiber.Ctx) error
 }
 
 type templateHandlerImpl struct {
@@ -76,13 +118,14 @@ func getPaginationParams(c fiber.Ctx) (int32, int32) {
 // CreateTemplate godoc
 //
 //	@Summary		Create a new email template
-//	@Description	Create a new email template with the provided name, HTML content, and plain text content.
+//	@Description	Create a new email template with the provided name, HTML content, and plain text content. Records the content as the template's first version: an operator's, published at once. The subject, plain text and HTML content must parse as Go templates the way the mailer parses them.
 //	@Tags			Templates
 //	@Accept			json
 //	@Produce		json
 //	@Param			template	body		requests.CreateTemplate	true	"Template details"
-//	@Success		201			{object}	database.Template
+//	@Success		201			{object}	handlers.Template
 //	@Failure		400			{object}	apperrors.AppError	"Bad Request"
+//	@Failure		422			{object}	apperrors.AppError	"The subject, plain text or HTML content does not parse (template.unparseable, params.part)"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates [post]
 func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
@@ -92,19 +135,21 @@ func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
 		return err
 	}
 
-	template, err := h.db.CreateTemplate(c.Context(), database.CreateTemplateParams{
-		Name:              params.Name,
-		Subject:           params.Subject,
-		HtmlContent:       params.HTMLContent,
-		PlainTextContent:  params.PlainTextContent,
-		ReactEmailContent: params.ReactEmailContent,
-		Key:               params.Key,
-	})
+	template, err := h.db.PublishTemplateWrite(c.Context(), versionAuthor(c, database.TemplateAuthorKindOperator), checkedWrite(func(q *database.Queries) (database.Template, error) {
+		return q.CreateTemplate(c.Context(), database.CreateTemplateParams{
+			Name:              params.Name,
+			Subject:           params.Subject,
+			HtmlContent:       params.HTMLContent,
+			PlainTextContent:  params.PlainTextContent,
+			ReactEmailContent: params.ReactEmailContent,
+			Key:               params.Key,
+		})
+	}))
 	if err != nil {
 		return err
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(template)
+	return h.sendTemplate(c, fiber.StatusCreated, template)
 }
 
 // GetTemplates godoc
@@ -116,7 +161,7 @@ func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
 //	@Param			_start		query		int		false	"Start index"
 //	@Param			_end		query		int		false	"End index"
 //	@Param			lifecycle	query		string	false	"Lifecycle filter: current, inactive, all"	Enums(current,inactive,all)	default(current)
-//	@Success		200			{array}		database.Template
+//	@Success		200			{array}		handlers.Template
 //	@Failure		400			{object}	apperrors.AppError	"Bad Request"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates [get]
@@ -151,9 +196,14 @@ func (h *templateHandlerImpl) GetTemplates(c fiber.Ctx) error {
 		return err
 	}
 
+	served, err := h.served(c.Context(), templates)
+	if err != nil {
+		return err
+	}
+
 	c.Response().Header.Set("X-Total-Count", strconv.FormatInt(count, 10))
 
-	return c.JSON(templates)
+	return c.JSON(served)
 }
 
 // GetTemplate godoc
@@ -163,7 +213,7 @@ func (h *templateHandlerImpl) GetTemplates(c fiber.Ctx) error {
 //	@Tags			Templates
 //	@Produce		json
 //	@Param			id	path		string	true	"Template ID"
-//	@Success		200	{object}	database.Template
+//	@Success		200	{object}	handlers.Template
 //	@Failure		400	{object}	apperrors.AppError	"Bad Request"
 //	@Failure		404	{object}	apperrors.AppError	"Not Found"
 //	@Failure		500	{object}	apperrors.AppError	"Internal Server Error"
@@ -179,21 +229,22 @@ func (h *templateHandlerImpl) GetTemplate(c fiber.Ctx) error {
 		return err
 	}
 
-	return c.JSON(template)
+	return h.sendTemplate(c, fiber.StatusOK, template)
 }
 
 // UpdateTemplate godoc
 //
 //	@Summary		Update an email template
-//	@Description	Update an existing email template with the provided ID and details.
+//	@Description	Update an existing email template with the provided ID and details. Records the content the template ends up with as an operator's version, published at once. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable of the template, or nothing is written.
 //	@Tags			Templates
 //	@Accept			json
 //	@Produce		json
 //	@Param			id			path		string					true	"Template ID"
 //	@Param			template	body		requests.UpdateTemplate	true	"Template details"
-//	@Success		200			{object}	database.Template
+//	@Success		200			{object}	handlers.Template
 //	@Failure		400			{object}	apperrors.AppError	"Bad Request"
 //	@Failure		404			{object}	apperrors.AppError	"Not Found"
+//	@Failure		422			{object}	apperrors.AppError	"The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates/{id} [patch]
 func (h *templateHandlerImpl) UpdateTemplate(c fiber.Ctx) error {
@@ -216,26 +267,30 @@ func (h *templateHandlerImpl) UpdateTemplate(c fiber.Ctx) error {
 	if existing.System {
 		// The content of a system template may be reworded freely; its key is the
 		// contract another service calls it by, so that stays put.
-		if !sameKey(key, existing.Key) {
+		if !ptr.Equal(key, existing.Key) {
 			return errSystemTemplateKey
 		}
 		key = existing.Key
 	}
 
-	template, err := h.db.UpdateTemplate(c.Context(), database.UpdateTemplateParams{
-		ID:                id,
-		Name:              params.Name,
-		Subject:           params.Subject,
-		HtmlContent:       params.HTMLContent,
-		PlainTextContent:  params.PlainTextContent,
-		ReactEmailContent: params.ReactEmailContent,
-		Key:               key,
-	})
+	// The old panel has no drafts: its edit is an operator's version, published
+	// at once, as its saves always went straight to live mail.
+	template, err := h.db.PublishTemplateWrite(c.Context(), versionAuthor(c, database.TemplateAuthorKindOperator), checkedWrite(func(q *database.Queries) (database.Template, error) {
+		return q.UpdateTemplate(c.Context(), database.UpdateTemplateParams{
+			ID:                id,
+			Name:              params.Name,
+			Subject:           params.Subject,
+			HtmlContent:       params.HTMLContent,
+			PlainTextContent:  params.PlainTextContent,
+			ReactEmailContent: params.ReactEmailContent,
+			Key:               key,
+		})
+	}))
 	if err != nil {
 		return err
 	}
 
-	return c.JSON(template)
+	return h.sendTemplate(c, fiber.StatusOK, template)
 }
 
 // DeleteTemplate godoc
@@ -265,7 +320,7 @@ func (h *templateHandlerImpl) DeleteTemplate(c fiber.Ctx) error {
 	}
 
 	if _, err := h.db.ArchiveTemplate(c.Context(), database.ArchiveTemplateParams{
-		ID: id, ArchivedBy: lifecycleActor(c.Locals("user_id")),
+		ID: id, ArchivedBy: localText(c, "user_id"),
 	}); err != nil {
 		return err
 	}
@@ -280,7 +335,7 @@ func (h *templateHandlerImpl) DeleteTemplate(c fiber.Ctx) error {
 //	@Tags			Templates
 //	@Produce		json
 //	@Param			id	path		string	true	"Template ID"
-//	@Success		200	{object}	database.Template
+//	@Success		200	{object}	handlers.Template
 //	@Failure		404	{object}	apperrors.AppError	"Not Found"
 //	@Failure		409	{object}	apperrors.AppError	"Conflict"
 //	@Router			/templates/{id}/restore [post]
@@ -294,14 +349,103 @@ func (h *templateHandlerImpl) RestoreTemplate(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(template)
+	return h.sendTemplate(c, fiber.StatusOK, template)
 }
 
-func sameKey(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
+// served is template rows as the template routes serve them.
+func (h *templateHandlerImpl) served(ctx context.Context, rows []database.Template) ([]Template, error) {
+	ids := make([]uuid.UUID, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
 	}
-	return *a == *b
+	modes, err := h.db.ListPublishedMainModes(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	drafts, err := h.db.ListTemplateDrafts(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+
+	mainModes := make(map[uuid.UUID]string, len(modes))
+	for _, mode := range modes {
+		mainModes[mode.TemplateID] = string(mode.MainMode)
+	}
+	inProgress := make(map[uuid.UUID][]TemplateVersionSummary, len(rows))
+	for _, draft := range drafts {
+		inProgress[draft.TemplateID] = append(inProgress[draft.TemplateID], versionSummary(draft))
+	}
+	served := make([]Template, 0, len(rows))
+	for _, row := range rows {
+		template := Template{Template: row, Drafts: inProgress[row.ID], SeedRefusal: seedRefusal(row)}
+		if mode, ok := mainModes[row.ID]; ok {
+			template.MainMode = &mode
+		}
+		if template.Drafts == nil {
+			template.Drafts = []TemplateVersionSummary{}
+		}
+		served = append(served, template)
+	}
+	return served, nil
+}
+
+// sendTemplate answers with one template as the template routes serve it.
+func (h *templateHandlerImpl) sendTemplate(c fiber.Ctx, status int, row database.Template) error {
+	served, err := h.served(c.Context(), []database.Template{row})
+	if err != nil {
+		return err
+	}
+	return c.Status(status).JSON(served[0])
+}
+
+// versionAuthor is who a request writes a Mail template version as: the
+// subject and name of its token, under the kind of writer the route serves.
+func versionAuthor(c fiber.Ctx, kind database.TemplateAuthorKind) database.VersionAuthor {
+	return database.VersionAuthor{
+		Kind: kind,
+		Sub:  localText(c, "user_id"),
+		Name: localText(c, "user_name"),
+	}
+}
+
+// checkedWrite is a row write that must leave a subject, plain text and body
+// the mailer can parse, and a body that references every Required variable —
+// what checkVersion asks of a draft and a publish: it checks
+// what the write left, inside the write's transaction, so a refused write —
+// and the version it would have been — is rolled back with it.
+func checkedWrite(write func(*database.Queries) (database.Template, error)) func(*database.Queries) (database.Template, error) {
+	return func(q *database.Queries) (database.Template, error) {
+		written, err := write(q)
+		if err != nil {
+			return written, err
+		}
+		if err := requiredvars.CheckParts(written.Subject, written.PlainTextContent, written.HtmlContent); err != nil {
+			return written, err
+		}
+		return written, requiredvars.CheckBody(written, written.HtmlContent)
+	}
+}
+
+// contractSet is a contract set as the database keeps one: sorted by name
+// byte by byte, each name once (its first entry wins), a blank reason
+// unknown. nil, a set not sent, stays nil.
+func contractSet(sent *[]requests.ContractVariable) ([]byte, error) {
+	if sent == nil {
+		return nil, nil
+	}
+	set := make(database.ContractVariables, 0, len(*sent))
+	for _, variable := range *sent {
+		if _, taken := set.Find(variable.Name); taken {
+			continue
+		}
+		reason := variable.Reason
+		if reason != nil && strings.TrimSpace(*reason) == "" {
+			reason = nil
+		}
+		set = append(set, database.ContractVariable{Name: variable.Name, Reason: reason})
+	}
+	slices.SortFunc(set, func(a, b database.ContractVariable) int { return strings.Compare(a.Name, b.Name) })
+	return json.Marshal(set)
 }
 
 // GetTemplateByKey godoc
@@ -311,7 +455,7 @@ func sameKey(a, b *string) bool {
 //	@Tags			Templates
 //	@Produce		json
 //	@Param			key	path		string	true	"Template key"
-//	@Success		200	{object}	database.Template
+//	@Success		200	{object}	handlers.Template
 //	@Failure		404	{object}	apperrors.AppError	"Not Found"
 //	@Router			/templates/by-key/{key} [get]
 func (h *templateHandlerImpl) GetTemplateByKey(c fiber.Ctx) error {
@@ -325,21 +469,26 @@ func (h *templateHandlerImpl) GetTemplateByKey(c fiber.Ctx) error {
 		return err
 	}
 
-	return c.JSON(template)
+	return h.sendTemplate(c, fiber.StatusOK, template)
 }
 
 // UpsertTemplateByKey godoc
 //
 //	@Summary		Create or replace a template addressed by key
-//	@Description	Seed path for system templates: creates the template when the key is new and replaces its content when it already exists. Un-archives the template so a seed always leaves a usable template behind.
+//	@Description	The Template seed's path: creates the template when the key is new and replaces its content — the subject included — when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once; react_email_content holding a JSX source (anything but whitespace and comments, so not the seed's old pointer comment) makes it the version's JSX Main source, and otherwise the HTML content is the HTML Main source. Writes the contract Required variables when sent, and keeps them when not. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.
+//	@Description
+//	@Description	Neither the seed nor an operator silently overwrites the other (ADR-0047). A template an operator changed since the last seed is refused with 409 template.seed_conflict and nothing is written, when any of these holds (params.rules lists each that does): published_by_operator — the version the template sends is not the last Template seed version; newer_operator_version — an operator wrote a version after the last seed version, a draft included and a discarded draft not; operator_subject — the subject sent is an operator's that the seed would overwrite: neither the one the last seed version asked for nor the one asked for now (for a template whose last seed version is the migration's first one, which does not know what the seed asked for: the seed asks for a subject other than the one sent). The refusal is kept on the template as seed_refusal until a seed goes through. A seed that would leave the template as its published version already is overwrites nothing and is never refused. force=true writes over the operator's change anyway, as a published Template seed version; their versions stay in the history and can be restored, and the answer names what was overridden in overrode (left out when nothing was).
 //	@Tags			Templates
 //	@Accept			json
 //	@Produce		json
 //	@Param			key			path		string							true	"Template key"
+//	@Param			force		query		bool							false	"Write even over an operator's change since the last seed"
 //	@Param			template	body		requests.UpsertTemplateByKey	true	"Template details"
-//	@Success		200			{object}	database.Template
-//	@Failure		400			{object}	apperrors.AppError	"Bad Request"
-//	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
+//	@Success		200			{object}	handlers.SeededTemplate			"The template; forced over an operator's change, also what it overrode"
+//	@Failure		400			{object}	apperrors.AppError				"Bad Request (validation.error, force included)"
+//	@Failure		409			{object}	apperrors.AppError				"template.seed_conflict: an operator changed the template since the last seed; params: key, template_id, rules, published_version, last_seed_version, operator_versions (each a version summary, as the history serves it), subject (sent now) and requested_subject (the seed's)"
+//	@Failure		422			{object}	apperrors.AppError				"The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
+//	@Failure		500			{object}	apperrors.AppError				"Internal Server Error"
 //	@Router			/templates/by-key/{key} [put]
 func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 	key := c.Params("key")
@@ -350,23 +499,52 @@ func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 		return errInvalidTemplateKey
 	}
 
+	force, err := seedForce(c)
+	if err != nil {
+		return err
+	}
+
 	var params requests.UpsertTemplateByKey
 	if err := c.Bind().Body(&params); err != nil {
 		return err
 	}
 
-	template, err := h.db.UpsertTemplateByKey(c.Context(), database.UpsertTemplateByKeyParams{
-		Key:               key,
-		Name:              params.Name,
-		Subject:           params.Subject,
-		HtmlContent:       params.HTMLContent,
-		PlainTextContent:  params.PlainTextContent,
-		ReactEmailContent: params.ReactEmailContent,
-		System:            params.System,
-	})
+	contract, err := contractSet(params.ContractRequiredVariables)
+	if err != nil {
+		return err
+	}
+	payloadSHA256, err := seedPayloadSHA256(key, params, contract)
 	if err != nil {
 		return err
 	}
 
-	return c.JSON(template)
+	// A Template seed's version is published at once, unless an operator's
+	// change is in its way and it is not forced.
+	template, overrode, err := h.db.SeedTemplate(c.Context(), database.TemplateSeed{
+		Key:           key,
+		Author:        versionAuthor(c, database.TemplateAuthorKindTemplateSeed),
+		Subject:       params.Subject,
+		Force:         force,
+		PayloadSHA256: payloadSHA256,
+	}, checkedWrite(func(q *database.Queries) (database.Template, error) {
+		return q.UpsertTemplateByKey(c.Context(), database.UpsertTemplateByKeyParams{
+			Key:                       key,
+			Name:                      params.Name,
+			Subject:                   params.Subject,
+			HtmlContent:               params.HTMLContent,
+			PlainTextContent:          params.PlainTextContent,
+			ReactEmailContent:         params.ReactEmailContent,
+			System:                    params.System,
+			ContractRequiredVariables: contract,
+		})
+	}))
+	if err != nil {
+		return seedError(err)
+	}
+
+	served, err := h.served(c.Context(), []database.Template{template})
+	if err != nil {
+		return err
+	}
+	return c.JSON(SeededTemplate{Template: served[0], Overrode: seedOverride(overrode)})
 }

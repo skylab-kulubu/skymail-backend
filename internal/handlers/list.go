@@ -279,7 +279,7 @@ func (h *listHandlerImpl) DeleteList(c fiber.Ctx) error {
 	}
 
 	if _, err := h.db.ArchiveMailingList(c.Context(), database.ArchiveMailingListParams{
-		ID: id, ArchivedBy: lifecycleActor(c.Locals("user_id")),
+		ID: id, ArchivedBy: localText(c, "user_id"),
 	}); err != nil {
 		return err
 	}

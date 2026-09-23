@@ -8,16 +8,22 @@ import (
 	"github.com/spf13/viper"
 )
 
+// DefaultKeycloakClientID is the client SkyMail's roles are on when
+// KEYCLOAK_CLIENT_ID does not say.
+const DefaultKeycloakClientID = "skymail"
+
 type Config struct {
-	DatabaseURL                 string `mapstructure:"DATABASE_URL" validate:"required"`
-	SMTPFrom                    string `mapstructure:"SMTP_FROM" validate:"required"`
-	SMTPHost                    string `mapstructure:"SMTP_HOST" validate:"required"`
-	SMTPPort                    int    `mapstructure:"SMTP_PORT" validate:"required"`
-	SMTPUser                    string `mapstructure:"SMTP_USER" validate:"required"`
-	SMTPPass                    string `mapstructure:"SMTP_PASS" validate:"required"`
-	SMTPFQDN                    string `mapstructure:"SMTP_FQDN" validate:"required"`
-	SMTPPlain                   bool   `mapstructure:"SMTP_PLAIN"`
-	KeycloakRealmURL            string `mapstructure:"KEYCLOAK_REALM_URL" validate:"required"`
+	DatabaseURL      string `mapstructure:"DATABASE_URL" validate:"required"`
+	SMTPFrom         string `mapstructure:"SMTP_FROM" validate:"required"`
+	SMTPHost         string `mapstructure:"SMTP_HOST" validate:"required"`
+	SMTPPort         int    `mapstructure:"SMTP_PORT" validate:"required"`
+	SMTPUser         string `mapstructure:"SMTP_USER" validate:"required"`
+	SMTPPass         string `mapstructure:"SMTP_PASS" validate:"required"`
+	SMTPFQDN         string `mapstructure:"SMTP_FQDN" validate:"required"`
+	SMTPPlain        bool   `mapstructure:"SMTP_PLAIN"`
+	KeycloakRealmURL string `mapstructure:"KEYCLOAK_REALM_URL" validate:"required"`
+	// The Keycloak client whose roles SkyMail's permissions are: skymail when unset.
+	KeycloakClientID            string `mapstructure:"KEYCLOAK_CLIENT_ID"`
 	KeycloakServiceClientID     string `mapstructure:"KEYCLOAK_SERVICE_CLIENT_ID" validate:"required"`
 	KeycloakServiceClientSecret string `mapstructure:"KEYCLOAK_SERVICE_CLIENT_SECRET" validate:"required"`
 	AppPort                     int    `mapstructure:"APP_PORT"`
@@ -48,6 +54,9 @@ func LoadConfig(vld validator.StructValidator) (config Config, err error) {
 
 	if err = vld.Validate(&config); err != nil {
 		return config, err
+	}
+	if config.KeycloakClientID == "" {
+		config.KeycloakClientID = DefaultKeycloakClientID
 	}
 
 	return config, err

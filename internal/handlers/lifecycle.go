@@ -3,6 +3,8 @@ package handlers
 import (
 	"strings"
 
+	"github.com/gofiber/fiber/v3"
+
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 )
 
@@ -29,10 +31,12 @@ func parseLifecycleFilter(raw string) (lifecycleFilter, error) {
 	}
 }
 
-func lifecycleActor(raw interface{}) *string {
-	actor, ok := raw.(string)
-	if !ok || strings.TrimSpace(actor) == "" {
+// localText reads a string the middleware left on the request — the caller's
+// subject, their name — or nil when it is missing or blank.
+func localText(c fiber.Ctx, key string) *string {
+	text, ok := c.Locals(key).(string)
+	if !ok || strings.TrimSpace(text) == "" {
 		return nil
 	}
-	return &actor
+	return &text
 }

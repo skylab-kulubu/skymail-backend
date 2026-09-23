@@ -16,79 +16,23 @@
                 },
                 "type": "object"
             },
-            "database.GetAllMailTasksRow": {
+            "database.ContractVariable": {
                 "properties": {
-                    "body_variables": {
-                        "items": {
-                            "type": "integer"
-                        },
-                        "type": "array",
-                        "uniqueItems": false
-                    },
-                    "created_at": {
+                    "name": {
+                        "description": "The variable, as the body reaches it with .Name.",
                         "type": "string"
                     },
-                    "id": {
-                        "type": "string"
-                    },
-                    "mail_list_id": {
-                        "type": "string"
-                    },
-                    "mail_list_name": {
-                        "type": "string"
-                    },
-                    "sent_by": {
-                        "type": "string"
-                    },
-                    "template_id": {
-                        "type": "string"
-                    },
-                    "template_name": {
+                    "reason": {
+                        "description": "Why the mail cannot do without it, a sentence the repo declares. Null when the Template seed sent the name alone.",
                         "type": "string"
                     }
                 },
                 "type": "object"
             },
-            "database.GetMailTaskByIdRow": {
+            "database.GetMailQueueItemsByTaskIdRow": {
                 "properties": {
-                    "body_variables": {
-                        "items": {
-                            "type": "integer"
-                        },
-                        "type": "array",
-                        "uniqueItems": false
-                    },
-                    "created_at": {
-                        "type": "string"
-                    },
-                    "id": {
-                        "type": "string"
-                    },
-                    "mail_list_id": {
-                        "type": "string"
-                    },
-                    "mail_list_name": {
-                        "type": "string"
-                    },
-                    "sent_by": {
-                        "type": "string"
-                    },
-                    "template_id": {
-                        "type": "string"
-                    },
-                    "template_name": {
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
-            "database.MailQueue": {
-                "properties": {
-                    "body": {
-                        "type": "string"
-                    },
-                    "body_html": {
-                        "type": "string"
+                    "attempts": {
+                        "type": "integer"
                     },
                     "created_at": {
                         "type": "string"
@@ -99,6 +43,9 @@
                     "id": {
                         "type": "string"
                     },
+                    "next_attempt_at": {
+                        "type": "string"
+                    },
                     "recipient_email": {
                         "type": "string"
                     },
@@ -107,12 +54,6 @@
                     },
                     "status": {
                         "$ref": "#/components/schemas/database.NullMailQueueStatus"
-                    },
-                    "subject": {
-                        "type": "string"
-                    },
-                    "task_id": {
-                        "type": "string"
                     }
                 },
                 "type": "object"
@@ -190,36 +131,400 @@
                 },
                 "type": "object"
             },
-            "database.Template": {
+            "database.SeedConflictRule": {
+                "enum": [
+                    "published_by_operator",
+                    "newer_operator_version",
+                    "operator_subject"
+                ],
+                "type": "string",
+                "x-enum-varnames": [
+                    "SeedConflictPublishedByOperator",
+                    "SeedConflictNewerOperatorVersion",
+                    "SeedConflictOperatorSubject"
+                ]
+            },
+            "database.VersionAuthor": {
                 "properties": {
-                    "archived_at": {
+                    "kind": {
+                        "description": "operator: written in SkyMail; template_seed: written by the Template seed from the repo.",
+                        "enum": [
+                            "operator",
+                            "template_seed"
+                        ],
                         "type": "string"
                     },
-                    "archived_by": {
+                    "name": {
+                        "description": "The name the writer's token carried when the version was written. Null when not known.",
                         "type": "string"
+                    },
+                    "sub": {
+                        "description": "The Keycloak subject of the token that wrote the version. Null when not known: the first versions, made from templates written before versions were kept.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.DailySent": {
+                "properties": {
+                    "date": {
+                        "example": "2026-09-22",
+                        "type": "string"
+                    },
+                    "sent": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApproval": {
+                "properties": {
+                    "audience": {
+                        "$ref": "#/components/schemas/handlers.SendAudience"
+                    },
+                    "body_variables": {
+                        "description": "The variables it is sent with: as submitted, or as an approver edited them.",
+                        "type": "object"
                     },
                     "created_at": {
                         "type": "string"
                     },
-                    "html_content": {
+                    "deadline_at": {
+                        "description": "Pending or returned past this, it expires.",
+                        "type": "string"
+                    },
+                    "history": {
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.MailApprovalEvent"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "last_event": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalEvent"
+                    },
+                    "notification": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalNotification"
+                    },
+                    "preview": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalPreview"
+                    },
+                    "preview_error": {
+                        "type": "string"
+                    },
+                    "recipient_count": {
+                        "description": "How many it would reach now: 1 for one recipient, a list's members, a Keycloak group's members with an address. Null when Keycloak did not say in time.",
+                        "type": "integer"
+                    },
+                    "state": {
+                        "description": "pending: awaiting an approver; returned: an approver's edit awaits the submitter; approved: sent; rejected: refused with a reason, the submitter may resubmit; declined: the submitter refused an approver's edit and may resubmit; expired: undecided seven days after it was submitted, never sent.",
+                        "enum": [
+                            "pending",
+                            "returned",
+                            "approved",
+                            "rejected",
+                            "declined",
+                            "expired"
+                        ],
+                        "type": "string"
+                    },
+                    "submitted_at": {
+                        "description": "When it was last submitted; its deadline is seven days on.",
+                        "type": "string"
+                    },
+                    "submitter": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalSubmitter"
+                    },
+                    "task_id": {
+                        "description": "The send, once approved.",
+                        "type": "string"
+                    },
+                    "template": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
+                    },
+                    "updated_at": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalChange": {
+                "properties": {
+                    "after": {
+                        "description": "The value after; null when there is none.",
+                        "type": "object"
+                    },
+                    "before": {
+                        "description": "The value before; null when there was none.",
+                        "type": "object"
+                    },
+                    "field": {
+                        "description": "variable: a variable's value; template: the template or its version ({id, version_id}); audience: who it goes to ({mail_list_id} or {recipient_email, recipient_full_name}).",
+                        "enum": [
+                            "variable",
+                            "template",
+                            "audience"
+                        ],
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "The variable's name; null for the template and the audience.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalEvent": {
+                "description": "What happened to it last.",
+                "properties": {
+                    "actor": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalPerson"
+                    },
+                    "at": {
+                        "type": "string"
+                    },
+                    "changes": {
+                        "description": "What an edit or a resubmission changed; empty for every other event.",
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.MailApprovalChange"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "kind": {
+                        "description": "submitted, resubmitted and accepted, declined are the submitter's; edited, returned, approved, rejected an approver's; expired SkyMail's.",
+                        "enum": [
+                            "submitted",
+                            "resubmitted",
+                            "edited",
+                            "returned",
+                            "accepted",
+                            "declined",
+                            "approved",
+                            "rejected",
+                            "expired"
+                        ],
+                        "type": "string"
+                    },
+                    "note": {
+                        "description": "A rejection's reason, or the note an approver or the submitter left.",
+                        "type": "string"
+                    },
+                    "seq": {
+                        "description": "1, 2, 3… in the order they happened.",
+                        "type": "integer"
+                    },
+                    "task_id": {
+                        "description": "The send an approval or an acceptance queued.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalItem": {
+                "properties": {
+                    "audience": {
+                        "$ref": "#/components/schemas/handlers.SendAudience"
+                    },
+                    "body_variables": {
+                        "description": "The variables it is sent with: as submitted, or as an approver edited them.",
+                        "type": "object"
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "deadline_at": {
+                        "description": "Pending or returned past this, it expires.",
                         "type": "string"
                     },
                     "id": {
                         "type": "string"
                     },
+                    "last_event": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalEvent"
+                    },
+                    "state": {
+                        "description": "pending: awaiting an approver; returned: an approver's edit awaits the submitter; approved: sent; rejected: refused with a reason, the submitter may resubmit; declined: the submitter refused an approver's edit and may resubmit; expired: undecided seven days after it was submitted, never sent.",
+                        "enum": [
+                            "pending",
+                            "returned",
+                            "approved",
+                            "rejected",
+                            "declined",
+                            "expired"
+                        ],
+                        "type": "string"
+                    },
+                    "submitted_at": {
+                        "description": "When it was last submitted; its deadline is seven days on.",
+                        "type": "string"
+                    },
+                    "submitter": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalSubmitter"
+                    },
+                    "task_id": {
+                        "description": "The send, once approved.",
+                        "type": "string"
+                    },
+                    "template": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
+                    },
+                    "updated_at": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalNotification": {
+                "description": "On the answer to an action: the mail it sent about itself. Absent when it sent none.",
+                "properties": {
+                    "notified": {
+                        "description": "How many people it was queued to.",
+                        "type": "integer"
+                    },
+                    "problem": {
+                        "description": "Why it reached no one or fewer than it was for: no_approvers (no one holding skymail:mails:approve has an address), approver_lookup_failed (Keycloak did not say in time), no_address (the submitter's token carried no e-mail), unverified_address (it carried one Keycloak had not verified, which is not used), template_unavailable (the System template is not seeded), enqueue_failed. Null when it reached everyone.",
+                        "enum": [
+                            "no_approvers",
+                            "approver_lookup_failed",
+                            "no_address",
+                            "unverified_address",
+                            "template_unavailable",
+                            "enqueue_failed"
+                        ],
+                        "type": "string"
+                    },
+                    "template_key": {
+                        "description": "The System template it was sent with.",
+                        "enum": [
+                            "mail.approval-requested",
+                            "mail.approval-resolved"
+                        ],
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalPerson": {
+                "description": "Who did it; null when SkyMail expired the request.",
+                "properties": {
                     "name": {
                         "type": "string"
                     },
-                    "plain_text_content": {
+                    "sub": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalPreview": {
+                "description": "Null when it does not render; preview_error says why.",
+                "properties": {
+                    "html": {
+                        "description": "The whole mail as HTML: operators' template markup with the submitted values. Show it only in a sandboxed iframe (sandbox with no allow-scripts or allow-same-origin), never in the page itself.",
                         "type": "string"
                     },
-                    "react_email_content": {
+                    "plain_text": {
                         "type": "string"
+                    },
+                    "rendered_for": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalRecipient"
                     },
                     "subject": {
                         "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalRecipient": {
+                "properties": {
+                    "email": {
+                        "type": "string"
                     },
-                    "updated_at": {
+                    "full_name": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalSubmitter": {
+                "properties": {
+                    "email": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "sub": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalTemplate": {
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "key": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "republished": {
+                        "description": "The template has published another version since: approving or accepting is refused (mail_approval.template_republished) until the submitter resubmits.",
+                        "type": "boolean"
+                    },
+                    "version_id": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailTaskItem": {
+                "properties": {
+                    "audience": {
+                        "$ref": "#/components/schemas/handlers.SendAudience"
+                    },
+                    "body_variables": {
+                        "items": {
+                            "type": "integer"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "mail_list_id": {
+                        "type": "string"
+                    },
+                    "mail_list_name": {
+                        "type": "string"
+                    },
+                    "recipient_counts": {
+                        "$ref": "#/components/schemas/handlers.QueueCounts"
+                    },
+                    "sent_by": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "$ref": "#/components/schemas/handlers.SendStatus"
+                    },
+                    "template_id": {
+                        "type": "string"
+                    },
+                    "template_key": {
+                        "type": "string"
+                    },
+                    "template_name": {
                         "type": "string"
                     }
                 },
@@ -254,6 +559,455 @@
                 },
                 "type": "object"
             },
+            "handlers.QueueCounts": {
+                "properties": {
+                    "failed": {
+                        "type": "integer"
+                    },
+                    "pending": {
+                        "type": "integer"
+                    },
+                    "processing": {
+                        "type": "integer"
+                    },
+                    "sent": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.SeedOverride": {
+                "description": "What a forced seed wrote over: the rules that held, the version that was sent and the operator's versions after the last seed — what an unforced seed's 409 names. Left out when the seed overrode nothing, forced or not.",
+                "properties": {
+                    "operator_versions": {
+                        "description": "The operator's versions after the last seed, oldest first, discarded drafts left out.",
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.TemplateVersionSummary"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "published_version": {
+                        "$ref": "#/components/schemas/handlers.TemplateVersionSummary"
+                    },
+                    "rules": {
+                        "description": "The conflict rules that held, as template.seed_conflict names them.",
+                        "items": {
+                            "$ref": "#/components/schemas/database.SeedConflictRule"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.SeedRefusal": {
+                "description": "The Template seed refused since the last seed that went through, because an operator changed the template (ADR-0047): a repo change waiting on a decision. Null when no seed is refused.",
+                "properties": {
+                    "payload_sha256": {
+                        "description": "A SHA-256 of what the seed asked to write, in hex: the same content refused again has the same one.",
+                        "type": "string"
+                    },
+                    "refused_at": {
+                        "description": "When the Template seed was first refused with the content it asked for last; refused again with the same content, the time stays.",
+                        "type": "string"
+                    },
+                    "rules": {
+                        "description": "The conflict rules that held the last time: published_by_operator (the version sent is an operator's, not the last seed's), newer_operator_version (an operator wrote a version after the last seed, a draft included), operator_subject (the subject sent is an operator's).",
+                        "items": {
+                            "$ref": "#/components/schemas/database.SeedConflictRule"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.SeededTemplate": {
+                "properties": {
+                    "archived_at": {
+                        "type": "string"
+                    },
+                    "archived_by": {
+                        "type": "string"
+                    },
+                    "contract_required_variables": {
+                        "description": "Required variables from the sending service's contract, sorted by name, each with why the mail needs it. Written only by the Template seed; locked in the panel.",
+                        "items": {
+                            "$ref": "#/components/schemas/database.ContractVariable"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "drafts": {
+                        "description": "Each operator's draft in progress, newest first: the newest version an operator wrote of the template, while it is neither published nor discarded. An operator's earlier drafts are superseded and not listed. A draft whose base_version_id is not published_version_id is stale: a newer version was published after it was started, and publishing it takes force.",
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.TemplateVersionSummary"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "html_content": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "key": {
+                        "type": "string"
+                    },
+                    "main_mode": {
+                        "description": "The Authoring mode of the Main source the template sends: its published version's. Null for a template with no published version.",
+                        "enum": [
+                            "jsx",
+                            "visual",
+                            "html"
+                        ],
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "operator_required_variables": {
+                        "description": "Required variables operators marked, sorted. Never shares a name with contract_required_variables.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "overrode": {
+                        "$ref": "#/components/schemas/handlers.SeedOverride"
+                    },
+                    "plain_text_content": {
+                        "type": "string"
+                    },
+                    "published_version_id": {
+                        "type": "string"
+                    },
+                    "react_email_content": {
+                        "type": "string"
+                    },
+                    "seed_refusal": {
+                        "$ref": "#/components/schemas/handlers.SeedRefusal"
+                    },
+                    "subject": {
+                        "type": "string"
+                    },
+                    "system": {
+                        "type": "boolean"
+                    },
+                    "updated_at": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.SendAudience": {
+                "properties": {
+                    "kind": {
+                        "enum": [
+                            "mailing_list",
+                            "single"
+                        ],
+                        "type": "string"
+                    },
+                    "mail_list_id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "recipient_email": {
+                        "type": "string"
+                    },
+                    "recipient_full_name": {
+                        "type": "string"
+                    },
+                    "source": {
+                        "enum": [
+                            "internal",
+                            "keycloak"
+                        ],
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.SendCounts": {
+                "properties": {
+                    "failed": {
+                        "type": "integer"
+                    },
+                    "sending": {
+                        "type": "integer"
+                    },
+                    "sent": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.SendStatus": {
+                "enum": [
+                    "failed",
+                    "sending",
+                    "sent"
+                ],
+                "type": "string",
+                "x-enum-varnames": [
+                    "SendStatusFailed",
+                    "SendStatusSending",
+                    "SendStatusSent"
+                ]
+            },
+            "handlers.SendSummary": {
+                "properties": {
+                    "daily_sent": {
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.DailySent"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "queue_counts": {
+                        "$ref": "#/components/schemas/handlers.QueueCounts"
+                    },
+                    "recent_sends": {
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.MailTaskItem"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "send_counts": {
+                        "$ref": "#/components/schemas/handlers.SendCounts"
+                    },
+                    "time_zone": {
+                        "example": "Europe/Istanbul",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.Template": {
+                "properties": {
+                    "archived_at": {
+                        "type": "string"
+                    },
+                    "archived_by": {
+                        "type": "string"
+                    },
+                    "contract_required_variables": {
+                        "description": "Required variables from the sending service's contract, sorted by name, each with why the mail needs it. Written only by the Template seed; locked in the panel.",
+                        "items": {
+                            "$ref": "#/components/schemas/database.ContractVariable"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "drafts": {
+                        "description": "Each operator's draft in progress, newest first: the newest version an operator wrote of the template, while it is neither published nor discarded. An operator's earlier drafts are superseded and not listed. A draft whose base_version_id is not published_version_id is stale: a newer version was published after it was started, and publishing it takes force.",
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.TemplateVersionSummary"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "html_content": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "key": {
+                        "type": "string"
+                    },
+                    "main_mode": {
+                        "description": "The Authoring mode of the Main source the template sends: its published version's. Null for a template with no published version.",
+                        "enum": [
+                            "jsx",
+                            "visual",
+                            "html"
+                        ],
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "operator_required_variables": {
+                        "description": "Required variables operators marked, sorted. Never shares a name with contract_required_variables.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "plain_text_content": {
+                        "type": "string"
+                    },
+                    "published_version_id": {
+                        "type": "string"
+                    },
+                    "react_email_content": {
+                        "type": "string"
+                    },
+                    "seed_refusal": {
+                        "$ref": "#/components/schemas/handlers.SeedRefusal"
+                    },
+                    "subject": {
+                        "type": "string"
+                    },
+                    "system": {
+                        "type": "boolean"
+                    },
+                    "updated_at": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.TemplateVersion": {
+                "properties": {
+                    "author": {
+                        "$ref": "#/components/schemas/database.VersionAuthor"
+                    },
+                    "base_version_id": {
+                        "description": "The published version a draft started from; null for a template's first version.",
+                        "type": "string"
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "current": {
+                        "description": "Whether this is the published version the template sends.",
+                        "type": "boolean"
+                    },
+                    "discarded": {
+                        "description": "Whether an operator gave this draft up: it stays in the history and can be restored, but it is nobody's draft in progress and is never published.",
+                        "type": "boolean"
+                    },
+                    "html_content": {
+                        "description": "The Main source rendered as HTML, as the browser or the Template seed rendered it.",
+                        "type": "string"
+                    },
+                    "html_source": {
+                        "description": "The HTML source; null when the version has none.",
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "jsx_source": {
+                        "description": "The JSX source, React Email code; null when the version has none.",
+                        "type": "string"
+                    },
+                    "main_mode": {
+                        "description": "The Authoring mode whose source is the Main source: its render is what the version sends.",
+                        "enum": [
+                            "jsx",
+                            "visual",
+                            "html"
+                        ],
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "The template's name in this version; publishing it names the template so. Versions written before names were kept carry the name the template had then.",
+                        "type": "string"
+                    },
+                    "plain_text_content": {
+                        "description": "The Main source rendered as plain text.",
+                        "type": "string"
+                    },
+                    "published_at": {
+                        "description": "When the version was published; null for a draft.",
+                        "type": "string"
+                    },
+                    "requested_subject": {
+                        "description": "The subject the Template seed sent for its version. A seed writes it, so it is the subject; a seed version written before the seed's conflict rule may differ, having kept the subject an operator gave the template. Null on an operator's version and on the first versions, made from templates written before versions were kept.",
+                        "type": "string"
+                    },
+                    "seq": {
+                        "description": "1, 2, 3… within the template, in the order versions were written.",
+                        "type": "integer"
+                    },
+                    "subject": {
+                        "type": "string"
+                    },
+                    "template_id": {
+                        "type": "string"
+                    },
+                    "visual_source": {
+                        "description": "The Visual source, the block editor's document; null when the version has none.",
+                        "type": "object"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.TemplateVersionSummary": {
+                "description": "The version the template sent before the seed; null when it had none.",
+                "properties": {
+                    "author": {
+                        "$ref": "#/components/schemas/database.VersionAuthor"
+                    },
+                    "base_version_id": {
+                        "description": "The published version a draft started from; null for a template's first version.",
+                        "type": "string"
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "current": {
+                        "description": "Whether this is the published version the template sends.",
+                        "type": "boolean"
+                    },
+                    "discarded": {
+                        "description": "Whether an operator gave this draft up: it stays in the history and can be restored, but it is nobody's draft in progress and is never published.",
+                        "type": "boolean"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "main_mode": {
+                        "description": "The Authoring mode whose source is the Main source: its render is what the version sends.",
+                        "enum": [
+                            "jsx",
+                            "visual",
+                            "html"
+                        ],
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "The template's name in this version; publishing it names the template so. Versions written before names were kept carry the name the template had then.",
+                        "type": "string"
+                    },
+                    "published_at": {
+                        "description": "When the version was published; null for a draft.",
+                        "type": "string"
+                    },
+                    "requested_subject": {
+                        "description": "The subject the Template seed sent for its version. A seed writes it, so it is the subject; a seed version written before the seed's conflict rule may differ, having kept the subject an operator gave the template. Null on an operator's version and on the first versions, made from templates written before versions were kept.",
+                        "type": "string"
+                    },
+                    "seq": {
+                        "description": "1, 2, 3… within the template, in the order versions were written.",
+                        "type": "integer"
+                    },
+                    "subject": {
+                        "type": "string"
+                    },
+                    "template_id": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "requests.AddRecipient": {
                 "properties": {
                     "email": {
@@ -266,6 +1020,53 @@
                 "required": [
                     "email",
                     "full_name"
+                ],
+                "type": "object"
+            },
+            "requests.AddRequiredVariable": {
+                "properties": {
+                    "name": {
+                        "description": "The variable, as the body reaches it with .Name.",
+                        "example": "EventUrl",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "name"
+                ],
+                "type": "object"
+            },
+            "requests.ApproveMailApproval": {
+                "properties": {
+                    "body_variables": {
+                        "additionalProperties": {},
+                        "description": "The variables as the approver edited them, whole. Leave them out to send the request as it stands.",
+                        "type": "object"
+                    },
+                    "note": {
+                        "description": "A word for the submitter, mailed with the decision.",
+                        "maxLength": 2000,
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "requests.ContractVariable": {
+                "properties": {
+                    "name": {
+                        "description": "The variable, as the body reaches it with .Name.",
+                        "example": "link",
+                        "type": "string"
+                    },
+                    "reason": {
+                        "description": "Why the mail cannot do without it, in a sentence an operator reads.",
+                        "example": "Parola sıfırlama bağlantısı; kaldırılırsa mail işe yaramaz.",
+                        "maxLength": 300,
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "name"
                 ],
                 "type": "object"
             },
@@ -304,6 +1105,9 @@
                     "html_content": {
                         "type": "string"
                     },
+                    "key": {
+                        "type": "string"
+                    },
                     "name": {
                         "type": "string"
                     },
@@ -326,6 +1130,118 @@
                 ],
                 "type": "object"
             },
+            "requests.DeclineMailApproval": {
+                "properties": {
+                    "note": {
+                        "description": "A word for the record: why the edit was not taken.",
+                        "maxLength": 2000,
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "requests.PublishOver": {
+                "description": "Publish a stale draft anyway, replacing the version named. Left out: a stale draft is refused.",
+                "properties": {
+                    "over_version_id": {
+                        "description": "The published_version_id of the template.stale_base conflict: the version the operator saw and chose to replace. If another has been published since, the publish is refused again, naming it. The replaced version stays in the history.",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "over_version_id"
+                ],
+                "type": "object"
+            },
+            "requests.PublishTemplateVersion": {
+                "properties": {
+                    "force": {
+                        "$ref": "#/components/schemas/requests.PublishOver"
+                    }
+                },
+                "type": "object"
+            },
+            "requests.RejectMailApproval": {
+                "properties": {
+                    "reason": {
+                        "maxLength": 2000,
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "reason"
+                ],
+                "type": "object"
+            },
+            "requests.ReturnMailApproval": {
+                "properties": {
+                    "body_variables": {
+                        "additionalProperties": {},
+                        "description": "The variables as the approver edited them, whole. They must differ from the request's.",
+                        "type": "object"
+                    },
+                    "note": {
+                        "description": "A word for the submitter, mailed with the decision.",
+                        "maxLength": 2000,
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "body_variables"
+                ],
+                "type": "object"
+            },
+            "requests.SaveTemplateDraft": {
+                "properties": {
+                    "base_version_id": {
+                        "description": "The published version the draft started from: the template's published_version_id when the editor opened it. Null only for a template that has no published version.",
+                        "type": "string"
+                    },
+                    "html_content": {
+                        "description": "The Main source rendered as HTML, with its Go template actions intact for the mailer to fill per send.",
+                        "type": "string"
+                    },
+                    "html_source": {
+                        "description": "The HTML source. Left out or null: kept as it is.",
+                        "type": "string"
+                    },
+                    "jsx_source": {
+                        "description": "The JSX source, React Email code. Left out or null: kept as it is.",
+                        "type": "string"
+                    },
+                    "main_mode": {
+                        "description": "The Authoring mode whose source is the Main source: html_content and plain_text_content are its render.",
+                        "enum": [
+                            "jsx",
+                            "visual",
+                            "html"
+                        ],
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "The template's name in this version: publishing the draft renames the template. Left out or null: kept from the version the save continues.",
+                        "type": "string"
+                    },
+                    "plain_text_content": {
+                        "description": "The Main source rendered as plain text.",
+                        "type": "string"
+                    },
+                    "subject": {
+                        "type": "string"
+                    },
+                    "visual_source": {
+                        "description": "The Visual source, the block editor's document: a JSON object. Left out or null: kept as it is.",
+                        "type": "object"
+                    }
+                },
+                "required": [
+                    "html_content",
+                    "main_mode",
+                    "plain_text_content",
+                    "subject"
+                ],
+                "type": "object"
+            },
             "requests.SendSingleMail": {
                 "properties": {
                     "body_variables": {
@@ -340,10 +1256,38 @@
                     },
                     "template_id": {
                         "type": "string"
+                    },
+                    "template_key": {
+                        "type": "string"
                     }
                 },
                 "required": [
-                    "recipient_email",
+                    "recipient_email"
+                ],
+                "type": "object"
+            },
+            "requests.SubmitMailApproval": {
+                "properties": {
+                    "body_variables": {
+                        "additionalProperties": {},
+                        "type": "object"
+                    },
+                    "mail_list_id": {
+                        "description": "An internal mailing list or a Keycloak group. Leave it out to send to one recipient.",
+                        "type": "string"
+                    },
+                    "recipient_email": {
+                        "description": "The one recipient. Leave it out to send to a mailing list.",
+                        "type": "string"
+                    },
+                    "recipient_full_name": {
+                        "type": "string"
+                    },
+                    "template_id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
                     "template_id"
                 ],
                 "type": "object"
@@ -364,6 +1308,9 @@
                     "html_content": {
                         "type": "string"
                     },
+                    "key": {
+                        "type": "string"
+                    },
                     "name": {
                         "type": "string"
                     },
@@ -375,6 +1322,46 @@
                     },
                     "subject": {
                         "type": "string"
+                    }
+                },
+                "required": [
+                    "html_content",
+                    "name",
+                    "plain_text_content",
+                    "react_email_content",
+                    "subject"
+                ],
+                "type": "object"
+            },
+            "requests.UpsertTemplateByKey": {
+                "properties": {
+                    "contract_required_variables": {
+                        "description": "The Required variables the sending service's contract declares, which the body must keep referencing, each with why the mail needs it. An entry may also be the name alone, as a string; its reason is then null. They replace the template's contract set; a name among them leaves the operators' set. Leave the field out (or null) to keep the set the template has; send [] to clear it.",
+                        "items": {
+                            "$ref": "#/components/schemas/requests.ContractVariable"
+                        },
+                        "maxItems": 50,
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "html_content": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "plain_text_content": {
+                        "type": "string"
+                    },
+                    "react_email_content": {
+                        "description": "The template's JSX source: its .tsx file in the repo as it is, of which html_content and plain_text_content are the render. It becomes the version's JSX Main source, which the panel's JSX mode opens. Text with nothing but comments in it — the pointer comment the seed sent before it sent the source — is no source: html_content is then the HTML Main source.",
+                        "type": "string"
+                    },
+                    "subject": {
+                        "type": "string"
+                    },
+                    "system": {
+                        "type": "boolean"
                     }
                 },
                 "required": [
@@ -403,10 +1390,34 @@
         "url": ""
     },
     "paths": {
-        "/mail_tasks": {
+        "/mail_approvals": {
             "get": {
-                "description": "Get a list of all mail tasks with pagination.",
+                "description": "An approver (skymail:mails:approve) lists everyone's requests, or only their own with mine=true; anyone else lists only their own. Newest submission first; X-Total-Count counts the filtered requests. A request undecided past its deadline is listed, and filtered, as expired; listing writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.",
                 "parameters": [
+                    {
+                        "description": "Only requests in this state",
+                        "in": "query",
+                        "name": "state",
+                        "schema": {
+                            "enum": [
+                                "pending",
+                                "returned",
+                                "approved",
+                                "rejected",
+                                "declined",
+                                "expired"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Only the caller's own requests",
+                        "in": "query",
+                        "name": "mine",
+                        "schema": {
+                            "type": "boolean"
+                        }
+                    },
                     {
                         "description": "Start index",
                         "in": "query",
@@ -430,13 +1441,885 @@
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/database.GetAllMailTasksRow"
+                                        "$ref": "#/components/schemas/handlers.MailApprovalItem"
                                     },
                                     "type": "array"
                                 }
                             }
                         },
+                        "description": "OK",
+                        "headers": {
+                            "X-Total-Count": {
+                                "description": "Number of requests matching the filter",
+                                "schema": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error: an unknown state"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "List requests for approval",
+                "tags": [
+                    "Mail approval"
+                ]
+            },
+            "post": {
+                "description": "Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or one recipient (as POST /mail_tasks/single takes them), never both — and nothing is sent until someone holding skymail:mails:approve approves it. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values. It waits seven days; undecided by then, it expires and is never sent.\n\nEvery approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.SubmitMailApproval",
+                                        "summary": "send",
+                                        "description": "The send"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The send",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
+                        "description": "The request, pending, with notification"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error: no template_id, a malformed address, or not exactly one of mail_list_id and recipient_email (params.errors)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.template_unavailable, mail_approval.audience_unavailable, mail_approval.required_variables_missing (params.missing: [{name, source, reason}]) or mail_approval.unrenderable (params.error)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Submit a send for approval",
+                "tags": [
+                    "Mail approval"
+                ]
+            }
+        },
+        "/mail_approvals/{id}": {
+            "get": {
+                "description": "A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.",
+                "parameters": [
+                    {
+                        "description": "Request ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
                         "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such request, or not the caller's to see"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Read a request for approval",
+                "tags": [
+                    "Mail approval"
+                ]
+            }
+        },
+        "/mail_approvals/{id}/accept": {
+            "post": {
+                "description": "The submitter accepts the edit an approver returned, and the request is sent as edited, exactly as an approval sends it — locked, once, of the pinned template version.",
+                "parameters": [
+                    {
+                        "description": "Request ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
+                        "description": "The request, approved, with its task_id"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.not_submitter"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such request, or not the caller's to see"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.state_conflict, mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished, mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Accept an approver's edit and send it",
+                "tags": [
+                    "Mail approval"
+                ]
+            }
+        },
+        "/mail_approvals/{id}/approve": {
+            "post": {
+                "description": "An approver approves a pending request — their own too, which its history then shows — and it is queued through the send path at once, sent by its submitter: without body_variables exactly as it stands, with them as the approver edited them — the edit is recorded (an edited event naming each variable changed, before and after) and told to the submitter. The send is of the template version the request is pinned to, to its audience as it is now. Approving is idempotent and race-safe: the request is locked while it is sent, someone else acting on it at that moment is refused (409 mail_approval.busy), and approving an approved request again without an edit sends nothing and answers it as it is.\n\nThe submitter is mailed the mail.approval-resolved System template with Decision \"approved\". A request past its deadline is expired instead (409 mail_approval.expired) and its submitter told.",
+                "parameters": [
+                    {
+                        "description": "Request ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.ApproveMailApproval",
+                                        "summary": "approval",
+                                        "description": "An edit and a note, both optional"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "An edit and a note, both optional"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
+                        "description": "The request, approved, with its task_id and notification"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not an approver"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such request"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.state_conflict (params.state, params.allowed), mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished (params.submitted_version_id, params.published_version_id), mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The edit leaves a Required variable empty (mail_approval.required_variables_missing) or does not render (mail_approval.unrenderable)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Approve a request and send it",
+                "tags": [
+                    "Mail approval"
+                ]
+            }
+        },
+        "/mail_approvals/{id}/decline": {
+            "post": {
+                "description": "The submitter refuses the edit an approver returned. Nothing is sent; the submitter may edit and resubmit the request.",
+                "parameters": [
+                    {
+                        "description": "Request ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.DeclineMailApproval",
+                                        "summary": "decline",
+                                        "description": "A note"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "A note"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
+                        "description": "The request, declined"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.not_submitter"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such request, or not the caller's to see"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.state_conflict, mail_approval.expired or mail_approval.busy"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Decline an approver's edit",
+                "tags": [
+                    "Mail approval"
+                ]
+            }
+        },
+        "/mail_approvals/{id}/reject": {
+            "post": {
+                "description": "An approver refuses a pending request, with a reason. Nothing is sent. The submitter is mailed the mail.approval-resolved System template with Decision \"rejected\" and the reason as DecisionNote, and may edit and resubmit the request; the rejection stays in its history.",
+                "parameters": [
+                    {
+                        "description": "Request ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.RejectMailApproval",
+                                        "summary": "rejection",
+                                        "description": "The reason"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The reason",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
+                        "description": "The request, rejected, with notification"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error: no reason, or a blank one"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not an approver"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such request"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.state_conflict, mail_approval.expired or mail_approval.busy"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Reject a request",
+                "tags": [
+                    "Mail approval"
+                ]
+            }
+        },
+        "/mail_approvals/{id}/resubmit": {
+            "post": {
+                "description": "The submitter fills a rejected request, or one whose returned edit they declined, in again — whole, as a submission is — and it is pending again with a new seven-day deadline, pinned to the version its template publishes now. It is checked as a submission is. It stays the same request: a resubmitted event records what changed, and everything before it stays in the history. Every approver is mailed mail.approval-requested again.",
+                "parameters": [
+                    {
+                        "description": "Request ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.SubmitMailApproval",
+                                        "summary": "send",
+                                        "description": "The send"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The send",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
+                        "description": "The request, pending, with notification"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.not_submitter"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such request, or not the caller's to see"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.state_conflict or mail_approval.busy"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.template_unavailable, mail_approval.audience_unavailable, mail_approval.required_variables_missing or mail_approval.unrenderable"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Resubmit a rejected or declined request",
+                "tags": [
+                    "Mail approval"
+                ]
+            }
+        },
+        "/mail_approvals/{id}/return": {
+            "post": {
+                "description": "An approver edits a pending request and hands it back: the edit is recorded (an edited event naming each variable changed, before and after), the request is returned with a new seven-day deadline — the decision is the submitter's now — and the submitter is mailed the mail.approval-resolved System template with Decision \"returned\" and the deadline. Nothing is sent. The submitter accepts it — and it goes out as edited — or declines it. body_variables is the whole edit and must differ from the request's.",
+                "parameters": [
+                    {
+                        "description": "Request ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.ReturnMailApproval",
+                                        "summary": "edit",
+                                        "description": "The edit and a note"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The edit and a note",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
+                        "description": "The request, returned, with notification"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not an approver"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such request"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.state_conflict, mail_approval.expired or mail_approval.busy"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_approval.no_edit, mail_approval.required_variables_missing or mail_approval.unrenderable"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Return an edited request to its submitter",
+                "tags": [
+                    "Mail approval"
+                ]
+            }
+        },
+        "/mail_tasks": {
+            "get": {
+                "description": "Get a list of all mail tasks with pagination, newest first, each with its derived status, recipients by status and audience. The status filter keeps only sends with that derived status; X-Total-Count counts the filtered sends. Keycloak group names are looked up within 2 seconds for the whole page and are null past that.",
+                "parameters": [
+                    {
+                        "description": "Start index",
+                        "in": "query",
+                        "name": "_start",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "End index",
+                        "in": "query",
+                        "name": "_end",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "Derived send status: failed (a recipient failed, or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent)",
+                        "in": "query",
+                        "name": "status",
+                        "schema": {
+                            "enum": [
+                                "failed",
+                                "sending",
+                                "sent"
+                            ],
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "items": {
+                                        "$ref": "#/components/schemas/handlers.MailTaskItem"
+                                    },
+                                    "type": "array"
+                                }
+                            }
+                        },
+                        "description": "OK",
+                        "headers": {
+                            "X-Total-Count": {
+                                "description": "Number of sends matching the filter",
+                                "schema": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
                     },
                     "500": {
                         "content": {
@@ -575,9 +2458,80 @@
                 ]
             }
         },
+        "/mail_tasks/summary": {
+            "get": {
+                "description": "Queue rows (one per recipient) by status; sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).",
+                "parameters": [
+                    {
+                        "description": "Days in the daily series, ending today in Europe/Istanbul (1-90)",
+                        "in": "query",
+                        "name": "days",
+                        "schema": {
+                            "default": 30,
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "Latest sends to list, newest first (1-20)",
+                        "in": "query",
+                        "name": "recent",
+                        "schema": {
+                            "default": 5,
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.SendSummary"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Summarise mail sends",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
         "/mail_tasks/{id}": {
             "get": {
-                "description": "Get details of a specific mail task by its ID.",
+                "description": "Get details of a specific mail task by its ID, with its derived status, recipients by status and audience, as the send list shows it.",
                 "parameters": [
                     {
                         "description": "Task ID",
@@ -594,7 +2548,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/database.GetMailTaskByIdRow"
+                                    "$ref": "#/components/schemas/handlers.MailTaskItem"
                                 }
                             }
                         },
@@ -609,6 +2563,16 @@
                             }
                         },
                         "description": "Bad Request"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
                     },
                     "404": {
                         "content": {
@@ -639,7 +2603,7 @@
         },
         "/mail_tasks/{id}/queue": {
             "get": {
-                "description": "Get a list of mail queue items associated with a specific task ID, with pagination.",
+                "description": "Get a send's recipients, one queue row each, newest first with the row id breaking ties so pages neither repeat nor skip a recipient. The status filter keeps only recipients in that queue status; X-Total-Count counts the filtered recipients.",
                 "parameters": [
                     {
                         "description": "Task ID",
@@ -665,6 +2629,20 @@
                         "schema": {
                             "type": "integer"
                         }
+                    },
+                    {
+                        "description": "Recipient queue status",
+                        "in": "query",
+                        "name": "status",
+                        "schema": {
+                            "enum": [
+                                "pending",
+                                "processing",
+                                "sent",
+                                "failed"
+                            ],
+                            "type": "string"
+                        }
                     }
                 ],
                 "responses": {
@@ -673,13 +2651,21 @@
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/database.MailQueue"
+                                        "$ref": "#/components/schemas/database.GetMailQueueItemsByTaskIdRow"
                                     },
                                     "type": "array"
                                 }
                             }
                         },
-                        "description": "OK"
+                        "description": "OK",
+                        "headers": {
+                            "X-Total-Count": {
+                                "description": "Number of recipients matching the filter",
+                                "schema": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
                     },
                     "400": {
                         "content": {
@@ -690,6 +2676,16 @@
                             }
                         },
                         "description": "Bad Request"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
                     },
                     "500": {
                         "content": {
@@ -1326,7 +3322,7 @@
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/database.Template"
+                                        "$ref": "#/components/schemas/handlers.Template"
                                     },
                                     "type": "array"
                                 }
@@ -1361,7 +3357,7 @@
                 ]
             },
             "post": {
-                "description": "Create a new email template with the provided name, HTML content, and plain text content.",
+                "description": "Create a new email template with the provided name, HTML content, and plain text content. Records the content as the template's first version: an operator's, published at once. The subject, plain text and HTML content must parse as Go templates the way the mailer parses them.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -1387,7 +3383,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/database.Template"
+                                    "$ref": "#/components/schemas/handlers.Template"
                                 }
                             }
                         },
@@ -1403,6 +3399,16 @@
                         },
                         "description": "Bad Request"
                     },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The subject, plain text or HTML content does not parse (template.unparseable, params.part)"
+                    },
                     "500": {
                         "content": {
                             "application/json": {
@@ -1415,6 +3421,146 @@
                     }
                 },
                 "summary": "Create a new email template",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/by-key/{key}": {
+            "get": {
+                "description": "Get a template by its stable key (for example keycloak.verify-email).",
+                "parameters": [
+                    {
+                        "description": "Template key",
+                        "in": "path",
+                        "name": "key",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.Template"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    }
+                },
+                "summary": "Get an email template by key",
+                "tags": [
+                    "Templates"
+                ]
+            },
+            "put": {
+                "description": "The Template seed's path: creates the template when the key is new and replaces its content — the subject included — when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once; react_email_content holding a JSX source (anything but whitespace and comments, so not the seed's old pointer comment) makes it the version's JSX Main source, and otherwise the HTML content is the HTML Main source. Writes the contract Required variables when sent, and keeps them when not. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.\n\nNeither the seed nor an operator silently overwrites the other (ADR-0047). A template an operator changed since the last seed is refused with 409 template.seed_conflict and nothing is written, when any of these holds (params.rules lists each that does): published_by_operator — the version the template sends is not the last Template seed version; newer_operator_version — an operator wrote a version after the last seed version, a draft included and a discarded draft not; operator_subject — the subject sent is an operator's that the seed would overwrite: neither the one the last seed version asked for nor the one asked for now (for a template whose last seed version is the migration's first one, which does not know what the seed asked for: the seed asks for a subject other than the one sent). The refusal is kept on the template as seed_refusal until a seed goes through. A seed that would leave the template as its published version already is overwrites nothing and is never refused. force=true writes over the operator's change anyway, as a published Template seed version; their versions stay in the history and can be restored, and the answer names what was overridden in overrode (left out when nothing was).",
+                "parameters": [
+                    {
+                        "description": "Template key",
+                        "in": "path",
+                        "name": "key",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Write even over an operator's change since the last seed",
+                        "in": "query",
+                        "name": "force",
+                        "schema": {
+                            "type": "boolean"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.UpsertTemplateByKey",
+                                        "summary": "template",
+                                        "description": "Template details"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "Template details",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.SeededTemplate"
+                                }
+                            }
+                        },
+                        "description": "The template; forced over an operator's change, also what it overrode"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request (validation.error, force included)"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "template.seed_conflict: an operator changed the template since the last seed; params: key, template_id, rules, published_version, last_seed_version, operator_versions (each a version summary, as the history serves it), subject (sent now) and requested_subject (the seed's)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Create or replace a template addressed by key",
                 "tags": [
                     "Templates"
                 ]
@@ -1492,7 +3638,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/database.Template"
+                                    "$ref": "#/components/schemas/handlers.Template"
                                 }
                             }
                         },
@@ -1535,7 +3681,7 @@
                 ]
             },
             "patch": {
-                "description": "Update an existing email template with the provided ID and details.",
+                "description": "Update an existing email template with the provided ID and details. Records the content the template ends up with as an operator's version, published at once. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable of the template, or nothing is written.",
                 "parameters": [
                     {
                         "description": "Template ID",
@@ -1572,7 +3718,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/database.Template"
+                                    "$ref": "#/components/schemas/handlers.Template"
                                 }
                             }
                         },
@@ -1598,6 +3744,16 @@
                         },
                         "description": "Not Found"
                     },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
+                    },
                     "500": {
                         "content": {
                             "application/json": {
@@ -1610,6 +3766,311 @@
                     }
                 },
                 "summary": "Update an email template",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/{id}/drafts": {
+            "post": {
+                "description": "Records an operator's draft of a Mail template: a version that is sent to nobody until it is published. The template row, which is what is sent, does not change. Changing which source is the Main source is a save too: send the new main_mode and the render its source gives.\n\nThe editor renders the Main source; the server stores the render it is given. It checks what it can without rendering: the fields are there and not blank, the Main source's Authoring mode holds a source, the base is a published version of this template, a Visual source is a JSON object, a JSX source has code in it, and — as every write of a version is checked, by requiredvars — the subject, plain text and HTML parse as the mailer's Go templates (422 template.unparseable, params.part naming subject, plain_text or html) and the HTML references every Required variable of the template as it stands now (422 template.required_variables_missing, params.missing: [{name, source, reason}]). An archived template is not found.\n\nEach save is a new version; an operator's newest version, while unpublished, is their draft in progress. A save continues it when it started from the same base, or else starts from the base. Sources left out, or null, are kept from the version the save continues, so a save never drops a source; so is the name, and a name sent renames the template when the draft is published. A save that changes nothing records nothing and answers 200 with the version it continues.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.SaveTemplateDraft",
+                                        "summary": "draft",
+                                        "description": "The draft"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The draft",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.TemplateVersion"
+                                }
+                            }
+                        },
+                        "description": "Nothing changed: the version the save would have repeated"
+                    },
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.TemplateVersion"
+                                }
+                            }
+                        },
+                        "description": "The draft, written"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error (params.errors, sorted by field), template.invalid_base or template.main_source_missing"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found: no such template, or it is archived"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "template.unparseable: params.part (subject, plain_text or html) does not parse, params.error is the parser's message; or template.required_variables_missing: params.missing names each Required variable the HTML drops, with its source (contract or operator) and reason"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Save a draft of a template",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/{id}/required-variables": {
+            "post": {
+                "description": "Adds a variable to the template's operator Required variables: from then on every save and publish must keep referencing it. The published body must reference it already — a Required variable is a promise about the mail being sent — counted as the save check counts (inside a conditional section counts; a comment, plain text, a range or with element's field, or index . do not). A variable the contract set holds is required already and stays the contract's; asking for one, or for one operators marked, changes nothing. Changes no version.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.AddRequiredVariable",
+                                        "summary": "variable",
+                                        "description": "The variable to require"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The variable to require",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.Template"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The name is not a variable name (validation.error)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such template in use: unknown or archived"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The published body does not reference the variable (template.required_variables_missing) or does not parse (template.unparseable, params.part \"html\")"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Mark a variable of a template required",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/{id}/required-variables/{name}": {
+            "delete": {
+                "description": "Removes a variable from the template's operator Required variables. A contract variable — the sending service's, written by the Template seed — cannot be released here. Releasing a variable that is not required changes nothing. Changes no version.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Variable name",
+                        "in": "path",
+                        "name": "name",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.Template"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The name is not a variable name (template.invalid_variable_name)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such template in use: unknown or archived"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The variable is in the contract set (template.required_variable_in_contract, params.name)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Release a variable operators marked required",
                 "tags": [
                     "Templates"
                 ]
@@ -1634,7 +4095,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/database.Template"
+                                    "$ref": "#/components/schemas/handlers.Template"
                                 }
                             }
                         },
@@ -1666,6 +4127,482 @@
                     "Templates"
                 ]
             }
+        },
+        "/templates/{id}/versions": {
+            "get": {
+                "description": "A Mail template's version history, newest first: who wrote each version (an operator, by the name their token carried, or a Template seed), when, whether it is published or a draft (published_at null), which Authoring mode is its Main source, the published version it started from, and which version the template sends (current). Sources and render are left out; read one version for them. An archived template's history stays readable.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Start index",
+                        "in": "query",
+                        "name": "_start",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "End index",
+                        "in": "query",
+                        "name": "_end",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "Which versions: published ones, drafts (discarded ones included, flagged), or all",
+                        "in": "query",
+                        "name": "state",
+                        "schema": {
+                            "default": "all",
+                            "enum": [
+                                "published",
+                                "draft",
+                                "all"
+                            ],
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "items": {
+                                        "$ref": "#/components/schemas/handlers.TemplateVersionSummary"
+                                    },
+                                    "type": "array"
+                                }
+                            }
+                        },
+                        "description": "OK",
+                        "headers": {
+                            "X-Total-Count": {
+                                "description": "Number of versions the template has in that state",
+                                "schema": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error: an unknown state"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "List a template's versions",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/{id}/versions/{versionId}": {
+            "get": {
+                "description": "One Mail template version whole: its sources (at most one per Authoring mode, null where it has none), which is the Main source, and the Main source's render as HTML and plain text. A version of another template is not found.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Version ID",
+                        "in": "path",
+                        "name": "versionId",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.TemplateVersion"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Read one version of a template",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/{id}/versions/{versionId}/discard": {
+            "post": {
+                "description": "Gives up a draft: it stays in the history, readable and restorable, but it is nobody's draft in progress any more — it leaves the template's drafts, and the next save starts from the published version — and it is never published. Any operator with the write role can discard any draft. Discarding a discarded draft changes nothing and answers the same way. Answers with the version as discarding left it.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Version ID of the draft",
+                        "in": "path",
+                        "name": "versionId",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.TemplateVersion"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found: no such template or version, or the template is archived"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "template.not_a_draft: the version is published"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Discard a draft",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/{id}/versions/{versionId}/publish": {
+            "post": {
+                "description": "Makes a draft the version the template sends: the draft is marked published and copied onto the template row — name, subject, HTML and plain text, and react_email_content: the JSX source when JSX is the Main source, an empty string otherwise, so the old panel never re-renders a JSX source that is not what is sent — in one transaction. Answers with the template as publishing left it. Publishing the version the template already sends changes nothing and answers the same way. The draft is checked again as it was when saved, against the template's Required variables as they stand at publishing.\n\nA draft is stale when its base_version_id is not the template's published_version_id: someone published after it was started, and publishing it would quietly revert their version. That is refused with 409 template.stale_base, whose params name version_id (the draft), base_version_id (what it started from) and published_version_id (what is sent now), so both can be shown side by side. The operator's confirmation names the version they saw: {\"force\": {\"over_version_id\": \u003cpublished_version_id from the conflict\u003e}} publishes the draft over it, and the replaced version stays in the history. If another version was published since, the confirmation is refused with a fresh 409 naming it.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Version ID of the draft",
+                        "in": "path",
+                        "name": "versionId",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.PublishTemplateVersion",
+                                        "summary": "publish",
+                                        "description": "The version a stale draft is published over"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The version a stale draft is published over"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.Template"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found: no such template or version, or the template is archived"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "template.stale_base, template.not_a_draft or template.draft_discarded"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "template.unparseable (params.part: subject, plain_text or html), or template.required_variables_missing: the draft drops a Required variable the template has now, a variable marked since it was saved included (params.missing: [{name, source, reason}])"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Publish a draft",
+                "tags": [
+                    "Templates"
+                ]
+            }
+        },
+        "/templates/{id}/versions/{versionId}/restore": {
+            "post": {
+                "description": "Copies any version of the template — its subject, sources, Main source and render — into a new draft by the caller, started from the version published now. Nothing that is sent changes; the draft is published like any other. Another operator's draft can be restored too. When the copy would repeat the version it continues — the caller's draft in progress on the published version, or else the published version — nothing is recorded and that version is answered with 200.",
+                "parameters": [
+                    {
+                        "description": "Template ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Version ID",
+                        "in": "path",
+                        "name": "versionId",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.TemplateVersion"
+                                }
+                            }
+                        },
+                        "description": "Nothing changed: the version the copy would have repeated"
+                    },
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.TemplateVersion"
+                                }
+                            }
+                        },
+                        "description": "The draft, written"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found: no such template or version, or the template is archived"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "template.unparseable: the copy would not parse; or template.required_variables_missing: it drops a Required variable the template has now (params.missing: [{name, source, reason}]) — checked as a saved draft is"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Restore a version as a draft",
+                "tags": [
+                    "Templates"
+                ]
+            }
         }
     },
     "openapi": "3.1.0",
@@ -1677,6 +4614,10 @@
         {
             "description": "Mailing list and recipient management operations",
             "name": "Lists"
+        },
+        {
+            "description": "Mail onayı: sends submitted by members without send permission, held until an approver decides them",
+            "name": "Mail approval"
         }
     ],
     "servers": [
