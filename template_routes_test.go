@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/bytedance/sonic"
 	"github.com/gofiber/fiber/v3"
+	"github.com/google/uuid"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
@@ -19,8 +21,8 @@ import (
 )
 
 // templateRoutesApp serves the template routes as production registers them —
-// the real permission middleware, handler, validator, JSON codec, error
-// handler and database — with only Keycloak's token check replaced by the
+// the real permission middleware, handler, error handler, body validator,
+// JSON codec and database — with only Keycloak's token check replaced by the
 // roles under test. It returns a template with one version to ask about.
 func templateRoutesApp(t *testing.T, roles ...string) (*fiber.App, database.Template) {
 	t.Helper()
@@ -122,14 +124,12 @@ func TestTemplateVersionRoutesAnswerInTheAPIsErrorShape(t *testing.T) {
 	}
 }
 
-func sendRoute(t *testing.T, app *fiber.App, method, path string, body any) (int, []byte) {
+// sendJSON sends a JSON body to the app and reads the answer.
+func sendJSON(t *testing.T, app *fiber.App, method, path string, body any) (int, []byte) {
 	t.Helper()
-	var payload []byte
-	if body != nil {
-		var err error
-		if payload, err = json.Marshal(body); err != nil {
-			t.Fatal(err)
-		}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
 	}
 	request := httptest.NewRequest(method, path, bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/json")
@@ -137,11 +137,140 @@ func sendRoute(t *testing.T, app *fiber.App, method, path string, body any) (int
 	if err != nil {
 		t.Fatal(err)
 	}
-	var raw bytes.Buffer
-	if _, err := raw.ReadFrom(response.Body); err != nil {
+	raw, _ := io.ReadAll(response.Body)
+	return response.StatusCode, raw
+}
+
+// Saving a draft, publishing, restoring a version and discarding a draft are
+// template writes: they take skymail:templates:write, as every other template
+// write does, and no other role stands in for it.
+func TestTemplateDraftWritesRequireTemplatesWrite(t *testing.T) {
+	type check struct {
+		name         string
+		status, want int
+	}
+	for _, tc := range []struct {
+		roles   []string
+		allowed bool
+	}{
+		{[]string{"skymail:access"}, false},
+		{[]string{"skymail:access", "skymail:templates:read"}, false},
+		{[]string{"skymail:access", "skymail:templates:read", "skymail:mails:write", "skymail:mails:send", "skymail:lists:write"}, false},
+		{[]string{"skymail:access", "skymail:templates:write"}, true},
+	} {
+		app, template := templateRoutesApp(t, tc.roles...)
+		versions := "/v1/templates/" + template.ID.String() + "/versions/"
+		versionOf := func(status int, body []byte) handlers.TemplateVersion {
+			t.Helper()
+			var version handlers.TemplateVersion
+			if status == fiber.StatusCreated {
+				if err := json.Unmarshal(body, &version); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return version
+		}
+
+		var checks []check
+		status, body := sendJSON(t, app, fiber.MethodPost, "/v1/templates/"+template.ID.String()+"/drafts", map[string]any{
+			"subject": "Taslak", "main_mode": "html", "html_source": "<p>Taslak</p>",
+			"html_content": "<p>Taslak</p>", "plain_text_content": "Taslak", "base_version_id": template.PublishedVersionID,
+		})
+		draft := versionOf(status, body)
+		checks = append(checks, check{"save a draft", status, fiber.StatusCreated})
+		status, _ = sendJSON(t, app, fiber.MethodPost, versions+draft.ID.String()+"/publish", nil)
+		checks = append(checks, check{"publish", status, fiber.StatusOK})
+		status, body = sendJSON(t, app, fiber.MethodPost, versions+template.PublishedVersionID.String()+"/restore", nil)
+		restored := versionOf(status, body)
+		checks = append(checks, check{"restore", status, fiber.StatusCreated})
+		status, _ = sendJSON(t, app, fiber.MethodPost, versions+restored.ID.String()+"/discard", nil)
+		checks = append(checks, check{"discard", status, fiber.StatusOK})
+
+		for _, c := range checks {
+			want := c.want
+			if !tc.allowed {
+				want = fiber.StatusForbidden
+			}
+			if c.status != want {
+				t.Errorf("roles %v: %s = %d, want %d", tc.roles, c.name, c.status, want)
+			}
+		}
+	}
+}
+
+// The draft routes refuse in the API's error shape, through the error
+// handler production uses: a stale publish names the versions involved, an
+// archived template is not found, and an invalid body names its fields.
+func TestTemplateDraftRefusalsAnswerInTheAPIsErrorShape(t *testing.T) {
+	app, template := templateRoutesApp(t, "skymail:access", "skymail:templates:read", "skymail:templates:write")
+	id := template.ID.String()
+	type apiError struct {
+		Code    string         `json:"code"`
+		Message string         `json:"message"`
+		Params  map[string]any `json:"params"`
+	}
+	decode := func(body []byte) apiError {
+		t.Helper()
+		var e apiError
+		if err := json.Unmarshal(body, &e); err != nil {
+			t.Fatalf("%s: %v", body, err)
+		}
+		return e
+	}
+
+	status, body := sendJSON(t, app, fiber.MethodPost, "/v1/templates/"+id+"/drafts", map[string]any{
+		"subject": "", "main_mode": "html", "html_content": "<p>x</p>", "plain_text_content": "x",
+	})
+	if e := decode(body); status != fiber.StatusBadRequest || e.Code != "validation.error" || e.Params["errors"] == nil {
+		t.Errorf("a draft with no subject = %d %s, want 400 validation.error listing the field", status, body)
+	}
+
+	status, body = sendJSON(t, app, fiber.MethodPost, "/v1/templates/"+id+"/drafts", map[string]any{
+		"subject": "Taslak", "main_mode": "html", "html_source": "<p>Taslak</p>",
+		"html_content": "<p>Taslak</p>", "plain_text_content": "Taslak", "base_version_id": template.PublishedVersionID,
+	})
+	if status != fiber.StatusCreated {
+		t.Fatalf("save = %d %s", status, body)
+	}
+	var draft handlers.TemplateVersion
+	if err := json.Unmarshal(body, &draft); err != nil {
 		t.Fatal(err)
 	}
-	return response.StatusCode, raw.Bytes()
+	status, body = sendJSON(t, app, fiber.MethodPatch, "/v1/templates/"+id, map[string]any{
+		"name": template.Name, "subject": "Eski panelden", "html_content": "<p>Eski panelden</p>",
+		"plain_text_content": "Eski panelden", "react_email_content": "{}",
+	})
+	if status != fiber.StatusOK {
+		t.Fatalf("old panel edit = %d %s", status, body)
+	}
+	var edited struct {
+		PublishedVersionID string `json:"published_version_id"`
+	}
+	if err := json.Unmarshal(body, &edited); err != nil {
+		t.Fatal(err)
+	}
+
+	status, body = sendJSON(t, app, fiber.MethodPost, "/v1/templates/"+id+"/versions/"+draft.ID.String()+"/publish", nil)
+	if e := decode(body); status != fiber.StatusConflict || e.Code != "template.stale_base" ||
+		e.Params["version_id"] != draft.ID.String() || e.Params["base_version_id"] != template.PublishedVersionID.String() ||
+		e.Params["published_version_id"] != edited.PublishedVersionID {
+		t.Errorf("stale publish = %d %s, want 409 template.stale_base naming the draft, its base and %s", status, body, edited.PublishedVersionID)
+	}
+
+	if status, body := sendJSON(t, app, fiber.MethodDelete, "/v1/templates/"+id, nil); status != fiber.StatusNoContent {
+		t.Fatalf("archive = %d %s", status, body)
+	}
+	status, body = sendJSON(t, app, fiber.MethodPost, "/v1/templates/"+id+"/versions/"+draft.ID.String()+"/publish", map[string]any{"force": map[string]any{"over_version_id": edited.PublishedVersionID}})
+	if e := decode(body); status != fiber.StatusNotFound || e.Code != "server.not_found" {
+		t.Errorf("publishing on an archived template = %d %s, want 404 server.not_found", status, body)
+	}
+
+	status, body = sendJSON(t, app, fiber.MethodPost, "/v1/templates/"+uuid.NewString()+"/drafts", map[string]any{
+		"subject": "Taslak", "main_mode": "html", "html_source": "<p>Taslak</p>", "html_content": "<p>Taslak</p>", "plain_text_content": "Taslak",
+	})
+	if e := decode(body); status != fiber.StatusNotFound || e.Code != "server.not_found" {
+		t.Errorf("a draft of an unknown template = %d %s, want 404 server.not_found", status, body)
+	}
 }
 
 // The operator's Required variables are changed with the role every other
@@ -158,10 +287,10 @@ func TestRequiredVariableRoutesRequireTemplatesWrite(t *testing.T) {
 		app, template := templateRoutesApp(t, tc.roles...)
 		path := "/v1/templates/" + template.ID.String() + "/required-variables"
 
-		if status, body := sendRoute(t, app, fiber.MethodPost, path, map[string]any{"name": "FullName"}); status != tc.want {
+		if status, body := sendJSON(t, app, fiber.MethodPost, path, map[string]any{"name": "FullName"}); status != tc.want {
 			t.Errorf("roles %v: POST = %d %s, want %d", tc.roles, status, body, tc.want)
 		}
-		if status, body := sendRoute(t, app, fiber.MethodDelete, path+"/FullName", nil); status != tc.want {
+		if status, body := sendJSON(t, app, fiber.MethodDelete, path+"/FullName", nil); status != tc.want {
 			t.Errorf("roles %v: DELETE = %d %s, want %d", tc.roles, status, body, tc.want)
 		}
 	}
@@ -210,7 +339,7 @@ func TestMalformedRequiredVariableNamesAreRefused(t *testing.T) {
 			"contract_required_variables": []any{map[string]any{"name": "link", "reason": strings.Repeat("uzun ", 61)}},
 		}, "max_length", "contract_required_variables[0].reason"},
 	} {
-		status, body := sendRoute(t, app, tc.method, tc.path, tc.body)
+		status, body := sendJSON(t, app, tc.method, tc.path, tc.body)
 		e := read(body)
 		if status != fiber.StatusBadRequest || e.Code != "validation.error" || len(e.Params.Errors) != 1 ||
 			e.Params.Errors[0].Code != tc.code || e.Params.Errors[0].Field != tc.field {
@@ -218,7 +347,7 @@ func TestMalformedRequiredVariableNamesAreRefused(t *testing.T) {
 		}
 	}
 
-	status, body := sendRoute(t, app, fiber.MethodDelete, path+"/not-a-name", nil)
+	status, body := sendJSON(t, app, fiber.MethodDelete, path+"/not-a-name", nil)
 	if e := read(body); status != fiber.StatusBadRequest || e.Code != "template.invalid_variable_name" {
 		t.Errorf("DELETE not-a-name = %d %s, want 400 template.invalid_variable_name", status, body)
 	}
@@ -229,7 +358,7 @@ func TestMalformedRequiredVariableNamesAreRefused(t *testing.T) {
 func TestTheSeedSendsContractVariablesWithOrWithoutReasons(t *testing.T) {
 	app, _ := templateRoutesApp(t, "skymail:access", "skymail:templates:write", "skymail:templates:read")
 
-	status, body := sendRoute(t, app, fiber.MethodPut, "/v1/templates/by-key/keycloak.reset-password", map[string]any{
+	status, body := sendJSON(t, app, fiber.MethodPut, "/v1/templates/by-key/keycloak.reset-password", map[string]any{
 		"name": "Parola", "subject": "Parola", "html_content": `<a href="{{.link}}">{{.firstName}}</a>`, "plain_text_content": "{{.link}}",
 		"react_email_content": "// kaynak", "system": true,
 		"contract_required_variables": []any{"firstName", map[string]any{"name": "link", "reason": "Parola sıfırlama bağlantısı."}},

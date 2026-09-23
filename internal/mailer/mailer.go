@@ -219,6 +219,35 @@ type mailTemplates struct {
 	html    *htmlt.Template
 }
 
+// MailPart is one of the three parts of a Mail template a send parses.
+type MailPart string
+
+const (
+	PartSubject   MailPart = "subject"
+	PartPlainText MailPart = "plain text"
+	PartHTML      MailPart = "html"
+)
+
+// ParseError is a part of a Mail template that does not parse.
+type ParseError struct {
+	Part MailPart
+	Err  error
+}
+
+func (e *ParseError) Error() string {
+	return fmt.Sprintf("invalid %s template: %v", e.Part, e.Err)
+}
+
+func (e *ParseError) Unwrap() error { return e.Err }
+
+// CheckTemplate parses a Mail template's subject, plain text and HTML the way
+// a send parses them, and returns a *ParseError for the first part that does
+// not parse: a template stored like that would fail every send of it.
+func CheckTemplate(subject, plainText, html string) error {
+	_, err := parseMailTemplates(subject, plainText, html)
+	return err
+}
+
 // parseMailTemplates parses all three parts or returns the first failure,
 // naming the part that failed. Returning is the whole point: a Parse error
 // hands back a nil template, so a part whose error is merely logged reaches
@@ -227,15 +256,15 @@ type mailTemplates struct {
 func parseMailTemplates(subject, plainText, html string) (mailTemplates, error) {
 	subjectTemplate, err := parseSubject(subject)
 	if err != nil {
-		return mailTemplates{}, fmt.Errorf("invalid subject template: %w", err)
+		return mailTemplates{}, &ParseError{Part: PartSubject, Err: err}
 	}
 	textTemplate, err := textt.New("text").Funcs(mailFuncs).Parse(plainText)
 	if err != nil {
-		return mailTemplates{}, fmt.Errorf("invalid plain text template: %w", err)
+		return mailTemplates{}, &ParseError{Part: PartPlainText, Err: err}
 	}
 	htmlTemplate, err := htmlt.New("html").Funcs(mailFuncs).Parse(html)
 	if err != nil {
-		return mailTemplates{}, fmt.Errorf("invalid html template: %w", err)
+		return mailTemplates{}, &ParseError{Part: PartHTML, Err: err}
 	}
 	return mailTemplates{subject: subjectTemplate, text: textTemplate, html: htmlTemplate}, nil
 }

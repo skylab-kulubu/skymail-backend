@@ -19,7 +19,7 @@ import (
 //	@Produce		json
 //	@Param			id			path		string							true	"Template ID"
 //	@Param			variable	body		requests.AddRequiredVariable	true	"The variable to require"
-//	@Success		200			{object}	database.Template
+//	@Success		200			{object}	handlers.Template
 //	@Failure		400			{object}	apperrors.AppError	"The name is not a variable name (validation.error)"
 //	@Failure		403			{object}	apperrors.AppError	"Forbidden"
 //	@Failure		404			{object}	apperrors.AppError	"No such template in use: unknown or archived"
@@ -48,7 +48,7 @@ func (h *templateHandlerImpl) AddRequiredVariable(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(template)
+	return h.sendTemplate(c, fiber.StatusOK, template)
 }
 
 // RemoveRequiredVariable godoc
@@ -59,7 +59,7 @@ func (h *templateHandlerImpl) AddRequiredVariable(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			id		path		string	true	"Template ID"
 //	@Param			name	path		string	true	"Variable name"
-//	@Success		200		{object}	database.Template
+//	@Success		200		{object}	handlers.Template
 //	@Failure		400		{object}	apperrors.AppError	"The name is not a variable name (template.invalid_variable_name)"
 //	@Failure		403		{object}	apperrors.AppError	"Forbidden"
 //	@Failure		404		{object}	apperrors.AppError	"No such template in use: unknown or archived"
@@ -91,5 +91,5 @@ func (h *templateHandlerImpl) RemoveRequiredVariable(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(template)
+	return h.sendTemplate(c, fiber.StatusOK, template)
 }

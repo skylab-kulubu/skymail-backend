@@ -21,7 +21,6 @@ func requiredVariablesApp(t *testing.T, db *database.Store) *fiber.App {
 	t.Helper()
 	app := templateVersionsApp(t, db)
 	templates := NewTemplateHandler(db)
-	app.Post("/templates/:id/restore", templates.RestoreTemplate)
 	app.Post("/templates/:id/required-variables", templates.AddRequiredVariable)
 	app.Delete("/templates/:id/required-variables/:name", templates.RemoveRequiredVariable)
 	return app
@@ -54,9 +53,9 @@ func refusalOf(t *testing.T, body []byte) refusal {
 	return r
 }
 
-// servedTemplate is a template as its routes serve it, read field by field
+// requiredTemplate is a template as its routes serve it, read field by field
 // the way the panel reads it.
-type servedTemplate struct {
+type requiredTemplate struct {
 	ID                uuid.UUID `json:"id"`
 	Name              string    `json:"name"`
 	Subject           string    `json:"subject"`
@@ -72,10 +71,10 @@ type contractVariable struct {
 	Reason *string `json:"reason"`
 }
 
-func templateOf(t *testing.T, body []byte) servedTemplate {
+func templateOf(t *testing.T, body []byte) requiredTemplate {
 	t.Helper()
 	assertTemplateShape(t, body)
-	var template servedTemplate
+	var template requiredTemplate
 	if err := json.Unmarshal(body, &template); err != nil {
 		t.Fatalf("template %s: %v", body, err)
 	}
@@ -83,7 +82,7 @@ func templateOf(t *testing.T, body []byte) servedTemplate {
 }
 
 // readTemplate is the template as GET /templates/:id serves it now.
-func readTemplate(t *testing.T, app *fiber.App, id uuid.UUID) servedTemplate {
+func readTemplate(t *testing.T, app *fiber.App, id uuid.UUID) requiredTemplate {
 	t.Helper()
 	response, body := sendJSON(t, app, fiber.MethodGet, "/templates/"+id.String(), nil)
 	if response.StatusCode != fiber.StatusOK {
@@ -92,7 +91,7 @@ func readTemplate(t *testing.T, app *fiber.App, id uuid.UUID) servedTemplate {
 	return templateOf(t, body)
 }
 
-func assertSets(t *testing.T, template servedTemplate, contract, operator []string) {
+func assertSets(t *testing.T, template requiredTemplate, contract, operator []string) {
 	t.Helper()
 	names := make([]string, 0, len(template.Contract))
 	for _, variable := range template.Contract {
@@ -513,7 +512,8 @@ func TestAPartTheMailerCannotParseIsRefused(t *testing.T) {
 	payload["subject"] = "{{.realmDisplayName} parola sıfırlama"
 	response, body := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/keycloak.reset-password", payload)
 	assertUnparseable(t, response.StatusCode, body, "subject")
-	if _, err := db.GetTemplateByKey(context.Background(), ptr("keycloak.reset-password")); err == nil {
+	key := "keycloak.reset-password"
+	if _, err := db.GetTemplateByKey(context.Background(), &key); err == nil {
 		t.Fatal("a refused seed created its template")
 	}
 }
@@ -543,8 +543,6 @@ func TestRequiredVariablesOfAnArchivedOrUnknownTemplate(t *testing.T) {
 		}
 	}
 }
-
-func ptr(s string) *string { return &s }
 
 // collatedHandlerStore is lifecycleHandlerStore on a database whose text order
 // is en-US's, as a glibc or ICU database's is — link before Link before
@@ -582,7 +580,7 @@ func TestRequiredVariablesAreKeptInOneOrder(t *testing.T) {
 	app := requiredVariablesApp(t, db)
 
 	body := `<a href="{{.link}}">{{.Link}}</a> {{.VerifyURL}} {{.a}} {{.B}}`
-	seed := func(contract any) servedTemplate {
+	seed := func(contract any) requiredTemplate {
 		t.Helper()
 		response, raw := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/core.certificate", map[string]any{
 			"name": "Sertifika", "subject": "Sertifikan", "html_content": body, "plain_text_content": "Sertifikan",
