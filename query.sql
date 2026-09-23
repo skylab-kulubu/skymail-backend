@@ -925,7 +925,7 @@ RETURNING *;
 -- version the template publishes now, and its list's name when the list is an
 -- internal one (a Keycloak group's is Keycloak's to give).
 -- name: GetMailApproval :one
-SELECT a.*,
+SELECT sqlc.embed(a),
        t.name                             AS template_name,
        t.key                              AS template_key,
        t.published_version_id             AS template_published_version_id,
@@ -942,7 +942,7 @@ WHERE a.id = $1;
 -- state it is in as of as_of: one undecided past its deadline is expired,
 -- whether or not the sweep has written it yet.
 -- name: ListMailApprovals :many
-SELECT a.*,
+SELECT sqlc.embed(a),
        t.name                             AS template_name,
        t.key                              AS template_key,
        t.published_version_id             AS template_published_version_id,

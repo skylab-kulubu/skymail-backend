@@ -95,7 +95,7 @@ func main() {
 		Plain:     cfg.SMTPPlain,
 	})
 
-	authMiddleware := middlewares.NewAuthMiddleware("skymail", cfg.KeycloakRealmURL)
+	authMiddleware := middlewares.NewAuthMiddleware(cfg.KeycloakClientID, cfg.KeycloakRealmURL)
 	gateConfig, err := accessgate.ConfigFromEnv(config.Value, cfg.KeycloakRealmURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid account access gate configuration")
@@ -122,7 +122,7 @@ func main() {
 	listHandler := handlers.NewListHandler(db, kcClient)
 	mailHandler := handlers.NewMailHandler(db, mailerService, kcClient)
 	approvalHandler := handlers.NewMailApprovalHandler(db, mailerService, kcClient, handlers.MailApprovalOptions{
-		ClientID: "skymail",
+		ClientID: cfg.KeycloakClientID,
 		UIURL:    config.Value("SKYMAIL_UI_URL"),
 	})
 

@@ -1083,29 +1083,13 @@ WHERE a.id = $1
 `
 
 type GetMailApprovalRow struct {
-	ID                         uuid.UUID         `json:"id"`
-	SubmitterSub               string            `json:"submitter_sub"`
-	SubmitterName              *string           `json:"submitter_name"`
-	SubmitterEmail             *string           `json:"submitter_email"`
-	SubmitterEmailUnverified   bool              `json:"submitter_email_unverified"`
-	State                      MailApprovalState `json:"state"`
-	TemplateID                 uuid.UUID         `json:"template_id"`
-	TemplateVersionID          uuid.UUID         `json:"template_version_id"`
-	MailListID                 *uuid.UUID        `json:"mail_list_id"`
-	RecipientEmail             *string           `json:"recipient_email"`
-	RecipientFullName          *string           `json:"recipient_full_name"`
-	BodyVariables              []byte            `json:"body_variables"`
-	CreatedAt                  time.Time         `json:"created_at"`
-	SubmittedAt                time.Time         `json:"submitted_at"`
-	DeadlineAt                 time.Time         `json:"deadline_at"`
-	UpdatedAt                  time.Time         `json:"updated_at"`
-	TaskID                     *uuid.UUID        `json:"task_id"`
-	TemplateName               string            `json:"template_name"`
-	TemplateKey                *string           `json:"template_key"`
-	TemplatePublishedVersionID *uuid.UUID        `json:"template_published_version_id"`
-	TemplateArchived           bool              `json:"template_archived"`
-	MailListName               *string           `json:"mail_list_name"`
-	InternalMailList           bool              `json:"internal_mail_list"`
+	MailApproval               MailApproval `json:"mail_approval"`
+	TemplateName               string       `json:"template_name"`
+	TemplateKey                *string      `json:"template_key"`
+	TemplatePublishedVersionID *uuid.UUID   `json:"template_published_version_id"`
+	TemplateArchived           bool         `json:"template_archived"`
+	MailListName               *string      `json:"mail_list_name"`
+	InternalMailList           bool         `json:"internal_mail_list"`
 }
 
 // A request as every screen shows it: with its template's name and key, the
@@ -1115,23 +1099,23 @@ func (q *Queries) GetMailApproval(ctx context.Context, id uuid.UUID) (GetMailApp
 	row := q.db.QueryRow(ctx, getMailApproval, id)
 	var i GetMailApprovalRow
 	err := row.Scan(
-		&i.ID,
-		&i.SubmitterSub,
-		&i.SubmitterName,
-		&i.SubmitterEmail,
-		&i.SubmitterEmailUnverified,
-		&i.State,
-		&i.TemplateID,
-		&i.TemplateVersionID,
-		&i.MailListID,
-		&i.RecipientEmail,
-		&i.RecipientFullName,
-		&i.BodyVariables,
-		&i.CreatedAt,
-		&i.SubmittedAt,
-		&i.DeadlineAt,
-		&i.UpdatedAt,
-		&i.TaskID,
+		&i.MailApproval.ID,
+		&i.MailApproval.SubmitterSub,
+		&i.MailApproval.SubmitterName,
+		&i.MailApproval.SubmitterEmail,
+		&i.MailApproval.SubmitterEmailUnverified,
+		&i.MailApproval.State,
+		&i.MailApproval.TemplateID,
+		&i.MailApproval.TemplateVersionID,
+		&i.MailApproval.MailListID,
+		&i.MailApproval.RecipientEmail,
+		&i.MailApproval.RecipientFullName,
+		&i.MailApproval.BodyVariables,
+		&i.MailApproval.CreatedAt,
+		&i.MailApproval.SubmittedAt,
+		&i.MailApproval.DeadlineAt,
+		&i.MailApproval.UpdatedAt,
+		&i.MailApproval.TaskID,
 		&i.TemplateName,
 		&i.TemplateKey,
 		&i.TemplatePublishedVersionID,
@@ -1764,29 +1748,13 @@ type ListMailApprovalsParams struct {
 }
 
 type ListMailApprovalsRow struct {
-	ID                         uuid.UUID         `json:"id"`
-	SubmitterSub               string            `json:"submitter_sub"`
-	SubmitterName              *string           `json:"submitter_name"`
-	SubmitterEmail             *string           `json:"submitter_email"`
-	SubmitterEmailUnverified   bool              `json:"submitter_email_unverified"`
-	State                      MailApprovalState `json:"state"`
-	TemplateID                 uuid.UUID         `json:"template_id"`
-	TemplateVersionID          uuid.UUID         `json:"template_version_id"`
-	MailListID                 *uuid.UUID        `json:"mail_list_id"`
-	RecipientEmail             *string           `json:"recipient_email"`
-	RecipientFullName          *string           `json:"recipient_full_name"`
-	BodyVariables              []byte            `json:"body_variables"`
-	CreatedAt                  time.Time         `json:"created_at"`
-	SubmittedAt                time.Time         `json:"submitted_at"`
-	DeadlineAt                 time.Time         `json:"deadline_at"`
-	UpdatedAt                  time.Time         `json:"updated_at"`
-	TaskID                     *uuid.UUID        `json:"task_id"`
-	TemplateName               string            `json:"template_name"`
-	TemplateKey                *string           `json:"template_key"`
-	TemplatePublishedVersionID *uuid.UUID        `json:"template_published_version_id"`
-	TemplateArchived           bool              `json:"template_archived"`
-	MailListName               *string           `json:"mail_list_name"`
-	InternalMailList           bool              `json:"internal_mail_list"`
+	MailApproval               MailApproval `json:"mail_approval"`
+	TemplateName               string       `json:"template_name"`
+	TemplateKey                *string      `json:"template_key"`
+	TemplatePublishedVersionID *uuid.UUID   `json:"template_published_version_id"`
+	TemplateArchived           bool         `json:"template_archived"`
+	MailListName               *string      `json:"mail_list_name"`
+	InternalMailList           bool         `json:"internal_mail_list"`
 }
 
 // Requests newest submission first, the id breaking ties. A NULL submitter
@@ -1809,23 +1777,23 @@ func (q *Queries) ListMailApprovals(ctx context.Context, arg ListMailApprovalsPa
 	for rows.Next() {
 		var i ListMailApprovalsRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.SubmitterSub,
-			&i.SubmitterName,
-			&i.SubmitterEmail,
-			&i.SubmitterEmailUnverified,
-			&i.State,
-			&i.TemplateID,
-			&i.TemplateVersionID,
-			&i.MailListID,
-			&i.RecipientEmail,
-			&i.RecipientFullName,
-			&i.BodyVariables,
-			&i.CreatedAt,
-			&i.SubmittedAt,
-			&i.DeadlineAt,
-			&i.UpdatedAt,
-			&i.TaskID,
+			&i.MailApproval.ID,
+			&i.MailApproval.SubmitterSub,
+			&i.MailApproval.SubmitterName,
+			&i.MailApproval.SubmitterEmail,
+			&i.MailApproval.SubmitterEmailUnverified,
+			&i.MailApproval.State,
+			&i.MailApproval.TemplateID,
+			&i.MailApproval.TemplateVersionID,
+			&i.MailApproval.MailListID,
+			&i.MailApproval.RecipientEmail,
+			&i.MailApproval.RecipientFullName,
+			&i.MailApproval.BodyVariables,
+			&i.MailApproval.CreatedAt,
+			&i.MailApproval.SubmittedAt,
+			&i.MailApproval.DeadlineAt,
+			&i.MailApproval.UpdatedAt,
+			&i.MailApproval.TaskID,
 			&i.TemplateName,
 			&i.TemplateKey,
 			&i.TemplatePublishedVersionID,

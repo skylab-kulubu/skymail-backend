@@ -88,9 +88,9 @@ func (notice approvalNotice) decisionNote(view database.GetMailApprovalRow) stri
 	case decisionReturned:
 		return withNote("Onaycı şunları değiştirip gönderimi onayına geri gönderdi: "+changedVariables(notice.changes)+
 			". Kabul edersen bu hâliyle gider; etmezsen düzenleyip yeniden sunabilirsin. "+
-			mailTime(view.DeadlineAt)+" tarihine kadar karar vermezsen talebin süresi dolar.", notice.note)
+			mailTime(view.MailApproval.DeadlineAt)+" tarihine kadar karar vermezsen talebin süresi dolar.", notice.note)
 	case decisionExpired:
-		return "Talebe " + mailTime(view.DeadlineAt) + " tarihine kadar karar verilmediği için süresi doldu; gönderim yapılmadı ve yapılmayacak."
+		return "Talebe " + mailTime(view.MailApproval.DeadlineAt) + " tarihine kadar karar verilmediği için süresi doldu; gönderim yapılmadı ve yapılmayacak."
 	}
 	return strings.TrimSpace(notice.note)
 }
@@ -134,9 +134,9 @@ func (h *mailApprovalHandlerImpl) notifyApprovers(ctx context.Context, view data
 	if problem != "" {
 		return &MailApprovalNotification{TemplateKey: approvalRequestedKey, Problem: &problem}
 	}
-	requester := deref(view.SubmitterName)
+	requester := deref(view.MailApproval.SubmitterName)
 	if requester == "" {
-		requester = deref(view.SubmitterEmail)
+		requester = deref(view.MailApproval.SubmitterEmail)
 	}
 	count := "?"
 	if n := h.recipientCount(ctx, view); n != nil {
@@ -154,9 +154,9 @@ func (h *mailApprovalHandlerImpl) notifyApprovers(ctx context.Context, view data
 }
 
 func (h *mailApprovalHandlerImpl) notifySubmitter(ctx context.Context, view database.GetMailApprovalRow, notice approvalNotice) *MailApprovalNotification {
-	if deref(view.SubmitterEmail) == "" {
+	if deref(view.MailApproval.SubmitterEmail) == "" {
 		problem := "no_address"
-		if view.SubmitterEmailUnverified {
+		if view.MailApproval.SubmitterEmailUnverified {
 			problem = "unverified_address"
 		}
 		return &MailApprovalNotification{TemplateKey: approvalResolvedKey, Problem: &problem}
@@ -165,21 +165,20 @@ func (h *mailApprovalHandlerImpl) notifySubmitter(ctx context.Context, view data
 	if sender == "" {
 		sender = skymailSender
 	}
-	submitter := []mailer.RecipientInfo{{FullName: deref(view.SubmitterName), Email: *view.SubmitterEmail}}
-	return h.notify(ctx, approvalResolvedKey, sender, submitter, map[string]interface{}{
+	return h.notify(ctx, approvalResolvedKey, sender, []mailer.RecipientInfo{submitterOf(view.MailApproval)}, map[string]interface{}{
 		"TemplateName": view.TemplateName,
 		"AudienceName": h.audienceName(ctx, view),
 		"Decision":     string(notice.decision),
 		"DecidedBy":    notice.decidedBy,
 		"DecisionNote": notice.decisionNote(view),
-		"DeadlineAt":   mailTime(view.DeadlineAt),
+		"DeadlineAt":   mailTime(view.MailApproval.DeadlineAt),
 		"RequestUrl":   h.requestURL(view),
 	})
 }
 
 // requestURL is the request's page in the SkyMail UI.
 func (h *mailApprovalHandlerImpl) requestURL(view database.GetMailApprovalRow) string {
-	return h.uiURL + "/mail-approvals/show/" + view.ID.String()
+	return h.uiURL + "/mail-approvals/show/" + view.MailApproval.ID.String()
 }
 
 // approvers are the holders of MailApproverRole with an address, each once —
@@ -247,17 +246,17 @@ func (h *mailApprovalHandlerImpl) notify(ctx context.Context, key, sentBy string
 // audienceName is who a request goes to, as a notification names it.
 func (h *mailApprovalHandlerImpl) audienceName(ctx context.Context, view database.GetMailApprovalRow) string {
 	switch {
-	case view.MailListID == nil:
-		email := deref(view.RecipientEmail)
-		if name := deref(view.RecipientFullName); name != "" {
+	case view.MailApproval.MailListID == nil:
+		email := deref(view.MailApproval.RecipientEmail)
+		if name := deref(view.MailApproval.RecipientFullName); name != "" {
 			return name + " <" + email + ">"
 		}
 		return email
 	case view.InternalMailList:
 		return deref(view.MailListName)
 	}
-	if name := h.approvalGroupNames(ctx, []database.GetMailApprovalRow{view})[*view.MailListID]; name != nil {
+	if name := h.approvalGroupNames(ctx, []database.GetMailApprovalRow{view})[*view.MailApproval.MailListID]; name != nil {
 		return *name
 	}
-	return "Keycloak grubu " + view.MailListID.String()
+	return "Keycloak grubu " + view.MailApproval.MailListID.String()
 }

@@ -82,6 +82,11 @@ var (
 		"Someone else is acting on this request right now. Reload it and try again.",
 		fiber.StatusConflict,
 	)
+	errApprovalChanged = apperrors.New(
+		"mail_approval.changed",
+		"The request changed while this action was being prepared. Reload it and try again.",
+		fiber.StatusConflict,
+	)
 	errApprovalExpired = apperrors.New(
 		"mail_approval.expired",
 		"The request was undecided for seven days and has expired. It will never be sent.",
@@ -421,7 +426,7 @@ func (h *mailApprovalHandlerImpl) List(c fiber.Ctx) error {
 	ids := make([]uuid.UUID, len(rows))
 	for i, row := range rows {
 		views[i] = database.GetMailApprovalRow(row)
-		ids[i] = row.ID
+		ids[i] = row.MailApproval.ID
 	}
 	lastEvents, err := h.db.ListLastMailApprovalEvents(c.Context(), ids)
 	if err != nil {
@@ -436,7 +441,7 @@ func (h *mailApprovalHandlerImpl) List(c fiber.Ctx) error {
 	items := make([]MailApprovalItem, len(views))
 	for i, view := range views {
 		var lastEvent *MailApprovalEvent
-		if event, ok := last[view.ID]; ok {
+		if event, ok := last[view.MailApproval.ID]; ok {
 			lastEvent = &event
 		}
 		items[i] = approvalItem(view, names, lastEvent, now)
@@ -470,7 +475,7 @@ func (h *mailApprovalHandlerImpl) Get(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if !caller.approver && view.SubmitterSub != caller.sub {
+	if !caller.approver && view.MailApproval.SubmitterSub != caller.sub {
 		return apperrors.ErrStatusNotFound
 	}
 	answer, err := h.approval(c.Context(), view)
@@ -495,7 +500,7 @@ func (h *mailApprovalHandlerImpl) Get(c fiber.Ctx) error {
 //	@Failure		400			{object}	apperrors.AppError				"validation.error"
 //	@Failure		403			{object}	apperrors.AppError				"Not an approver"
 //	@Failure		404			{object}	apperrors.AppError				"No such request"
-//	@Failure		409			{object}	apperrors.AppError				"mail_approval.state_conflict (params.state, params.allowed), mail_approval.expired, mail_approval.busy, mail_approval.template_republished (params.submitted_version_id, params.published_version_id), mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
+//	@Failure		409			{object}	apperrors.AppError				"mail_approval.state_conflict (params.state, params.allowed), mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished (params.submitted_version_id, params.published_version_id), mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
 //	@Failure		422			{object}	apperrors.AppError				"The edit leaves a Required variable empty (mail_approval.required_variables_missing) or does not render (mail_approval.unrenderable)"
 //	@Failure		500			{object}	apperrors.AppError				"Internal Server Error"
 //	@Router			/mail_approvals/{id}/approve [post]
@@ -627,7 +632,7 @@ func (h *mailApprovalHandlerImpl) Reject(c fiber.Ctx) error {
 //	@Success		200	{object}	handlers.MailApproval	"The request, approved, with its task_id"
 //	@Failure		403	{object}	apperrors.AppError		"mail_approval.not_submitter"
 //	@Failure		404	{object}	apperrors.AppError		"No such request, or not the caller's to see"
-//	@Failure		409	{object}	apperrors.AppError		"mail_approval.state_conflict, mail_approval.expired, mail_approval.busy, mail_approval.template_republished, mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
+//	@Failure		409	{object}	apperrors.AppError		"mail_approval.state_conflict, mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished, mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
 //	@Failure		500	{object}	apperrors.AppError		"Internal Server Error"
 //	@Router			/mail_approvals/{id}/accept [post]
 func (h *mailApprovalHandlerImpl) Accept(c fiber.Ctx) error {
@@ -710,9 +715,8 @@ func (h *mailApprovalHandlerImpl) Resubmit(c fiber.Ctx) error {
 	return h.act(c, approvalAction{
 		by:   bySubmitter,
 		from: []database.MailApprovalState{database.MailApprovalStateRejected, database.MailApprovalStateDeclined},
-		prepare: func(ctx context.Context, view database.GetMailApprovalRow, caller approvalCaller) (approvalPrepared, error) {
-			checked, err := h.checkSend(ctx, send, caller.recipient())
-			return approvalPrepared{checked: checked}, err
+		check: func(ctx context.Context, view database.GetMailApprovalRow, caller approvalCaller) (checkedSend, error) {
+			return h.checkSend(ctx, send, caller.recipient())
 		},
 		do: func(ctx context.Context, q *database.Queries, a database.MailApproval, caller approvalCaller, prepared approvalPrepared) (approvalNotice, error) {
 			return h.resubmit(ctx, q, a, caller, send, prepared.checked)

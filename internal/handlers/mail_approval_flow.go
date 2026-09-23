@@ -144,6 +144,7 @@ func (s approvalSend) renderedFor(submitter mailer.RecipientInfo) mailer.Recipie
 	return submitter
 }
 
+// sendOfApproval is what a request would send, as it now stands.
 func sendOfApproval(a database.MailApproval) approvalSend {
 	return approvalSend{
 		templateID:        a.TemplateID,
@@ -154,6 +155,7 @@ func sendOfApproval(a database.MailApproval) approvalSend {
 	}
 }
 
+// submitterOf is a request's submitter as a mail to them is addressed.
 func submitterOf(a database.MailApproval) mailer.RecipientInfo {
 	return mailer.RecipientInfo{FullName: deref(a.SubmitterName), Email: deref(a.SubmitterEmail)}
 }
@@ -266,7 +268,8 @@ type approvalPrepared struct {
 	groupID *uuid.UUID
 	// The group's members with an address; nil when the group is gone.
 	groupMembers []mailer.RecipientInfo
-	checked      checkedSend
+	// A resubmission's send, as its checks passed it.
+	checked checkedSend
 }
 
 // approvalAction is one action on a request.
@@ -278,8 +281,9 @@ type approvalAction struct {
 	sends bool
 	// repeat says whether the request, locked, is already what the action
 	// would make it, so doing it again changes nothing and answers 200.
-	repeat  func(a database.MailApproval) bool
-	prepare func(ctx context.Context, view database.GetMailApprovalRow, caller approvalCaller) (approvalPrepared, error)
+	repeat func(a database.MailApproval) bool
+	// check checks what the action was given before the lock is taken.
+	check func(ctx context.Context, view database.GetMailApprovalRow, caller approvalCaller) (checkedSend, error)
 	// do takes the action on the request, locked and in a state from allows,
 	// and says whom to tell.
 	do func(ctx context.Context, q *database.Queries, a database.MailApproval, caller approvalCaller, prepared approvalPrepared) (approvalNotice, error)
@@ -305,18 +309,18 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	if err != nil {
 		return err
 	}
-	if err := authorizeApproval(caller, view.SubmitterSub, action.by); err != nil {
+	if err := authorizeApproval(caller, view.MailApproval.SubmitterSub, action.by); err != nil {
 		return err
 	}
 	var prepared approvalPrepared
-	if action.sends && view.MailListID != nil && !view.InternalMailList {
-		prepared, err = h.groupRecipients(ctx, *view.MailListID)
+	if action.sends && view.MailApproval.MailListID != nil && !view.InternalMailList {
+		prepared, err = h.groupRecipients(ctx, *view.MailApproval.MailListID)
 		if err != nil {
 			return err
 		}
 	}
-	if action.prepare != nil {
-		if prepared, err = action.prepare(ctx, view, caller); err != nil {
+	if action.check != nil {
+		if prepared.checked, err = action.check(ctx, view, caller); err != nil {
 			return err
 		}
 	}
@@ -354,7 +358,7 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	}
 	notification := h.deliver(ctx, view, notice)
 	if expired {
-		return errApprovalExpired.WithParams(map[string]interface{}{"deadline_at": view.DeadlineAt})
+		return errApprovalExpired.WithParams(map[string]interface{}{"deadline_at": view.MailApproval.DeadlineAt})
 	}
 	answer, err := h.approval(ctx, view)
 	if err != nil {
@@ -413,14 +417,20 @@ func (h *mailApprovalHandlerImpl) groupRecipients(ctx context.Context, groupID u
 	if err != nil {
 		return prepared, err
 	}
-	prepared.groupMembers = []mailer.RecipientInfo{}
-	for _, m := range members {
-		if gocloak.PString(m.Email) == "" {
-			continue
-		}
-		prepared.groupMembers = append(prepared.groupMembers, mailer.RecipientInfo{FullName: userFullName(m), Email: gocloak.PString(m.Email)})
-	}
+	prepared.groupMembers = membersWithAddress(members)
 	return prepared, nil
+}
+
+// membersWithAddress is a Keycloak group's members as a send to it addresses
+// them: those with an e-mail address, each by name.
+func membersWithAddress(members []*gocloak.User) []mailer.RecipientInfo {
+	recipients := []mailer.RecipientInfo{}
+	for _, m := range members {
+		if email := gocloak.PString(m.Email); email != "" {
+			recipients = append(recipients, mailer.RecipientInfo{FullName: userFullName(m), Email: email})
+		}
+	}
+	return recipients
 }
 
 // edit applies an approver's edit of the variables to a request, locked: it
@@ -532,9 +542,10 @@ func (h *mailApprovalHandlerImpl) send(ctx context.Context, q *database.Queries,
 		return uuid.Nil, err
 	}
 
-	// A Keycloak group, whose members were asked for before the lock.
+	// A Keycloak group, whose members were asked for before the lock — unless
+	// the request's audience changed in between.
 	if prepared.groupID == nil || *prepared.groupID != *a.MailListID {
-		return uuid.Nil, errApprovalBusy
+		return uuid.Nil, errApprovalChanged
 	}
 	if prepared.groupMembers == nil {
 		return uuid.Nil, atSend(errApprovalAudienceUnavailable)
@@ -741,7 +752,7 @@ func (h *mailApprovalHandlerImpl) ExpireDue(ctx context.Context) (int, error) {
 
 // approval is a request whole, as reading it answers.
 func (h *mailApprovalHandlerImpl) approval(ctx context.Context, view database.GetMailApprovalRow) (MailApproval, error) {
-	events, err := h.db.ListMailApprovalEvents(ctx, view.ID)
+	events, err := h.db.ListMailApprovalEvents(ctx, view.MailApproval.ID)
 	if err != nil {
 		return MailApproval{}, err
 	}
@@ -759,12 +770,12 @@ func (h *mailApprovalHandlerImpl) approval(ctx context.Context, view database.Ge
 		RecipientCount:   h.recipientCount(ctx, view),
 		History:          history,
 	}
-	version, err := h.db.GetTemplateVersion(ctx, database.GetTemplateVersionParams{TemplateID: view.TemplateID, ID: view.TemplateVersionID})
+	version, err := h.db.GetTemplateVersion(ctx, database.GetTemplateVersionParams{TemplateID: view.MailApproval.TemplateID, ID: view.MailApproval.TemplateVersionID})
 	if err != nil {
 		return MailApproval{}, err
 	}
-	to := viewSend(view).renderedFor(mailer.RecipientInfo{FullName: deref(view.SubmitterName), Email: deref(view.SubmitterEmail)})
-	rendered, err := mailer.Render(version.TemplateVersionSummary.Subject, version.PlainTextContent, version.HtmlContent, view.BodyVariables, to)
+	to := sendOfApproval(view.MailApproval).renderedFor(submitterOf(view.MailApproval))
+	rendered, err := mailer.Render(version.TemplateVersionSummary.Subject, version.PlainTextContent, version.HtmlContent, view.MailApproval.BodyVariables, to)
 	if err != nil {
 		message := err.Error()
 		answer.PreviewError = &message
@@ -779,16 +790,6 @@ func (h *mailApprovalHandlerImpl) approval(ctx context.Context, view database.Ge
 	return answer, nil
 }
 
-func viewSend(view database.GetMailApprovalRow) approvalSend {
-	return approvalSend{
-		templateID:        view.TemplateID,
-		mailListID:        view.MailListID,
-		recipientEmail:    view.RecipientEmail,
-		recipientFullName: view.RecipientFullName,
-		variables:         view.BodyVariables,
-	}
-}
-
 // effectiveState is the state a request is in as of now: one undecided past
 // its deadline is expired, whether or not the sweep has written it yet.
 func effectiveState(state database.MailApprovalState, deadline, now time.Time) database.MailApprovalState {
@@ -800,41 +801,41 @@ func effectiveState(state database.MailApprovalState, deadline, now time.Time) d
 
 func approvalItem(view database.GetMailApprovalRow, groupNames map[uuid.UUID]*string, last *MailApprovalEvent, now time.Time) MailApprovalItem {
 	return MailApprovalItem{
-		ID:    view.ID,
-		State: string(effectiveState(view.State, view.DeadlineAt, now)),
+		ID:    view.MailApproval.ID,
+		State: string(effectiveState(view.MailApproval.State, view.MailApproval.DeadlineAt, now)),
 		Submitter: MailApprovalSubmitter{
-			Sub:   view.SubmitterSub,
-			Name:  view.SubmitterName,
-			Email: view.SubmitterEmail,
+			Sub:   view.MailApproval.SubmitterSub,
+			Name:  view.MailApproval.SubmitterName,
+			Email: view.MailApproval.SubmitterEmail,
 		},
 		Template: MailApprovalTemplate{
-			ID:          view.TemplateID,
-			VersionID:   view.TemplateVersionID,
+			ID:          view.MailApproval.TemplateID,
+			VersionID:   view.MailApproval.TemplateVersionID,
 			Name:        view.TemplateName,
 			Key:         view.TemplateKey,
-			Republished: view.TemplatePublishedVersionID == nil || *view.TemplatePublishedVersionID != view.TemplateVersionID,
+			Republished: view.TemplatePublishedVersionID == nil || *view.TemplatePublishedVersionID != view.MailApproval.TemplateVersionID,
 		},
 		Audience:      approvalAudience(view, groupNames),
-		BodyVariables: view.BodyVariables,
-		CreatedAt:     view.CreatedAt,
-		SubmittedAt:   view.SubmittedAt,
-		DeadlineAt:    view.DeadlineAt,
-		UpdatedAt:     view.UpdatedAt,
-		TaskID:        view.TaskID,
+		BodyVariables: view.MailApproval.BodyVariables,
+		CreatedAt:     view.MailApproval.CreatedAt,
+		SubmittedAt:   view.MailApproval.SubmittedAt,
+		DeadlineAt:    view.MailApproval.DeadlineAt,
+		UpdatedAt:     view.MailApproval.UpdatedAt,
+		TaskID:        view.MailApproval.TaskID,
 		LastEvent:     last,
 	}
 }
 
 func approvalAudience(view database.GetMailApprovalRow, groupNames map[uuid.UUID]*string) SendAudience {
 	switch {
-	case view.MailListID == nil:
-		return SendAudience{Kind: audienceSingle, RecipientFullName: view.RecipientFullName, RecipientEmail: view.RecipientEmail}
+	case view.MailApproval.MailListID == nil:
+		return SendAudience{Kind: audienceSingle, RecipientFullName: view.MailApproval.RecipientFullName, RecipientEmail: view.MailApproval.RecipientEmail}
 	case view.InternalMailList:
 		source := sourceInternal
-		return SendAudience{Kind: audienceMailingList, MailListID: view.MailListID, Name: view.MailListName, Source: &source}
+		return SendAudience{Kind: audienceMailingList, MailListID: view.MailApproval.MailListID, Name: view.MailListName, Source: &source}
 	default:
 		source := sourceKeycloak
-		return SendAudience{Kind: audienceMailingList, MailListID: view.MailListID, Name: groupNames[*view.MailListID], Source: &source}
+		return SendAudience{Kind: audienceMailingList, MailListID: view.MailApproval.MailListID, Name: groupNames[*view.MailApproval.MailListID], Source: &source}
 	}
 }
 
@@ -870,10 +871,10 @@ func (h *mailApprovalHandlerImpl) approvalGroupNames(ctx context.Context, views 
 		if ctx.Err() != nil {
 			break
 		}
-		if view.MailListID == nil || view.InternalMailList {
+		if view.MailApproval.MailListID == nil || view.InternalMailList {
 			continue
 		}
-		id := *view.MailListID
+		id := *view.MailApproval.MailListID
 		if _, done := names[id]; done {
 			continue
 		}
@@ -895,28 +896,24 @@ func (h *mailApprovalHandlerImpl) approvalGroupNames(ctx context.Context, views 
 func (h *mailApprovalHandlerImpl) recipientCount(ctx context.Context, view database.GetMailApprovalRow) *int64 {
 	var count int64
 	switch {
-	case view.MailListID == nil:
+	case view.MailApproval.MailListID == nil:
 		count = 1
 	case view.InternalMailList:
-		n, err := h.db.CountRecipientsByMailingListId(ctx, *view.MailListID)
+		n, err := h.db.CountRecipientsByMailingListId(ctx, *view.MailApproval.MailListID)
 		if err != nil {
-			log.Warn().Err(err).Str("approval_id", view.ID.String()).Msg("could not count an approval request's list")
+			log.Warn().Err(err).Str("approval_id", view.MailApproval.ID.String()).Msg("could not count an approval request's list")
 			return nil
 		}
 		count = n
 	default:
 		ctx, cancel := context.WithTimeout(ctx, approvalKeycloakBudget)
 		defer cancel()
-		members, err := h.kc.GetGroupMembers(ctx, view.MailListID.String())
+		members, err := h.kc.GetGroupMembers(ctx, view.MailApproval.MailListID.String())
 		if err != nil {
-			log.Warn().Err(err).Str("approval_id", view.ID.String()).Msg("could not count an approval request's Keycloak group")
+			log.Warn().Err(err).Str("approval_id", view.MailApproval.ID.String()).Msg("could not count an approval request's Keycloak group")
 			return nil
 		}
-		for _, m := range members {
-			if gocloak.PString(m.Email) != "" {
-				count++
-			}
-		}
+		count = int64(len(membersWithAddress(members)))
 	}
 	return &count
 }
