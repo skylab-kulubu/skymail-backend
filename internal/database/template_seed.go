@@ -29,14 +29,15 @@ const (
 	SeedConflictOperatorSubject SeedConflictRule = "operator_subject"
 )
 
-// SeedConflictError refuses a Template seed that would overwrite an
-// operator's change. Nothing was written.
-type SeedConflictError struct {
+// SeedConflict is how an operator changed a template since the Template seed
+// last wrote it. As an error it refuses a seed, and nothing was written; a
+// forced seed returns it as what it wrote over.
+type SeedConflict struct {
 	TemplateID uuid.UUID
 	Key        string
 	// Every rule that holds, in the order the rules are listed above.
 	Rules []SeedConflictRule
-	// The version the template sends now; nil when it has none.
+	// The version the template sent when the seed came; nil when it had none.
 	PublishedVersion *TemplateVersionSummary
 	// The last version a seed wrote; nil when no seed has.
 	LastSeedVersion *TemplateVersionSummary
@@ -47,7 +48,7 @@ type SeedConflictError struct {
 	Subject, RequestedSubject string
 }
 
-func (e *SeedConflictError) Error() string {
+func (e *SeedConflict) Error() string {
 	return fmt.Sprintf("the Template seed of %s is refused: %v", e.Key, e.Rules)
 }
 
@@ -70,23 +71,24 @@ type TemplateSeed struct {
 // transaction, as PublishTemplateWrite does for the old panel.
 //
 // Unless seed.Force, a template an operator changed since the last seed is
-// not written: that is a *SeedConflictError naming what the operator did, and
-// the refusal is kept on the template (RecordSeedRefusal). A seed that leaves
-// the template as its published version already is — it would record no
-// version — overwrites nothing and is never refused. A seed that goes through
-// clears a refusal kept before it.
-func (s *Store) SeedTemplate(ctx context.Context, seed TemplateSeed, write func(*Queries) (Template, error)) (Template, error) {
-	var seeded Template
-	var refused *SeedConflictError
-	err := pgx.BeginFunc(ctx, s.Conn, func(tx pgx.Tx) error {
+// not written: the error is a *SeedConflict naming what the operator did, and
+// the refusal is kept on the template (RecordSeedRefusal). Forced, the seed is
+// written anyway, and overrode is that *SeedConflict — what it wrote over,
+// with the versions read again as they are after the write. A seed that
+// leaves the template as its published version already is — it would record
+// no version — overwrites nothing: it is never refused and overrides nothing.
+// A seed that goes through clears a refusal kept before it.
+func (s *Store) SeedTemplate(ctx context.Context, seed TemplateSeed, write func(*Queries) (Template, error)) (seeded Template, overrode *SeedConflict, err error) {
+	var refused *SeedConflict
+	err = pgx.BeginFunc(ctx, s.Conn, func(tx pgx.Tx) error {
 		q := s.WithTx(tx)
-		var conflict *SeedConflictError
+		var conflict *SeedConflict
 		existing, err := q.LockTemplateByKey(ctx, &seed.Key)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
 		case err != nil:
 			return err
-		case !seed.Force:
+		default:
 			if conflict, err = seedConflict(ctx, q, existing, seed); err != nil {
 				return err
 			}
@@ -95,15 +97,20 @@ func (s *Store) SeedTemplate(ctx context.Context, seed TemplateSeed, write func(
 		// Whether the seed changes anything a version holds is known once the
 		// row is written — the version is built from the row, as for every
 		// writer — so the write goes in a savepoint, undone when it would
-		// overwrite an operator's change.
+		// overwrite an operator's change unforced.
 		err = pgx.BeginFunc(ctx, tx, func(savepoint pgx.Tx) error {
+			q := s.WithTx(savepoint)
 			var recorded bool
 			var err error
-			seeded, recorded, err = recordWrite(ctx, s.WithTx(savepoint), seed.Author, &seed.Subject, write)
-			if err == nil && recorded && conflict != nil {
+			seeded, recorded, err = recordWrite(ctx, q, seed.Author, &seed.Subject, write)
+			if err != nil || !recorded || conflict == nil {
+				return err
+			}
+			if !seed.Force {
 				return conflict
 			}
-			return err
+			overrode = conflict
+			return conflict.reread(ctx, q)
 		})
 		if !errors.As(err, &refused) {
 			return err
@@ -115,18 +122,40 @@ func (s *Store) SeedTemplate(ctx context.Context, seed TemplateSeed, write func(
 		return q.RecordSeedRefusal(ctx, RecordSeedRefusalParams{ID: existing.ID, Rules: rules, PayloadSha256: seed.PayloadSHA256})
 	})
 	if err != nil {
-		return Template{}, err
+		return Template{}, nil, err
 	}
 	if refused != nil {
-		return Template{}, refused
+		return Template{}, nil, refused
 	}
-	return seeded, nil
+	return seeded, overrode, nil
+}
+
+// reread reads the versions a conflict names again, as they are now: after a
+// forced seed, the version that was sent is no longer current.
+func (c *SeedConflict) reread(ctx context.Context, q *Queries) error {
+	for _, version := range []**TemplateVersionSummary{&c.PublishedVersion, &c.LastSeedVersion} {
+		if *version == nil {
+			continue
+		}
+		again, err := q.GetTemplateVersionSummary(ctx, GetTemplateVersionSummaryParams{TemplateID: c.TemplateID, ID: (*version).ID})
+		if err != nil {
+			return err
+		}
+		*version = &again
+	}
+	after := 0
+	if c.LastSeedVersion != nil {
+		after = c.LastSeedVersion.Seq
+	}
+	var err error
+	c.OperatorVersions, err = q.ListOperatorVersionsAfter(ctx, ListOperatorVersionsAfterParams{TemplateID: c.TemplateID, AfterSeq: after})
+	return err
 }
 
 // seedConflict is how an operator changed a locked template since the last
 // seed, or nil when they have not.
-func seedConflict(ctx context.Context, q *Queries, template Template, seed TemplateSeed) (*SeedConflictError, error) {
-	conflict := &SeedConflictError{TemplateID: template.ID, Key: seed.Key, Subject: template.Subject, RequestedSubject: seed.Subject}
+func seedConflict(ctx context.Context, q *Queries, template Template, seed TemplateSeed) (*SeedConflict, error) {
+	conflict := &SeedConflict{TemplateID: template.ID, Key: seed.Key, Subject: template.Subject, RequestedSubject: seed.Subject}
 
 	lastSeed, err := q.LastTemplateSeedVersion(ctx, template.ID)
 	switch {

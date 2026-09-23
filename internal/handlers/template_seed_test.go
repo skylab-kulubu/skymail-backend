@@ -47,11 +47,14 @@ func seedAs(t *testing.T, app *fiber.App, key string, payload map[string]any, fo
 	return response, template, body
 }
 
-// conflictVersion is a version as a seed conflict names it.
+// conflictVersion is a version as a seed conflict names it: its summary, as
+// the history serves it.
 type conflictVersion struct {
-	ID     uuid.UUID `json:"id"`
-	Seq    int       `json:"seq"`
-	Author struct {
+	ID      uuid.UUID `json:"id"`
+	Seq     int       `json:"seq"`
+	Subject string    `json:"subject"`
+	Current bool      `json:"current"`
+	Author  struct {
 		Kind string  `json:"kind"`
 		Sub  *string `json:"sub"`
 		Name *string `json:"name"`
@@ -87,6 +90,21 @@ func refusedSeed(t *testing.T, app *fiber.App, key string, payload map[string]an
 		t.Fatalf("seed = %d %s, want 409 template.seed_conflict", response.StatusCode, body)
 	}
 	return conflict
+}
+
+// withoutField is a JSON object without one of its fields.
+func withoutField(t *testing.T, body []byte, field string) []byte {
+	t.Helper()
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(body, &object); err != nil {
+		t.Fatalf("%s: %v", body, err)
+	}
+	delete(object, field)
+	trimmed, err := json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return trimmed
 }
 
 func sameRules(got []string, want ...string) bool {
@@ -130,6 +148,7 @@ func TestASeedIsRefusedWhileAnOperatorsDraftIsNewerThanTheLastSeed(t *testing.T)
 	}
 	if len(p.OperatorVersions) != 1 || p.OperatorVersions[0].ID != draft.ID || p.OperatorVersions[0].Seq != 2 ||
 		p.OperatorVersions[0].PublishedAt != nil || p.OperatorVersions[0].Author.Kind != "operator" ||
+		p.OperatorVersions[0].Subject != "Aramıza hoş geldin" || p.OperatorVersions[0].Current ||
 		!sameString(p.OperatorVersions[0].Author.Name, operatorName) {
 		t.Fatalf("conflict operator_versions = %+v, want the draft, version 2 by %s, unpublished", p.OperatorVersions, operatorName)
 	}
@@ -174,12 +193,30 @@ func TestAForcedSeedIsPublishedAndTheOperatorsWorkStaysRestorable(t *testing.T) 
 	}
 
 	payload := welcomeSeed("<p>Koyu temalı hoş geldin {{.FullName}}</p>")
-	refusedSeed(t, app, key, payload)
+	refused := refusedSeed(t, app, key, payload)
 	response, forced, body := seedAs(t, app, key, payload, true)
 	if response.StatusCode != fiber.StatusOK {
 		t.Fatalf("forced seed = %d %s, want 200", response.StatusCode, body)
 	}
-	assertTemplateShape(t, body)
+	// It says what it wrote over — what the refusal named — and is otherwise
+	// the template.
+	assertTemplateShape(t, withoutField(t, body, "overrode"))
+	var answer struct {
+		Overrode *struct {
+			Rules            []string          `json:"rules"`
+			PublishedVersion *conflictVersion  `json:"published_version"`
+			OperatorVersions []conflictVersion `json:"operator_versions"`
+		} `json:"overrode"`
+	}
+	if err := json.Unmarshal(body, &answer); err != nil {
+		t.Fatal(err)
+	}
+	o := answer.Overrode
+	if o == nil || !sameRules(o.Rules, refused.Params.Rules...) || !sameRules(o.Rules, "published_by_operator", "newer_operator_version", "operator_subject") ||
+		o.PublishedVersion == nil || o.PublishedVersion.ID != *edited.PublishedVersionID || o.PublishedVersion.Current ||
+		len(o.OperatorVersions) != 2 || o.OperatorVersions[0].ID != *edited.PublishedVersionID || o.OperatorVersions[1].ID != draft.ID {
+		t.Fatalf("forced seed overrode = %+v, want the rules, the operator's published edit and both their versions", o)
+	}
 
 	versions, published := storedVersions(t, db, seeded.ID)
 	if len(versions) != 4 {
@@ -201,6 +238,20 @@ func TestAForcedSeedIsPublishedAndTheOperatorsWorkStaysRestorable(t *testing.T) 
 		t.Fatalf("the operator's versions changed: %+v", versions[1:3])
 	}
 
+	// Forced again with nothing of an operator's in the way, it overrides
+	// nothing and says nothing of it.
+	for name, forcedAgain := range map[string]map[string]any{
+		"the same content": payload,
+		"new content":      welcomeSeed("<p>Koyu tema ve logo {{.FullName}}</p>"),
+	} {
+		response, body := sendJSON(t, app, fiber.MethodPut, "/templates/by-key/"+key+"?force=true", forcedAgain)
+		if response.StatusCode != fiber.StatusOK {
+			t.Fatalf("forcing %s again = %d %s", name, response.StatusCode, body)
+		}
+		assertTemplateShape(t, body)
+	}
+	versions, _ = storedVersions(t, db, seeded.ID)
+
 	for name, version := range map[string]uuid.UUID{"their published edit": versions[1].ID, "their draft": draft.ID} {
 		response, restored, body := restore(t, app, seeded.ID, version)
 		if response.StatusCode != fiber.StatusCreated {
@@ -213,7 +264,7 @@ func TestAForcedSeedIsPublishedAndTheOperatorsWorkStaysRestorable(t *testing.T) 
 			}
 		}
 		if restored.Subject != original.Subject || restored.HTMLContent != original.HTMLContent || restored.PublishedAt != nil ||
-			restored.BaseVersionID == nil || *restored.BaseVersionID != seed.ID {
+			restored.BaseVersionID == nil || *restored.BaseVersionID != versions[len(versions)-1].ID {
 			t.Fatalf("restored %s = %+v, want its content as a draft on the forced seed", name, restored.servedVersion)
 		}
 	}
@@ -739,5 +790,35 @@ func TestAnOperatorsRenameHoldsASeedBackAndStaysRestorable(t *testing.T) {
 	}
 	if response, published, body := publish(t, app, seeded.ID, restored.ID, nil); response.StatusCode != fiber.StatusOK || published.Name != "Karşılama (Core)" {
 		t.Fatalf("publishing the restored rename = %d %s, want the operator's name back on the template", response.StatusCode, body)
+	}
+}
+
+// A keyed template an operator made in the old panel has no Template seed
+// version at all: everything it holds is an operator's. The first seed of that
+// key is refused, naming no last seed version and the operator's version.
+func TestASeedIsRefusedForAKeyedTemplateMadeInThePanel(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	const key = "event.reminder"
+	created := createTemplate(t, app, map[string]any{
+		"name": "Hatırlatma", "subject": "Yarın: {{.EventName}}", "key": key,
+		"html_content": "<p>Yarın {{.EventName}}</p>", "plain_text_content": "Yarın {{.EventName}}",
+		"react_email_content": panelSource,
+	})
+
+	payload := map[string]any{
+		"name": "Etkinlik · Hatırlatma", "subject": "Yarın: {{.EventName}}",
+		"html_content": "<p>Yarın {{.EventName}} başlıyor</p>", "plain_text_content": "Yarın {{.EventName}} başlıyor",
+		"react_email_content": seedPointerComment(key), "system": false,
+	}
+	conflict := refusedSeed(t, app, key, payload)
+	p := conflict.Params
+	if p.TemplateID != created.ID || !sameRules(p.Rules, "published_by_operator", "newer_operator_version") || p.LastSeedVersion != nil ||
+		p.PublishedVersion == nil || p.PublishedVersion.ID != *created.PublishedVersionID || p.PublishedVersion.Author.Kind != "operator" ||
+		len(p.OperatorVersions) != 1 || p.OperatorVersions[0].ID != *created.PublishedVersionID {
+		t.Fatalf("seed of a panel-made key = %+v, want both rules, no last seed version and the operator's first version", p)
+	}
+	if row := templateRow(t, db, created.ID); row.Name != "Hatırlatma" || row.HtmlContent != "<p>Yarın {{.EventName}}</p>" {
+		t.Fatalf("a refused seed changed the panel's template: %+v", row)
 	}
 }

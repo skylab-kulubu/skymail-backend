@@ -93,12 +93,15 @@ these holds; `params.rules` lists each one that does:
   than the one sent counts.
 
 `params` also name the template (`key`, `template_id`), the versions involved
-(`published_version`, `last_seed_version`, `operator_versions`, each
-`{id, seq, author, published_at}`) and the two subjects (`subject` sent now,
-`requested_subject` asked for). A seed that would leave the template as its
-published version already is overwrites nothing and is never refused. A forced
-seed is written like any other; the operator's versions stay in the history and
-can be restored as drafts.
+(`published_version`, `last_seed_version`, `operator_versions`, each a version
+summary as `GET /v1/templates/{id}/versions` serves it) and the two subjects
+(`subject` sent now, `requested_subject` asked for). A seed that would leave the
+template as its published version already is overwrites nothing and is never
+refused. A forced seed is written like any other; the operator's versions stay
+in the history and can be restored as drafts, and its answer — the template —
+carries `overrode: {rules, published_version, operator_versions}`, the same
+shapes, saying what it wrote over. A forced seed that overrode nothing has no
+`overrode`.
 
 A refused seed records no version. The template keeps it as `seed_refusal`,
 `{"refused_at", "rules", "payload_sha256"}`, served with the template:

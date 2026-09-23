@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/google/uuid"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
@@ -31,7 +30,7 @@ type SeedRefusal struct {
 	// When the Template seed was first refused with the content it asked for last; refused again with the same content, the time stays.
 	RefusedAt time.Time `json:"refused_at"`
 	// The conflict rules that held the last time: published_by_operator (the version sent is an operator's, not the last seed's), newer_operator_version (an operator wrote a version after the last seed, a draft included), operator_subject (the subject sent is an operator's).
-	Rules []string `json:"rules" enums:"published_by_operator,newer_operator_version,operator_subject"`
+	Rules []database.SeedConflictRule `json:"rules"`
 	// A SHA-256 of what the seed asked to write, in hex: the same content refused again has the same one.
 	PayloadSHA256 string `json:"payload_sha256"`
 }
@@ -41,14 +40,18 @@ func seedRefusal(row database.Template) *SeedRefusal {
 	if row.SeedRefusedAt == nil || row.SeedRefusedPayloadSha256 == nil {
 		return nil
 	}
-	return &SeedRefusal{RefusedAt: *row.SeedRefusedAt, Rules: row.SeedRefusedRules, PayloadSHA256: *row.SeedRefusedPayloadSha256}
+	rules := make([]database.SeedConflictRule, len(row.SeedRefusedRules))
+	for i, rule := range row.SeedRefusedRules {
+		rules[i] = database.SeedConflictRule(rule)
+	}
+	return &SeedRefusal{RefusedAt: *row.SeedRefusedAt, Rules: rules, PayloadSHA256: *row.SeedRefusedPayloadSha256}
 }
 
 // seedPayloadSHA256 is a SHA-256 of what a seed asks to write, in hex: every
 // field of the payload, the contract set as the database would keep it, in a
 // fixed order. The same content hashes the same whatever the JSON looked like.
-func seedPayloadSHA256(key string, params requests.UpsertTemplateByKey, contract []byte) string {
-	canonical, _ := json.Marshal(struct {
+func seedPayloadSHA256(key string, params requests.UpsertTemplateByKey, contract []byte) (string, error) {
+	canonical, err := json.Marshal(struct {
 		Key               string          `json:"key"`
 		Name              string          `json:"name"`
 		Subject           string          `json:"subject"`
@@ -58,18 +61,60 @@ func seedPayloadSHA256(key string, params requests.UpsertTemplateByKey, contract
 		System            bool            `json:"system"`
 		Contract          json.RawMessage `json:"contract_required_variables"`
 	}{key, params.Name, params.Subject, params.HTMLContent, params.PlainTextContent, params.ReactEmailContent, params.System, contract})
+	if err != nil {
+		return "", err
+	}
 	sum := sha256.Sum256(canonical)
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), nil
 }
 
-// SeedConflictVersion is a version a refused seed names.
-type SeedConflictVersion struct {
-	ID  uuid.UUID `json:"id"`
-	Seq int       `json:"seq"`
-	// Who wrote it.
-	Author database.VersionAuthor `json:"author"`
-	// When it was published; null for a draft.
-	PublishedAt *time.Time `json:"published_at"`
+// SeededTemplate is a template as the Template seed's upsert answers with it:
+// what the other template routes serve, and what a forced seed wrote over.
+type SeededTemplate struct {
+	Template
+	// What a forced seed wrote over: the rules that held, the version that was sent and the operator's versions after the last seed — what an unforced seed's 409 names. Left out when the seed overrode nothing, forced or not.
+	Overrode *SeedOverride `json:"overrode,omitempty"`
+}
+
+// SeedOverride is what a forced Template seed wrote over. The operator's
+// versions stay in the history and can be restored.
+type SeedOverride struct {
+	// The conflict rules that held, as template.seed_conflict names them.
+	Rules []database.SeedConflictRule `json:"rules"`
+	// The version the template sent before the seed; null when it had none.
+	PublishedVersion *TemplateVersionSummary `json:"published_version"`
+	// The operator's versions after the last seed, oldest first, discarded drafts left out.
+	OperatorVersions []TemplateVersionSummary `json:"operator_versions"`
+}
+
+// summaries is versions as the version routes serve them.
+func summaries(versions []database.TemplateVersionSummary) []TemplateVersionSummary {
+	served := make([]TemplateVersionSummary, 0, len(versions))
+	for _, version := range versions {
+		served = append(served, versionSummary(version))
+	}
+	return served
+}
+
+// optionalSummary is a version as the version routes serve it, or nil.
+func optionalSummary(version *database.TemplateVersionSummary) *TemplateVersionSummary {
+	if version == nil {
+		return nil
+	}
+	served := versionSummary(*version)
+	return &served
+}
+
+// seedOverride is what a forced seed wrote over, or nil when nothing.
+func seedOverride(overrode *database.SeedConflict) *SeedOverride {
+	if overrode == nil {
+		return nil
+	}
+	return &SeedOverride{
+		Rules:            overrode.Rules,
+		PublishedVersion: optionalSummary(overrode.PublishedVersion),
+		OperatorVersions: summaries(overrode.OperatorVersions),
+	}
 }
 
 // seedForce reads the force query parameter of the seed's upsert: true writes
@@ -89,31 +134,21 @@ func seedForce(c fiber.Ctx) (bool, error) {
 	return force, nil
 }
 
-// seedError is the API error for what refused a seed, or err itself.
+// seedError is the API error for what refused a seed, or err itself. Its
+// params name the versions the way the version routes serve them.
 func seedError(err error) error {
-	var conflict *database.SeedConflictError
+	var conflict *database.SeedConflict
 	if !errors.As(err, &conflict) {
 		return err
-	}
-	operator := make([]SeedConflictVersion, 0, len(conflict.OperatorVersions))
-	for _, version := range conflict.OperatorVersions {
-		operator = append(operator, *seedConflictVersion(&version))
 	}
 	return errSeedConflict.WithParams(map[string]interface{}{
 		"key":               conflict.Key,
 		"template_id":       conflict.TemplateID,
 		"rules":             conflict.Rules,
-		"published_version": seedConflictVersion(conflict.PublishedVersion),
-		"last_seed_version": seedConflictVersion(conflict.LastSeedVersion),
-		"operator_versions": operator,
+		"published_version": optionalSummary(conflict.PublishedVersion),
+		"last_seed_version": optionalSummary(conflict.LastSeedVersion),
+		"operator_versions": summaries(conflict.OperatorVersions),
 		"subject":           conflict.Subject,
 		"requested_subject": conflict.RequestedSubject,
 	})
-}
-
-func seedConflictVersion(version *database.TemplateVersionSummary) *SeedConflictVersion {
-	if version == nil {
-		return nil
-	}
-	return &SeedConflictVersion{ID: version.ID, Seq: version.Seq, Author: version.Author(), PublishedAt: version.PublishedAt}
 }

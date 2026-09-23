@@ -89,6 +89,16 @@ components:
         updated_at:
           type: string
       type: object
+    database.SeedConflictRule:
+      enum:
+      - published_by_operator
+      - newer_operator_version
+      - operator_subject
+      type: string
+      x-enum-varnames:
+      - SeedConflictPublishedByOperator
+      - SeedConflictNewerOperatorVersion
+      - SeedConflictOperatorSubject
     database.VersionAuthor:
       properties:
         kind:
@@ -176,6 +186,28 @@ components:
         sent:
           type: integer
       type: object
+    handlers.SeedOverride:
+      description: 'What a forced seed wrote over: the rules that held, the version
+        that was sent and the operator''s versions after the last seed — what an unforced
+        seed''s 409 names. Left out when the seed overrode nothing, forced or not.'
+      properties:
+        operator_versions:
+          description: The operator's versions after the last seed, oldest first,
+            discarded drafts left out.
+          items:
+            $ref: '#/components/schemas/handlers.TemplateVersionSummary'
+          type: array
+          uniqueItems: false
+        published_version:
+          $ref: '#/components/schemas/handlers.TemplateVersionSummary'
+        rules:
+          description: The conflict rules that held, as template.seed_conflict names
+            them.
+          items:
+            $ref: '#/components/schemas/database.SeedConflictRule'
+          type: array
+          uniqueItems: false
+      type: object
     handlers.SeedRefusal:
       description: 'The Template seed refused since the last seed that went through,
         because an operator changed the template (ADR-0047): a repo change waiting
@@ -195,13 +227,76 @@ components:
             (an operator wrote a version after the last seed, a draft included), operator_subject
             (the subject sent is an operator''s).'
           items:
-            enum:
-            - published_by_operator
-            - newer_operator_version
-            - operator_subject
+            $ref: '#/components/schemas/database.SeedConflictRule'
+          type: array
+          uniqueItems: false
+      type: object
+    handlers.SeededTemplate:
+      properties:
+        archived_at:
+          type: string
+        archived_by:
+          type: string
+        contract_required_variables:
+          description: Required variables from the sending service's contract, sorted
+            by name, each with why the mail needs it. Written only by the Template
+            seed; locked in the panel.
+          items:
+            $ref: '#/components/schemas/database.ContractVariable'
+          type: array
+          uniqueItems: false
+        created_at:
+          type: string
+        drafts:
+          description: 'Each operator''s draft in progress, newest first: the newest
+            version an operator wrote of the template, while it is neither published
+            nor discarded. An operator''s earlier drafts are superseded and not listed.
+            A draft whose base_version_id is not published_version_id is stale: a
+            newer version was published after it was started, and publishing it takes
+            force.'
+          items:
+            $ref: '#/components/schemas/handlers.TemplateVersionSummary'
+          type: array
+          uniqueItems: false
+        html_content:
+          type: string
+        id:
+          type: string
+        key:
+          type: string
+        main_mode:
+          description: 'The Authoring mode of the Main source the template sends:
+            its published version''s. Null for a template with no published version.'
+          enum:
+          - jsx
+          - visual
+          - html
+          type: string
+        name:
+          type: string
+        operator_required_variables:
+          description: Required variables operators marked, sorted. Never shares a
+            name with contract_required_variables.
+          items:
             type: string
           type: array
           uniqueItems: false
+        overrode:
+          $ref: '#/components/schemas/handlers.SeedOverride'
+        plain_text_content:
+          type: string
+        published_version_id:
+          type: string
+        react_email_content:
+          type: string
+        seed_refusal:
+          $ref: '#/components/schemas/handlers.SeedRefusal'
+        subject:
+          type: string
+        system:
+          type: boolean
+        updated_at:
+          type: string
       type: object
     handlers.SendAudience:
       properties:
@@ -398,6 +493,8 @@ components:
           type: object
       type: object
     handlers.TemplateVersionSummary:
+      description: The version the template sent before the seed; null when it had
+        none.
       properties:
         author:
           $ref: '#/components/schemas/database.VersionAuthor'
@@ -2158,7 +2255,7 @@ paths:
       description: |-
         The Template seed's path: creates the template when the key is new and replaces its content — the subject included — when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once; react_email_content holding a JSX source (anything but whitespace and comments, so not the seed's old pointer comment) makes it the version's JSX Main source, and otherwise the HTML content is the HTML Main source. Writes the contract Required variables when sent, and keeps them when not. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.
 
-        Neither the seed nor an operator silently overwrites the other (ADR-0047). A template an operator changed since the last seed is refused with 409 template.seed_conflict and nothing is written, when any of these holds (params.rules lists each that does): published_by_operator — the version the template sends is not the last Template seed version; newer_operator_version — an operator wrote a version after the last seed version, a draft included and a discarded draft not; operator_subject — the subject sent is an operator's that the seed would overwrite: neither the one the last seed version asked for nor the one asked for now (for a template whose last seed version is the migration's first one, which does not know what the seed asked for: the seed asks for a subject other than the one sent). The refusal is kept on the template as seed_refusal until a seed goes through. A seed that would leave the template as its published version already is overwrites nothing and is never refused. force=true writes over the operator's change anyway, as a published Template seed version; their versions stay in the history and can be restored.
+        Neither the seed nor an operator silently overwrites the other (ADR-0047). A template an operator changed since the last seed is refused with 409 template.seed_conflict and nothing is written, when any of these holds (params.rules lists each that does): published_by_operator — the version the template sends is not the last Template seed version; newer_operator_version — an operator wrote a version after the last seed version, a draft included and a discarded draft not; operator_subject — the subject sent is an operator's that the seed would overwrite: neither the one the last seed version asked for nor the one asked for now (for a template whose last seed version is the migration's first one, which does not know what the seed asked for: the seed asks for a subject other than the one sent). The refusal is kept on the template as seed_refusal until a seed goes through. A seed that would leave the template as its published version already is overwrites nothing and is never refused. force=true writes over the operator's change anyway, as a published Template seed version; their versions stay in the history and can be restored, and the answer names what was overridden in overrode (left out when nothing was).
       parameters:
       - description: Template key
         in: path
@@ -2187,8 +2284,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/handlers.Template'
-          description: OK
+                $ref: '#/components/schemas/handlers.SeededTemplate'
+          description: The template; forced over an operator's change, also what it
+            overrode
         "400":
           content:
             application/json:
@@ -2202,8 +2300,8 @@ paths:
                 $ref: '#/components/schemas/apperrors.AppError'
           description: 'template.seed_conflict: an operator changed the template since
             the last seed; params: key, template_id, rules, published_version, last_seed_version,
-            operator_versions (each {id, seq, author, published_at}), subject (sent
-            now) and requested_subject (the seed''s)'
+            operator_versions (each a version summary, as the history serves it),
+            subject (sent now) and requested_subject (the seed''s)'
         "422":
           content:
             application/json:

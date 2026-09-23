@@ -477,18 +477,18 @@ func (h *templateHandlerImpl) GetTemplateByKey(c fiber.Ctx) error {
 //	@Summary		Create or replace a template addressed by key
 //	@Description	The Template seed's path: creates the template when the key is new and replaces its content — the subject included — when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once; react_email_content holding a JSX source (anything but whitespace and comments, so not the seed's old pointer comment) makes it the version's JSX Main source, and otherwise the HTML content is the HTML Main source. Writes the contract Required variables when sent, and keeps them when not. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.
 //	@Description
-//	@Description	Neither the seed nor an operator silently overwrites the other (ADR-0047). A template an operator changed since the last seed is refused with 409 template.seed_conflict and nothing is written, when any of these holds (params.rules lists each that does): published_by_operator — the version the template sends is not the last Template seed version; newer_operator_version — an operator wrote a version after the last seed version, a draft included and a discarded draft not; operator_subject — the subject sent is an operator's that the seed would overwrite: neither the one the last seed version asked for nor the one asked for now (for a template whose last seed version is the migration's first one, which does not know what the seed asked for: the seed asks for a subject other than the one sent). The refusal is kept on the template as seed_refusal until a seed goes through. A seed that would leave the template as its published version already is overwrites nothing and is never refused. force=true writes over the operator's change anyway, as a published Template seed version; their versions stay in the history and can be restored.
+//	@Description	Neither the seed nor an operator silently overwrites the other (ADR-0047). A template an operator changed since the last seed is refused with 409 template.seed_conflict and nothing is written, when any of these holds (params.rules lists each that does): published_by_operator — the version the template sends is not the last Template seed version; newer_operator_version — an operator wrote a version after the last seed version, a draft included and a discarded draft not; operator_subject — the subject sent is an operator's that the seed would overwrite: neither the one the last seed version asked for nor the one asked for now (for a template whose last seed version is the migration's first one, which does not know what the seed asked for: the seed asks for a subject other than the one sent). The refusal is kept on the template as seed_refusal until a seed goes through. A seed that would leave the template as its published version already is overwrites nothing and is never refused. force=true writes over the operator's change anyway, as a published Template seed version; their versions stay in the history and can be restored, and the answer names what was overridden in overrode (left out when nothing was).
 //	@Tags			Templates
 //	@Accept			json
 //	@Produce		json
 //	@Param			key			path		string							true	"Template key"
 //	@Param			force		query		bool							false	"Write even over an operator's change since the last seed"
 //	@Param			template	body		requests.UpsertTemplateByKey	true	"Template details"
-//	@Success		200			{object}	handlers.Template
-//	@Failure		400			{object}	apperrors.AppError	"Bad Request (validation.error, force included)"
-//	@Failure		409			{object}	apperrors.AppError	"template.seed_conflict: an operator changed the template since the last seed; params: key, template_id, rules, published_version, last_seed_version, operator_versions (each {id, seq, author, published_at}), subject (sent now) and requested_subject (the seed's)"
-//	@Failure		422			{object}	apperrors.AppError	"The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
-//	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
+//	@Success		200			{object}	handlers.SeededTemplate			"The template; forced over an operator's change, also what it overrode"
+//	@Failure		400			{object}	apperrors.AppError				"Bad Request (validation.error, force included)"
+//	@Failure		409			{object}	apperrors.AppError				"template.seed_conflict: an operator changed the template since the last seed; params: key, template_id, rules, published_version, last_seed_version, operator_versions (each a version summary, as the history serves it), subject (sent now) and requested_subject (the seed's)"
+//	@Failure		422			{object}	apperrors.AppError				"The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
+//	@Failure		500			{object}	apperrors.AppError				"Internal Server Error"
 //	@Router			/templates/by-key/{key} [put]
 func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 	key := c.Params("key")
@@ -513,15 +513,19 @@ func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	payloadSHA256, err := seedPayloadSHA256(key, params, contract)
+	if err != nil {
+		return err
+	}
 
 	// A Template seed's version is published at once, unless an operator's
 	// change is in its way and it is not forced.
-	template, err := h.db.SeedTemplate(c.Context(), database.TemplateSeed{
+	template, overrode, err := h.db.SeedTemplate(c.Context(), database.TemplateSeed{
 		Key:           key,
 		Author:        versionAuthor(c, database.TemplateAuthorKindTemplateSeed),
 		Subject:       params.Subject,
 		Force:         force,
-		PayloadSHA256: seedPayloadSHA256(key, params, contract),
+		PayloadSHA256: payloadSHA256,
 	}, checkedWrite(func(q *database.Queries) (database.Template, error) {
 		return q.UpsertTemplateByKey(c.Context(), database.UpsertTemplateByKeyParams{
 			Key:                       key,
@@ -538,5 +542,9 @@ func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 		return seedError(err)
 	}
 
-	return h.sendTemplate(c, fiber.StatusOK, template)
+	served, err := h.served(c.Context(), []database.Template{template})
+	if err != nil {
+		return err
+	}
+	return c.JSON(SeededTemplate{Template: served[0], Overrode: seedOverride(overrode)})
 }
