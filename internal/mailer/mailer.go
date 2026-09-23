@@ -269,6 +269,52 @@ func parseMailTemplates(subject, plainText, html string) (mailTemplates, error) 
 	return mailTemplates{subject: subjectTemplate, text: textTemplate, html: htmlTemplate}, nil
 }
 
+// Rendered is one recipient's mail as a send queues it.
+type Rendered struct {
+	Subject   string `json:"subject"`
+	PlainText string `json:"plain_text"`
+	HTML      string `json:"html"`
+}
+
+// Render renders a Mail template's subject, plain text and HTML for one
+// recipient exactly as a send renders what it queues: the send's variables —
+// a JSON object, as a mail task keeps them — with the recipient's Email and
+// FullName over them. A part that does not parse is a *ParseError.
+func Render(subject, plainText, html string, variables []byte, recipient RecipientInfo) (Rendered, error) {
+	parsed, err := parseMailTemplates(subject, plainText, html)
+	if err != nil {
+		return Rendered{}, err
+	}
+	var vars map[string]interface{}
+	if err := json.Unmarshal(variables, &vars); err != nil {
+		return Rendered{}, fmt.Errorf("invalid json variables: %w", err)
+	}
+	return parsed.render(vars, recipient)
+}
+
+// render executes the three parts for one recipient. It is the one place a
+// send and a preview render, so a preview is what the send would queue.
+func (t mailTemplates) render(vars map[string]interface{}, recipient RecipientInfo) (Rendered, error) {
+	data := make(map[string]interface{}, len(vars)+2)
+	for k, v := range vars {
+		data[k] = v
+	}
+	data["Email"] = recipient.Email
+	data["FullName"] = recipient.FullName
+
+	var subject, text, html bytes.Buffer
+	if err := t.subject.Execute(&subject, data); err != nil {
+		return Rendered{}, fmt.Errorf("render %s: %w", PartSubject, err)
+	}
+	if err := t.text.Execute(&text, data); err != nil {
+		return Rendered{}, fmt.Errorf("render %s: %w", PartPlainText, err)
+	}
+	if err := t.html.Execute(&html, data); err != nil {
+		return Rendered{}, fmt.Errorf("render %s: %w", PartHTML, err)
+	}
+	return Rendered{Subject: subject.String(), PlainText: text.String(), HTML: html.String()}, nil
+}
+
 func (m *mailerImpl) renderAndQueue(ctx context.Context, rows []commonMailRow) error {
 	if len(rows) == 0 {
 		return nil
@@ -283,46 +329,23 @@ func (m *mailerImpl) renderAndQueue(ctx context.Context, rows []commonMailRow) e
 	if err != nil {
 		return err
 	}
-	subjectTemplate, textTemplate, htmlTemplate := parsed.subject, parsed.text, parsed.html
 
 	queueItems := make([]database.CreateMailQueueItemsParams, len(rows))
 	for i, row := range rows {
-		renderData := make(map[string]interface{})
-		for k, v := range taskVars {
-			renderData[k] = v
-		}
-		renderData["Email"] = row.RecipientEmail
-		renderData["FullName"] = row.RecipientFullName
-
-		var subjectBuf bytes.Buffer
-		err = subjectTemplate.Execute(&subjectBuf, renderData)
-		if err != nil {
-			m.logger.Err(err).Msg("Failed to render subject template")
-			continue
-		}
-
-		var textBuf bytes.Buffer
-		err = textTemplate.Execute(&textBuf, renderData)
+		rendered, err := parsed.render(taskVars, RecipientInfo{FullName: row.RecipientFullName, Email: row.RecipientEmail})
 		if err != nil {
 			m.logger.Err(err).Msg("Failed to render template")
 			continue
 		}
 
-		var htmlBuf bytes.Buffer
-		err = htmlTemplate.Execute(&htmlBuf, renderData)
-		if err != nil {
-			m.logger.Err(err).Msg("Failed to render template")
-			continue
-		}
-
-		htmlRes := htmlBuf.String()
+		htmlRes := rendered.HTML
 
 		queueItems[i] = database.CreateMailQueueItemsParams{
 			TaskID:            row.TaskID,
 			RecipientFullName: row.RecipientFullName,
 			RecipientEmail:    row.RecipientEmail,
-			Subject:           subjectBuf.String(),
-			Body:              textBuf.String(),
+			Subject:           rendered.Subject,
+			Body:              rendered.PlainText,
 			BodyHtml:          &htmlRes,
 		}
 	}
