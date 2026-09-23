@@ -818,9 +818,9 @@ func TestPublishesTheServerRefuses(t *testing.T) {
 	// saving a draft of it, and is refused like one.
 	var broken uuid.UUID
 	if err := db.Conn.QueryRow(context.Background(), `
-		INSERT INTO template_versions (template_id, seq, subject, html_source, main_mode, html_content, plain_text_content,
+		INSERT INTO template_versions (template_id, seq, name, subject, html_source, main_mode, html_content, plain_text_content,
 		                               author_kind, author_sub, author_name, published_at, base_version_id)
-		SELECT id, (SELECT max(seq) + 1 FROM template_versions WHERE template_id = $1), subject, '<p>{{.FullName</p>', 'html',
+		SELECT id, (SELECT max(seq) + 1 FROM template_versions WHERE template_id = $1), name, subject, '<p>{{.FullName</p>', 'html',
 		       '<p>{{.FullName</p>', 'Merhaba', 'operator', $2, 'Ada Yılmaz', NOW(), published_version_id
 		FROM templates WHERE id = $1
 		RETURNING id`, created.ID, operatorSub).Scan(&broken); err != nil {
@@ -839,9 +839,9 @@ func TestPublishesTheServerRefuses(t *testing.T) {
 	// A draft written before anything checked is checked again on publishing.
 	var unchecked uuid.UUID
 	if err := db.Conn.QueryRow(context.Background(), `
-		INSERT INTO template_versions (template_id, seq, subject, html_source, main_mode, html_content, plain_text_content,
+		INSERT INTO template_versions (template_id, seq, name, subject, html_source, main_mode, html_content, plain_text_content,
 		                               author_kind, author_sub, author_name, base_version_id)
-		SELECT id, (SELECT max(seq) + 1 FROM template_versions WHERE template_id = $1), 'Konu', '<p>{{.FullName</p>', 'html',
+		SELECT id, (SELECT max(seq) + 1 FROM template_versions WHERE template_id = $1), name, 'Konu', '<p>{{.FullName</p>', 'html',
 		       '<p>{{.FullName</p>', 'Merhaba', 'operator', $2, 'Ada Yılmaz', published_version_id
 		FROM templates WHERE id = $1
 		RETURNING id`, created.ID, operatorSub).Scan(&unchecked); err != nil {
@@ -1630,5 +1630,47 @@ func TestAPublishAndASaveThatMeetTakeTurns(t *testing.T) {
 	}
 	if row := templateRow(t, db, created.ID); row.Subject != "Yayımlanacak" {
 		t.Fatalf("row subject = %q, want the published draft's", row.Subject)
+	}
+}
+
+// The editor renames a template through a draft: the draft carries the name,
+// publishing it names the template, and a save that leaves the name out keeps
+// the one of the version it continues. A name is part of what a save compares,
+// so renaming alone is a new draft, and a blank name is refused.
+func TestADraftRenamesTheTemplateWhenPublished(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	created := panelTemplate(t, app)
+	base := created.PublishedVersionID
+	draft := func(fields map[string]any) (*http.Response, servedDraft, []byte) {
+		t.Helper()
+		body := map[string]any{
+			"subject": "Merhaba {{.FullName}}", "main_mode": "jsx",
+			"html_content": "<p>Merhaba {{.FullName}}</p>", "plain_text_content": "Merhaba {{.FullName}}", "base_version_id": base,
+		}
+		for field, value := range fields {
+			body[field] = value
+		}
+		return saveDraft(t, app, created.ID, body)
+	}
+
+	response, renamed, body := draft(map[string]any{"name": "Ekim duyurusu"})
+	if response.StatusCode != fiber.StatusCreated || renamed.Name != "Ekim duyurusu" {
+		t.Fatalf("a draft that only renames = %d %s, want 201 with the new name", response.StatusCode, body)
+	}
+	if row := templateRow(t, db, created.ID); row.Name != created.Name {
+		t.Fatalf("saving a renaming draft renamed the template to %q", row.Name)
+	}
+	response, kept, body := draft(map[string]any{"subject": "Selam {{.FullName}}"})
+	if response.StatusCode != fiber.StatusCreated || kept.Name != "Ekim duyurusu" || kept.Seq != renamed.Seq+1 {
+		t.Fatalf("a save without a name = %d %s, want the name its draft had", response.StatusCode, body)
+	}
+	if response, _, body := draft(map[string]any{"name": "  "}); response.StatusCode != fiber.StatusBadRequest || !namesField(decodeError(t, body), "name") {
+		t.Fatalf("a blank name = %d %s, want 400 on name", response.StatusCode, body)
+	}
+
+	response, published, body := publish(t, app, created.ID, kept.ID, nil)
+	if response.StatusCode != fiber.StatusOK || published.Name != "Ekim duyurusu" || templateRow(t, db, created.ID).Name != "Ekim duyurusu" {
+		t.Fatalf("publishing the draft = %d %s, want the template renamed", response.StatusCode, body)
 	}
 }

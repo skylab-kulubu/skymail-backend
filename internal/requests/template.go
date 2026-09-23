@@ -70,7 +70,9 @@ type AddRequiredVariable struct {
 // is given. A source that is left out, or null, is kept from the version the
 // save continues, so a save never drops a source.
 type SaveTemplateDraft struct {
-	Subject string `json:"subject" validate:"required"`
+	// The template's name in this version: publishing the draft renames the template. Left out or null: kept from the version the save continues.
+	Name    *string `json:"name"`
+	Subject string  `json:"subject" validate:"required"`
 	// The Authoring mode whose source is the Main source: html_content and plain_text_content are its render.
 	MainMode string `json:"main_mode" validate:"required,oneof=jsx visual html" enums:"jsx,visual,html"`
 	// The JSX source, React Email code. Left out or null: kept as it is.

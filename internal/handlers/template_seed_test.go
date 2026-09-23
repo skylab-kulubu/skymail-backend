@@ -681,3 +681,52 @@ func TestASeedAndAnOperatorsEditThatMeetTakeTurns(t *testing.T) {
 		}
 	}
 }
+
+// A template's name is part of its versions, so renaming one in the old panel
+// is an operator's change like any other: a seed after it is refused rather
+// than quietly putting the repo's name back, and forced, it leaves the rename
+// in the history, where restoring and publishing it brings the name back.
+func TestAnOperatorsRenameHoldsASeedBackAndStaysRestorable(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	const key = "core.welcome"
+	seeded := seededTemplate(t, app, key)
+
+	row := templateRow(t, db, seeded.ID)
+	response, body := sendJSON(t, app, fiber.MethodPatch, "/templates/"+seeded.ID.String(), map[string]any{
+		"name": "Karşılama (Core)", "subject": row.Subject, "key": key,
+		"html_content": row.HtmlContent, "plain_text_content": row.PlainTextContent, "react_email_content": row.ReactEmailContent,
+	})
+	if response.StatusCode != fiber.StatusOK {
+		t.Fatalf("rename = %d %s", response.StatusCode, body)
+	}
+	versions, _ := storedVersions(t, db, seeded.ID)
+	if len(versions) != 2 || versions[1].AuthorKind != "operator" || versions[1].Name != "Karşılama (Core)" || versions[0].Name != "Hoş Geldin" {
+		t.Fatalf("history after a rename = %+v, want the seed's version and the operator's, each with its name", versions)
+	}
+	rename := versions[1]
+
+	unchanged := welcomeSeed("<p>Hoş geldin {{.FullName}}</p>")
+	conflict := refusedSeed(t, app, key, unchanged)
+	if !sameRules(conflict.Params.Rules, "published_by_operator", "newer_operator_version") ||
+		conflict.Params.PublishedVersion == nil || conflict.Params.PublishedVersion.ID != rename.ID {
+		t.Fatalf("seed after a rename: rules %v, published %+v; want the rename named, published by an operator", conflict.Params.Rules, conflict.Params.PublishedVersion)
+	}
+	if name := templateRow(t, db, seeded.ID).Name; name != "Karşılama (Core)" {
+		t.Fatalf("name after a refused seed = %q, want the operator's", name)
+	}
+
+	if response, _, body := seedAs(t, app, key, unchanged, true); response.StatusCode != fiber.StatusOK {
+		t.Fatalf("forced seed = %d %s", response.StatusCode, body)
+	}
+	if name := templateRow(t, db, seeded.ID).Name; name != "Hoş Geldin" {
+		t.Fatalf("name after a forced seed = %q, want the repo's", name)
+	}
+	response, restored, body := restore(t, app, seeded.ID, rename.ID)
+	if response.StatusCode != fiber.StatusCreated || restored.Name != "Karşılama (Core)" {
+		t.Fatalf("restoring the rename = %d %s, want a draft with the operator's name", response.StatusCode, body)
+	}
+	if response, published, body := publish(t, app, seeded.ID, restored.ID, nil); response.StatusCode != fiber.StatusOK || published.Name != "Karşılama (Core)" {
+		t.Fatalf("publishing the restored rename = %d %s, want the operator's name back on the template", response.StatusCode, body)
+	}
+}

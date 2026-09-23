@@ -230,6 +230,7 @@ type TemplateVersion struct {
 	PublishedAt      *time.Time         `json:"published_at"`
 	BaseVersionID    *uuid.UUID         `json:"base_version_id"`
 	DiscardedAt      *time.Time         `json:"discarded_at"`
+	Name             string             `json:"name"`
 }
 
 type TemplateVersionSummary struct {
@@ -247,4 +248,5 @@ type TemplateVersionSummary struct {
 	BaseVersionID    *uuid.UUID         `json:"base_version_id"`
 	IsCurrent        bool               `json:"is_current"`
 	DiscardedAt      *time.Time         `json:"discarded_at"`
+	Name             string             `json:"name"`
 }

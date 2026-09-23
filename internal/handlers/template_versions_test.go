@@ -123,6 +123,7 @@ func sendJSON(t *testing.T, app *fiber.App, method, path string, body any) (*htt
 type storedVersion struct {
 	ID               uuid.UUID
 	Seq              int
+	Name             string
 	Subject          string
 	RequestedSubject *string
 	JSXSource        *string
@@ -145,7 +146,7 @@ func storedVersions(t *testing.T, db *database.Store, templateID uuid.UUID) ([]s
 	t.Helper()
 	ctx := context.Background()
 	rows, err := db.Conn.Query(ctx, `
-		SELECT id, seq, subject, requested_subject, jsx_source, visual_source, html_source, main_mode::text, html_content,
+		SELECT id, seq, name, subject, requested_subject, jsx_source, visual_source, html_source, main_mode::text, html_content,
 		       plain_text_content, author_kind::text, author_sub, author_name, created_at, published_at, base_version_id
 		FROM template_versions
 		WHERE template_id = $1
@@ -157,7 +158,7 @@ func storedVersions(t *testing.T, db *database.Store, templateID uuid.UUID) ([]s
 	var versions []storedVersion
 	for rows.Next() {
 		var v storedVersion
-		if err := rows.Scan(&v.ID, &v.Seq, &v.Subject, &v.RequestedSubject, &v.JSXSource, &v.VisualSource, &v.HTMLSource, &v.MainMode, &v.HTMLContent,
+		if err := rows.Scan(&v.ID, &v.Seq, &v.Name, &v.Subject, &v.RequestedSubject, &v.JSXSource, &v.VisualSource, &v.HTMLSource, &v.MainMode, &v.HTMLContent,
 			&v.PlainTextContent, &v.AuthorKind, &v.AuthorSub, &v.AuthorName, &v.CreatedAt, &v.PublishedAt, &v.BaseVersionID); err != nil {
 			t.Fatal(err)
 		}
@@ -566,9 +567,9 @@ func TestSendAfterVersionedWritesQueuesThePublishedCopyNotADraft(t *testing.T) {
 
 	// A draft as ticket 07 will write one: newer, unpublished, not on the row.
 	if _, err := db.Conn.Exec(ctx, `
-		INSERT INTO template_versions (template_id, seq, subject, html_source, main_mode, html_content,
+		INSERT INTO template_versions (template_id, seq, name, subject, html_source, main_mode, html_content,
 		                               plain_text_content, author_kind, author_sub, author_name, base_version_id)
-		SELECT id, 3, 'YARIM TASLAK', '<p>YARIM</p>', 'html', '<p>YARIM</p>', 'YARIM', 'operator', $2, 'Başka Operatör',
+		SELECT id, 3, name, 'YARIM TASLAK', '<p>YARIM</p>', 'html', '<p>YARIM</p>', 'YARIM', 'operator', $2, 'Başka Operatör',
 		       published_version_id
 		FROM templates
 		WHERE id = $1`, seeded.ID, operatorSub); err != nil {
@@ -598,6 +599,7 @@ type servedVersion struct {
 	ID               uuid.UUID `json:"id"`
 	TemplateID       uuid.UUID `json:"template_id"`
 	Seq              int       `json:"seq"`
+	Name             string    `json:"name"`
 	Subject          string    `json:"subject"`
 	RequestedSubject *string   `json:"requested_subject"`
 	MainMode         string    `json:"main_mode"`
@@ -638,9 +640,9 @@ func templateWithHistory(t *testing.T, db *database.Store, app *fiber.App) (data
 		t.Fatalf("edit = %d %s", response.StatusCode, body)
 	}
 	if _, err := db.Conn.Exec(context.Background(), `
-		INSERT INTO template_versions (template_id, seq, subject, jsx_source, visual_source, main_mode, html_content,
+		INSERT INTO template_versions (template_id, seq, name, subject, jsx_source, visual_source, main_mode, html_content,
 		                               plain_text_content, author_kind, author_sub, author_name, base_version_id)
-		SELECT id, 3, 'Taslak konu', $2, '{"type": "doc", "content": []}', 'visual', '<p>Taslak</p>', 'Taslak',
+		SELECT id, 3, name, 'Taslak konu', $2, '{"type": "doc", "content": []}', 'visual', '<p>Taslak</p>', 'Taslak',
 		       'operator', 'b7d1e7a2-3c1f-4c55-9d6e-0a1b2c3d4e5f', 'Can Demir', published_version_id
 		FROM templates
 		WHERE id = $1`, template.ID, panelSource); err != nil {
@@ -859,7 +861,8 @@ func TestTemplateVersionResponsesAreServedAsDocumented(t *testing.T) {
 // A write that leaves the template as its published version already is —
 // subject, every source, Main source, render — is not a change and records no
 // version: a routine seed must not make every open draft stale (ticket 07), nor
-// fill the history with copies. name is not part of a version.
+// fill the history with copies. The name is part of a version, so a rename is
+// a change (TestAnOperatorsRenameHoldsASeedBackAndStaysRestorable).
 func TestUnchangedWritesRecordNoVersion(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	app := templateVersionsApp(t, db)
@@ -886,26 +889,17 @@ func TestUnchangedWritesRecordNoVersion(t *testing.T) {
 		t.Fatalf("three identical seeds left %d versions (row copy of %v, answered %v), want 1", len(versions), published, seeded.PublishedVersionID)
 	}
 
-	for name, change := range map[string]map[string]any{
-		"an identical save": {},
-		"a rename":          {"name": "Parola sıfırlama (Keycloak)"},
-	} {
-		body := map[string]any{
-			"name": seeded.Name, "subject": seeded.Subject, "key": key,
-			"html_content": seeded.HtmlContent, "plain_text_content": seeded.PlainTextContent,
-			"react_email_content": seeded.ReactEmailContent,
-		}
-		for field, value := range change {
-			body[field] = value
-		}
-		response, raw := sendJSON(t, app, fiber.MethodPatch, "/templates/"+seeded.ID.String(), body)
-		if response.StatusCode != fiber.StatusOK {
-			t.Fatalf("%s = %d %s", name, response.StatusCode, raw)
-		}
-		assertTemplateShape(t, raw)
-		if versions, _ := storedVersions(t, db, seeded.ID); len(versions) != 1 {
-			t.Fatalf("%s recorded a version; versions = %d, want 1", name, len(versions))
-		}
+	response, raw := sendJSON(t, app, fiber.MethodPatch, "/templates/"+seeded.ID.String(), map[string]any{
+		"name": seeded.Name, "subject": seeded.Subject, "key": key,
+		"html_content": seeded.HtmlContent, "plain_text_content": seeded.PlainTextContent,
+		"react_email_content": seeded.ReactEmailContent,
+	})
+	if response.StatusCode != fiber.StatusOK {
+		t.Fatalf("an identical save = %d %s", response.StatusCode, raw)
+	}
+	assertTemplateShape(t, raw)
+	if versions, _ := storedVersions(t, db, seeded.ID); len(versions) != 1 {
+		t.Fatalf("an identical save recorded a version; versions = %d, want 1", len(versions))
 	}
 }
 

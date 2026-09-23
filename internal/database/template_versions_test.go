@@ -76,8 +76,8 @@ func TestTemplateVersionConstraints(t *testing.T) {
 
 	insert := func(columns string, values ...any) error {
 		_, err := db.Conn.Exec(ctx, `
-			INSERT INTO template_versions (template_id, seq, subject, main_mode, html_content, plain_text_content, author_kind`+columns+`)
-			VALUES ($1, $2, 'Konu', $3, '<p>x</p>', 'x', 'operator'`+placeholders(4, len(values)-3)+`)`, values...)
+			INSERT INTO template_versions (template_id, seq, name, subject, main_mode, html_content, plain_text_content, author_kind`+columns+`)
+			VALUES ($1, $2, 'Ad', 'Konu', $3, '<p>x</p>', 'x', 'operator'`+placeholders(4, len(values)-3)+`)`, values...)
 		return err
 	}
 

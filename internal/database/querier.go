@@ -126,7 +126,7 @@ type Querier interface {
 	LockTemplateByKey(ctx context.Context, key *string) (Template, error)
 	ProcessQueueItems(ctx context.Context) ([]MailQueue, error)
 	// Publishes a draft: marks it published and copies it onto the template row,
-	// which the send path reads — its subject and its render. react_email_content,
+	// which the send path reads — its name, subject and render. react_email_content,
 	// the column the old panel edits, gets the JSX source only when JSX is the
 	// Main source, and an empty string otherwise. The old panel re-renders any JSX
 	// it finds there and saves that render as the body, and the expand step would
@@ -143,7 +143,7 @@ type Querier interface {
 	RecordSeedRefusal(ctx context.Context, arg RecordSeedRefusalParams) error
 	// Writes an operator's draft, numbered after the template's last version,
 	// unless the version it continues holds exactly this content already —
-	// subject, every source, Main source and render, a Visual document compared
+	// name, subject, every source, Main source and render, a Visual document compared
 	// as JSON rather than as text. Returns the draft it wrote, or the version it
 	// would have repeated, and whether it wrote one. The caller holds the template
 	// row's lock (LockTemplate).
@@ -157,7 +157,7 @@ type Querier interface {
 	//
 	// Those writers send a subject, a render and at most a JSX source, so the
 	// version starts from the published one and replaces only what they changed:
-	//   * The subject and the render are the row's.
+	//   * The name, the subject and the render are the row's.
 	//   * If the body — html_content, plain_text_content and the JSX source — is
 	//     the published version's, the Main source and every source stay as they
 	//     were: the old panel sends a stored body back untouched when only the
@@ -170,7 +170,7 @@ type Querier interface {
 	// A row with no published version yet — written before versions were kept,
 	// or by the old binary between the migration and this one — is taken as it
 	// now is. When the result is the published version over again, nothing is
-	// recorded: the write changed nothing a version holds (name is not one).
+	// recorded: the write changed nothing a version holds.
 	//
 	// The version is numbered after the template's last one; the row write before
 	// this holds the row's lock, so two writers cannot take the same number. Its

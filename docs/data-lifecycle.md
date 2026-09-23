@@ -28,11 +28,15 @@ the authenticated Keycloak subject when available.
 ## Mail template versions
 
 From the release that adds `template_versions`, every write through the API
-that changes what a version holds — the subject, a source, which source is
-main, the rendered HTML or plain text — records a Mail template version, and
-versions are never deleted. A write that changes none of these (a repeated
-seed, an identical save, a rename) records none. The migration gives every
-template that exists then one published first version from its row.
+that changes what a version holds — the name, the subject, a source, which
+source is main, the rendered HTML or plain text — records a Mail template
+version, and versions are never deleted. A write that changes none of these (a
+repeated seed, an identical save) records none. The migration gives every
+template that exists then one published first version from its row. Names
+joined the versions later (migration `20260923230000`): the versions that
+existed then carry the name their template had at that moment, and from then
+on renaming a template — in the old panel, or through a draft's `name` — is a
+version like any other change.
 
 The template row is a copy of the published version, and
 `published_version_id` names it. Archiving and restoring a template changes

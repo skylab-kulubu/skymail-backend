@@ -33,9 +33,9 @@ func TestDiscardedDraftMigrationGoesUpAndDown(t *testing.T) {
 		t.Helper()
 		var id string
 		if err := database.Pool.QueryRow(ctx, `
-			INSERT INTO template_versions (template_id, seq, subject, html_source, main_mode, html_content, plain_text_content,
+			INSERT INTO template_versions (template_id, seq, name, subject, html_source, main_mode, html_content, plain_text_content,
 			                               author_kind, published_at)
-			VALUES ($1, $2, 'Bülten', '<p>Bülten</p>', 'html', '<p>Bülten</p>', 'Bülten', 'operator', `+publishedAt+`)
+			VALUES ($1, $2, 'Bülten', 'Bülten', '<p>Bülten</p>', 'html', '<p>Bülten</p>', 'Bülten', 'operator', `+publishedAt+`)
 			RETURNING id`, templateID, seq).Scan(&id); err != nil {
 			t.Fatal(err)
 		}

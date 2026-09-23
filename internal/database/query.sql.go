@@ -1320,7 +1320,7 @@ func (q *Queries) GetTemplateByKey(ctx context.Context, key *string) (Template, 
 }
 
 const getTemplateVersion = `-- name: GetTemplateVersion :one
-SELECT s.id, s.template_id, s.seq, s.subject, s.requested_subject, s.main_mode, s.author_kind, s.author_sub, s.author_name, s.created_at, s.published_at, s.base_version_id, s.is_current, s.discarded_at,
+SELECT s.id, s.template_id, s.seq, s.subject, s.requested_subject, s.main_mode, s.author_kind, s.author_sub, s.author_name, s.created_at, s.published_at, s.base_version_id, s.is_current, s.discarded_at, s.name,
        v.jsx_source,
        v.visual_source,
        v.html_source,
@@ -1366,6 +1366,7 @@ func (q *Queries) GetTemplateVersion(ctx context.Context, arg GetTemplateVersion
 		&i.TemplateVersionSummary.BaseVersionID,
 		&i.TemplateVersionSummary.IsCurrent,
 		&i.TemplateVersionSummary.DiscardedAt,
+		&i.TemplateVersionSummary.Name,
 		&i.JsxSource,
 		&i.VisualSource,
 		&i.HtmlSource,
@@ -1376,7 +1377,7 @@ func (q *Queries) GetTemplateVersion(ctx context.Context, arg GetTemplateVersion
 }
 
 const getTemplateVersionSummary = `-- name: GetTemplateVersionSummary :one
-SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at
+SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at, name
 FROM template_version_summaries
 WHERE template_id = $1
   AND id = $2
@@ -1405,6 +1406,7 @@ func (q *Queries) GetTemplateVersionSummary(ctx context.Context, arg GetTemplate
 		&i.BaseVersionID,
 		&i.IsCurrent,
 		&i.DiscardedAt,
+		&i.Name,
 	)
 	return i, err
 }
@@ -1459,7 +1461,7 @@ func (q *Queries) IsJSXSource(ctx context.Context, content string) (bool, error)
 }
 
 const lastTemplateSeedVersion = `-- name: LastTemplateSeedVersion :one
-SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at
+SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at, name
 FROM template_version_summaries
 WHERE template_id = $1
   AND author_kind = 'template_seed'
@@ -1487,6 +1489,7 @@ func (q *Queries) LastTemplateSeedVersion(ctx context.Context, templateID uuid.U
 		&i.BaseVersionID,
 		&i.IsCurrent,
 		&i.DiscardedAt,
+		&i.Name,
 	)
 	return i, err
 }
@@ -1611,7 +1614,7 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 }
 
 const listOperatorVersionsAfter = `-- name: ListOperatorVersionsAfter :many
-SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at
+SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at, name
 FROM template_version_summaries
 WHERE template_id = $1
   AND author_kind = 'operator'
@@ -1652,6 +1655,7 @@ func (q *Queries) ListOperatorVersionsAfter(ctx context.Context, arg ListOperato
 			&i.BaseVersionID,
 			&i.IsCurrent,
 			&i.DiscardedAt,
+			&i.Name,
 		); err != nil {
 			return nil, err
 		}
@@ -1698,7 +1702,7 @@ func (q *Queries) ListPublishedMainModes(ctx context.Context, templateIds []uuid
 }
 
 const listTemplateDrafts = `-- name: ListTemplateDrafts :many
-SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at
+SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at, name
 FROM template_version_summaries s
 WHERE s.id IN (SELECT DISTINCT ON (v.template_id, v.author_sub) v.id
                FROM template_versions v
@@ -1740,6 +1744,7 @@ func (q *Queries) ListTemplateDrafts(ctx context.Context, templateIds []uuid.UUI
 			&i.BaseVersionID,
 			&i.IsCurrent,
 			&i.DiscardedAt,
+			&i.Name,
 		); err != nil {
 			return nil, err
 		}
@@ -1752,7 +1757,7 @@ func (q *Queries) ListTemplateDrafts(ctx context.Context, templateIds []uuid.UUI
 }
 
 const listTemplateVersions = `-- name: ListTemplateVersions :many
-SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at
+SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at, name
 FROM template_version_summaries
 WHERE template_id = $1
   AND ($4::boolean IS NULL OR (published_at IS NOT NULL) = $4::boolean)
@@ -1799,6 +1804,7 @@ func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVers
 			&i.BaseVersionID,
 			&i.IsCurrent,
 			&i.DiscardedAt,
+			&i.Name,
 		); err != nil {
 			return nil, err
 		}
@@ -1939,9 +1945,10 @@ WITH published AS (
             AND v.template_id = $2
             AND v.published_at IS NULL
             AND v.discarded_at IS NULL
-        RETURNING v.id, v.template_id, v.subject, v.jsx_source, v.main_mode, v.html_content, v.plain_text_content)
+        RETURNING v.id, v.template_id, v.name, v.subject, v.jsx_source, v.main_mode, v.html_content, v.plain_text_content)
 UPDATE templates t
-SET subject              = p.subject,
+SET name                 = p.name,
+    subject              = p.subject,
     html_content         = p.html_content,
     plain_text_content   = p.plain_text_content,
     react_email_content  = CASE WHEN p.main_mode = 'jsx' THEN p.jsx_source ELSE '' END,
@@ -1958,7 +1965,7 @@ type PublishTemplateDraftParams struct {
 }
 
 // Publishes a draft: marks it published and copies it onto the template row,
-// which the send path reads — its subject and its render. react_email_content,
+// which the send path reads — its name, subject and render. react_email_content,
 // the column the old panel edits, gets the JSX source only when JSX is the
 // Main source, and an empty string otherwise. The old panel re-renders any JSX
 // it finds there and saves that render as the body, and the expand step would
@@ -2024,30 +2031,31 @@ const recordTemplateDraft = `-- name: RecordTemplateDraft :one
 WITH repeated AS (SELECT v.id
                   FROM template_versions v
                   WHERE v.id = $1::uuid
-                    AND (v.subject, v.jsx_source, v.visual_source, v.html_source, v.main_mode, v.html_content,
+                    AND (v.name, v.subject, v.jsx_source, v.visual_source, v.html_source, v.main_mode, v.html_content,
                          v.plain_text_content)
                       IS NOT DISTINCT FROM
-                        ($2::text, $3::text, $4::jsonb,
-                         $5::text, $6::authoring_mode, $7::text,
-                         $8::text)),
+                        ($2::text, $3::text, $4::text, $5::jsonb,
+                         $6::text, $7::authoring_mode, $8::text,
+                         $9::text)),
      written AS (
-         INSERT INTO template_versions (template_id, seq, subject, jsx_source, visual_source, html_source, main_mode,
+         INSERT INTO template_versions (template_id, seq, name, subject, jsx_source, visual_source, html_source, main_mode,
                                         html_content, plain_text_content, author_kind, author_sub, author_name,
                                         base_version_id)
-             SELECT $9::uuid,
-                    COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = $9::uuid),
+             SELECT $10::uuid,
+                    COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = $10::uuid),
                              0) + 1,
                     $2::text,
                     $3::text,
-                    $4::jsonb,
-                    $5::text,
-                    $6::authoring_mode,
-                    $7::text,
+                    $4::text,
+                    $5::jsonb,
+                    $6::text,
+                    $7::authoring_mode,
                     $8::text,
+                    $9::text,
                     'operator',
-                    $10::text,
                     $11::text,
-                    $12::uuid
+                    $12::text,
+                    $13::uuid
              WHERE NOT EXISTS (SELECT 1 FROM repeated)
              RETURNING id)
 SELECT id, true AS written
@@ -2059,6 +2067,7 @@ FROM repeated
 
 type RecordTemplateDraftParams struct {
 	ContinuedID      *uuid.UUID    `json:"continued_id"`
+	Name             string        `json:"name"`
 	Subject          string        `json:"subject"`
 	JsxSource        *string       `json:"jsx_source"`
 	VisualSource     []byte        `json:"visual_source"`
@@ -2079,13 +2088,14 @@ type RecordTemplateDraftRow struct {
 
 // Writes an operator's draft, numbered after the template's last version,
 // unless the version it continues holds exactly this content already —
-// subject, every source, Main source and render, a Visual document compared
+// name, subject, every source, Main source and render, a Visual document compared
 // as JSON rather than as text. Returns the draft it wrote, or the version it
 // would have repeated, and whether it wrote one. The caller holds the template
 // row's lock (LockTemplate).
 func (q *Queries) RecordTemplateDraft(ctx context.Context, arg RecordTemplateDraftParams) (RecordTemplateDraftRow, error) {
 	row := q.db.QueryRow(ctx, recordTemplateDraft,
 		arg.ContinuedID,
+		arg.Name,
 		arg.Subject,
 		arg.JsxSource,
 		arg.VisualSource,
@@ -2105,6 +2115,7 @@ func (q *Queries) RecordTemplateDraft(ctx context.Context, arg RecordTemplateDra
 
 const recordTemplateRowAsVersion = `-- name: RecordTemplateRowAsVersion :execrows
 WITH written AS (SELECT t.id,
+                        t.name,
                         t.subject,
                         t.html_content,
                         t.plain_text_content,
@@ -2113,6 +2124,7 @@ WITH written AS (SELECT t.id,
                  FROM templates t
                  WHERE t.id = $1),
      candidate AS (SELECT w.id                                                        AS template_id,
+                          w.name,
                           w.subject,
                           COALESCE(w.jsx_source, p.jsx_source)                        AS jsx_source,
                           p.visual_source,
@@ -2128,7 +2140,7 @@ WITH written AS (SELECT t.id,
                           w.html_content,
                           w.plain_text_content,
                           p.id                                                        AS published_id,
-                          (p.subject, p.jsx_source, p.visual_source, p.html_source, p.main_mode,
+                          (p.name, p.subject, p.jsx_source, p.visual_source, p.html_source, p.main_mode,
                            p.html_content, p.plain_text_content)                      AS published_content
                    FROM written w
                             LEFT JOIN template_versions p ON p.id = w.published_version_id
@@ -2137,11 +2149,12 @@ WITH written AS (SELECT t.id,
                                                            AND w.plain_text_content = p.plain_text_content
                                                            AND w.jsx_source IS NOT DISTINCT FROM p.jsx_source AS kept) body),
      version AS (
-         INSERT INTO template_versions (template_id, seq, subject, jsx_source, visual_source, html_source, main_mode,
+         INSERT INTO template_versions (template_id, seq, name, subject, jsx_source, visual_source, html_source, main_mode,
                                         html_content, plain_text_content, author_kind, author_sub, author_name,
                                         requested_subject, published_at, base_version_id)
              SELECT c.template_id,
                     COALESCE((SELECT max(v.seq) FROM template_versions v WHERE v.template_id = c.template_id), 0) + 1,
+                    c.name,
                     c.subject,
                     c.jsx_source,
                     c.visual_source,
@@ -2157,7 +2170,7 @@ WITH written AS (SELECT t.id,
                     c.published_id
              FROM candidate c
              WHERE c.published_id IS NULL
-                OR (c.subject, c.jsx_source, c.visual_source, c.html_source, c.main_mode,
+                OR (c.name, c.subject, c.jsx_source, c.visual_source, c.html_source, c.main_mode,
                     c.html_content, c.plain_text_content) IS DISTINCT FROM c.published_content
              RETURNING id, template_id)
 UPDATE templates t
@@ -2183,7 +2196,7 @@ type RecordTemplateRowAsVersionParams struct {
 //
 // Those writers send a subject, a render and at most a JSX source, so the
 // version starts from the published one and replaces only what they changed:
-//   - The subject and the render are the row's.
+//   - The name, the subject and the render are the row's.
 //   - If the body — html_content, plain_text_content and the JSX source — is
 //     the published version's, the Main source and every source stay as they
 //     were: the old panel sends a stored body back untouched when only the
@@ -2197,7 +2210,7 @@ type RecordTemplateRowAsVersionParams struct {
 // A row with no published version yet — written before versions were kept,
 // or by the old binary between the migration and this one — is taken as it
 // now is. When the result is the published version over again, nothing is
-// recorded: the write changed nothing a version holds (name is not one).
+// recorded: the write changed nothing a version holds.
 //
 // The version is numbered after the template's last one; the row write before
 // this holds the row's lock, so two writers cannot take the same number. Its

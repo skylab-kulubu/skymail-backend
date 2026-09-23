@@ -500,6 +500,10 @@ const docTemplate = `{
                         ],
                         "type": "string"
                     },
+                    "name": {
+                        "description": "The template's name in this version; publishing it names the template so. Versions written before names were kept carry the name the template had then.",
+                        "type": "string"
+                    },
                     "plain_text_content": {
                         "description": "The Main source rendered as plain text.",
                         "type": "string"
@@ -559,6 +563,10 @@ const docTemplate = `{
                             "visual",
                             "html"
                         ],
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "The template's name in this version; publishing it names the template so. Versions written before names were kept carry the name the template had then.",
                         "type": "string"
                     },
                     "published_at": {
@@ -735,6 +743,10 @@ const docTemplate = `{
                             "visual",
                             "html"
                         ],
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "The template's name in this version: publishing the draft renames the template. Left out or null: kept from the version the save continues.",
                         "type": "string"
                     },
                     "plain_text_content": {
@@ -2407,7 +2419,7 @@ const docTemplate = `{
         },
         "/templates/{id}/drafts": {
             "post": {
-                "description": "Records an operator's draft of a Mail template: a version that is sent to nobody until it is published. The template row, which is what is sent, does not change. Changing which source is the Main source is a save too: send the new main_mode and the render its source gives.\n\nThe editor renders the Main source; the server stores the render it is given. It checks what it can without rendering: the fields are there and not blank, the Main source's Authoring mode holds a source, the base is a published version of this template, a Visual source is a JSON object, a JSX source has code in it, and — as every write of a version is checked, by requiredvars — the subject, plain text and HTML parse as the mailer's Go templates (422 template.unparseable, params.part naming subject, plain_text or html) and the HTML references every Required variable of the template as it stands now (422 template.required_variables_missing, params.missing: [{name, source, reason}]). An archived template is not found.\n\nEach save is a new version; an operator's newest version, while unpublished, is their draft in progress. A save continues it when it started from the same base, or else starts from the base. Sources left out, or null, are kept from the version the save continues, so a save never drops a source. A save that changes nothing records nothing and answers 200 with the version it continues.",
+                "description": "Records an operator's draft of a Mail template: a version that is sent to nobody until it is published. The template row, which is what is sent, does not change. Changing which source is the Main source is a save too: send the new main_mode and the render its source gives.\n\nThe editor renders the Main source; the server stores the render it is given. It checks what it can without rendering: the fields are there and not blank, the Main source's Authoring mode holds a source, the base is a published version of this template, a Visual source is a JSON object, a JSX source has code in it, and — as every write of a version is checked, by requiredvars — the subject, plain text and HTML parse as the mailer's Go templates (422 template.unparseable, params.part naming subject, plain_text or html) and the HTML references every Required variable of the template as it stands now (422 template.required_variables_missing, params.missing: [{name, source, reason}]). An archived template is not found.\n\nEach save is a new version; an operator's newest version, while unpublished, is their draft in progress. A save continues it when it started from the same base, or else starts from the base. Sources left out, or null, are kept from the version the save continues, so a save never drops a source; so is the name, and a name sent renames the template when the draft is published. A save that changes nothing records nothing and answers 200 with the version it continues.",
                 "parameters": [
                     {
                         "description": "Template ID",
@@ -3029,7 +3041,7 @@ const docTemplate = `{
         },
         "/templates/{id}/versions/{versionId}/publish": {
             "post": {
-                "description": "Makes a draft the version the template sends: the draft is marked published and copied onto the template row — subject, HTML and plain text, and react_email_content: the JSX source when JSX is the Main source, an empty string otherwise, so the old panel never re-renders a JSX source that is not what is sent — in one transaction. Answers with the template as publishing left it. Publishing the version the template already sends changes nothing and answers the same way. The draft is checked again as it was when saved, against the template's Required variables as they stand at publishing.\n\nA draft is stale when its base_version_id is not the template's published_version_id: someone published after it was started, and publishing it would quietly revert their version. That is refused with 409 template.stale_base, whose params name version_id (the draft), base_version_id (what it started from) and published_version_id (what is sent now), so both can be shown side by side. The operator's confirmation names the version they saw: {\"force\": {\"over_version_id\": \u003cpublished_version_id from the conflict\u003e}} publishes the draft over it, and the replaced version stays in the history. If another version was published since, the confirmation is refused with a fresh 409 naming it.",
+                "description": "Makes a draft the version the template sends: the draft is marked published and copied onto the template row — name, subject, HTML and plain text, and react_email_content: the JSX source when JSX is the Main source, an empty string otherwise, so the old panel never re-renders a JSX source that is not what is sent — in one transaction. Answers with the template as publishing left it. Publishing the version the template already sends changes nothing and answers the same way. The draft is checked again as it was when saved, against the template's Required variables as they stand at publishing.\n\nA draft is stale when its base_version_id is not the template's published_version_id: someone published after it was started, and publishing it would quietly revert their version. That is refused with 409 template.stale_base, whose params name version_id (the draft), base_version_id (what it started from) and published_version_id (what is sent now), so both can be shown side by side. The operator's confirmation names the version they saw: {\"force\": {\"over_version_id\": \u003cpublished_version_id from the conflict\u003e}} publishes the draft over it, and the replaced version stays in the history. If another version was published since, the confirmation is refused with a fresh 409 naming it.",
                 "parameters": [
                     {
                         "description": "Template ID",
