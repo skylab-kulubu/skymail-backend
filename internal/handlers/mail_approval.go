@@ -211,7 +211,8 @@ type MailApprovalRecipient struct {
 // or — for a list, whose members each get their own — the submitter's, as if
 // they were on it.
 type MailApprovalPreview struct {
-	Subject     string                `json:"subject"`
+	Subject string `json:"subject"`
+	// The whole mail as HTML: operators' template markup with the submitted values. Show it only in a sandboxed iframe (sandbox with no allow-scripts or allow-same-origin), never in the page itself.
 	HTML        string                `json:"html"`
 	PlainText   string                `json:"plain_text"`
 	RenderedFor MailApprovalRecipient `json:"rendered_for"`
@@ -453,7 +454,7 @@ func (h *mailApprovalHandlerImpl) List(c fiber.Ctx) error {
 // Get godoc
 //
 //	@Summary		Read a request for approval
-//	@Description	A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to, and its history — for an approver or its submitter; to anyone else it is not found. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.
+//	@Description	A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.
 //	@Tags			Mail approval
 //	@Produce		json
 //	@Param			id	path		string	true	"Request ID"

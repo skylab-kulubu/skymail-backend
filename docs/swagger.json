@@ -386,11 +386,12 @@
                         "type": "integer"
                     },
                     "problem": {
-                        "description": "Why it reached no one or fewer than it was for: no_approvers (no one else holds skymail:mails:approve), approver_lookup_failed (Keycloak did not say in time), no_address (the submitter's token carried no e-mail), template_unavailable (the System template is not seeded), enqueue_failed. Null when it reached everyone.",
+                        "description": "Why it reached no one or fewer than it was for: no_approvers (no one holding skymail:mails:approve has an address), approver_lookup_failed (Keycloak did not say in time), no_address (the submitter's token carried no e-mail), unverified_address (it carried one Keycloak had not verified, which is not used), template_unavailable (the System template is not seeded), enqueue_failed. Null when it reached everyone.",
                         "enum": [
                             "no_approvers",
                             "approver_lookup_failed",
                             "no_address",
+                            "unverified_address",
                             "template_unavailable",
                             "enqueue_failed"
                         ],
@@ -423,6 +424,7 @@
                 "description": "Null when it does not render; preview_error says why.",
                 "properties": {
                     "html": {
+                        "description": "The whole mail as HTML: operators' template markup with the submitted values. Show it only in a sandboxed iframe (sandbox with no allow-scripts or allow-same-origin), never in the page itself.",
                         "type": "string"
                     },
                     "plain_text": {
@@ -1390,7 +1392,7 @@
     "paths": {
         "/mail_approvals": {
             "get": {
-                "description": "An approver (skymail:mails:approve) lists everyone's requests, or only their own with mine=true; anyone else lists only their own. Newest submission first; X-Total-Count counts the filtered requests. A request past its deadline is expired before it is listed.",
+                "description": "An approver (skymail:mails:approve) lists everyone's requests, or only their own with mine=true; anyone else lists only their own. Newest submission first; X-Total-Count counts the filtered requests. A request undecided past its deadline is listed, and filtered, as expired; listing writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.",
                 "parameters": [
                     {
                         "description": "Only requests in this state",
@@ -1492,7 +1494,7 @@
                 ]
             },
             "post": {
-                "description": "Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or one recipient (as POST /mail_tasks/single takes them), never both — and nothing is sent until someone holding skymail:mails:approve approves it. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values. It waits seven days; undecided by then, it expires and is never sent.\n\nEvery approver but the submitter is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.",
+                "description": "Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or one recipient (as POST /mail_tasks/single takes them), never both — and nothing is sent until someone holding skymail:mails:approve approves it. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values. It waits seven days; undecided by then, it expires and is never sent.\n\nEvery approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -1573,7 +1575,7 @@
         },
         "/mail_approvals/{id}": {
             "get": {
-                "description": "A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to, and its history — for an approver or its submitter; to anyone else it is not found. A request past its deadline is expired before it is read.",
+                "description": "A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.",
                 "parameters": [
                     {
                         "description": "Request ID",
@@ -1686,7 +1688,7 @@
                                 }
                             }
                         },
-                        "description": "mail_approval.state_conflict, mail_approval.expired, mail_approval.busy, mail_approval.template_republished, mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
+                        "description": "mail_approval.state_conflict, mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished, mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
                     },
                     "500": {
                         "content": {
@@ -1707,7 +1709,7 @@
         },
         "/mail_approvals/{id}/approve": {
             "post": {
-                "description": "An approver approves a pending request someone else submitted, and it is queued through the send path at once, sent by its submitter: without body_variables exactly as it stands, with them as the approver edited them — the edit is recorded (an edited event naming each variable changed, before and after) and told to the submitter. The send is of the template version the request is pinned to, to its audience as it is now. Approving is idempotent and race-safe: the request is locked while it is sent, someone else acting on it at that moment is refused (409 mail_approval.busy), and approving an approved request again without an edit sends nothing and answers it as it is.\n\nThe submitter is mailed the mail.approval-resolved System template with Decision \"approved\". A request past its deadline is expired instead (409 mail_approval.expired) and its submitter told.",
+                "description": "An approver approves a pending request — their own too, which its history then shows — and it is queued through the send path at once, sent by its submitter: without body_variables exactly as it stands, with them as the approver edited them — the edit is recorded (an edited event naming each variable changed, before and after) and told to the submitter. The send is of the template version the request is pinned to, to its audience as it is now. Approving is idempotent and race-safe: the request is locked while it is sent, someone else acting on it at that moment is refused (409 mail_approval.busy), and approving an approved request again without an edit sends nothing and answers it as it is.\n\nThe submitter is mailed the mail.approval-resolved System template with Decision \"approved\". A request past its deadline is expired instead (409 mail_approval.expired) and its submitter told.",
                 "parameters": [
                     {
                         "description": "Request ID",
@@ -1767,7 +1769,7 @@
                                 }
                             }
                         },
-                        "description": "Not an approver, or mail_approval.own_request"
+                        "description": "Not an approver"
                     },
                     "404": {
                         "content": {
@@ -1787,7 +1789,7 @@
                                 }
                             }
                         },
-                        "description": "mail_approval.state_conflict (params.state, params.allowed), mail_approval.expired, mail_approval.busy, mail_approval.template_republished (params.submitted_version_id, params.published_version_id), mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
+                        "description": "mail_approval.state_conflict (params.state, params.allowed), mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished (params.submitted_version_id, params.published_version_id), mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
                     },
                     "422": {
                         "content": {
@@ -1919,7 +1921,7 @@
         },
         "/mail_approvals/{id}/reject": {
             "post": {
-                "description": "An approver refuses a pending request someone else submitted, with a reason. Nothing is sent. The submitter is mailed the mail.approval-resolved System template with Decision \"rejected\" and the reason as DecisionNote, and may edit and resubmit the request; the rejection stays in its history.",
+                "description": "An approver refuses a pending request, with a reason. Nothing is sent. The submitter is mailed the mail.approval-resolved System template with Decision \"rejected\" and the reason as DecisionNote, and may edit and resubmit the request; the rejection stays in its history.",
                 "parameters": [
                     {
                         "description": "Request ID",
@@ -1980,7 +1982,7 @@
                                 }
                             }
                         },
-                        "description": "Not an approver, or mail_approval.own_request"
+                        "description": "Not an approver"
                     },
                     "404": {
                         "content": {
@@ -2021,7 +2023,7 @@
         },
         "/mail_approvals/{id}/resubmit": {
             "post": {
-                "description": "The submitter fills a rejected request, or one whose returned edit they declined, in again — whole, as a submission is — and it is pending again with a new seven-day deadline, pinned to the version its template publishes now. It is checked as a submission is. It stays the same request: a resubmitted event records what changed, and everything before it stays in the history. Every approver but the submitter is mailed mail.approval-requested again.",
+                "description": "The submitter fills a rejected request, or one whose returned edit they declined, in again — whole, as a submission is — and it is pending again with a new seven-day deadline, pinned to the version its template publishes now. It is checked as a submission is. It stays the same request: a resubmitted event records what changed, and everything before it stays in the history. Every approver is mailed mail.approval-requested again.",
                 "parameters": [
                     {
                         "description": "Request ID",
@@ -2133,7 +2135,7 @@
         },
         "/mail_approvals/{id}/return": {
             "post": {
-                "description": "An approver edits a pending request someone else submitted and hands it back: the edit is recorded (an edited event naming each variable changed, before and after), the request is returned, and the submitter is mailed the mail.approval-resolved System template with Decision \"returned\". Nothing is sent. The submitter accepts it — and it goes out as edited — or declines it. body_variables is the whole edit and must differ from the request's.",
+                "description": "An approver edits a pending request and hands it back: the edit is recorded (an edited event naming each variable changed, before and after), the request is returned with a new seven-day deadline — the decision is the submitter's now — and the submitter is mailed the mail.approval-resolved System template with Decision \"returned\" and the deadline. Nothing is sent. The submitter accepts it — and it goes out as edited — or declines it. body_variables is the whole edit and must differ from the request's.",
                 "parameters": [
                     {
                         "description": "Request ID",
@@ -2194,7 +2196,7 @@
                                 }
                             }
                         },
-                        "description": "Not an approver, or mail_approval.own_request"
+                        "description": "Not an approver"
                     },
                     "404": {
                         "content": {
