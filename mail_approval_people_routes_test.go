@@ -256,6 +256,8 @@ func TestPeopleAreCheckedBeforeARequestIsKept(t *testing.T) {
 	withList["mail_list_id"] = w.list.ID
 	withOldField := w.peopleSend(ayseKaya)
 	withOldField["recipient_email"] = "mehmet@example.com"
+	withOldName := w.peopleSend(ayseKaya)
+	withOldName["recipient_full_name"] = "Mehmet Demir"
 
 	for name, tc := range map[string]struct {
 		send  map[string]any
@@ -265,6 +267,7 @@ func TestPeopleAreCheckedBeforeARequestIsKept(t *testing.T) {
 		"no one":                        {w.peopleSend(), "mail_list_id", "exactly_one_of"},
 		"a list and people":             {withList, "mail_list_id", "exactly_one_of"},
 		"people and the one-person one": {withOldField, "mail_list_id", "exactly_one_of"},
+		"people and a one-person name":  {withOldName, "mail_list_id", "exactly_one_of"},
 		"a malformed address":           {w.peopleSend(ayseKaya, approvalRecipient{Email: "mehmet"}), "recipients[1].email", "invalid_email"},
 		"no address":                    {w.peopleSend(approvalRecipient{FullName: "Adı Var"}), "recipients[0].email", "required"},
 		"an address twice":              {w.peopleSend(ayseKaya, mehmetDemir, approvalRecipient{Email: "AYSE@Example.com"}), "recipients[2].email", "duplicate"},
@@ -392,6 +395,11 @@ func TestSubmittingTakesReadAccessToWhatIsSubmitted(t *testing.T) {
 	}
 	refused("baska", "/v1/mail_approvals", w.listSend(), "skymail:templates:read", "skymail:lists:read")
 	refused("baska", "/v1/mail_approvals", w.peopleSend(ayseKaya), "skymail:templates:read")
+	// Without templates:read nothing in the body matters: it is refused before
+	// the body is checked.
+	malformed := w.peopleSend(approvalRecipient{Email: "ayse"}, approvalRecipient{Email: "ayse"})
+	delete(malformed, "template_id")
+	refused("baska", "/v1/mail_approvals", malformed, "skymail:templates:read")
 	refused("okur", "/v1/mail_approvals", w.listSend(), "skymail:lists:read")
 	var kept int64
 	if err := w.store.Conn.QueryRow(context.Background(), `SELECT count(*) FROM mail_approvals`).Scan(&kept); err != nil {

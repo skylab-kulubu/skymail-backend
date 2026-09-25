@@ -78,6 +78,18 @@ func (c approvalCaller) mayRead(send approvalSend) error {
 	return nil
 }
 
+// listNamedIn is as much of a send as a body that has not been checked yet
+// shows: whether it names a list. A body that does not parse names none.
+func listNamedIn(body []byte) approvalSend {
+	var peek struct {
+		MailListID *uuid.UUID `json:"mail_list_id"`
+	}
+	if json.Unmarshal(body, &peek) != nil || peek.MailListID == nil || *peek.MailListID == uuid.Nil {
+		return approvalSend{}
+	}
+	return approvalSend{mailListID: peek.MailListID}
+}
+
 // recipient is the caller as a mail to them is addressed.
 func (c approvalCaller) recipient() mailer.RecipientInfo {
 	return mailer.RecipientInfo{FullName: deref(c.name), Email: deref(c.email)}
@@ -166,14 +178,16 @@ func errNotOneAudience() error {
 
 // recipientsOf is the people a submission names, trimmed, in order: its
 // recipients, or — until the screens send those (ticket 22) — the one person
-// of recipient_email. Naming both is refused, and so is an address named
-// twice, whatever its case: everyone is sent to once.
+// of recipient_email and recipient_full_name. Recipients with either of those
+// is refused, and so is an address named twice, whatever its case: everyone
+// is sent to once.
 func recipientsOf(params requests.SubmitMailApproval) ([]mailer.RecipientInfo, error) {
-	if email := strings.TrimSpace(params.RecipientEmail); email != "" {
-		if len(params.Recipients) > 0 {
-			return nil, errNotOneAudience()
-		}
-		return []mailer.RecipientInfo{{FullName: strings.TrimSpace(params.RecipientFullName), Email: email}}, nil
+	email, name := strings.TrimSpace(params.RecipientEmail), strings.TrimSpace(params.RecipientFullName)
+	if len(params.Recipients) > 0 && (email != "" || name != "") {
+		return nil, errNotOneAudience()
+	}
+	if email != "" {
+		return []mailer.RecipientInfo{{FullName: name, Email: email}}, nil
 	}
 	recipients := make([]mailer.RecipientInfo, len(params.Recipients))
 	first := map[string]int{}
@@ -197,6 +211,20 @@ func recipientsOf(params requests.SubmitMailApproval) ([]mailer.RecipientInfo, e
 
 func recipientField(i int) string {
 	return "recipients[" + strconv.Itoa(i) + "].email"
+}
+
+// duplicateRecipientsError is what an address named twice means to the
+// caller when Postgres, not recipientsOf, found it: its lower() and Go's
+// strings.ToLower can differ on an unusual address. Which rows clashed is
+// Postgres's to know, so the error names the list.
+func duplicateRecipientsError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "mail_approval_recipients_email_once" {
+		return apperrors.ErrValidation.WithParams(map[string]interface{}{
+			"errors": []validator.FieldError{{Field: "recipients", Code: "duplicate"}},
+		})
+	}
+	return err
 }
 
 // renderedFor is who a preview of a send is rendered for: its first person,
@@ -258,7 +286,7 @@ func setRecipients(ctx context.Context, q *database.Queries, id uuid.UUID, recip
 	for i, r := range recipients {
 		params.Emails[i], params.FullNames[i] = r.Email, r.FullName
 	}
-	return q.AddMailApprovalRecipients(ctx, params)
+	return duplicateRecipientsError(q.AddMailApprovalRecipients(ctx, params))
 }
 
 // submitterOf is a request's submitter as a mail to them is addressed.
@@ -608,7 +636,7 @@ func (h *mailApprovalHandlerImpl) send(ctx context.Context, q *database.Queries,
 	return taskIDs, q.AddMailApprovalTasks(ctx, database.AddMailApprovalTasksParams{ApprovalID: a.ID, TaskIds: taskIDs})
 }
 
-// queue queues send's sends and returns them, in order.
+// queue queues a request's sends, locked, and returns them in order.
 func (h *mailApprovalHandlerImpl) queue(ctx context.Context, q *database.Queries, a database.MailApproval, prepared approvalPrepared) ([]uuid.UUID, error) {
 	template, err := q.ShareLockTemplate(ctx, a.TemplateID)
 	if err != nil {
@@ -626,46 +654,55 @@ func (h *mailApprovalHandlerImpl) queue(ctx context.Context, q *database.Queries
 
 	sends := h.mailer.Queue(q)
 	if a.MailListID == nil {
-		send, err := lockedSend(ctx, q, a)
-		if err != nil {
-			return nil, err
-		}
-		if len(send.recipients) == 0 {
-			return nil, errApprovalAudienceEmpty
-		}
-		taskIDs := make([]uuid.UUID, len(send.recipients))
-		for i, to := range send.recipients {
-			if taskIDs[i], err = sends.EnqueueSingle(ctx, database.CreateSingleMailTaskParams{
-				SentBy:            a.SubmitterSub,
-				TemplateID:        &a.TemplateID,
-				BodyVariables:     a.BodyVariables,
-				RecipientFullName: to.FullName,
-				RecipientEmail:    to.Email,
-			}); err != nil {
-				return nil, err
-			}
-		}
-		return taskIDs, nil
+		return queueToPeople(ctx, q, sends, a)
 	}
-	one := func(taskID uuid.UUID, err error) ([]uuid.UUID, error) {
-		if err != nil {
-			return nil, err
-		}
-		return []uuid.UUID{taskID}, nil
+	taskID, err := queueToList(ctx, q, sends, a, prepared)
+	if err != nil {
+		return nil, err
 	}
+	return []uuid.UUID{taskID}, nil
+}
 
+// queueToPeople queues a request, locked, as one single send per person, in
+// their order.
+func queueToPeople(ctx context.Context, q *database.Queries, sends mailer.Queue, a database.MailApproval) ([]uuid.UUID, error) {
+	send, err := lockedSend(ctx, q, a)
+	if err != nil {
+		return nil, err
+	}
+	if len(send.recipients) == 0 {
+		return nil, errApprovalAudienceEmpty
+	}
+	taskIDs := make([]uuid.UUID, len(send.recipients))
+	for i, to := range send.recipients {
+		if taskIDs[i], err = sends.EnqueueSingle(ctx, database.CreateSingleMailTaskParams{
+			SentBy:            a.SubmitterSub,
+			TemplateID:        &a.TemplateID,
+			BodyVariables:     a.BodyVariables,
+			RecipientFullName: to.FullName,
+			RecipientEmail:    to.Email,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return taskIDs, nil
+}
+
+// queueToList queues a request, locked, as the one send to its internal list
+// or Keycloak group.
+func queueToList(ctx context.Context, q *database.Queries, sends mailer.Queue, a database.MailApproval, prepared approvalPrepared) (uuid.UUID, error) {
 	list, err := q.ShareLockMailingList(ctx, *a.MailListID)
 	switch {
 	case err == nil:
 		if list.ArchivedAt != nil {
-			return nil, atSend(errApprovalAudienceUnavailable)
+			return uuid.Nil, atSend(errApprovalAudienceUnavailable)
 		}
 		recipients, err := q.CountRecipientsByMailingListId(ctx, list.ID)
 		if err != nil {
-			return nil, err
+			return uuid.Nil, err
 		}
 		if recipients == 0 {
-			return nil, errApprovalAudienceEmpty
+			return uuid.Nil, errApprovalAudienceEmpty
 		}
 		taskID, err := sends.Enqueue(ctx, database.CreateMailTaskParams{
 			SentBy:        a.SubmitterSub,
@@ -674,31 +711,31 @@ func (h *mailApprovalHandlerImpl) queue(ctx context.Context, q *database.Queries
 			BodyVariables: a.BodyVariables,
 		})
 		if err == nil && taskID == uuid.Nil {
-			return nil, errApprovalAudienceEmpty
+			return uuid.Nil, errApprovalAudienceEmpty
 		}
-		return one(taskID, err)
+		return taskID, err
 	case !isNotFound(err):
-		return nil, err
+		return uuid.Nil, err
 	}
 
 	// A Keycloak group, whose members were asked for before the lock — unless
 	// the request's audience changed in between.
 	if prepared.groupID == nil || *prepared.groupID != *a.MailListID {
-		return nil, errApprovalChanged
+		return uuid.Nil, errApprovalChanged
 	}
 	if prepared.groupMembers == nil {
-		return nil, atSend(errApprovalAudienceUnavailable)
+		return uuid.Nil, atSend(errApprovalAudienceUnavailable)
 	}
 	if len(prepared.groupMembers) == 0 {
-		return nil, errApprovalAudienceEmpty
+		return uuid.Nil, errApprovalAudienceEmpty
 	}
-	return one(sends.EnqueueWithRecipients(ctx, mailer.EnqueueWithRecipientsParams{
+	return sends.EnqueueWithRecipients(ctx, mailer.EnqueueWithRecipientsParams{
 		SentBy:        a.SubmitterSub,
 		TemplateID:    a.TemplateID,
 		MailListID:    a.MailListID,
 		BodyVariables: a.BodyVariables,
 		Recipients:    prepared.groupMembers,
-	}))
+	})
 }
 
 // approvalStep is what a decision does to a request: the state it moves it
