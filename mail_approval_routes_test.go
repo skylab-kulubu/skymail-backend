@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http/httptest"
@@ -109,15 +110,19 @@ type sentMail struct {
 
 // recordingMailer is the real mailer — it writes the send and its rendered
 // queue rows to Postgres, it only never dispatches them — with every call
-// recorded, those made inside a transaction included. gate, when set, holds a
-// list send inside the mailer until it is closed, so a test can act while an
-// approval is mid-send.
+// recorded, those made inside a transaction included. gate, when set, holds
+// each send an approval queues inside the mailer until it is closed, so a test
+// can act while an approval is mid-send; entered is told of each, when it has
+// room. failSingle, when set, makes that one-person send of an approval — the
+// first is 1 — fail.
 type recordingMailer struct {
 	mailer.Transactional
-	mu      sync.Mutex
-	sent    []sentMail
-	gate    chan struct{}
-	entered chan struct{}
+	mu         sync.Mutex
+	sent       []sentMail
+	gate       chan struct{}
+	entered    chan struct{}
+	failSingle int
+	singles    int
 }
 
 func decodeVariables(raw []byte) map[string]any {
@@ -133,32 +138,43 @@ func (m *recordingMailer) record(s sentMail) {
 }
 
 func (m *recordingMailer) Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error) {
-	return recordingQueue{m, m.Transactional}.Enqueue(ctx, arg)
+	return recordingQueue{m: m, queue: m.Transactional}.Enqueue(ctx, arg)
 }
 
 func (m *recordingMailer) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
-	return recordingQueue{m, m.Transactional}.EnqueueSingle(ctx, arg)
+	return recordingQueue{m: m, queue: m.Transactional}.EnqueueSingle(ctx, arg)
 }
 
 func (m *recordingMailer) EnqueueWithRecipients(ctx context.Context, params mailer.EnqueueWithRecipientsParams) (uuid.UUID, error) {
-	return recordingQueue{m, m.Transactional}.EnqueueWithRecipients(ctx, params)
+	return recordingQueue{m: m, queue: m.Transactional}.EnqueueWithRecipients(ctx, params)
 }
 
 func (m *recordingMailer) Queue(q *database.Queries) mailer.Queue {
-	return recordingQueue{m, m.Transactional.Queue(q)}
+	return recordingQueue{m: m, queue: m.Transactional.Queue(q), inTx: true}
 }
 
-// recordingQueue records each send it queues through queue.
+// recordingQueue records each send it queues through queue. inTx: it is an
+// approval's, in the approval's transaction; the notifications are not.
 type recordingQueue struct {
 	m     *recordingMailer
 	queue mailer.Queue
+	inTx  bool
+}
+
+// hold keeps an approval's send at the gate, when there is one.
+func (r recordingQueue) hold() {
+	if !r.inTx || r.m.gate == nil {
+		return
+	}
+	select {
+	case r.m.entered <- struct{}{}:
+	default:
+	}
+	<-r.m.gate
 }
 
 func (r recordingQueue) Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error) {
-	if r.m.gate != nil {
-		r.m.entered <- struct{}{}
-		<-r.m.gate
-	}
+	r.hold()
 	id, err := r.queue.Enqueue(ctx, arg)
 	if err == nil {
 		r.m.record(sentMail{kind: "list", templateID: *arg.TemplateID, sentBy: arg.SentBy, mailListID: arg.MailListID,
@@ -168,6 +184,16 @@ func (r recordingQueue) Enqueue(ctx context.Context, arg database.CreateMailTask
 }
 
 func (r recordingQueue) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
+	r.hold()
+	if r.inTx {
+		r.m.mu.Lock()
+		r.m.singles++
+		fail := r.m.singles == r.m.failSingle
+		r.m.mu.Unlock()
+		if fail {
+			return uuid.Nil, errors.New("injected send failure")
+		}
+	}
 	id, err := r.queue.EnqueueSingle(ctx, arg)
 	if err == nil {
 		r.m.record(sentMail{kind: "single", templateID: *arg.TemplateID, sentBy: arg.SentBy, recipients: []string{arg.RecipientEmail},
@@ -177,6 +203,7 @@ func (r recordingQueue) EnqueueSingle(ctx context.Context, arg database.CreateSi
 }
 
 func (r recordingQueue) EnqueueWithRecipients(ctx context.Context, params mailer.EnqueueWithRecipientsParams) (uuid.UUID, error) {
+	r.hold()
 	id, err := r.queue.EnqueueWithRecipients(ctx, params)
 	if err == nil {
 		var to []string
@@ -415,23 +442,28 @@ type approvalAnswer struct {
 		RecipientEmail    *string    `json:"recipient_email"`
 		RecipientFullName *string    `json:"recipient_full_name"`
 	} `json:"audience"`
-	BodyVariables  map[string]any `json:"body_variables"`
-	SubmittedAt    time.Time      `json:"submitted_at"`
-	DeadlineAt     time.Time      `json:"deadline_at"`
-	TaskID         *uuid.UUID     `json:"task_id"`
-	LastEvent      *approvalEvent `json:"last_event"`
-	RecipientCount *int64         `json:"recipient_count"`
+	Recipients     []approvalRecipient `json:"recipients"`
+	BodyVariables  map[string]any      `json:"body_variables"`
+	SubmittedAt    time.Time           `json:"submitted_at"`
+	DeadlineAt     time.Time           `json:"deadline_at"`
+	TaskID         *uuid.UUID          `json:"task_id"`
+	TaskIDs        []uuid.UUID         `json:"task_ids"`
+	LastEvent      *approvalEvent      `json:"last_event"`
+	RecipientCount *int64              `json:"recipient_count"`
 	Preview        *struct {
-		Subject     string `json:"subject"`
-		HTML        string `json:"html"`
-		PlainText   string `json:"plain_text"`
-		RenderedFor struct {
-			FullName string `json:"full_name"`
-			Email    string `json:"email"`
-		} `json:"rendered_for"`
+		Subject     string            `json:"subject"`
+		HTML        string            `json:"html"`
+		PlainText   string            `json:"plain_text"`
+		RenderedFor approvalRecipient `json:"rendered_for"`
 	} `json:"preview"`
-	History      []approvalEvent       `json:"history"`
-	Notification *approvalNotification `json:"notification"`
+	PreviewRecipient *approvalRecipient    `json:"preview_recipient"`
+	History          []approvalEvent       `json:"history"`
+	Notification     *approvalNotification `json:"notification"`
+}
+
+type approvalRecipient struct {
+	Email    string `json:"email"`
+	FullName string `json:"full_name"`
 }
 
 type apiError struct {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ type approvalCaller struct {
 	// The token carried an address Keycloak had not verified; email is nil.
 	emailUnverified bool
 	approver        bool
+	roles           []string
 }
 
 func approvalCallerOf(c fiber.Ctx) (approvalCaller, error) {
@@ -45,13 +47,18 @@ func approvalCallerOf(c fiber.Ctx) (approvalCaller, error) {
 		caller.email = &email
 	}
 	caller.emailUnverified, _ = c.Locals("user_email_unverified").(bool)
-	roles, _ := c.Locals("roles").([]string)
-	for _, role := range roles {
-		if role == MailApproverRole {
-			caller.approver = true
+	caller.roles, _ = c.Locals("roles").([]string)
+	caller.approver = caller.has(MailApproverRole)
+	return caller, nil
+}
+
+func (c approvalCaller) has(role string) bool {
+	for _, r := range c.roles {
+		if r == role {
+			return true
 		}
 	}
-	return caller, nil
+	return false
 }
 
 // recipient is the caller as a mail to them is addressed.
@@ -98,23 +105,22 @@ func parseApprovalState(raw string) (database.NullMailApprovalState, error) {
 
 // approvalSend is what a request would send, as the submitter filled it in.
 type approvalSend struct {
-	templateID        uuid.UUID
-	mailListID        *uuid.UUID
-	recipientEmail    *string
-	recipientFullName *string
+	templateID uuid.UUID
+	mailListID *uuid.UUID
+	// The people it goes to, in order; none when it goes to a list.
+	recipients []mailer.RecipientInfo
 	// A JSON object.
 	variables []byte
 }
 
 func approvalSendOf(params requests.SubmitMailApproval) (approvalSend, error) {
+	recipients, err := recipientsOf(params)
+	if err != nil {
+		return approvalSend{}, err
+	}
 	hasList := params.MailListID != nil && *params.MailListID != uuid.Nil
-	email := strings.TrimSpace(params.RecipientEmail)
-	if hasList == (email != "") {
-		return approvalSend{}, apperrors.ErrValidation.WithParams(map[string]interface{}{
-			"errors": []validator.FieldError{{Field: "mail_list_id", Code: "exactly_one_of", Params: map[string]interface{}{
-				"fields": []string{"mail_list_id", "recipient_email"},
-			}}},
-		})
+	if hasList == (len(recipients) > 0) {
+		return approvalSend{}, errNotOneAudience()
 	}
 	variables := params.BodyVariables
 	if variables == nil {
@@ -124,35 +130,118 @@ func approvalSendOf(params requests.SubmitMailApproval) (approvalSend, error) {
 	if err != nil {
 		return approvalSend{}, err
 	}
-	send := approvalSend{templateID: params.TemplateID, variables: raw}
+	send := approvalSend{templateID: params.TemplateID, recipients: recipients, variables: raw}
 	if hasList {
 		send.mailListID = params.MailListID
-	} else {
-		name := strings.TrimSpace(params.RecipientFullName)
-		send.recipientEmail = &email
-		send.recipientFullName = &name
 	}
 	return send, nil
 }
 
-// renderedFor is who a preview of a send is rendered for: its one recipient,
+// errNotOneAudience refuses a submission that names no audience, or more than
+// one of a list, recipients and recipient_email.
+func errNotOneAudience() error {
+	return apperrors.ErrValidation.WithParams(map[string]interface{}{
+		"errors": []validator.FieldError{{Field: "mail_list_id", Code: "exactly_one_of", Params: map[string]interface{}{
+			"fields": []string{"mail_list_id", "recipients", "recipient_email"},
+		}}},
+	})
+}
+
+// recipientsOf is the people a submission names, trimmed, in order: its
+// recipients, or — until the screens send those (ticket 22) — the one person
+// of recipient_email. Naming both is refused, and so is an address named
+// twice, whatever its case: everyone is sent to once.
+func recipientsOf(params requests.SubmitMailApproval) ([]mailer.RecipientInfo, error) {
+	if email := strings.TrimSpace(params.RecipientEmail); email != "" {
+		if len(params.Recipients) > 0 {
+			return nil, errNotOneAudience()
+		}
+		return []mailer.RecipientInfo{{FullName: strings.TrimSpace(params.RecipientFullName), Email: email}}, nil
+	}
+	recipients := make([]mailer.RecipientInfo, len(params.Recipients))
+	first := map[string]int{}
+	var duplicates []validator.FieldError
+	for i, r := range params.Recipients {
+		recipients[i] = mailer.RecipientInfo{FullName: strings.TrimSpace(r.FullName), Email: strings.TrimSpace(r.Email)}
+		address := strings.ToLower(recipients[i].Email)
+		if j, seen := first[address]; seen {
+			duplicates = append(duplicates, validator.FieldError{
+				Field: recipientField(i), Code: "duplicate", Params: map[string]interface{}{"first": recipientField(j)},
+			})
+			continue
+		}
+		first[address] = i
+	}
+	if len(duplicates) > 0 {
+		return nil, apperrors.ErrValidation.WithParams(map[string]interface{}{"errors": duplicates})
+	}
+	return recipients, nil
+}
+
+func recipientField(i int) string {
+	return "recipients[" + strconv.Itoa(i) + "].email"
+}
+
+// renderedFor is who a preview of a send is rendered for: its first person,
 // or — a list's members each get their own — the submitter.
 func (s approvalSend) renderedFor(submitter mailer.RecipientInfo) mailer.RecipientInfo {
-	if s.recipientEmail != nil {
-		return mailer.RecipientInfo{FullName: deref(s.recipientFullName), Email: *s.recipientEmail}
+	if len(s.recipients) > 0 {
+		return s.recipients[0]
 	}
 	return submitter
 }
 
-// sendOfApproval is what a request would send, as it now stands.
-func sendOfApproval(a database.MailApproval) approvalSend {
+// sendOfView is what a request would send, as it was read.
+func sendOfView(view database.GetMailApprovalRow) approvalSend {
 	return approvalSend{
-		templateID:        a.TemplateID,
-		mailListID:        a.MailListID,
-		recipientEmail:    a.RecipientEmail,
-		recipientFullName: a.RecipientFullName,
-		variables:         a.BodyVariables,
+		templateID: view.MailApproval.TemplateID,
+		mailListID: view.MailApproval.MailListID,
+		recipients: recipientsOfView(view),
+		variables:  view.MailApproval.BodyVariables,
 	}
+}
+
+// recipientsOfView is the people a request goes to, as it was read.
+func recipientsOfView(view database.GetMailApprovalRow) []mailer.RecipientInfo {
+	recipients := make([]mailer.RecipientInfo, len(view.RecipientEmails))
+	for i, email := range view.RecipientEmails {
+		recipients[i] = mailer.RecipientInfo{FullName: view.RecipientFullNames[i], Email: email}
+	}
+	return recipients
+}
+
+// lockedSend is what a request, locked, would send: its row and its people as
+// q's transaction sees them.
+func lockedSend(ctx context.Context, q *database.Queries, a database.MailApproval) (approvalSend, error) {
+	rows, err := q.ListMailApprovalRecipients(ctx, a.ID)
+	if err != nil {
+		return approvalSend{}, err
+	}
+	recipients := make([]mailer.RecipientInfo, len(rows))
+	for i, row := range rows {
+		recipients[i] = mailer.RecipientInfo{FullName: row.FullName, Email: row.Email}
+	}
+	return approvalSend{templateID: a.TemplateID, mailListID: a.MailListID, recipients: recipients, variables: a.BodyVariables}, nil
+}
+
+// setRecipients makes recipients the people a request goes to, in q's
+// transaction and in order, in place of whoever it went to before.
+func setRecipients(ctx context.Context, q *database.Queries, id uuid.UUID, recipients []mailer.RecipientInfo) error {
+	if err := q.ClearMailApprovalRecipients(ctx, id); err != nil {
+		return err
+	}
+	if len(recipients) == 0 {
+		return nil
+	}
+	params := database.AddMailApprovalRecipientsParams{
+		ApprovalID: id,
+		Emails:     make([]string, len(recipients)),
+		FullNames:  make([]string, len(recipients)),
+	}
+	for i, r := range recipients {
+		params.Emails[i], params.FullNames[i] = r.Email, r.FullName
+	}
+	return q.AddMailApprovalRecipients(ctx, params)
 }
 
 // submitterOf is a request's submitter as a mail to them is addressed.
@@ -457,7 +546,10 @@ func (h *mailApprovalHandlerImpl) edit(ctx context.Context, q *database.Queries,
 	if err != nil {
 		return a, nil, err
 	}
-	edited := sendOfApproval(a)
+	edited, err := lockedSend(ctx, q, a)
+	if err != nil {
+		return a, nil, err
+	}
 	edited.variables = raw
 	if err := checkApprovalValues(template, version, raw, edited.renderedFor(submitterOf(a))); err != nil {
 		return a, nil, err
@@ -483,50 +575,80 @@ func (h *mailApprovalHandlerImpl) edit(ctx context.Context, q *database.Queries,
 }
 
 // send queues a request, locked, through the send path, sent by its
-// submitter: exactly its values, of the template version it is pinned to, to
-// its audience as it is now. It is queued in the request's transaction, so
-// the send exists only if the decision commits; act wakes the dispatcher
-// after. The template and an internal list are share-locked until then, so
-// neither can be published over or archived between these checks and the
-// queueing; the mailer reads the template row, a copy of the pinned version.
-func (h *mailApprovalHandlerImpl) send(ctx context.Context, q *database.Queries, a database.MailApproval, prepared approvalPrepared) (uuid.UUID, error) {
+// submitter — exactly its values, of the template version it is pinned to, to
+// its audience as it is now — and records the sends on it, in order: a list's
+// one send, or one per person, as POST /mail_tasks/single sends to one. They
+// are queued in the request's transaction, so they exist only if the decision
+// commits, all or none; act wakes the dispatcher after. The template and an
+// internal list are share-locked until then, so neither can be published over
+// or archived between these checks and the queueing; the mailer reads the
+// template row, a copy of the pinned version.
+func (h *mailApprovalHandlerImpl) send(ctx context.Context, q *database.Queries, a database.MailApproval, prepared approvalPrepared) ([]uuid.UUID, error) {
+	taskIDs, err := h.queue(ctx, q, a, prepared)
+	if err != nil {
+		return nil, err
+	}
+	return taskIDs, q.AddMailApprovalTasks(ctx, database.AddMailApprovalTasksParams{ApprovalID: a.ID, TaskIds: taskIDs})
+}
+
+// queue queues send's sends and returns them, in order.
+func (h *mailApprovalHandlerImpl) queue(ctx context.Context, q *database.Queries, a database.MailApproval, prepared approvalPrepared) ([]uuid.UUID, error) {
 	template, err := q.ShareLockTemplate(ctx, a.TemplateID)
 	if err != nil {
-		return uuid.Nil, err
+		return nil, err
 	}
 	if template.ArchivedAt != nil {
-		return uuid.Nil, atSend(errApprovalTemplateUnavailable)
+		return nil, atSend(errApprovalTemplateUnavailable)
 	}
 	if template.PublishedVersionID == nil || *template.PublishedVersionID != a.TemplateVersionID {
-		return uuid.Nil, errApprovalTemplateRepublished.WithParams(map[string]interface{}{
+		return nil, errApprovalTemplateRepublished.WithParams(map[string]interface{}{
 			"submitted_version_id": a.TemplateVersionID,
 			"published_version_id": template.PublishedVersionID,
 		})
 	}
 
 	sends := h.mailer.Queue(q)
-	if a.RecipientEmail != nil {
-		return sends.EnqueueSingle(ctx, database.CreateSingleMailTaskParams{
-			SentBy:            a.SubmitterSub,
-			TemplateID:        &a.TemplateID,
-			BodyVariables:     a.BodyVariables,
-			RecipientFullName: deref(a.RecipientFullName),
-			RecipientEmail:    *a.RecipientEmail,
-		})
+	if a.MailListID == nil {
+		send, err := lockedSend(ctx, q, a)
+		if err != nil {
+			return nil, err
+		}
+		if len(send.recipients) == 0 {
+			return nil, errApprovalAudienceEmpty
+		}
+		taskIDs := make([]uuid.UUID, len(send.recipients))
+		for i, to := range send.recipients {
+			if taskIDs[i], err = sends.EnqueueSingle(ctx, database.CreateSingleMailTaskParams{
+				SentBy:            a.SubmitterSub,
+				TemplateID:        &a.TemplateID,
+				BodyVariables:     a.BodyVariables,
+				RecipientFullName: to.FullName,
+				RecipientEmail:    to.Email,
+			}); err != nil {
+				return nil, err
+			}
+		}
+		return taskIDs, nil
+	}
+	one := func(taskID uuid.UUID, err error) ([]uuid.UUID, error) {
+		if err != nil {
+			return nil, err
+		}
+		return []uuid.UUID{taskID}, nil
 	}
 
 	list, err := q.ShareLockMailingList(ctx, *a.MailListID)
 	switch {
 	case err == nil:
 		if list.ArchivedAt != nil {
-			return uuid.Nil, atSend(errApprovalAudienceUnavailable)
+			return nil, atSend(errApprovalAudienceUnavailable)
 		}
 		recipients, err := q.CountRecipientsByMailingListId(ctx, list.ID)
 		if err != nil {
-			return uuid.Nil, err
+			return nil, err
 		}
 		if recipients == 0 {
-			return uuid.Nil, errApprovalAudienceEmpty
+			return nil, errApprovalAudienceEmpty
 		}
 		taskID, err := sends.Enqueue(ctx, database.CreateMailTaskParams{
 			SentBy:        a.SubmitterSub,
@@ -535,36 +657,36 @@ func (h *mailApprovalHandlerImpl) send(ctx context.Context, q *database.Queries,
 			BodyVariables: a.BodyVariables,
 		})
 		if err == nil && taskID == uuid.Nil {
-			return uuid.Nil, errApprovalAudienceEmpty
+			return nil, errApprovalAudienceEmpty
 		}
-		return taskID, err
+		return one(taskID, err)
 	case !isNotFound(err):
-		return uuid.Nil, err
+		return nil, err
 	}
 
 	// A Keycloak group, whose members were asked for before the lock — unless
 	// the request's audience changed in between.
 	if prepared.groupID == nil || *prepared.groupID != *a.MailListID {
-		return uuid.Nil, errApprovalChanged
+		return nil, errApprovalChanged
 	}
 	if prepared.groupMembers == nil {
-		return uuid.Nil, atSend(errApprovalAudienceUnavailable)
+		return nil, atSend(errApprovalAudienceUnavailable)
 	}
 	if len(prepared.groupMembers) == 0 {
-		return uuid.Nil, errApprovalAudienceEmpty
+		return nil, errApprovalAudienceEmpty
 	}
-	return sends.EnqueueWithRecipients(ctx, mailer.EnqueueWithRecipientsParams{
+	return one(sends.EnqueueWithRecipients(ctx, mailer.EnqueueWithRecipientsParams{
 		SentBy:        a.SubmitterSub,
 		TemplateID:    a.TemplateID,
 		MailListID:    a.MailListID,
 		BodyVariables: a.BodyVariables,
 		Recipients:    prepared.groupMembers,
-	})
+	}))
 }
 
 // approvalStep is what a decision does to a request: the state it moves it
-// to, the event that records it with its note and send, and — for a return —
-// the new deadline.
+// to, the event that records it with its note and send — the first, when it
+// queued one per person — and, for a return, the new deadline.
 type approvalStep struct {
 	state    database.MailApprovalState
 	kind     database.MailApprovalEventKind
@@ -576,7 +698,7 @@ type approvalStep struct {
 // decide takes step on a request, locked, by caller.
 func (h *mailApprovalHandlerImpl) decide(ctx context.Context, q *database.Queries, a database.MailApproval, caller approvalCaller, step approvalStep) error {
 	if _, err := q.SetMailApprovalState(ctx, database.SetMailApprovalStateParams{
-		State: step.state, TaskID: step.taskID, DeadlineAt: step.deadline, At: h.now(), ID: a.ID,
+		State: step.state, DeadlineAt: step.deadline, At: h.now(), ID: a.ID,
 	}); err != nil {
 		return err
 	}
@@ -612,7 +734,11 @@ func (h *mailApprovalHandlerImpl) resubmit(ctx context.Context, q *database.Quer
 		after, _ := json.Marshal(map[string]uuid.UUID{"id": checked.template.ID, "version_id": checked.versionID})
 		changes = append([]MailApprovalChange{{Field: "template", Before: before, After: after}}, changes...)
 	}
-	if before, after := audienceJSON(sendOfApproval(a)), audienceJSON(send); !bytesEqualJSON(before, after) {
+	was, err := lockedSend(ctx, q, a)
+	if err != nil {
+		return approvalNotice{}, err
+	}
+	if before, after := audienceJSON(was), audienceJSON(send); !bytesEqualJSON(before, after) {
 		changes = append([]MailApprovalChange{{Field: "audience", Before: before, After: after}}, changes...)
 	}
 
@@ -621,13 +747,14 @@ func (h *mailApprovalHandlerImpl) resubmit(ctx context.Context, q *database.Quer
 		TemplateID:        checked.template.ID,
 		TemplateVersionID: checked.versionID,
 		MailListID:        send.mailListID,
-		RecipientEmail:    send.recipientEmail,
-		RecipientFullName: send.recipientFullName,
 		BodyVariables:     send.variables,
 		At:                now,
 		DeadlineAt:        now.Add(mailApprovalDeadline),
 		ID:                a.ID,
 	}); err != nil {
+		return approvalNotice{}, err
+	}
+	if err := setRecipients(ctx, q, a.ID, send.recipients); err != nil {
 		return approvalNotice{}, err
 	}
 	recorded, err := json.Marshal(changes)
@@ -645,12 +772,14 @@ func (h *mailApprovalHandlerImpl) resubmit(ctx context.Context, q *database.Quer
 	return approvalNotice{kind: noticeRequested, by: caller.sub}, err
 }
 
+// audienceJSON is who a send goes to, as a change records it: {mail_list_id}
+// or {recipients: [{email, full_name}]}.
 func audienceJSON(s approvalSend) json.RawMessage {
 	var raw []byte
 	if s.mailListID != nil {
 		raw, _ = json.Marshal(map[string]interface{}{"mail_list_id": s.mailListID})
 	} else {
-		raw, _ = json.Marshal(map[string]interface{}{"recipient_email": s.recipientEmail, "recipient_full_name": s.recipientFullName})
+		raw, _ = json.Marshal(map[string]interface{}{"recipients": approvalRecipients(s.recipients)})
 	}
 	return raw
 }
@@ -774,7 +903,8 @@ func (h *mailApprovalHandlerImpl) approval(ctx context.Context, view database.Ge
 	if err != nil {
 		return MailApproval{}, err
 	}
-	to := sendOfApproval(view.MailApproval).renderedFor(submitterOf(view.MailApproval))
+	to := sendOfView(view).renderedFor(submitterOf(view.MailApproval))
+	answer.PreviewRecipient = MailApprovalRecipient{FullName: to.FullName, Email: to.Email}
 	rendered, err := mailer.Render(version.TemplateVersionSummary.Subject, version.PlainTextContent, version.HtmlContent, view.MailApproval.BodyVariables, to)
 	if err != nil {
 		message := err.Error()
@@ -784,7 +914,7 @@ func (h *mailApprovalHandlerImpl) approval(ctx context.Context, view database.Ge
 			Subject:     rendered.Subject,
 			HTML:        rendered.HTML,
 			PlainText:   rendered.PlainText,
-			RenderedFor: MailApprovalRecipient{FullName: to.FullName, Email: to.Email},
+			RenderedFor: answer.PreviewRecipient,
 		}
 	}
 	return answer, nil
@@ -800,7 +930,7 @@ func effectiveState(state database.MailApprovalState, deadline, now time.Time) d
 }
 
 func approvalItem(view database.GetMailApprovalRow, groupNames map[uuid.UUID]*string, last *MailApprovalEvent, now time.Time) MailApprovalItem {
-	return MailApprovalItem{
+	item := MailApprovalItem{
 		ID:    view.MailApproval.ID,
 		State: string(effectiveState(view.MailApproval.State, view.MailApproval.DeadlineAt, now)),
 		Submitter: MailApprovalSubmitter{
@@ -816,20 +946,38 @@ func approvalItem(view database.GetMailApprovalRow, groupNames map[uuid.UUID]*st
 			Republished: view.TemplatePublishedVersionID == nil || *view.TemplatePublishedVersionID != view.MailApproval.TemplateVersionID,
 		},
 		Audience:      approvalAudience(view, groupNames),
+		Recipients:    approvalRecipients(recipientsOfView(view)),
 		BodyVariables: view.MailApproval.BodyVariables,
 		CreatedAt:     view.MailApproval.CreatedAt,
 		SubmittedAt:   view.MailApproval.SubmittedAt,
 		DeadlineAt:    view.MailApproval.DeadlineAt,
 		UpdatedAt:     view.MailApproval.UpdatedAt,
-		TaskID:        view.MailApproval.TaskID,
+		TaskIDs:       view.TaskIds,
 		LastEvent:     last,
 	}
+	if len(view.TaskIds) > 0 {
+		item.TaskID = &view.TaskIds[0]
+	}
+	return item
 }
 
+func approvalRecipients(recipients []mailer.RecipientInfo) []MailApprovalRecipient {
+	out := make([]MailApprovalRecipient, len(recipients))
+	for i, r := range recipients {
+		out[i] = MailApprovalRecipient{FullName: r.FullName, Email: r.Email}
+	}
+	return out
+}
+
+// approvalAudience is who a request goes to, as a send's audience reads: a
+// list; one person, as a single send names them; or several people, whom the
+// request's recipients name.
 func approvalAudience(view database.GetMailApprovalRow, groupNames map[uuid.UUID]*string) SendAudience {
 	switch {
+	case view.MailApproval.MailListID == nil && len(view.RecipientEmails) == 1:
+		return SendAudience{Kind: audienceSingle, RecipientFullName: &view.RecipientFullNames[0], RecipientEmail: &view.RecipientEmails[0]}
 	case view.MailApproval.MailListID == nil:
-		return SendAudience{Kind: audienceSingle, RecipientFullName: view.MailApproval.RecipientFullName, RecipientEmail: view.MailApproval.RecipientEmail}
+		return SendAudience{Kind: audiencePeople}
 	case view.InternalMailList:
 		source := sourceInternal
 		return SendAudience{Kind: audienceMailingList, MailListID: view.MailApproval.MailListID, Name: view.MailListName, Source: &source}
@@ -897,7 +1045,7 @@ func (h *mailApprovalHandlerImpl) recipientCount(ctx context.Context, view datab
 	var count int64
 	switch {
 	case view.MailApproval.MailListID == nil:
-		count = 1
+		count = int64(len(view.RecipientEmails))
 	case view.InternalMailList:
 		n, err := h.db.CountRecipientsByMailingListId(ctx, *view.MailApproval.MailListID)
 		if err != nil {

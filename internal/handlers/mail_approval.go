@@ -30,6 +30,9 @@ import (
 //     declines it and may resubmit. Every edit is recorded and told to the
 //     submitter; an approval without one sends the request as submitted.
 //
+// A request goes to a mailing list or to 1..100 people (Yusuf, 2026-09-24);
+// the approver decides it once, and each person gets a send of their own.
+//
 // Anyone who can use SkyMail may submit: the one thing that makes a send need
 // approval is that its author lacks send permission, which is exactly who the
 // ADR is for, and a role of its own would put back the 403 the ADR removes.
@@ -150,7 +153,7 @@ type MailApprovalTemplate struct {
 
 // MailApprovalChange is one thing an edit or a resubmission changed.
 type MailApprovalChange struct {
-	// variable: a variable's value; template: the template or its version ({id, version_id}); audience: who it goes to ({mail_list_id} or {recipient_email, recipient_full_name}).
+	// variable: a variable's value; template: the template or its version ({id, version_id}); audience: who it goes to ({mail_list_id} or {recipients: [{email, full_name}]}; changes recorded before a request could go to several people hold {recipient_email, recipient_full_name}).
 	Field string `json:"field" enums:"variable,template,audience"`
 	// The variable's name; null for the template and the audience.
 	Name *string `json:"name"`
@@ -172,7 +175,7 @@ type MailApprovalEvent struct {
 	Note *string `json:"note"`
 	// What an edit or a resubmission changed; empty for every other event.
 	Changes []MailApprovalChange `json:"changes"`
-	// The send an approval or an acceptance queued.
+	// The send an approval or an acceptance queued; the first, when it queued one per person — the request's task_ids has them all.
 	TaskID *uuid.UUID `json:"task_id"`
 	At     time.Time  `json:"at"`
 }
@@ -186,6 +189,8 @@ type MailApprovalItem struct {
 	Submitter MailApprovalSubmitter `json:"submitter"`
 	Template  MailApprovalTemplate  `json:"template"`
 	Audience  SendAudience          `json:"audience"`
+	// The people it goes to, in the order submitted; empty when it goes to a mailing list. audience reads as a send's: single for one person, whom recipient_email and recipient_full_name name too; people for several.
+	Recipients []MailApprovalRecipient `json:"recipients"`
 	// The variables it is sent with: as submitted, or as an approver edited them.
 	BodyVariables json.RawMessage `json:"body_variables" swaggertype:"object"`
 	CreatedAt     time.Time       `json:"created_at"`
@@ -194,22 +199,26 @@ type MailApprovalItem struct {
 	// Pending or returned past this, it expires.
 	DeadlineAt time.Time `json:"deadline_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
-	// The send, once approved.
+	// Deprecated: the first of task_ids, until the screens read those (ticket 22). Null until approved.
 	TaskID *uuid.UUID `json:"task_id"`
+	// The sends, once approved, in order: a list's one, or one per person, task_ids[i] to recipients[i]. Empty until then.
+	TaskIDs []uuid.UUID `json:"task_ids"`
 	// What happened to it last.
 	LastEvent *MailApprovalEvent `json:"last_event"`
 }
 
-// MailApprovalRecipient is who a preview is rendered for.
+// MailApprovalRecipient is someone a request goes to, or a preview is
+// rendered for.
 type MailApprovalRecipient struct {
+	// Empty when the submitter knows only the address.
 	FullName string `json:"full_name"`
 	Email    string `json:"email"`
 }
 
 // MailApprovalPreview is the mail the request would queue, rendered by the
-// mailer from the template version it is pinned to: the single recipient's,
-// or — for a list, whose members each get their own — the submitter's, as if
-// they were on it.
+// mailer from the template version it is pinned to: its first person's, or —
+// for a list, whose members each get their own — the submitter's, as if they
+// were on it.
 type MailApprovalPreview struct {
 	Subject string `json:"subject"`
 	// The whole mail as HTML: operators' template markup with the submitted values. Show it only in a sandboxed iframe (sandbox with no allow-scripts or allow-same-origin), never in the page itself.
@@ -230,11 +239,15 @@ type MailApprovalNotification struct {
 }
 
 // MailApproval is a request whole: as the list shows it, with how many it
-// would reach, its preview and everything that happened to it.
+// would reach, its preview and whose mail that is (preview_recipient: the
+// first person, or for a list the submitter), and everything that happened to
+// it. A struct-typed field's comment would become its type's description in
+// the OpenAPI document, so preview_recipient is described on Get instead.
 type MailApproval struct {
 	MailApprovalItem
-	// How many it would reach now: 1 for one recipient, a list's members, a Keycloak group's members with an address. Null when Keycloak did not say in time.
-	RecipientCount *int64 `json:"recipient_count"`
+	// How many it would reach now: its people, a list's members, a Keycloak group's members with an address. Null when Keycloak did not say in time.
+	RecipientCount   *int64                `json:"recipient_count"`
+	PreviewRecipient MailApprovalRecipient `json:"preview_recipient"`
 	// Null when it does not render; preview_error says why.
 	Preview      *MailApprovalPreview `json:"preview"`
 	PreviewError *string              `json:"preview_error"`
@@ -302,7 +315,7 @@ func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc ke
 // Submit godoc
 //
 //	@Summary		Submit a send for approval
-//	@Description	Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or one recipient (as POST /mail_tasks/single takes them), never both — and nothing is sent until someone holding skymail:mails:approve approves it. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values. It waits seven days; undecided by then, it expires and is never sent.
+//	@Description	Mail onayı (ADR-0031): a member submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Until the screens send recipients, recipient_email and recipient_full_name still submit a send to one person. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent.
 //	@Description
 //	@Description	Every approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.
 //	@Tags			Mail approval
@@ -310,7 +323,7 @@ func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc ke
 //	@Produce		json
 //	@Param			send	body		requests.SubmitMailApproval	true	"The send"
 //	@Success		201		{object}	handlers.MailApproval		"The request, pending, with notification"
-//	@Failure		400		{object}	apperrors.AppError			"validation.error: no template_id, a malformed address, or not exactly one of mail_list_id and recipient_email (params.errors)"
+//	@Failure		400		{object}	apperrors.AppError			"validation.error (params.errors: [{field, code, params}]): no template_id; not exactly one of mail_list_id, recipients and recipient_email (mail_list_id, exactly_one_of); more than 100 people (recipients, max_length); a missing or malformed address (recipients[i].email, required or invalid_email); an address twice (recipients[i].email, duplicate, params.first naming the first)"
 //	@Failure		403		{object}	apperrors.AppError			"Forbidden"
 //	@Failure		422		{object}	apperrors.AppError			"mail_approval.template_unavailable, mail_approval.audience_unavailable, mail_approval.required_variables_missing (params.missing: [{name, source, reason}]) or mail_approval.unrenderable (params.error)"
 //	@Failure		500		{object}	apperrors.AppError			"Internal Server Error"
@@ -344,8 +357,6 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 			TemplateID:               checked.template.ID,
 			TemplateVersionID:        checked.versionID,
 			MailListID:               send.mailListID,
-			RecipientEmail:           send.recipientEmail,
-			RecipientFullName:        send.recipientFullName,
 			BodyVariables:            send.variables,
 			At:                       now,
 			DeadlineAt:               now.Add(mailApprovalDeadline),
@@ -354,6 +365,9 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 			return err
 		}
 		id = created.ID
+		if err := setRecipients(c.Context(), q, id, send.recipients); err != nil {
+			return err
+		}
 		_, err = q.RecordMailApprovalEvent(c.Context(), database.RecordMailApprovalEventParams{
 			ApprovalID: id,
 			Kind:       database.MailApprovalEventKindSubmitted,
@@ -454,7 +468,7 @@ func (h *mailApprovalHandlerImpl) List(c fiber.Ctx) error {
 // Get godoc
 //
 //	@Summary		Read a request for approval
-//	@Description	A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.
+//	@Description	A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. preview_recipient is whose mail the preview is: the first of its people, or for a list the submitter, as if they were on it; it is given also when the preview does not render. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.
 //	@Tags			Mail approval
 //	@Produce		json
 //	@Param			id	path		string	true	"Request ID"
@@ -489,7 +503,7 @@ func (h *mailApprovalHandlerImpl) Get(c fiber.Ctx) error {
 // Approve godoc
 //
 //	@Summary		Approve a request and send it
-//	@Description	An approver approves a pending request — their own too, which its history then shows — and it is queued through the send path at once, sent by its submitter: without body_variables exactly as it stands, with them as the approver edited them — the edit is recorded (an edited event naming each variable changed, before and after) and told to the submitter. The send is of the template version the request is pinned to, to its audience as it is now. Approving is idempotent and race-safe: the request is locked while it is sent, someone else acting on it at that moment is refused (409 mail_approval.busy), and approving an approved request again without an edit sends nothing and answers it as it is.
+//	@Description	An approver approves a pending request — their own too, which its history then shows — and it is queued through the send path at once, sent by its submitter: without body_variables exactly as it stands, with them as the approver edited them — the edit is recorded (an edited event naming each variable changed, before and after) and told to the submitter. The send is of the template version the request is pinned to, to its audience as it is now: one send to a mailing list, or one per person (as POST /mail_tasks/single sends to one), all queued in one transaction — all of them or none. Approving is idempotent and race-safe: the request is locked while it is sent, someone else acting on it at that moment is refused (409 mail_approval.busy), and approving an approved request again without an edit sends nothing and answers it as it is.
 //	@Description
 //	@Description	The submitter is mailed the mail.approval-resolved System template with Decision "approved". A request past its deadline is expired instead (409 mail_approval.expired) and its submitter told.
 //	@Tags			Mail approval
@@ -497,7 +511,7 @@ func (h *mailApprovalHandlerImpl) Get(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			id			path		string							true	"Request ID"
 //	@Param			approval	body		requests.ApproveMailApproval	false	"An edit and a note, both optional"
-//	@Success		200			{object}	handlers.MailApproval			"The request, approved, with its task_id and notification"
+//	@Success		200			{object}	handlers.MailApproval			"The request, approved, with its task_ids and notification"
 //	@Failure		400			{object}	apperrors.AppError				"validation.error"
 //	@Failure		403			{object}	apperrors.AppError				"Not an approver"
 //	@Failure		404			{object}	apperrors.AppError				"No such request"
@@ -524,12 +538,12 @@ func (h *mailApprovalHandlerImpl) Approve(c fiber.Ctx) error {
 			if err != nil {
 				return approvalNotice{}, err
 			}
-			taskID, err := h.send(ctx, q, a, prepared)
+			taskIDs, err := h.send(ctx, q, a, prepared)
 			if err != nil {
 				return approvalNotice{}, err
 			}
 			if err := h.decide(ctx, q, a, caller, approvalStep{
-				state: database.MailApprovalStateApproved, kind: database.MailApprovalEventKindApproved, note: params.Note, taskID: &taskID,
+				state: database.MailApprovalStateApproved, kind: database.MailApprovalEventKindApproved, note: params.Note, taskID: &taskIDs[0],
 			}); err != nil {
 				return approvalNotice{}, err
 			}
@@ -626,11 +640,11 @@ func (h *mailApprovalHandlerImpl) Reject(c fiber.Ctx) error {
 // Accept godoc
 //
 //	@Summary		Accept an approver's edit and send it
-//	@Description	The submitter accepts the edit an approver returned, and the request is sent as edited, exactly as an approval sends it — locked, once, of the pinned template version.
+//	@Description	The submitter accepts the edit an approver returned, and the request is sent as edited, exactly as an approval sends it — locked, once, of the pinned template version, one send per person when it goes to people.
 //	@Tags			Mail approval
 //	@Produce		json
 //	@Param			id	path		string					true	"Request ID"
-//	@Success		200	{object}	handlers.MailApproval	"The request, approved, with its task_id"
+//	@Success		200	{object}	handlers.MailApproval	"The request, approved, with its task_ids"
 //	@Failure		403	{object}	apperrors.AppError		"mail_approval.not_submitter"
 //	@Failure		404	{object}	apperrors.AppError		"No such request, or not the caller's to see"
 //	@Failure		409	{object}	apperrors.AppError		"mail_approval.state_conflict, mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished, mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
@@ -642,12 +656,12 @@ func (h *mailApprovalHandlerImpl) Accept(c fiber.Ctx) error {
 		from:  []database.MailApprovalState{database.MailApprovalStateReturned},
 		sends: true,
 		do: func(ctx context.Context, q *database.Queries, a database.MailApproval, caller approvalCaller, prepared approvalPrepared) (approvalNotice, error) {
-			taskID, err := h.send(ctx, q, a, prepared)
+			taskIDs, err := h.send(ctx, q, a, prepared)
 			if err != nil {
 				return approvalNotice{}, err
 			}
 			return approvalNotice{}, h.decide(ctx, q, a, caller, approvalStep{
-				state: database.MailApprovalStateApproved, kind: database.MailApprovalEventKindAccepted, taskID: &taskID,
+				state: database.MailApprovalStateApproved, kind: database.MailApprovalEventKindAccepted, taskID: &taskIDs[0],
 			})
 		},
 	})
@@ -690,7 +704,7 @@ func (h *mailApprovalHandlerImpl) Decline(c fiber.Ctx) error {
 // Resubmit godoc
 //
 //	@Summary		Resubmit a rejected or declined request
-//	@Description	The submitter fills a rejected request, or one whose returned edit they declined, in again — whole, as a submission is — and it is pending again with a new seven-day deadline, pinned to the version its template publishes now. It is checked as a submission is. It stays the same request: a resubmitted event records what changed, and everything before it stays in the history. Every approver is mailed mail.approval-requested again.
+//	@Description	The submitter fills a rejected request, or one whose returned edit they declined, in again — whole, as a submission is, its list or its people too — and it is pending again with a new seven-day deadline, pinned to the version its template publishes now. It is checked as a submission is. It stays the same request: a resubmitted event records what changed, and everything before it stays in the history. Every approver is mailed mail.approval-requested again.
 //	@Tags			Mail approval
 //	@Accept			json
 //	@Produce		json

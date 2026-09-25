@@ -162,13 +162,14 @@ neither row nor version behind. The rules live in one place,
 A Mail onayı request (ADR-0031) is kept in `mail_approvals`, and everything
 that happened to it in `mail_approval_events`. Neither is ever deleted or
 rewritten: a request stays when it is sent, rejected, declined or expired, and
-a resubmission is the same request with the events before it kept. The send an
-approval queues is an ordinary `mail_tasks` row, kept as every send is, and
-the request and its `approved` or `accepted` event name it by `task_id`.
+a resubmission is the same request with the events before it kept. The sends
+an approval queues — a list's one, or one per person — are ordinary
+`mail_tasks` rows, kept as every send is; `mail_approval_tasks` names them in
+order, and the `approved` or `accepted` event names the first by `task_id`.
 
 A request keeps what would be sent — the template, pinned to the version it
-was submitted on, the audience and the variables — its state and its
-deadline: seven days after it was last submitted, or after an approver
+was submitted on, the audience (a mailing list, or 1..100 people in
+`mail_approval_recipients`) and the variables — its state and its deadline: seven days after it was last submitted, or after an approver
 returned it. A request still pending or returned at its deadline is reported
 as expired at once; the one-minute sweep records the expiry as an `expired`
 event with no actor and mails the submitter. Reading or listing a request
@@ -189,13 +190,14 @@ These fields keep a person's identity with no end date:
   submitted a request, and the name and verified address their token carried
   (`submitter_email_unverified` says the token carried an address Keycloak
   had not verified, which is not kept).
-- `mail_approvals.recipient_email` and `recipient_full_name` — the one
-  recipient of a single send.
+- `mail_approval_recipients.email` and `full_name` — the people a request
+  goes to. A resubmission replaces them; its `resubmitted` event keeps who they
+  were.
 - `mail_approvals.body_variables` — the values of the send, which may name or
   address people.
 - `mail_approval_events.actor_sub` and `actor_name` — who did each thing to a
-  request — and `changes`, each variable's value before and after an edit or a
-  resubmission.
+  request — and `changes`, each variable's value, and who a request went to,
+  before and after an edit or a resubmission.
 
 SkyMail has no erasure or anonymisation path for account deletion: nothing
 tells it an account was deleted, and nothing clears or replaces these fields.

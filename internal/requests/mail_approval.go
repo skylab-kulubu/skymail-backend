@@ -4,16 +4,26 @@ import "github.com/google/uuid"
 
 // SubmitMailApproval is a send submitted for Mail onayı, filled in the way a
 // send is: a template, and either a mailing list — an internal list or a
-// Keycloak group, as POST /mail_tasks takes it — or one recipient, as POST
-// /mail_tasks/single takes them; never both.
+// Keycloak group, as POST /mail_tasks takes it — or 1..100 people, each sent
+// to on their own as POST /mail_tasks/single sends to one; never both.
 type SubmitMailApproval struct {
 	TemplateID uuid.UUID `json:"template_id" validate:"required"`
-	// An internal mailing list or a Keycloak group. Leave it out to send to one recipient.
+	// An internal mailing list or a Keycloak group. Leave it out to send to people.
 	MailListID *uuid.UUID `json:"mail_list_id"`
-	// The one recipient. Leave it out to send to a mailing list.
-	RecipientEmail    string                 `json:"recipient_email" validate:"omitempty,email"`
+	// The people, 1..100, each address once (compared case-insensitively); each gets a send of their own. Leave it out to send to a mailing list.
+	Recipients []MailApprovalRecipient `json:"recipients" validate:"omitempty,max=100,dive"`
+	// Deprecated: one person, until the screens send recipients (ticket 22). Give recipients instead; never both.
+	RecipientEmail string `json:"recipient_email" validate:"omitempty,email"`
+	// Deprecated: the one person's name, with recipient_email.
 	RecipientFullName string                 `json:"recipient_full_name"`
 	BodyVariables     map[string]interface{} `json:"body_variables"`
+}
+
+// MailApprovalRecipient is one person a request goes to.
+type MailApprovalRecipient struct {
+	Email string `json:"email" validate:"required,email"`
+	// Empty when the submitter knows only the address.
+	FullName string `json:"full_name"`
 }
 
 // ApproveMailApproval approves a pending request and sends it. With no

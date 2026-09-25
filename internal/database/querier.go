@@ -12,6 +12,10 @@ import (
 )
 
 type Querier interface {
+	AddMailApprovalRecipients(ctx context.Context, arg AddMailApprovalRecipientsParams) error
+	// The sends an approval queued, in order: a list's one send, or one per
+	// person, each at that person's position.
+	AddMailApprovalTasks(ctx context.Context, arg AddMailApprovalTasksParams) error
 	// Required variable sets are sorted byte by byte (COLLATE "C"), the order the
 	// handler sorts a contract set in and a missing list comes in, whatever the
 	// database's collation.
@@ -24,6 +28,10 @@ type Querier interface {
 	AddRecipientToMailingList(ctx context.Context, arg AddRecipientToMailingListParams) (AddRecipientToMailingListRow, error)
 	ArchiveMailingList(ctx context.Context, arg ArchiveMailingListParams) (MailingList, error)
 	ArchiveTemplate(ctx context.Context, arg ArchiveTemplateParams) (Template, error)
+	// The people a request goes to, in the order submitted, replacing whoever it
+	// went to before; none for a request to a list. emails and full_names pair up
+	// by index.
+	ClearMailApprovalRecipients(ctx context.Context, approvalID uuid.UUID) error
 	CountAllMailingListsIncludingArchived(ctx context.Context) (int64, error)
 	CountAllTemplatesIncludingArchived(ctx context.Context) (int64, error)
 	CountArchivedMailingLists(ctx context.Context) (int64, error)
@@ -45,6 +53,9 @@ type Querier interface {
 	// a request runs in a transaction that first takes its row lock
 	// (LockMailApproval), so its checks, its state change and its events happen
 	// in turn, and an approval queues its send once.
+	// A request to people is written with them (AddMailApprovalRecipients) in the
+	// same transaction: it goes to a list or to people, which is checked when the
+	// transaction commits.
 	CreateMailApproval(ctx context.Context, arg CreateMailApprovalParams) (MailApproval, error)
 	CreateMailQueueItems(ctx context.Context, arg []CreateMailQueueItemsParams) (int64, error)
 	CreateMailTask(ctx context.Context, arg CreateMailTaskParams) ([]CreateMailTaskRow, error)
@@ -72,8 +83,9 @@ type Querier interface {
 	// one row per day, zero-filled.
 	GetDailySentCounts(ctx context.Context, arg GetDailySentCountsParams) ([]GetDailySentCountsRow, error)
 	// A request as every screen shows it: with its template's name and key, the
-	// version the template publishes now, and its list's name when the list is an
-	// internal one (a Keycloak group's is Keycloak's to give).
+	// version the template publishes now, its list's name when the list is an
+	// internal one (a Keycloak group's is Keycloak's to give), the people it goes
+	// to and the sends it queued, each in order.
 	GetMailApproval(ctx context.Context, id uuid.UUID) (GetMailApprovalRow, error)
 	// A send's recipients, newest first. A list send's rows come from one insert
 	// and share a created_at, so the id breaks the tie: pages neither repeat nor
@@ -103,6 +115,7 @@ type Querier interface {
 	// The last event of each of the requests, for the list.
 	ListLastMailApprovalEvents(ctx context.Context, approvalIds []uuid.UUID) ([]MailApprovalEvent, error)
 	ListMailApprovalEvents(ctx context.Context, approvalID uuid.UUID) ([]MailApprovalEvent, error)
+	ListMailApprovalRecipients(ctx context.Context, approvalID uuid.UUID) ([]ListMailApprovalRecipientsRow, error)
 	// Requests newest submission first, the id breaking ties. A NULL submitter
 	// lists everyone's and a NULL state every state. A request is filtered by the
 	// state it is in as of as_of: one undecided past its deadline is expired,
@@ -218,7 +231,9 @@ type Querier interface {
 	RestoreMailingList(ctx context.Context, id uuid.UUID) (MailingList, error)
 	RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, error)
 	// A resubmission: what would be sent, as the submitter now fills it in,
-	// pinned to the version published now, pending again with a new deadline.
+	// pinned to the version published now, pending again with a new deadline. Its
+	// people are written beside it (ClearMailApprovalRecipients, then
+	// AddMailApprovalRecipients).
 	ResubmitMailApproval(ctx context.Context, arg ResubmitMailApprovalParams) (MailApproval, error)
 	// A NULL deadline leaves the request's deadline as it is.
 	SetMailApprovalState(ctx context.Context, arg SetMailApprovalStateParams) (MailApproval, error)
