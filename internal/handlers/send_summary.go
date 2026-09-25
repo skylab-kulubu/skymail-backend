@@ -51,6 +51,9 @@ const (
 const (
 	audienceMailingList = "mailing_list"
 	audienceSingle      = "single"
+	// Only a Mail onayı request goes to several people at once; each is sent
+	// to on their own, a single send each.
+	audiencePeople = "people"
 
 	// The same source values as MailingListItem.
 	sourceInternal = "internal"
@@ -133,8 +136,14 @@ type DailySent struct {
 // SendAudience is who a send went to: a mailing list — an internal one or a
 // Keycloak group, told apart by source as in the mailing list API — or the one
 // recipient of a single send. Fields that do not apply to the kind are null.
+//
+// A Mail onayı request's audience is this type too, so a request reads as the
+// send it becomes, and one to several people is people, its recipients naming
+// them. A send is never people: approving such a request queues one single
+// send per person. The enum is therefore wider than /mail_tasks ever answers.
 type SendAudience struct {
-	Kind              string     `json:"kind" enums:"mailing_list,single"`
+	// mailing_list, single, or — only on a Mail onayı request — people.
+	Kind              string     `json:"kind" enums:"mailing_list,single,people"`
 	MailListID        *uuid.UUID `json:"mail_list_id"`
 	Name              *string    `json:"name"`
 	Source            *string    `json:"source" enums:"internal,keycloak"`

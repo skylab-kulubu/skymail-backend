@@ -243,15 +243,24 @@ func (h *mailApprovalHandlerImpl) notify(ctx context.Context, key, sentBy string
 	return notification
 }
 
-// audienceName is who a request goes to, as a notification names it.
+// audienceName is who a request goes to, as a notification names it: a list
+// by its name, a person by name and address, and several people by the first
+// and how many more.
 func (h *mailApprovalHandlerImpl) audienceName(ctx context.Context, view database.GetMailApprovalRow) string {
 	switch {
 	case view.MailApproval.MailListID == nil:
-		email := deref(view.MailApproval.RecipientEmail)
-		if name := deref(view.MailApproval.RecipientFullName); name != "" {
-			return name + " <" + email + ">"
+		recipients := recipientsOfView(view)
+		if len(recipients) == 0 {
+			return ""
 		}
-		return email
+		name := recipients[0].Email
+		if recipients[0].FullName != "" {
+			name = recipients[0].FullName + " <" + name + ">"
+		}
+		if len(recipients) > 1 {
+			name += " ve " + strconv.Itoa(len(recipients)-1) + " kişi daha"
+		}
+		return name
 	case view.InternalMailList:
 		return deref(view.MailListName)
 	}

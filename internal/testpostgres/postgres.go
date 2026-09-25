@@ -16,6 +16,10 @@ import (
 type Database struct {
 	Pool *pgxpool.Pool
 	URL  string
+	// Container is the Docker container the server runs in, for the tools
+	// that ship inside it (pg_dump, pg_restore) through docker exec. The
+	// database is skymailtest and its superuser postgres.
+	Container string
 }
 
 // Start launches PostgreSQL and registers all cleanup with t. Tests are skipped
@@ -67,7 +71,7 @@ func StartDatabase(t testing.TB) Database {
 		}
 		if poolErr == nil {
 			t.Cleanup(pool.Close)
-			return Database{Pool: pool, URL: databaseURL}
+			return Database{Pool: pool, URL: databaseURL, Container: name}
 		}
 		if pool != nil {
 			pool.Close()
