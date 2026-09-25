@@ -33,6 +33,18 @@ be exactly `1` and have no TTL. The reader never logs the subject, marker digest
 email, username, or other identity data. Decision logs contain only the request
 correlation ID and `allowed`, `blocked`, or `unavailable`.
 
+## Account erasure
+
+The erase route, `PUT /internal/v1/account-erasures/{request_id}`, is outside
+`/v1` and does not use `userinfo`, but it reads the same Redis through the same
+reader twice: the caller's own marker (`core-erasure`'s service account, never
+blocked: `401` if it is, `503 access_gate_unavailable` on failure), and the
+marker of the subject to erase, which must be there (`409
+subject_not_blocked` when it is not, `503 subject_block_unverifiable` on
+failure). In `off` mode there is no reader, so the route answers `503
+subject_block_unverifiable` with `Retry-After: 300` and erases nothing. See
+`docs/data-lifecycle.md`.
+
 ## Cutover gates
 
 1. Keep this service in `off` mode until Core has backfilled every durable
