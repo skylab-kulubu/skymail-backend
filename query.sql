@@ -840,16 +840,44 @@ WHERE (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(st
 -- a request runs in a transaction that first takes its row lock
 -- (LockMailApproval), so its checks, its state change and its events happen
 -- in turn, and an approval queues its send once.
+-- A request to people is written with them (AddMailApprovalRecipients) in the
+-- same transaction: it goes to a list or to people, which is checked when the
+-- transaction commits.
 -- name: CreateMailApproval :one
 INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, submitter_email_unverified, template_id,
-                            template_version_id, mail_list_id, recipient_email, recipient_full_name, body_variables,
-                            created_at, submitted_at, deadline_at, updated_at)
+                            template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at,
+                            updated_at)
 VALUES (sqlc.arg(submitter_sub), sqlc.narg(submitter_name), sqlc.narg(submitter_email),
         sqlc.arg(submitter_email_unverified), sqlc.arg(template_id),
-        sqlc.arg(template_version_id), sqlc.narg(mail_list_id), sqlc.narg(recipient_email),
-        sqlc.narg(recipient_full_name), sqlc.arg(body_variables), sqlc.arg(at), sqlc.arg(at), sqlc.arg(deadline_at),
-        sqlc.arg(at))
+        sqlc.arg(template_version_id), sqlc.narg(mail_list_id), sqlc.arg(body_variables), sqlc.arg(at), sqlc.arg(at),
+        sqlc.arg(deadline_at), sqlc.arg(at))
 RETURNING *;
+
+-- The people a request goes to, in the order submitted, replacing whoever it
+-- went to before; none for a request to a list. emails and full_names pair up
+-- by index.
+-- name: ClearMailApprovalRecipients :exec
+DELETE
+FROM mail_approval_recipients
+WHERE approval_id = $1;
+
+-- name: AddMailApprovalRecipients :exec
+INSERT INTO mail_approval_recipients (approval_id, position, email, full_name)
+SELECT sqlc.arg(approval_id), p.position, p.email, (sqlc.arg(full_names)::text[])[p.position]
+FROM unnest(sqlc.arg(emails)::text[]) WITH ORDINALITY AS p(email, position);
+
+-- name: ListMailApprovalRecipients :many
+SELECT email, full_name
+FROM mail_approval_recipients
+WHERE approval_id = $1
+ORDER BY position;
+
+-- The sends an approval queued, in order: a list's one send, or one per
+-- person, each at that person's position.
+-- name: AddMailApprovalTasks :exec
+INSERT INTO mail_approval_tasks (approval_id, position, task_id)
+SELECT sqlc.arg(approval_id), t.position, t.task_id
+FROM unnest(sqlc.arg(task_ids)::uuid[]) WITH ORDINALITY AS t(task_id, position);
 
 -- Takes a request's row lock without waiting for it: a request someone else is
 -- deciding right now is refused (55P03) rather than queued behind them — the
@@ -875,7 +903,6 @@ LIMIT 1 FOR UPDATE SKIP LOCKED;
 -- name: SetMailApprovalState :one
 UPDATE mail_approvals
 SET state       = sqlc.arg(state),
-    task_id     = sqlc.narg(task_id),
     deadline_at = COALESCE(sqlc.narg(deadline_at), deadline_at),
     updated_at  = sqlc.arg(at)
 WHERE id = sqlc.arg(id)
@@ -889,15 +916,15 @@ WHERE id = sqlc.arg(id)
 RETURNING *;
 
 -- A resubmission: what would be sent, as the submitter now fills it in,
--- pinned to the version published now, pending again with a new deadline.
+-- pinned to the version published now, pending again with a new deadline. Its
+-- people are written beside it (ClearMailApprovalRecipients, then
+-- AddMailApprovalRecipients).
 -- name: ResubmitMailApproval :one
 UPDATE mail_approvals
 SET state               = 'pending',
     template_id         = sqlc.arg(template_id),
     template_version_id = sqlc.arg(template_version_id),
     mail_list_id        = sqlc.narg(mail_list_id),
-    recipient_email     = sqlc.narg(recipient_email),
-    recipient_full_name = sqlc.narg(recipient_full_name),
     body_variables      = sqlc.arg(body_variables),
     submitted_at        = sqlc.arg(at),
     deadline_at         = sqlc.arg(deadline_at),
@@ -922,8 +949,9 @@ WHERE e.approval_id = sqlc.arg(approval_id)
 RETURNING *;
 
 -- A request as every screen shows it: with its template's name and key, the
--- version the template publishes now, and its list's name when the list is an
--- internal one (a Keycloak group's is Keycloak's to give).
+-- version the template publishes now, its list's name when the list is an
+-- internal one (a Keycloak group's is Keycloak's to give), the people it goes
+-- to and the sends it queued, each in order.
 -- name: GetMailApproval :one
 SELECT sqlc.embed(a),
        t.name                             AS template_name,
@@ -931,10 +959,20 @@ SELECT sqlc.embed(a),
        t.published_version_id             AS template_published_version_id,
        (t.archived_at IS NOT NULL)::boolean AS template_archived,
        ml.name                            AS mail_list_name,
-       (ml.id IS NOT NULL)::boolean       AS internal_mail_list
+       (ml.id IS NOT NULL)::boolean       AS internal_mail_list,
+       people.emails                      AS recipient_emails,
+       people.full_names                  AS recipient_full_names,
+       sends.task_ids                     AS task_ids
 FROM mail_approvals a
          JOIN templates t ON t.id = a.template_id
          LEFT JOIN mailing_lists ml ON ml.id = a.mail_list_id
+         CROSS JOIN LATERAL (SELECT COALESCE(array_agg(r.email ORDER BY r.position), '{}')::text[]     AS emails,
+                                    COALESCE(array_agg(r.full_name ORDER BY r.position), '{}')::text[] AS full_names
+                             FROM mail_approval_recipients r
+                             WHERE r.approval_id = a.id) people
+         CROSS JOIN LATERAL (SELECT COALESCE(array_agg(mat.task_id ORDER BY mat.position), '{}')::uuid[] AS task_ids
+                             FROM mail_approval_tasks mat
+                             WHERE mat.approval_id = a.id) sends
 WHERE a.id = $1;
 
 -- Requests newest submission first, the id breaking ties. A NULL submitter
@@ -948,10 +986,20 @@ SELECT sqlc.embed(a),
        t.published_version_id             AS template_published_version_id,
        (t.archived_at IS NOT NULL)::boolean AS template_archived,
        ml.name                            AS mail_list_name,
-       (ml.id IS NOT NULL)::boolean       AS internal_mail_list
+       (ml.id IS NOT NULL)::boolean       AS internal_mail_list,
+       people.emails                      AS recipient_emails,
+       people.full_names                  AS recipient_full_names,
+       sends.task_ids                     AS task_ids
 FROM mail_approvals a
          JOIN templates t ON t.id = a.template_id
          LEFT JOIN mailing_lists ml ON ml.id = a.mail_list_id
+         CROSS JOIN LATERAL (SELECT COALESCE(array_agg(r.email ORDER BY r.position), '{}')::text[]     AS emails,
+                                    COALESCE(array_agg(r.full_name ORDER BY r.position), '{}')::text[] AS full_names
+                             FROM mail_approval_recipients r
+                             WHERE r.approval_id = a.id) people
+         CROSS JOIN LATERAL (SELECT COALESCE(array_agg(mat.task_id ORDER BY mat.position), '{}')::uuid[] AS task_ids
+                             FROM mail_approval_tasks mat
+                             WHERE mat.approval_id = a.id) sends
 WHERE (sqlc.narg(submitter_sub)::text IS NULL OR a.submitter_sub = sqlc.narg(submitter_sub)::text)
   AND (sqlc.narg(state)::mail_approval_state IS NULL OR sqlc.narg(state)::mail_approval_state = (CASE
         WHEN a.state IN ('pending', 'returned') AND a.deadline_at <= sqlc.arg(as_of) THEN 'expired'

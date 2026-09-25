@@ -218,9 +218,11 @@ func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, m
 }
 
 // registerMailApprovalRoutes serves Mail onayı. Anyone who can use SkyMail —
-// the /v1 gate is skymail:access — submits and follows their own requests;
-// deciding one takes the approver's role, and the handler keeps an approver
-// off their own requests and a submitter's actions to the submitter.
+// the /v1 gate is skymail:access — follows their own requests. Submitting one
+// takes reading what it submits, skymail:templates:read and for a list
+// skymail:lists:read (Yusuf, 2026-09-24); the handler checks them, since only
+// the body says which. Deciding one takes the approver's role, and the handler
+// keeps a submitter's actions to the submitter.
 func registerMailApprovalRoutes(api fiber.Router, auth middlewares.AuthMiddleware, approvals handlers.MailApprovalHandler) {
 	requests := api.Group("/mail_approvals")
 	approver := auth.RequireAnyPermission(handlers.MailApproverRole)
