@@ -43,21 +43,27 @@ var (
 	fatih = approvalPerson{"22222222-2222-4222-8222-222222222222", "Fatih Naz", "fatih@yildizskylab.com",
 		[]string{"skymail:access", "skymail:mails:approve"}}
 	yusuf = approvalPerson{"33333333-3333-4333-8333-333333333333", "Yusuf Durusoy", "yusuf@yildizskylab.com",
-		[]string{"skymail:access", "skymail:mails:approve", "skymail:mails:write"}}
+		[]string{"skymail:access", "skymail:mails:approve", "skymail:mails:write", "skymail:templates:read", "skymail:lists:read"}}
 	baska = approvalPerson{"44444444-4444-4444-8444-444444444444", "Başka Üye", "baska@yildizskylab.com",
 		[]string{"skymail:access", "skymail:mails:read"}}
+	// A member who reads templates but not lists: they may submit a send to
+	// people, not to a list.
+	okur = approvalPerson{"77777777-7777-4777-8777-777777777777", "Şablon Okuru", "okur@yildizskylab.com",
+		[]string{"skymail:access", "skymail:templates:read"}}
 )
 
 // A member whose token carries no e-mail address, and one whose token carries
 // an address Keycloak has not verified.
 var (
-	adsiz          = approvalPerson{"55555555-5555-4555-8555-555555555555", "Adsız Üye", "", []string{"skymail:access"}}
-	dogrulanmamis  = approvalPerson{"66666666-6666-4666-8666-666666666666", "Doğrulanmamış Üye", "", []string{"skymail:access"}}
+	adsiz = approvalPerson{"55555555-5555-4555-8555-555555555555", "Adsız Üye", "",
+		[]string{"skymail:access", "skymail:templates:read", "skymail:lists:read"}}
+	dogrulanmamis = approvalPerson{"66666666-6666-4666-8666-666666666666", "Doğrulanmamış Üye", "",
+		[]string{"skymail:access", "skymail:templates:read", "skymail:lists:read"}}
 	unverifiedSubs = map[string]bool{dogrulanmamis.sub: true}
 )
 
 var approvalPeople = map[string]approvalPerson{
-	"elif": elif, "fatih": fatih, "yusuf": yusuf, "baska": baska, "adsiz": adsiz, "dogrulanmamis": dogrulanmamis,
+	"elif": elif, "fatih": fatih, "yusuf": yusuf, "baska": baska, "okur": okur, "adsiz": adsiz, "dogrulanmamis": dogrulanmamis,
 }
 
 func (p approvalPerson) user() *gocloak.User {

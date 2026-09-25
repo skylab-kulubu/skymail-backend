@@ -33,12 +33,16 @@ import (
 // A request goes to a mailing list or to 1..100 people (Yusuf, 2026-09-24);
 // the approver decides it once, and each person gets a send of their own.
 //
-// Anyone who can use SkyMail may submit: the one thing that makes a send need
-// approval is that its author lacks send permission, which is exactly who the
-// ADR is for, and a role of its own would put back the 403 the ADR removes.
+// Submitting takes reading what is submitted (Yusuf, 2026-09-24): the
+// template, and the list when it goes to one. No role of its own is needed:
+// the one thing that makes a send need approval is that its author lacks send
+// permission, which is exactly who the ADR is for.
 const (
 	// MailApproverRole is the client role of an approver (ticket 18, decision 1).
 	MailApproverRole = "skymail:mails:approve"
+	// What submitting a request takes, besides skymail:access (§16).
+	templatesReadRole = "skymail:templates:read"
+	listsReadRole     = "skymail:lists:read"
 	// How long a submission waits for a decision (ticket 18, decision 2).
 	mailApprovalDeadline = 7 * 24 * time.Hour
 	// All the time a notification gives Keycloak to name the approvers, or a
@@ -315,7 +319,7 @@ func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc ke
 // Submit godoc
 //
 //	@Summary		Submit a send for approval
-//	@Description	Mail onayı (ADR-0031): a member submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Until the screens send recipients, recipient_email and recipient_full_name still submit a send to one person. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent.
+//	@Description	Mail onayı (ADR-0031): a member submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Until the screens send recipients, recipient_email and recipient_full_name still submit a send to one person. Submitting takes skymail:templates:read, and skymail:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent.
 //	@Description
 //	@Description	Every approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.
 //	@Tags			Mail approval
@@ -324,7 +328,7 @@ func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc ke
 //	@Param			send	body		requests.SubmitMailApproval	true	"The send"
 //	@Success		201		{object}	handlers.MailApproval		"The request, pending, with notification"
 //	@Failure		400		{object}	apperrors.AppError			"validation.error (params.errors: [{field, code, params}]): no template_id; not exactly one of mail_list_id, recipients and recipient_email (mail_list_id, exactly_one_of); more than 100 people (recipients, max_length); a missing or malformed address (recipients[i].email, required or invalid_email); an address twice (recipients[i].email, duplicate, params.first naming the first)"
-//	@Failure		403		{object}	apperrors.AppError			"Forbidden"
+//	@Failure		403		{object}	apperrors.AppError			"server.forbidden: params.missing_roles names what the caller lacks of skymail:templates:read and, for a mailing list, skymail:lists:read"
 //	@Failure		422		{object}	apperrors.AppError			"mail_approval.template_unavailable, mail_approval.audience_unavailable, mail_approval.required_variables_missing (params.missing: [{name, source, reason}]) or mail_approval.unrenderable (params.error)"
 //	@Failure		500		{object}	apperrors.AppError			"Internal Server Error"
 //	@Router			/mail_approvals [post]
@@ -339,6 +343,9 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 	}
 	send, err := approvalSendOf(params)
 	if err != nil {
+		return err
+	}
+	if err := caller.mayRead(send); err != nil {
 		return err
 	}
 	checked, err := h.checkSend(c.Context(), send, caller.recipient())
@@ -704,7 +711,7 @@ func (h *mailApprovalHandlerImpl) Decline(c fiber.Ctx) error {
 // Resubmit godoc
 //
 //	@Summary		Resubmit a rejected or declined request
-//	@Description	The submitter fills a rejected request, or one whose returned edit they declined, in again — whole, as a submission is, its list or its people too — and it is pending again with a new seven-day deadline, pinned to the version its template publishes now. It is checked as a submission is. It stays the same request: a resubmitted event records what changed, and everything before it stays in the history. Every approver is mailed mail.approval-requested again.
+//	@Description	The submitter fills a rejected request, or one whose returned edit they declined, in again — whole, as a submission is, its list or its people too — and it is pending again with a new seven-day deadline, pinned to the version its template publishes now. It is checked, and takes the roles, as a submission does. It stays the same request: a resubmitted event records what changed, and everything before it stays in the history. Every approver is mailed mail.approval-requested again.
 //	@Tags			Mail approval
 //	@Accept			json
 //	@Produce		json
@@ -712,7 +719,7 @@ func (h *mailApprovalHandlerImpl) Decline(c fiber.Ctx) error {
 //	@Param			send	body		requests.SubmitMailApproval	true	"The send"
 //	@Success		200		{object}	handlers.MailApproval		"The request, pending, with notification"
 //	@Failure		400		{object}	apperrors.AppError			"validation.error"
-//	@Failure		403		{object}	apperrors.AppError			"mail_approval.not_submitter"
+//	@Failure		403		{object}	apperrors.AppError			"mail_approval.not_submitter, or server.forbidden with params.missing_roles as a submission"
 //	@Failure		404		{object}	apperrors.AppError			"No such request, or not the caller's to see"
 //	@Failure		409		{object}	apperrors.AppError			"mail_approval.state_conflict or mail_approval.busy"
 //	@Failure		422		{object}	apperrors.AppError			"mail_approval.template_unavailable, mail_approval.audience_unavailable, mail_approval.required_variables_missing or mail_approval.unrenderable"
@@ -731,6 +738,9 @@ func (h *mailApprovalHandlerImpl) Resubmit(c fiber.Ctx) error {
 		by:   bySubmitter,
 		from: []database.MailApprovalState{database.MailApprovalStateRejected, database.MailApprovalStateDeclined},
 		check: func(ctx context.Context, view database.GetMailApprovalRow, caller approvalCaller) (checkedSend, error) {
+			if err := caller.mayRead(send); err != nil {
+				return checkedSend{}, err
+			}
 			return h.checkSend(ctx, send, caller.recipient())
 		},
 		do: func(ctx context.Context, q *database.Queries, a database.MailApproval, caller approvalCaller, prepared approvalPrepared) (approvalNotice, error) {

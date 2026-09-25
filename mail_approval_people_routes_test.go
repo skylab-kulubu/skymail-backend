@@ -340,3 +340,45 @@ func TestResubmittingChangesWhoARequestGoesTo(t *testing.T) {
 		t.Fatalf("sent to %v, want only the person the request names now", got)
 	}
 }
+
+// Submitting takes reading what is submitted (Yusuf, 2026-09-24): the
+// template always, and the list when it goes to one. Without it the answer
+// is 403 and names the roles missing; nothing is kept and no one is told.
+func TestSubmittingTakesReadAccessToWhatIsSubmitted(t *testing.T) {
+	w := newApprovalWorld(t)
+
+	refused := func(who string, path string, send map[string]any, missing ...string) {
+		t.Helper()
+		var failure apiError
+		status, raw := w.call(who, fiber.MethodPost, path, send, &failure)
+		roles, _ := json.Marshal(failure.Params["missing_roles"])
+		want, _ := json.Marshal(missing)
+		if status != fiber.StatusForbidden || failure.Code != "server.forbidden" || string(roles) != string(want) {
+			t.Errorf("%s posting %s = %d %s, want 403 missing %s", who, path, status, raw, want)
+		}
+	}
+	refused("baska", "/v1/mail_approvals", w.listSend(), "skymail:templates:read", "skymail:lists:read")
+	refused("baska", "/v1/mail_approvals", w.peopleSend(ayseKaya), "skymail:templates:read")
+	refused("okur", "/v1/mail_approvals", w.listSend(), "skymail:lists:read")
+	var kept int64
+	if err := w.store.Conn.QueryRow(context.Background(), `SELECT count(*) FROM mail_approvals`).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if kept != 0 || len(w.mail.sent) != 0 {
+		t.Fatalf("refused submissions left %d requests and %d mails", kept, len(w.mail.sent))
+	}
+
+	toPeople := w.submit("okur", w.peopleSend(ayseKaya))
+	w.act("fatih", toPeople.ID, "reject", map[string]any{"reason": "Listeye gitsin."})
+	refused("okur", "/v1/mail_approvals/"+toPeople.ID.String()+"/resubmit", w.listSend(), "skymail:lists:read")
+	if status, _, failure := w.act("okur", toPeople.ID, "resubmit", w.peopleSend(ayseKaya, mehmetDemir)); status != fiber.StatusOK {
+		t.Fatalf("okur resubmitting to people = %d %+v", status, failure)
+	}
+	// Whose request it is still comes first: another's is not found.
+	if status, _, _ := w.act("baska", toPeople.ID, "resubmit", w.listSend()); status != fiber.StatusNotFound {
+		t.Errorf("baska resubmitting okur's = %d, want 404", status)
+	}
+	if _, read := w.get("okur", toPeople.ID); read.kinds() != "submitted,rejected,resubmitted" {
+		t.Errorf("after the refused resubmission: %s", read.kinds())
+	}
+}

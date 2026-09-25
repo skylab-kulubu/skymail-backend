@@ -61,6 +61,23 @@ func (c approvalCaller) has(role string) bool {
 	return false
 }
 
+// mayRead lets the caller submit send only if they can read what it submits
+// (Yusuf, 2026-09-24): its template, and its list when it goes to one — the
+// rule the screens show, held here too. The roles missing are named.
+func (c approvalCaller) mayRead(send approvalSend) error {
+	var missing []string
+	if !c.has(templatesReadRole) {
+		missing = append(missing, templatesReadRole)
+	}
+	if send.mailListID != nil && !c.has(listsReadRole) {
+		missing = append(missing, listsReadRole)
+	}
+	if len(missing) > 0 {
+		return apperrors.ErrForbidden.WithParams(map[string]interface{}{"missing_roles": missing})
+	}
+	return nil
+}
+
 // recipient is the caller as a mail to them is addressed.
 func (c approvalCaller) recipient() mailer.RecipientInfo {
 	return mailer.RecipientInfo{FullName: deref(c.name), Email: deref(c.email)}

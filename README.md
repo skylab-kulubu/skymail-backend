@@ -47,7 +47,10 @@ bir adres yazılmaz, paylaşılan ağın aralığı yazılır.
 
 SkyMail'in izinleri `KEYCLOAK_CLIENT_ID` istemcisinin (varsayılan `skymail`)
 rolleridir: `skymail:access` giriş kapısı, `templates:*`, `lists:*`,
-`mails:*` kaynak rolleri, `skymail:mails:approve` mail onayı.
+`mails:*` kaynak rolleri, `skymail:mails:approve` mail onayı. Mail onayına
+sunmak, sunulanı okumayı ister: `skymail:templates:read`, listeye sunmak için
+ayrıca `skymail:lists:read`. Eksik olana 403 döner ve `params.missing_roles`
+eksik rolleri sayar.
 
 `KEYCLOAK_SERVICE_CLIENT_ID` (`skymail-backend`) istemcisinin service
 account'u Keycloak'tan okur: gönderim ve listeler için grupları ve üyelerini,
