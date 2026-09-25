@@ -169,11 +169,18 @@ order, and the `approved` or `accepted` event names the first by `task_id`.
 
 A request keeps what would be sent — the template, pinned to the version it
 was submitted on, the audience (a mailing list, or 1..100 people in
-`mail_approval_recipients`) and the variables — its state and its deadline: seven days after it was last submitted, or after an approver
-returned it. A request still pending or returned at its deadline is reported
-as expired at once; the one-minute sweep records the expiry as an `expired`
-event with no actor and mails the submitter. Reading or listing a request
-writes nothing.
+`mail_approval_recipients`) and the variables — its state and its deadline:
+seven days after it was last submitted, or after an approver returned it. A
+request still pending or returned at its deadline is reported as expired at
+once; the one-minute sweep records the expiry as an `expired` event with no
+actor and mails the submitter. Reading or listing a request writes nothing.
+
+A resubmission that changes who a request goes to physically deletes the
+`mail_approval_recipients` rows of the people it no longer goes to. That is
+ADR-0042's exception for relationship rows whose removal is itself the fact:
+a row says only that the request goes to that person, and the change is
+recorded, before and after, by the `resubmitted` event's `changes`, which is
+never rewritten.
 
 ## Personal data
 

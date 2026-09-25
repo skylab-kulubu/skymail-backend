@@ -31,7 +31,8 @@ FROM mail_approvals
 WHERE recipient_email IS NOT NULL;
 
 -- The sends an approved request queued: the list's one send, or one per
--- person, at that person's position.
+-- person. position is that person's position, so the API can promise that
+-- task_ids[i] is the send to recipients[i]; a list's one send is at 1.
 CREATE TABLE mail_approval_tasks
 (
     approval_id UUID NOT NULL REFERENCES mail_approvals (id),

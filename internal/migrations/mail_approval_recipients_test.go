@@ -120,8 +120,9 @@ func TestMailApprovalRecipientsMigrationGoesUpAndDown(t *testing.T) {
 		t.Fatalf("%d of the one-person columns are left on mail_approvals", oldColumns)
 	}
 
-	// Each statement below is its own transaction; the audience is checked
-	// when it commits, so a request and its people may be written in turn.
+	// inTx runs its statements in one transaction and commits it; the
+	// audience is checked at that commit, so a request and its people may be
+	// written in turn within it.
 	inTx := func(statements ...string) error {
 		t.Helper()
 		tx, err := pool.Begin(ctx)
