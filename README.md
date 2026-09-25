@@ -68,6 +68,17 @@ sunuşun yanıtı `notification.problem: approver_lookup_failed` der.
 Mail onayı bildirimlerindeki linkler `SKYMAIL_UI_URL` altına kurulur
 (varsayılan `https://mail.yildizskylab.com`).
 
+## Hesap silme (Account erasure)
+
+`PUT /internal/v1/account-erasures/{request_id}` core'un silme komutudur
+(ADR-0051). `/v1` dışındadır ve `userinfo`'dan geçmez: token realm'in JWKS'i
+ile yerelde doğrulanır ve `azp` = `core-erasure`, `aud` ∋ `skymail`,
+`resource_access.skymail.roles` ∋ `skymail:account:erase` ister. Yalnız iç
+Docker ağından çağrılır; `X-Forwarded-*`, `Forwarded` ya da `X-Real-Ip`
+taşıyan istek `404` alır. Silinecek kişinin marker'ı account-access
+Redis'te olmalıdır; kapı `off` iken uç `503` döner. Ayrıntı:
+[`docs/data-lifecycle.md`](docs/data-lifecycle.md#account-erasure).
+
 ## Veritabanı migration'ları
 
 Uygulama bekleyen migration'ları servis trafiğe açılmadan önce çalıştırabilir.
