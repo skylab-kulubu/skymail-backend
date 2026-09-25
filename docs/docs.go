@@ -222,9 +222,20 @@ const docTemplate = `{
                     "preview_error": {
                         "type": "string"
                     },
+                    "preview_recipient": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalRecipient"
+                    },
                     "recipient_count": {
-                        "description": "How many it would reach now: 1 for one recipient, a list's members, a Keycloak group's members with an address. Null when Keycloak did not say in time.",
+                        "description": "How many it would reach now: its people, a list's members, a Keycloak group's members with an address. Null when Keycloak did not say in time.",
                         "type": "integer"
+                    },
+                    "recipients": {
+                        "description": "The people it goes to, in the order submitted; empty when it goes to a mailing list. audience reads as a send's: single for one person, whom recipient_email and recipient_full_name name too; people for several.",
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.MailApprovalRecipient"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
                     },
                     "state": {
                         "description": "pending: awaiting an approver; returned: an approver's edit awaits the submitter; approved: sent; rejected: refused with a reason, the submitter may resubmit; declined: the submitter refused an approver's edit and may resubmit; expired: undecided seven days after it was submitted, never sent.",
@@ -246,8 +257,16 @@ const docTemplate = `{
                         "$ref": "#/components/schemas/handlers.MailApprovalSubmitter"
                     },
                     "task_id": {
-                        "description": "The send, once approved.",
+                        "description": "Deprecated: the first of task_ids, until the screens read those (ticket 22). Null until approved.",
                         "type": "string"
+                    },
+                    "task_ids": {
+                        "description": "The sends, once approved, in order: a list's one, or one per person, task_ids[i] to recipients[i]. Empty until then.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
                     },
                     "template": {
                         "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
@@ -269,7 +288,7 @@ const docTemplate = `{
                         "type": "object"
                     },
                     "field": {
-                        "description": "variable: a variable's value; template: the template or its version ({id, version_id}); audience: who it goes to ({mail_list_id} or {recipient_email, recipient_full_name}).",
+                        "description": "variable: a variable's value; template: the template or its version ({id, version_id}); audience: who it goes to ({mail_list_id} or {recipients: [{email, full_name}]}; changes recorded before a request could go to several people hold {recipient_email, recipient_full_name}).",
                         "enum": [
                             "variable",
                             "template",
@@ -325,7 +344,7 @@ const docTemplate = `{
                         "type": "integer"
                     },
                     "task_id": {
-                        "description": "The send an approval or an acceptance queued.",
+                        "description": "The send an approval or an acceptance queued; the first, when it queued one per person — the request's task_ids has them all.",
                         "type": "string"
                     }
                 },
@@ -353,6 +372,14 @@ const docTemplate = `{
                     "last_event": {
                         "$ref": "#/components/schemas/handlers.MailApprovalEvent"
                     },
+                    "recipients": {
+                        "description": "The people it goes to, in the order submitted; empty when it goes to a mailing list. audience reads as a send's: single for one person, whom recipient_email and recipient_full_name name too; people for several.",
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.MailApprovalRecipient"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
                     "state": {
                         "description": "pending: awaiting an approver; returned: an approver's edit awaits the submitter; approved: sent; rejected: refused with a reason, the submitter may resubmit; declined: the submitter refused an approver's edit and may resubmit; expired: undecided seven days after it was submitted, never sent.",
                         "enum": [
@@ -373,8 +400,16 @@ const docTemplate = `{
                         "$ref": "#/components/schemas/handlers.MailApprovalSubmitter"
                     },
                     "task_id": {
-                        "description": "The send, once approved.",
+                        "description": "Deprecated: the first of task_ids, until the screens read those (ticket 22). Null until approved.",
                         "type": "string"
+                    },
+                    "task_ids": {
+                        "description": "The sends, once approved, in order: a list's one, or one per person, task_ids[i] to recipients[i]. Empty until then.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
                     },
                     "template": {
                         "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
@@ -452,6 +487,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "full_name": {
+                        "description": "Empty when the submitter knows only the address.",
                         "type": "string"
                     }
                 },
@@ -716,9 +752,11 @@ const docTemplate = `{
             "handlers.SendAudience": {
                 "properties": {
                     "kind": {
+                        "description": "mailing_list, single, or — only on a Mail onayı request — people.",
                         "enum": [
                             "mailing_list",
-                            "single"
+                            "single",
+                            "people"
                         ],
                         "type": "string"
                     },
@@ -1147,6 +1185,21 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
+            "requests.MailApprovalRecipient": {
+                "properties": {
+                    "email": {
+                        "type": "string"
+                    },
+                    "full_name": {
+                        "description": "Empty when the submitter knows only the address.",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "email"
+                ],
+                "type": "object"
+            },
             "requests.PublishOver": {
                 "description": "Publish a stale draft anyway, replacing the version named. Left out: a stale draft is refused.",
                 "properties": {
@@ -1280,15 +1333,25 @@ const docTemplate = `{
                         "type": "object"
                     },
                     "mail_list_id": {
-                        "description": "An internal mailing list or a Keycloak group. Leave it out to send to one recipient.",
+                        "description": "An internal mailing list or a Keycloak group. Leave it out to send to people.",
                         "type": "string"
                     },
                     "recipient_email": {
-                        "description": "The one recipient. Leave it out to send to a mailing list.",
+                        "description": "Deprecated: one person, until the screens send recipients (ticket 22). Give recipients instead; never both.",
                         "type": "string"
                     },
                     "recipient_full_name": {
+                        "description": "Deprecated: the one person's name, with recipient_email.",
                         "type": "string"
+                    },
+                    "recipients": {
+                        "description": "The people, 1..100, each address once (compared case-insensitively); each gets a send of their own. Leave it out to send to a mailing list.",
+                        "items": {
+                            "$ref": "#/components/schemas/requests.MailApprovalRecipient"
+                        },
+                        "maxItems": 100,
+                        "type": "array",
+                        "uniqueItems": false
                     },
                     "template_id": {
                         "type": "string"
@@ -1501,7 +1564,7 @@ const docTemplate = `{
                 ]
             },
             "post": {
-                "description": "Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or one recipient (as POST /mail_tasks/single takes them), never both — and nothing is sent until someone holding skymail:mails:approve approves it. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values. It waits seven days; undecided by then, it expires and is never sent.\n\nEvery approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.",
+                "description": "Mail onayı (ADR-0031): a member submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Until the screens send recipients, recipient_email and recipient_full_name still submit a send to one person. Submitting takes skymail:templates:read, and skymail:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent.\n\nEvery approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -1541,7 +1604,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "validation.error: no template_id, a malformed address, or not exactly one of mail_list_id and recipient_email (params.errors)"
+                        "description": "validation.error (params.errors: [{field, code, params}]): no template_id; not exactly one of mail_list_id, recipients and recipient_email (mail_list_id, exactly_one_of); more than 100 people (recipients, max_length); a missing or malformed address (recipients[i].email, required or invalid_email); an address twice (recipients[i].email, duplicate, params.first naming the first)"
                     },
                     "403": {
                         "content": {
@@ -1551,7 +1614,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "Forbidden"
+                        "description": "server.forbidden: params.missing_roles names what the caller lacks of skymail:templates:read and, for a mailing list, skymail:lists:read"
                     },
                     "422": {
                         "content": {
@@ -1582,7 +1645,7 @@ const docTemplate = `{
         },
         "/mail_approvals/{id}": {
             "get": {
-                "description": "A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.",
+                "description": "A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. preview_recipient is whose mail the preview is: the first of its people, or for a list the submitter, as if they were on it; it is given also when the preview does not render. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.",
                 "parameters": [
                     {
                         "description": "Request ID",
@@ -1644,7 +1707,7 @@ const docTemplate = `{
         },
         "/mail_approvals/{id}/accept": {
             "post": {
-                "description": "The submitter accepts the edit an approver returned, and the request is sent as edited, exactly as an approval sends it — locked, once, of the pinned template version.",
+                "description": "The submitter accepts the edit an approver returned, and the request is sent as edited, exactly as an approval sends it — locked, once, of the pinned template version, one send per person when it goes to people.",
                 "parameters": [
                     {
                         "description": "Request ID",
@@ -1665,7 +1728,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "The request, approved, with its task_id"
+                        "description": "The request, approved, with its task_ids"
                     },
                     "403": {
                         "content": {
@@ -1716,7 +1779,7 @@ const docTemplate = `{
         },
         "/mail_approvals/{id}/approve": {
             "post": {
-                "description": "An approver approves a pending request — their own too, which its history then shows — and it is queued through the send path at once, sent by its submitter: without body_variables exactly as it stands, with them as the approver edited them — the edit is recorded (an edited event naming each variable changed, before and after) and told to the submitter. The send is of the template version the request is pinned to, to its audience as it is now. Approving is idempotent and race-safe: the request is locked while it is sent, someone else acting on it at that moment is refused (409 mail_approval.busy), and approving an approved request again without an edit sends nothing and answers it as it is.\n\nThe submitter is mailed the mail.approval-resolved System template with Decision \"approved\". A request past its deadline is expired instead (409 mail_approval.expired) and its submitter told.",
+                "description": "An approver approves a pending request — their own too, which its history then shows — and it is queued through the send path at once, sent by its submitter: without body_variables exactly as it stands, with them as the approver edited them — the edit is recorded (an edited event naming each variable changed, before and after) and told to the submitter. The send is of the template version the request is pinned to, to its audience as it is now: one send to a mailing list, or one per person (as POST /mail_tasks/single sends to one), all queued in one transaction — all of them or none. Approving is idempotent and race-safe: the request is locked while it is sent, someone else acting on it at that moment is refused (409 mail_approval.busy), and approving an approved request again without an edit sends nothing and answers it as it is.\n\nThe submitter is mailed the mail.approval-resolved System template with Decision \"approved\". A request past its deadline is expired instead (409 mail_approval.expired) and its submitter told.",
                 "parameters": [
                     {
                         "description": "Request ID",
@@ -1756,7 +1819,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "The request, approved, with its task_id and notification"
+                        "description": "The request, approved, with its task_ids and notification"
                     },
                     "400": {
                         "content": {
@@ -2030,7 +2093,7 @@ const docTemplate = `{
         },
         "/mail_approvals/{id}/resubmit": {
             "post": {
-                "description": "The submitter fills a rejected request, or one whose returned edit they declined, in again — whole, as a submission is — and it is pending again with a new seven-day deadline, pinned to the version its template publishes now. It is checked as a submission is. It stays the same request: a resubmitted event records what changed, and everything before it stays in the history. Every approver is mailed mail.approval-requested again.",
+                "description": "The submitter fills a rejected request, or one whose returned edit they declined, in again — whole, as a submission is, its list or its people too — and it is pending again with a new seven-day deadline, pinned to the version its template publishes now. It is checked, and takes the roles, as a submission does. It stays the same request: a resubmitted event records what changed, and everything before it stays in the history. Every approver is mailed mail.approval-requested again.",
                 "parameters": [
                     {
                         "description": "Request ID",
@@ -2091,7 +2154,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "mail_approval.not_submitter"
+                        "description": "mail_approval.not_submitter, or server.forbidden with params.missing_roles as a submission"
                     },
                     "404": {
                         "content": {
