@@ -132,6 +132,39 @@ func TestApprovingSendsEachPersonTheirOwn(t *testing.T) {
 	}
 }
 
+// An approver's edit of a request to several people goes to each of them:
+// sent at once, or returned and sent when the submitter accepts it.
+func TestAnEditToSeveralPeopleGoesToEachOfThem(t *testing.T) {
+	w := newApprovalWorld(t)
+	edit := w.listSend()["body_variables"].(map[string]any)
+	edit["Heading"] = "GECEKODU 2026"
+
+	approvedAtOnce := w.submit("elif", w.peopleSend(ayseKaya, mehmetDemir))
+	status, approved, failure := w.act("fatih", approvedAtOnce.ID, "approve", map[string]any{"body_variables": edit})
+	if status != fiber.StatusOK || approved.kinds() != "submitted,edited,approved" || len(approved.TaskIDs) != 2 {
+		t.Fatalf("approve with an edit = %d %+v: %s %v", status, failure, approved.kinds(), approved.TaskIDs)
+	}
+
+	returned := w.submit("elif", w.peopleSend(ayseKaya, mehmetDemir))
+	if status, _, failure := w.act("fatih", returned.ID, "return", map[string]any{"body_variables": edit}); status != fiber.StatusOK {
+		t.Fatalf("return = %d %+v", status, failure)
+	}
+	status, accepted, failure := w.act("elif", returned.ID, "accept", nil)
+	if status != fiber.StatusOK || len(accepted.TaskIDs) != 2 || *accepted.History[3].TaskID != accepted.TaskIDs[0] {
+		t.Fatalf("accept = %d %+v: %v", status, failure, accepted.TaskIDs)
+	}
+
+	sent := w.mail.of(w.freeBasic.ID)
+	if got := emails(sent); !reflect.DeepEqual(got, []string{"ayse@example.com", "ayse@example.com", "mehmet@example.com", "mehmet@example.com"}) {
+		t.Fatalf("sent to %v, want each person twice: once per request", got)
+	}
+	for _, s := range sent {
+		if !reflect.DeepEqual(s.variables, edit) {
+			t.Errorf("sent %v to %v, want the edit", s.variables, s.recipients)
+		}
+	}
+}
+
 // The sends go out together or not at all: when one person's cannot be
 // queued, no one's is, the request is left pending, and approving it again
 // sends each person theirs once.
