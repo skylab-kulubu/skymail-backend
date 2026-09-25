@@ -246,14 +246,11 @@ type MailApproval struct {
 	TemplateID               uuid.UUID         `json:"template_id"`
 	TemplateVersionID        uuid.UUID         `json:"template_version_id"`
 	MailListID               *uuid.UUID        `json:"mail_list_id"`
-	RecipientEmail           *string           `json:"recipient_email"`
-	RecipientFullName        *string           `json:"recipient_full_name"`
 	BodyVariables            []byte            `json:"body_variables"`
 	CreatedAt                time.Time         `json:"created_at"`
 	SubmittedAt              time.Time         `json:"submitted_at"`
 	DeadlineAt               time.Time         `json:"deadline_at"`
 	UpdatedAt                time.Time         `json:"updated_at"`
-	TaskID                   *uuid.UUID        `json:"task_id"`
 }
 
 type MailApprovalEvent struct {
@@ -267,6 +264,19 @@ type MailApprovalEvent struct {
 	Changes    []byte                `json:"changes"`
 	TaskID     *uuid.UUID            `json:"task_id"`
 	CreatedAt  time.Time             `json:"created_at"`
+}
+
+type MailApprovalRecipient struct {
+	ApprovalID uuid.UUID `json:"approval_id"`
+	Position   int       `json:"position"`
+	Email      string    `json:"email"`
+	FullName   string    `json:"full_name"`
+}
+
+type MailApprovalTask struct {
+	ApprovalID uuid.UUID `json:"approval_id"`
+	Position   int       `json:"position"`
+	TaskID     uuid.UUID `json:"task_id"`
 }
 
 type MailQueue struct {
