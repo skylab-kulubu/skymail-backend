@@ -69,6 +69,12 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid database migration configuration")
 	}
+	// Read before anything runs: a value that is neither on nor paused stops
+	// startup rather than sending a restored queue.
+	mailSender, err := mailer.SenderFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid mail sender configuration")
+	}
 	if migrationConfig.Mode == migrations.ModeApply {
 		version, migrationErr := migrations.Run(ctx, cfg.DatabaseURL, migrationConfig.BaselineVersion)
 		if migrationErr != nil {
@@ -94,7 +100,7 @@ func main() {
 		Password:  cfg.SMTPPass,
 		FQDN:      cfg.SMTPFQDN,
 		Plain:     cfg.SMTPPlain,
-	})
+	}, mailSender)
 
 	authMiddleware := middlewares.NewAuthMiddleware(cfg.KeycloakClientID, cfg.KeycloakRealmURL)
 	gateConfig, err := accessgate.ConfigFromEnv(config.Value, cfg.KeycloakRealmURL)
@@ -180,6 +186,8 @@ func main() {
 	registerMailTaskRoutes(api, authMiddleware, mailHandler)
 	registerMailApprovalRoutes(api, authMiddleware, approvalHandler)
 
+	// Paused (MAIL_SENDER=paused), this only resets the rows left processing:
+	// the API, /ready and the erase endpoint serve as ever, and nothing is sent.
 	mailerService.Start(ctx, 3)
 	go expireMailApprovals(ctx, approvalHandler, time.Minute)
 

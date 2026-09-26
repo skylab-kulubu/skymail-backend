@@ -151,20 +151,25 @@ type SendAudience struct {
 	RecipientEmail    *string    `json:"recipient_email"`
 }
 
-// SendSummary is what the home screen shows: the queue as it stands, sends by
-// status, the mail sent per day, and the latest sends.
+// SendSummary is what the home screen shows: the queue as it stands, whether
+// the sender is paused, sends by status, the mail sent per day, and the latest
+// sends.
 type SendSummary struct {
-	TimeZone    string         `json:"time_zone" example:"Europe/Istanbul"`
-	QueueCounts QueueCounts    `json:"queue_counts"`
-	SendCounts  SendCounts     `json:"send_counts"`
-	DailySent   []DailySent    `json:"daily_sent"`
-	RecentSends []MailTaskItem `json:"recent_sends"`
+	TimeZone    string      `json:"time_zone" example:"Europe/Istanbul"`
+	QueueCounts QueueCounts `json:"queue_counts"`
+	// True while MAIL_SENDER=paused holds the sender back, as after a restore
+	// from backup: mail is queued and stays pending, and none is sent until
+	// the variable is removed and SkyMail redeployed.
+	SenderPaused bool           `json:"sender_paused"`
+	SendCounts   SendCounts     `json:"send_counts"`
+	DailySent    []DailySent    `json:"daily_sent"`
+	RecentSends  []MailTaskItem `json:"recent_sends"`
 }
 
 // GetSummary godoc
 //
 //	@Summary		Summarise mail sends
-//	@Description	Queue rows (one per recipient) by status; sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).
+//	@Description	Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			days	query		int	false	"Days in the daily series, ending today in Europe/Istanbul (1-90)"	default(30)
@@ -222,6 +227,7 @@ func (h *mailHandlerImpl) GetSummary(c fiber.Ctx) error {
 			Sent:       counts.Sent,
 			Failed:     counts.Failed,
 		},
+		SenderPaused: h.mailer.SenderPaused(),
 		SendCounts: SendCounts{
 			Failed:  sendCounts.Failed,
 			Sending: sendCounts.Sending,

@@ -25,6 +25,8 @@ type recordingMailerStub struct {
 
 func (*recordingMailerStub) Start(context.Context, int) {}
 
+func (*recordingMailerStub) SenderPaused() bool { return false }
+
 func (*recordingMailerStub) Enqueue(context.Context, database.CreateMailTaskParams) (uuid.UUID, error) {
 	return uuid.New(), nil
 }
@@ -265,7 +267,7 @@ func TestEnqueueSingleRefusesArchivedTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	realMailer := mailer.NewMailer(db, mailer.SMTPConfig{})
+	realMailer := mailer.NewMailer(db, mailer.SMTPConfig{}, mailer.SenderOn)
 	taskID, err := realMailer.EnqueueSingle(ctx, database.CreateSingleMailTaskParams{
 		SentBy:            "31ef736f-72da-4a40-8791-d523199cf9f0",
 		TemplateID:        &template.ID,

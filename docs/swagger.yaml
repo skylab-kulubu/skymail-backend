@@ -635,6 +635,12 @@ components:
           uniqueItems: false
         send_counts:
           $ref: '#/components/schemas/handlers.SendCounts'
+        sender_paused:
+          description: |-
+            True while MAIL_SENDER=paused holds the sender back, as after a restore
+            from backup: mail is queued and stays pending, and none is sent until
+            the variable is removed and SkyMail redeployed.
+          type: boolean
         time_zone:
           example: Europe/Istanbul
           type: string
@@ -1956,7 +1962,9 @@ paths:
       - Mail
   /mail_tasks/summary:
     get:
-      description: 'Queue rows (one per recipient) by status; sends by derived status,
+      description: 'Queue rows (one per recipient) by status; sender_paused, true
+        while MAIL_SENDER=paused holds the sender back (after a restore from backup:
+        mail is queued and stays pending, none is sent); sends by derived status,
         each equal to the X-Total-Count of the send list filtered by it; mail sent
         per Europe/Istanbul day over the last days (zero-filled, oldest first, ending
         today); and the latest sends. Derived status: failed (a recipient failed,

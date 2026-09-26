@@ -296,7 +296,7 @@ func newApprovalWorldWithPool(t *testing.T, poolSize int) *approvalWorld {
 	w := &approvalWorld{
 		t:     t,
 		store: store,
-		mail:  &recordingMailer{Transactional: mailer.NewMailer(store, mailer.SMTPConfig{})},
+		mail:  &recordingMailer{Transactional: mailer.NewMailer(store, mailer.SMTPConfig{}, mailer.SenderOn)},
 		directory: &approverDirectory{
 			approvers: []*gocloak.User{fatih.user(), yusuf.user()},
 			groups:    map[string][]*gocloak.User{},

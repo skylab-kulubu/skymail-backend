@@ -41,9 +41,12 @@ func (failingLifecycleKeycloakStub) GetGroupMembers(context.Context, string) ([]
 
 type lifecycleMailerStub struct {
 	enqueueCalls int
+	paused       bool
 }
 
 func (*lifecycleMailerStub) Start(context.Context, int) {}
+
+func (m *lifecycleMailerStub) SenderPaused() bool { return m.paused }
 
 func (m *lifecycleMailerStub) Enqueue(context.Context, database.CreateMailTaskParams) (uuid.UUID, error) {
 	m.enqueueCalls++
