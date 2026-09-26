@@ -346,12 +346,20 @@ Paused, SkyMail:
   `GET /v1/mail_tasks/summary` answers `sender_paused: true`.
 
 Pausing alone does not protect the people erased since the dump. Core keeps no
-addresses, so it replays with `emails: []`: that erases what is keyed by the
-subject but finds no mail by address. The person's own queued mail would stay
-`pending` and go out when the sender comes back on. Another person's queued
-mail that names them would keep the replay at `202`, because only a sent or
-failed mail's body is cleared. Core cannot say who the mail was for, so the
-restored queue is closed by time, not by person (account erasure ticket 16).
+address once an erasure is done. The replay reads the addresses back from the
+matching core and Keycloak backups (step 5), but an address the person changed
+between two backups is still missed, and a replay with `emails: []` erases
+only what is keyed by the subject. The person's queued mail to an address the
+replay does not have would stay `pending` and go out when the sender comes
+back on. Another person's queued mail that names them would keep the replay at
+`202`, because only a sent or failed mail's body is cleared. Core cannot say
+who the mail was for, so the restored queue is closed by time, not by person
+(account erasure ticket 16).
+
+A SkyMail dump can be restored only together with a core and a Keycloak dump
+taken at the same time: without them the replay has no addresses. The SKY LAB
+workspace's `ops/wizards/skymail-production-dump-wizard.sh` takes all three in
+one run.
 
 ### The procedure
 
@@ -381,7 +389,14 @@ restored queue is closed by time, not by person (account erasure ticket 16).
 
    See below for what it prints.
 5. **Replay.** Core replays its erasures (spec §8): every request completed
-   after the dump was taken. Expect `200` with a receipt for each.
+   after the dump was taken. Core keeps no address of an erased person, so it
+   reads each person's addresses from the matching core and Keycloak backups
+   (ADR-0053): the newest core backup taken before that request's
+   `anonymize_core` step and the newest Keycloak backup taken before its
+   `delete_identity` step, each loaded into a temporary Postgres with no
+   network. It sends the normal Erasure command with those addresses, then
+   destroys the temporary databases. Until core's replay tool exists, this is
+   done by hand. Expect `200` with a receipt for each.
 6. **Unpause.** Check that `GET /v1/mail_tasks?status=sending` lists no send
    created before the restore instant. Then remove `MAIL_SENDER` and
    redeploy. Only the mail queued since the restore is sent.
@@ -460,20 +475,20 @@ panel sends a failed row again. To send closed mail again, make a new send:
 Keycloak's reset and verification mails are not sent again: their links are
 stale by then, and the person asks again.
 
-Send closed mail again only when you know who it is for. The restored database
-still holds the addresses of people erased after the dump was taken: their
-recipients, their list memberships and the closed rows to them. The replay
-cannot find any of them by address (spec §8), and the closed rows do not show
+Send closed mail again only when you know who it is for. Until the replay has
+run, and for an address it missed, the restored database still holds the
+addresses of people erased after the dump was taken: their recipients, their
+list memberships and the closed rows to them. The closed rows do not show
 whose erasure they belong to. A Keycloak group is safe to send to again,
 because its members are read from Keycloak at send time and an erased person
 is no longer there. A SkyMail list restored from the dump can still hold an
 erased person. For a person, send again only to someone whose account still
 exists or who asked for it.
 
-A command that still carries the addresses (a request core had not completed
-when the dump was taken) finds the person's mail by address as well. It
-clears the person's closed mail to them and deletes any mail queued to them
-since the restore.
+A command that carries the addresses (a replay that read them from the
+matching backups, or a request core had not completed when the dump was taken)
+finds the person's mail by address as well. It clears the person's closed mail
+to them and deletes any mail queued to them since the restore.
 
 ## Retention boundaries
 
