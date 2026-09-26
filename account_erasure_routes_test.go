@@ -169,7 +169,7 @@ func (s *erasureStoreStub) FindAccountErasureReceipt(context.Context, uuid.UUID)
 
 func (s *erasureStoreStub) EraseAccount(_ context.Context, erasure database.AccountErasure) (*database.AccountErasureReceipt, error) {
 	s.erased.Add(1)
-	return &database.AccountErasureReceipt{RequestID: erasure.RequestID, CompletedAt: time.Now().UTC(), Counts: map[string]int64{"recipients_deleted": 0}}, nil
+	return &database.AccountErasureReceipt{RequestID: erasure.RequestID, CompletedAt: time.Now().UTC(), Counts: []byte(`{"recipients_deleted": 0}`)}, nil
 }
 
 type erasureRoute struct {
@@ -399,7 +399,7 @@ func TestErasureRouteNeedsTheSubjectBlocked(t *testing.T) {
 	t.Run("a finished request answers its receipt without reading the marker", func(t *testing.T) {
 		completed := time.Date(2026, 9, 25, 12, 0, 0, 123456000, time.UTC)
 		store := &erasureStoreStub{receipt: &database.AccountErasureReceipt{
-			RequestID: requestID, CompletedAt: completed, Counts: map[string]int64{"recipients_deleted": 2},
+			RequestID: requestID, CompletedAt: completed, Counts: []byte(`{"recipients_deleted": 2}`),
 		}}
 		gate := &erasureGate{}
 		route := newErasureRoute(t, store, gate)

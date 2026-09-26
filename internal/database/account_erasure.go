@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -55,12 +54,24 @@ type AccountErasure struct {
 	Emails    []string
 }
 
-// AccountErasureReceipt is the proof an erasure finished: no subject, no
-// address. A repeated command is answered with it.
-type AccountErasureReceipt struct {
-	RequestID   uuid.UUID
-	CompletedAt time.Time
-	Counts      map[string]int64
+// The proof an erasure finished is AccountErasureReceipt, the row of
+// account_erasure_receipts that sqlc generates (models.go): request_id,
+// completed_at and counts, no subject, no address. A repeated command is
+// answered with it.
+
+// StepCounts decodes the receipt's counts: how many rows each step changed,
+// keyed by the AccountErasure… names. A receipt without counts has none.
+func (r *AccountErasureReceipt) StepCounts() (map[string]int64, error) {
+	var counts map[string]int64
+	if len(r.Counts) > 0 {
+		if err := json.Unmarshal(r.Counts, &counts); err != nil {
+			return nil, fmt.Errorf("account erasure receipt counts: %w", err)
+		}
+	}
+	if counts == nil {
+		counts = map[string]int64{}
+	}
+	return counts, nil
 }
 
 // FindAccountErasureReceipt returns the receipt of a finished erasure, or nil.
@@ -83,13 +94,12 @@ func findAccountErasureReceipt(ctx context.Context, db receiptReader, requestID 
 
 func scanAccountErasureReceipt(row pgx.Row) (*AccountErasureReceipt, error) {
 	var receipt AccountErasureReceipt
-	var counts []byte
-	if err := row.Scan(&receipt.RequestID, &receipt.CompletedAt, &counts); err != nil {
+	if err := row.Scan(&receipt.RequestID, &receipt.CompletedAt, &receipt.Counts); err != nil {
 		return nil, err
 	}
 	receipt.CompletedAt = receipt.CompletedAt.UTC()
-	if err := json.Unmarshal(counts, &receipt.Counts); err != nil {
-		return nil, fmt.Errorf("account erasure receipt counts: %w", err)
+	if _, err := receipt.StepCounts(); err != nil {
+		return nil, err
 	}
 	return &receipt, nil
 }

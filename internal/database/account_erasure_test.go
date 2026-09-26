@@ -253,6 +253,15 @@ func queryString(t *testing.T, store *Store, sql string, args ...any) *string {
 	return value
 }
 
+func receiptCounts(t *testing.T, receipt *AccountErasureReceipt) map[string]int64 {
+	t.Helper()
+	counts, err := receipt.StepCounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return counts
+}
+
 func queryCount(t *testing.T, store *Store, sql string, args ...any) int {
 	t.Helper()
 	var n int
@@ -287,8 +296,8 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 		AccountErasureApprovalPlaceholders:      3,
 		AccountErasureApprovalSendLinksDeleted:  1,
 	}
-	if !reflect.DeepEqual(receipt.Counts, wantCounts) {
-		t.Errorf("counts = %v\nwant     %v", receipt.Counts, wantCounts)
+	if counts := receiptCounts(t, receipt); !reflect.DeepEqual(counts, wantCounts) {
+		t.Errorf("counts = %v\nwant     %v", counts, wantCounts)
 	}
 
 	assertOnlyChanged(t, before, after, map[string][]string{
@@ -538,7 +547,7 @@ func TestEraseAccountRepeatsTheFirstReceiptAndFindsNothingLeft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for key, n := range other.Counts {
+	for key, n := range receiptCounts(t, other) {
 		if n != 0 {
 			t.Errorf("second erasure changed %s: %d", key, n)
 		}
@@ -607,8 +616,8 @@ func TestConcurrentErasuresOfOneRequestDoTheWorkOnce(t *testing.T) {
 			t.Errorf("caller %d got %+v, caller 0 %+v", i, receipts[i], receipts[0])
 		}
 	}
-	if receipts[0].Counts[AccountErasureRecipientsDeleted] != 2 {
-		t.Errorf("counts = %v: the work was not done by the one that wrote the receipt", receipts[0].Counts)
+	if counts := receiptCounts(t, receipts[0]); counts[AccountErasureRecipientsDeleted] != 2 {
+		t.Errorf("counts = %v: the work was not done by the one that wrote the receipt", counts)
 	}
 	if n := queryCount(t, store, `SELECT count(*) FROM account_erasure_receipts`); n != 1 {
 		t.Errorf("receipts = %d, want 1", n)
@@ -671,8 +680,8 @@ func TestEraseAccountWaitsForASendInFlightToThePerson(t *testing.T) {
 	if name != DeletedUserName || email != "" || body != "" {
 		t.Errorf("sent row = %q %q %q", name, email, body)
 	}
-	if receipt.Counts[AccountErasureRecipientsDeleted] != 2 || receipt.Counts[AccountErasureQueueRowsCleared] != 4 {
-		t.Errorf("counts = %v", receipt.Counts)
+	if counts := receiptCounts(t, receipt); counts[AccountErasureRecipientsDeleted] != 2 || counts[AccountErasureQueueRowsCleared] != 4 {
+		t.Errorf("counts = %v", counts)
 	}
 }
 
@@ -724,8 +733,8 @@ func TestEraseAccountWithoutAddressesStillReplacesTheSubject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Counts[AccountErasureActorColumnsReplaced] != 9 || receipt.Counts[AccountErasureRecipientsDeleted] != 0 {
-		t.Errorf("counts = %v", receipt.Counts)
+	if counts := receiptCounts(t, receipt); counts[AccountErasureActorColumnsReplaced] != 9 || counts[AccountErasureRecipientsDeleted] != 0 {
+		t.Errorf("counts = %v", counts)
 	}
 	// The names the subject's own rows carry are still searched for.
 	if got := queryString(t, store, `SELECT body FROM mail_queue WHERE id = '50000000-0000-4000-8000-0000000000c1'`); *got != "" {
