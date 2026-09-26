@@ -138,16 +138,13 @@ func (h *mailApprovalHandlerImpl) notifyApprovers(ctx context.Context, view data
 	if requester == "" {
 		requester = deref(view.MailApproval.SubmitterEmail)
 	}
-	count := "?"
-	if n := h.recipientCount(ctx, view); n != nil {
-		count = strconv.FormatInt(*n, 10)
-	}
 	link := h.requestURL(view)
 	return h.notify(ctx, approvalRequestedKey, notice.by, approvers, map[string]interface{}{
 		"RequesterName":  requester,
 		"TemplateName":   view.TemplateName,
 		"AudienceName":   h.audienceName(ctx, view),
-		"RecipientCount": count,
+		"AudienceKind":   audienceKind(view),
+		"RecipientCount": countText(h.recipientCount(ctx, view)),
 		"PreviewUrl":     link + "#preview",
 		"ApproveUrl":     link,
 	})
@@ -166,14 +163,59 @@ func (h *mailApprovalHandlerImpl) notifySubmitter(ctx context.Context, view data
 		sender = skymailSender
 	}
 	return h.notify(ctx, approvalResolvedKey, sender, []mailer.RecipientInfo{submitterOf(view.MailApproval)}, map[string]interface{}{
-		"TemplateName": view.TemplateName,
-		"AudienceName": h.audienceName(ctx, view),
-		"Decision":     string(notice.decision),
-		"DecidedBy":    notice.decidedBy,
-		"DecisionNote": notice.decisionNote(view),
-		"DeadlineAt":   mailTime(view.MailApproval.DeadlineAt),
-		"RequestUrl":   h.requestURL(view),
+		"TemplateName":   view.TemplateName,
+		"AudienceName":   h.audienceName(ctx, view),
+		"AudienceKind":   audienceKind(view),
+		"RecipientCount": h.resolvedRecipientCount(ctx, view),
+		"Decision":       string(notice.decision),
+		"DecidedBy":      notice.decidedBy,
+		"DecisionNote":   notice.decisionNote(view),
+		"DeadlineAt":     mailTime(view.MailApproval.DeadlineAt),
+		"RequestUrl":     h.requestURL(view),
 	})
+}
+
+// audienceKind is the two mails' AudienceKind: who a request goes to, as its
+// audience.kind says it — mailing_list (an internal list or a Keycloak
+// group), single (one person) or people (several) — so a template can say
+// "listesine" or "N kişiye".
+func audienceKind(view database.GetMailApprovalRow) string {
+	switch {
+	case view.MailApproval.MailListID != nil:
+		return audienceMailingList
+	case len(view.RecipientEmails) == 1:
+		return audienceSingle
+	}
+	return audiencePeople
+}
+
+// unknownCount is RecipientCount when it cannot be told: Keycloak did not
+// name a group's members in time, or the count could not be read.
+const unknownCount = "?"
+
+// countText is a RecipientCount as the mails carry it: the number in digits,
+// or unknownCount.
+func countText(n *int64) string {
+	if n == nil {
+		return unknownCount
+	}
+	return strconv.FormatInt(*n, 10)
+}
+
+// resolvedRecipientCount is mail.approval-resolved's RecipientCount. Once a
+// request is approved it is how many it was sent to: its people, one send
+// each, or the mails its one send to a list queued. Before that it is how many
+// it would reach now, as mail.approval-requested says it.
+func (h *mailApprovalHandlerImpl) resolvedRecipientCount(ctx context.Context, view database.GetMailApprovalRow) string {
+	if view.MailApproval.State != database.MailApprovalStateApproved || view.MailApproval.MailListID == nil || len(view.TaskIds) != 1 {
+		return countText(h.recipientCount(ctx, view))
+	}
+	queued, err := h.db.CountMailQueueItemsByTaskId(ctx, database.CountMailQueueItemsByTaskIdParams{TaskID: view.TaskIds[0]})
+	if err != nil {
+		log.Warn().Err(err).Str("approval_id", view.MailApproval.ID.String()).Msg("could not count the mails an approved request queued")
+		return unknownCount
+	}
+	return countText(&queued)
 }
 
 // requestURL is the request's page in the SkyMail UI.
