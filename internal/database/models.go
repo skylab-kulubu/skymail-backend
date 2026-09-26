@@ -236,6 +236,12 @@ func (ns NullTemplateAuthorKind) Value() (driver.Value, error) {
 	return string(ns.TemplateAuthorKind), nil
 }
 
+type AccountErasureReceipt struct {
+	RequestID   uuid.UUID `json:"request_id"`
+	CompletedAt time.Time `json:"completed_at"`
+	Counts      []byte    `json:"counts"`
+}
+
 type MailApproval struct {
 	ID                       uuid.UUID         `json:"id"`
 	SubmitterSub             string            `json:"submitter_sub"`

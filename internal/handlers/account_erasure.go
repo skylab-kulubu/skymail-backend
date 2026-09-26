@@ -113,7 +113,11 @@ func (h AccountErasureHandler) Erase(c fiber.Ctx) error {
 		return erasureStoreFailed(c, logID, err)
 	}
 	if receipt != nil {
-		return erasureCompleted(c, receipt)
+		counts, err := receipt.StepCounts()
+		if err != nil {
+			return erasureStoreFailed(c, logID, err)
+		}
+		return erasureCompleted(c, receipt, counts)
 	}
 
 	// A compromised caller must not erase someone who never asked: core has
@@ -146,8 +150,12 @@ func (h AccountErasureHandler) Erase(c fiber.Ctx) error {
 	if err != nil {
 		return erasureStoreFailed(c, logID, err)
 	}
-	log.Info().Str("request_id", logID).Interface("counts", receipt.Counts).Msg("account erasure completed")
-	return erasureCompleted(c, receipt)
+	counts, err := receipt.StepCounts()
+	if err != nil {
+		return erasureStoreFailed(c, logID, err)
+	}
+	log.Info().Str("request_id", logID).Interface("counts", counts).Msg("account erasure completed")
+	return erasureCompleted(c, receipt, counts)
 }
 
 type erasureCommand struct {
@@ -271,11 +279,7 @@ func parseCanonicalishUUID(s string) (uuid.UUID, bool) {
 	return id, err == nil
 }
 
-func erasureCompleted(c fiber.Ctx, receipt *database.AccountErasureReceipt) error {
-	counts := receipt.Counts
-	if counts == nil {
-		counts = map[string]int64{}
-	}
+func erasureCompleted(c fiber.Ctx, receipt *database.AccountErasureReceipt, counts map[string]int64) error {
 	return erasureJSON(c, fiber.StatusOK, struct {
 		RequestID   string           `json:"request_id"`
 		Status      string           `json:"status"`
