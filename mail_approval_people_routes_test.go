@@ -458,3 +458,63 @@ func TestSubmittingTakesReadAccessToWhatIsSubmitted(t *testing.T) {
 		t.Errorf("after the refused resubmission: %s", read.kinds())
 	}
 }
+
+// Both approval mails say what a request goes to and how many it reaches, so
+// their templates can say "Tüm üyeler listesine" or "3 kişiye" (ticket 22's
+// proposal): AudienceKind as the request's audience.kind, RecipientCount in
+// digits. The approvers hear how many it would reach; the submitter, once it
+// is approved, how many it was sent to, and before that how many it would.
+func TestTheApprovalMailsSayWhatARequestGoesToAndHowMany(t *testing.T) {
+	w := newApprovalWorld(t)
+	last := func(templateID uuid.UUID) map[string]any {
+		t.Helper()
+		sent := w.mail.of(templateID)
+		if len(sent) == 0 {
+			t.Fatalf("no mail of template %s", templateID)
+		}
+		return sent[len(sent)-1].variables
+	}
+	toGroup := w.listSend()
+	toGroup["mail_list_id"] = w.group
+
+	for _, tc := range []struct {
+		name  string
+		send  map[string]any
+		kind  string
+		count string
+	}{
+		{"an internal list", w.listSend(), "mailing_list", "2"},
+		{"a Keycloak group", toGroup, "mailing_list", "2"},
+		{"one person", w.peopleSend(ayseKaya), "single", "1"},
+		{"several people", w.peopleSend(ayseKaya, mehmetDemir, adiYok), "people", "3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			submitted := w.submit("elif", tc.send)
+			if vars := last(w.requested.ID); vars["AudienceKind"] != tc.kind || vars["RecipientCount"] != tc.count {
+				t.Errorf("approval-requested variables = %v, want AudienceKind %s, RecipientCount %s", vars, tc.kind, tc.count)
+			}
+			if status, _, failure := w.act("fatih", submitted.ID, "approve", nil); status != fiber.StatusOK {
+				t.Fatalf("approve = %d %+v", status, failure)
+			}
+			if vars := last(w.resolved.ID); vars["Decision"] != "approved" || vars["AudienceKind"] != tc.kind || vars["RecipientCount"] != tc.count {
+				t.Errorf("approval-resolved variables = %v, want AudienceKind %s, RecipientCount %s", vars, tc.kind, tc.count)
+			}
+		})
+	}
+
+	// Refused, returned or expired, it was sent to no one: RecipientCount is
+	// how many it would have reached.
+	rejected := w.submit("elif", w.peopleSend(ayseKaya, mehmetDemir))
+	w.act("fatih", rejected.ID, "reject", map[string]any{"reason": "Tarih yanlış."})
+	if vars := last(w.resolved.ID); vars["Decision"] != "rejected" || vars["AudienceKind"] != "people" || vars["RecipientCount"] != "2" {
+		t.Errorf("rejection's approval-resolved variables = %v", vars)
+	}
+	w.submit("elif", w.listSend())
+	w.advance(8 * 24 * time.Hour)
+	if n, err := w.handler.ExpireDue(context.Background()); err != nil || n != 1 {
+		t.Fatalf("expired %d: %v", n, err)
+	}
+	if vars := last(w.resolved.ID); vars["Decision"] != "expired" || vars["AudienceKind"] != "mailing_list" || vars["RecipientCount"] != "2" {
+		t.Errorf("expiry's approval-resolved variables = %v", vars)
+	}
+}
