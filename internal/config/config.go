@@ -30,18 +30,9 @@ type Config struct {
 }
 
 func LoadConfig(vld validator.StructValidator) (config Config, err error) {
-	viper.AddConfigPath(".")
-	viper.SetConfigName(".env")
-	viper.SetConfigType("env")
-
-	if err := viper.ReadInConfig(); err != nil {
-		var configFileNotFoundError viper.ConfigFileNotFoundError
-		if !errors.As(err, &configFileNotFoundError) {
-			return config, err
-		}
+	if err = LoadEnv(); err != nil {
+		return config, err
 	}
-
-	viper.AutomaticEnv()
 
 	// Automatically bind environment variables for all fields in the struct.
 	// This is required for Unmarshal to work when the .env file is missing.
@@ -60,6 +51,26 @@ func LoadConfig(vld validator.StructValidator) (config Config, err error) {
 	}
 
 	return config, err
+}
+
+// LoadEnv sets up the source Value reads, and LoadConfig with it: the
+// environment, over a .env in the working directory when there is one. A
+// maintenance command run in the server's container calls it alone, so it
+// reads what the server reads without needing the server's whole Config.
+func LoadEnv() error {
+	viper.AddConfigPath(".")
+	viper.SetConfigName(".env")
+	viper.SetConfigType("env")
+
+	if err := viper.ReadInConfig(); err != nil {
+		var configFileNotFoundError viper.ConfigFileNotFoundError
+		if !errors.As(err, &configFileNotFoundError) {
+			return err
+		}
+	}
+
+	viper.AutomaticEnv()
+	return nil
 }
 
 func bindEnvs(t reflect.Type) {

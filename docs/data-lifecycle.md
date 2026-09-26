@@ -321,10 +321,11 @@ address can be added to a list again.
 ## Backup and restore
 
 A dump taken before an Account erasure brings the erased person's rows back
-on restore. That includes the mail queue, and mail still `pending` or
-`processing` in the dump would go out to the person. So SkyMail restores with
-its sender paused, and the sender comes back on only after core has replayed
-its erasures (account erasure spec §8).
+on restore. That includes the mail queue: mail still `pending` or `processing`
+in the dump would go out to the person, and another person's queued mail
+could still name them. So SkyMail restores with its sender paused, closes the
+queue the dump brought back without sending it, and only then lets core
+replay its erasures (account erasure spec §8) and turns the sender back on.
 
 `MAIL_SENDER` is `on` (the default, also when unset) or `paused`. Any other
 value stops startup. It is a plain environment value, not a secret. It is not a
@@ -335,8 +336,7 @@ API.
 Paused, SkyMail:
 
 - still puts the rows left `processing` back to `pending` at startup, as the
-  sender always does. The erase endpoint deletes a pending row to the person,
-  but waits (`202`) on a processing one, and no worker would ever finish it;
+  sender always does;
 - starts no dispatcher and no workers, so nothing is sent. Mail sent through
   the API, Keycloak's reset and verification mails among it, is queued and
   stays `pending`;
@@ -345,31 +345,135 @@ Paused, SkyMail:
 - serves the API, `/ready` and the erase endpoint as usual.
   `GET /v1/mail_tasks/summary` answers `sender_paused: true`.
 
-The procedure:
+Pausing alone does not protect the people erased since the dump. Core keeps no
+addresses, so it replays with `emails: []`: that erases what is keyed by the
+subject but finds no mail by address. The person's own queued mail would stay
+`pending` and go out when the sender comes back on. Another person's queued
+mail that names them would keep the replay at `202`, because only a sent or
+failed mail's body is cleared. Core cannot say who the mail was for, so the
+restored queue is closed by time, not by person (account erasure ticket 16).
 
-1. In Dokploy, set `MAIL_SENDER=paused` on SkyMail.
-2. `pg_restore` the dump.
-3. Deploy. A redeploy in between, by the secret rotator for example, stays
-   paused, since the environment has not changed.
-4. Core replays its erasures (spec §8): every request completed after the
-   dump was taken. Expect `200` with a receipt for each.
-5. Remove `MAIL_SENDER` and redeploy. The queue is sent.
+### The procedure
 
-The replay does not reach everything yet. Core keeps no addresses, so it
-replays with `emails: []`. That erases what is keyed by the subject, but finds
-no mail by address. Queued mail to the erased person stays `pending`, answers
-`200` without being deleted, and step 5 sends it. If that mail names the
-person by a name SkyMail holds for their subject, the replay answers `202`
-while paused instead. How the restored queue is handled before step 5 is open
-(account erasure ticket 16). Until it is settled, do not take step 5 while
-`GET /v1/mail_tasks?status=sending` lists a send created before the dump was
-taken.
+1. **Pause.** In Dokploy, set `MAIL_SENDER=paused` on SkyMail and deploy.
+   Check that `GET /v1/mail_tasks/summary` answers `sender_paused: true`. The
+   container that is running while the dump lands must already be paused:
+   an unpaused dispatcher looks at the queue every 10 seconds and would send
+   the restored queue as soon as it is there.
+2. **Restore.** Just before `pg_restore` starts, write down the time in UTC
+   on the host: `date -u +%Y-%m-%dT%H:%M:%SZ`. That is the restore instant,
+   `--before` in step 4. Then `pg_restore` the dump.
+3. **Deploy.** SkyMail starts on the restored database, still paused: any
+   pending migrations run, and rows the dump held as `processing` go back to
+   `pending`. A redeploy in between, by the secret rotator for example, stays
+   paused too, since the environment has not changed.
+4. **Close the restored queue.** On the Dokploy host, run the command in
+   SkyMail's own container (with `sudo` if your user cannot run `docker`), a
+   dry run first and then with `--apply`. Set `APP` to the SkyMail backend's
+   App Name in Dokploy, not its display name. Production and sandbox run on
+   the same host, so check that `echo` prints the container being restored.
 
-A command that still carries the addresses (a request core had not completed)
-deletes the person's queued mail and answers `200` while paused. Another
-person's queued mail that names them waits as it always does (`202`), because
-it goes out as rendered and is cleared afterwards. The person's own queued
-mail is deleted by that first call all the same.
+   ```sh
+   C=$(docker ps --format '{{.Names}}' | grep "^${APP:?App Name}" | head -n 1); echo "$C"
+   docker exec "$C" /app/skymail-backend queue-close-restored --before 2026-09-26T09:00:00Z
+   docker exec "$C" /app/skymail-backend queue-close-restored --before 2026-09-26T09:00:00Z --apply
+   ```
+
+   See below for what it prints.
+5. **Replay.** Core replays its erasures (spec §8): every request completed
+   after the dump was taken. Expect `200` with a receipt for each.
+6. **Unpause.** Check that `GET /v1/mail_tasks?status=sending` lists no send
+   created before the restore instant. Then remove `MAIL_SENDER` and
+   redeploy. Only the mail queued since the restore is sent.
+
+### `queue-close-restored`
+
+`skymail-backend queue-close-restored --before <RFC3339> [--apply]` is a
+subcommand of the server's binary. It has no HTTP endpoint. It reads the
+environment the server reads (`DATABASE_URL`, `MAIL_SENDER`), which is why it
+runs through `docker exec` in SkyMail's container.
+
+- `--before` is required: an RFC3339 time with its offset
+  (`2026-09-26T09:00:00Z` or `2026-09-26T12:00:00+03:00`). A time in the future
+  is refused. The rows it acts on are the `pending` and `processing` rows
+  queued before that time. A row without `created_at` counts as one of them:
+  SkyMail stamps every row it queues, so only a dump can hold such a row. Rows
+  queued at or after `--before`, and every `sent` or `failed` row, are never
+  touched.
+- Without `--apply` it only counts, and changes nothing. It runs whatever
+  `MAIL_SENDER` says, and notes when the sender is not paused.
+- `--apply` refuses unless `MAIL_SENDER=paused` in the container, so no worker
+  runs beside it. In one transaction it sets those rows to `failed` with the
+  error `restore: gönderilmedi`. `attempts` stays as it was, since nothing
+  tried them. It prints the same counts for what it closed. Run again, it
+  finds `0`.
+- It prints counts and times only, never an address, a name or a mail. It
+  exits `0` when done, `1` when refused or when the database fails (an apply
+  that fails changes nothing), and `2` for a wrong argument or a missing
+  `DATABASE_URL`.
+
+A dry run prints:
+
+```text
+queue-close-restored: dry run, nothing changed. Add --apply to close these rows.
+before: 2026-09-26T09:00:00Z
+pending: 41
+processing: 0
+tasks: 3
+oldest created_at: 2026-09-24T18:02:11Z
+newest created_at: 2026-09-25T23:40:05Z
+queued at or after --before, left alone: 2
+```
+
+- `pending`, `processing`: the rows the dump held that were still to go out.
+  After step 3's deploy, `processing` is normally `0`.
+- `tasks`: the sends those rows belong to.
+- `oldest created_at`, `newest created_at`: when they were queued, in UTC, or
+  `-` when there are none. The newest should be no later than the dump. If it
+  is later, `--before` is past the restore instant and would close mail queued
+  since: correct it before `--apply`.
+- `without created_at, counted in: N`: printed only when there are such rows.
+- `queued at or after --before, left alone`: mail queued since the restore.
+  It goes out at step 6.
+- `note: …`: printed when `MAIL_SENDER` is not paused. `--apply` would refuse.
+
+`--apply` prints the same lines after
+`queue-close-restored: closed without sending, error "restore: gönderilmedi".`
+
+### Closed mail afterwards
+
+Each closed send shows as failed (`Başarısız`) in the send list, on the home
+screen and in `GET /v1/mail_tasks/summary`. `mail_task_status()` makes a send
+failed as soon as one of its rows is. On a send's page, each closed recipient
+is failed with the error `restore: gönderilmedi`. A list send that was partly
+out when the dump was taken shows its sent count beside it.
+
+A failed row is final. SkyMail has no retry for it: neither the API nor the
+panel sends a failed row again. To send closed mail again, make a new send:
+
+- to a person: the send form, or `POST /v1/mail_tasks/single`, with the same
+  template and values. The address is on the send's page
+  (`GET /v1/mail_tasks/{id}/queue?status=failed`);
+- to a list: `POST /v1/mail_tasks`. It goes to everyone on the list, including
+  those whose mail had gone out before the dump.
+
+Keycloak's reset and verification mails are not sent again: their links are
+stale by then, and the person asks again.
+
+Send closed mail again only when you know who it is for. The restored database
+still holds the addresses of people erased after the dump was taken: their
+recipients, their list memberships and the closed rows to them. The replay
+cannot find any of them by address (spec §8), and the closed rows do not show
+whose erasure they belong to. A Keycloak group is safe to send to again,
+because its members are read from Keycloak at send time and an erased person
+is no longer there. A SkyMail list restored from the dump can still hold an
+erased person. For a person, send again only to someone whose account still
+exists or who asked for it.
+
+A command that still carries the addresses (a request core had not completed
+when the dump was taken) finds the person's mail by address as well. It
+clears the person's closed mail to them and deletes any mail queued to them
+since the restore.
 
 ## Retention boundaries
 

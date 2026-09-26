@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +57,12 @@ var swaggerDocument = sync.OnceValue(docs.SwaggerInfo.ReadDoc)
 // @host		skymail-api.yildizskylab.com
 // @BasePath	/v1
 func main() {
+	// A maintenance command instead of the server: it needs none of the
+	// server's startup, migrations included.
+	if len(os.Args) > 1 && os.Args[1] == queueCloseRestoredCommandName {
+		os.Exit(runQueueCloseRestoredFromEnv(os.Args[2:], os.Stdout))
+	}
+
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	defer cancelCtx()
 

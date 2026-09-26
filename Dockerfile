@@ -13,8 +13,9 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -o skymail-backend main.go
+# Build the application: the package, not main.go alone, so every file of
+# package main is in the binary (queue_close_restored.go among them).
+RUN CGO_ENABLED=0 GOOS=linux go build -o skymail-backend .
 
 # Final stage
 FROM alpine:latest

@@ -85,7 +85,11 @@ Redis'te olmalıdır; kapı `off` iken uç `503` döner. Ayrıntı:
 değer başlatmayı durdurur. `paused` iken mail kuyruğa yazılır ama gönderilmez:
 dağıtıcı ve işçiler başlamaz, açılışta bir uyarı logu çıkar, API ve `/ready`
 normal çalışır. `GET /v1/mail_tasks/summary` `sender_paused: true` döner.
-Yedekten geri yükleme bu değerle başlar. Prosedür:
+Yedekten geri yükleme bu değerle başlar. Sonra dump'ın getirdiği kuyruk
+göndermeden kapatılır: `skymail-backend queue-close-restored --before <RFC3339>`
+önce kuru çalışır, `--apply` ile geri yükleme anından önceki `pending` ve
+`processing` satırları `failed` (`restore: gönderilmedi`) yapar. `--apply`
+yalnız `MAIL_SENDER=paused` iken çalışır. Prosedür ve `docker exec` satırları:
 [`docs/data-lifecycle.md`](docs/data-lifecycle.md#backup-and-restore).
 
 ## Veritabanı migration'ları
