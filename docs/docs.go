@@ -256,10 +256,6 @@ const docTemplate = `{
                     "submitter": {
                         "$ref": "#/components/schemas/handlers.MailApprovalSubmitter"
                     },
-                    "task_id": {
-                        "description": "Deprecated: the first of task_ids, until the screens read those (ticket 22). Null until approved.",
-                        "type": "string"
-                    },
                     "task_ids": {
                         "description": "The sends, once approved, in order: a list's one, or one per person, task_ids[i] to recipients[i]. Empty until then.",
                         "items": {
@@ -398,10 +394,6 @@ const docTemplate = `{
                     },
                     "submitter": {
                         "$ref": "#/components/schemas/handlers.MailApprovalSubmitter"
-                    },
-                    "task_id": {
-                        "description": "Deprecated: the first of task_ids, until the screens read those (ticket 22). Null until approved.",
-                        "type": "string"
                     },
                     "task_ids": {
                         "description": "The sends, once approved, in order: a list's one, or one per person, task_ids[i] to recipients[i]. Empty until then.",
@@ -1336,14 +1328,6 @@ const docTemplate = `{
                         "description": "An internal mailing list or a Keycloak group. Leave it out to send to people.",
                         "type": "string"
                     },
-                    "recipient_email": {
-                        "description": "Deprecated: one person, until the screens send recipients (ticket 22). Give recipients instead; never both.",
-                        "type": "string"
-                    },
-                    "recipient_full_name": {
-                        "description": "Deprecated: the one person's name, with recipient_email.",
-                        "type": "string"
-                    },
                     "recipients": {
                         "description": "The people, 1..100, each address once (compared case-insensitively); each gets a send of their own. Leave it out to send to a mailing list.",
                         "items": {
@@ -1564,7 +1548,7 @@ const docTemplate = `{
                 ]
             },
             "post": {
-                "description": "Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Until the screens send recipients, recipient_email and recipient_full_name still submit a send to one person; neither may come with recipients. Submitting takes skymail:templates:read, and skymail:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing — before the body is checked, when templates:read is missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent.\n\nEvery approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.",
+                "description": "Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Submitting takes skymail:templates:read, and skymail:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing — before the body is checked, when templates:read is missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent.\n\nEvery approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -1604,7 +1588,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "validation.error (params.errors: [{field, code, params}]): no template_id; not exactly one of mail_list_id, recipients and recipient_email, or recipient_full_name with recipients (mail_list_id, exactly_one_of); more than 100 people (recipients, max_length); a missing or malformed address (recipients[i].email, required or invalid_email); an address twice (recipients[i].email, duplicate, params.first naming the first; or, for an address only Postgres finds twice, recipients, duplicate)"
+                        "description": "validation.error (params.errors: [{field, code, params}]): no template_id; not exactly one of mail_list_id and recipients (mail_list_id, exactly_one_of); more than 100 people (recipients, max_length); a missing or malformed address (recipients[i].email, required or invalid_email); an address twice (recipients[i].email, duplicate, params.first naming the first; or, for an address only Postgres finds twice, recipients, duplicate)"
                     },
                     "403": {
                         "content": {
