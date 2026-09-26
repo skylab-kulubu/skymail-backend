@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -30,6 +31,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/erasuretoken"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
+	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
 	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
 )
@@ -634,5 +636,175 @@ func TestErasureRouteErasesOnceAndRepeatsItsAnswer(t *testing.T) {
 
 	if !strings.Contains(logs.String(), requestID.String()) {
 		t.Errorf("logs do not name the request:\n%s", logs.String())
+	}
+}
+
+// countingSMTP stands in for the relay: it counts connections and hangs up.
+func countingSMTP(t *testing.T) (mailer.SMTPConfig, *atomic.Int32) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	dials := &atomic.Int32{}
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			dials.Add(1)
+			_ = conn.Close()
+		}
+	}()
+	return mailer.SMTPConfig{
+		FromEmail: "skymail@example.com",
+		Host:      "127.0.0.1",
+		Port:      listener.Addr().(*net.TCPAddr).Port,
+		User:      "skymail",
+		Password:  "test",
+		FQDN:      "example.com",
+	}, dials
+}
+
+// A restore brings the queue back as the dump held it: mail to the person a
+// worker had taken (processing) and mail still waiting (pending). SkyMail
+// starts with MAIL_SENDER=paused and core replays the erasure (account erasure
+// spec §8). The replay has to finish with 200 — not wait with 202 on a row no
+// worker will ever finish — and nothing may reach the person.
+func TestErasureReplayAfterARestoreCompletesWithTheSenderPaused(t *testing.T) {
+	captureLogs(t)
+	ctx := context.Background()
+	postgres := testpostgres.StartDatabase(t)
+	if _, err := migrations.Run(ctx, postgres.URL, 0); err != nil {
+		t.Fatal(err)
+	}
+	store := database.NewStore(postgres.Pool)
+	writer, reader := startAccessRedis(t)
+	route := newErasureRoute(t, store, accessgate.NewRedisGate(reader, time.Second))
+
+	if _, err := postgres.Pool.Exec(ctx, `
+		INSERT INTO templates (id, name, subject, html_content, plain_text_content, react_email_content)
+		VALUES ('10000000-0000-4000-8000-000000000001', 'Duyuru', 'Duyuru', '<p>x</p>', 'x', '');
+		INSERT INTO mailing_lists (id, name) VALUES ('20000000-0000-4000-8000-000000000001', 'Tüm üyeler');
+		INSERT INTO recipients (id, full_name, email) VALUES
+		    ('30000000-0000-4000-8000-000000000001', 'Deniz Yılmaz', 'deniz@example.com'),
+		    ('30000000-0000-4000-8000-000000000003', 'Ayşe Kaya', 'ayse@example.com');
+		INSERT INTO mailing_list_recipients (mail_list_id, recipient_id) VALUES
+		    ('20000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000001'),
+		    ('20000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000003');
+		INSERT INTO mail_tasks (id, sent_by, template_id, mail_list_id, body_variables) VALUES
+		    ('40000000-0000-4000-8000-00000000000a', '8d4f2c1e-7a6b-4c5d-9e8f-000000000001', '10000000-0000-4000-8000-000000000001',
+		     '20000000-0000-4000-8000-000000000001', '{}');
+		INSERT INTO mail_queue (id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status) VALUES
+		    ('50000000-0000-4000-8000-0000000000a1', '40000000-0000-4000-8000-00000000000a', 'Deniz Yılmaz', 'deniz@example.com',
+		     'Duyuru', 'Merhaba', '<p>Merhaba</p>', 'processing'),
+		    ('50000000-0000-4000-8000-0000000000a2', '40000000-0000-4000-8000-00000000000a', 'Deniz Yılmaz', 'deniz.yilmaz@std.yildiz.edu.tr',
+		     'Duyuru', 'Merhaba', '<p>Merhaba</p>', 'pending'),
+		    ('50000000-0000-4000-8000-0000000000a3', '40000000-0000-4000-8000-00000000000a', 'Ayşe Kaya', 'ayse@example.com',
+		     'Duyuru', 'Merhaba', '<p>Merhaba</p>', 'pending');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Set(ctx, accessgate.MarkerKey(erasureSubject), accessgate.MarkerValue, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	smtp, dials := countingSMTP(t)
+	paused := mailer.NewMailer(store, smtp, mailer.SenderPaused)
+	mailerCtx, stop := context.WithCancel(ctx)
+	t.Cleanup(stop)
+	paused.Start(mailerCtx, 3)
+	paused.Wake()
+
+	requestID := uuid.New()
+	answer := route.command(t, requestID)
+	if answer.status != fiber.StatusOK {
+		t.Fatalf("replay = %d %s, want 200", answer.status, answer.body)
+	}
+	var body struct {
+		Status string           `json:"status"`
+		Counts map[string]int64 `json:"counts"`
+	}
+	if err := json.Unmarshal(answer.body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Status != "completed" || body.Counts["queue_rows_deleted"] != 2 {
+		t.Fatalf("body = %s, want completed with both of the person's rows deleted", answer.body)
+	}
+
+	// Everyone else's mail waits for the sender to come back on.
+	var left []string
+	rows, err := postgres.Pool.Query(ctx, `SELECT recipient_email || ':' || status FROM mail_queue ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var row string
+		if err := rows.Scan(&row); err != nil {
+			t.Fatal(err)
+		}
+		left = append(left, row)
+	}
+	rows.Close()
+	if !reflect.DeepEqual(left, []string{"ayse@example.com:pending"}) {
+		t.Fatalf("queue after the replay = %v", left)
+	}
+	if n := dials.Load(); n != 0 {
+		t.Fatalf("paused sender dialled SMTP %d times", n)
+	}
+}
+
+// Paused, another person's queued mail that names the person is not sent, so
+// the replay waits on it (202) — the same wait as in normal running, where it
+// goes out as rendered and is then cleared. The person's own queued mail is
+// deleted by that first call all the same, so turning the sender on sends
+// nothing to them. docs/data-lifecycle.md's restore procedure says this.
+func TestErasureReplayWithTheSenderPausedWaitsOnlyOnOthersMailNamingThePerson(t *testing.T) {
+	captureLogs(t)
+	ctx := context.Background()
+	postgres := testpostgres.StartDatabase(t)
+	if _, err := migrations.Run(ctx, postgres.URL, 0); err != nil {
+		t.Fatal(err)
+	}
+	store := database.NewStore(postgres.Pool)
+	writer, reader := startAccessRedis(t)
+	route := newErasureRoute(t, store, accessgate.NewRedisGate(reader, time.Second))
+
+	if _, err := postgres.Pool.Exec(ctx, `
+		INSERT INTO recipients (id, full_name, email) VALUES
+		    ('30000000-0000-4000-8000-000000000001', 'Deniz Yılmaz', 'deniz@example.com');
+		INSERT INTO mail_tasks (id, sent_by, body_variables) VALUES
+		    ('40000000-0000-4000-8000-00000000000a', '8d4f2c1e-7a6b-4c5d-9e8f-000000000001', '{}');
+		INSERT INTO mail_queue (id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status) VALUES
+		    ('50000000-0000-4000-8000-0000000000a1', '40000000-0000-4000-8000-00000000000a', 'Deniz Yılmaz', 'deniz@example.com',
+		     'Duyuru', 'Merhaba', '<p>Merhaba</p>', 'processing'),
+		    ('50000000-0000-4000-8000-0000000000a3', '40000000-0000-4000-8000-00000000000a', 'Ayşe Kaya', 'ayse@example.com',
+		     'Mail onayı', 'Deniz Yılmaz bir gönderim sundu', '<p>Deniz Yılmaz bir gönderim sundu</p>', 'pending');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Set(ctx, accessgate.MarkerKey(erasureSubject), accessgate.MarkerValue, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	smtp, dials := countingSMTP(t)
+	paused := mailer.NewMailer(store, smtp, mailer.SenderPaused)
+	mailerCtx, stop := context.WithCancel(ctx)
+	t.Cleanup(stop)
+	paused.Start(mailerCtx, 3)
+
+	answer := route.command(t, uuid.New())
+	if answer.status != fiber.StatusAccepted {
+		t.Fatalf("replay = %d %s, want 202 while Ayşe's mail naming the person waits", answer.status, answer.body)
+	}
+	var toPerson int
+	if err := postgres.Pool.QueryRow(ctx, `SELECT count(*) FROM mail_queue WHERE recipient_email = 'deniz@example.com'`).Scan(&toPerson); err != nil {
+		t.Fatal(err)
+	}
+	if toPerson != 0 {
+		t.Fatalf("%d queued mails to the person survived the first call", toPerson)
+	}
+	if n := dials.Load(); n != 0 {
+		t.Fatalf("paused sender dialled SMTP %d times", n)
 	}
 }

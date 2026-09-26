@@ -22,6 +22,8 @@ type idleMailer struct{}
 
 func (idleMailer) Start(context.Context, int) {}
 
+func (idleMailer) SenderPaused() bool { return false }
+
 func (idleMailer) Enqueue(context.Context, database.CreateMailTaskParams) (uuid.UUID, error) {
 	return uuid.Nil, nil
 }

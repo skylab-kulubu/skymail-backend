@@ -318,6 +318,59 @@ address can be added to a list again.
   `counts`) holds no subject and no address. It is the deletion record and is
   kept at least three years; no code path deletes it.
 
+## Backup and restore
+
+A dump taken before an Account erasure brings the erased person's rows back
+on restore. That includes the mail queue, and mail still `pending` or
+`processing` in the dump would go out to the person. So SkyMail restores with
+its sender paused, and the sender comes back on only after core has replayed
+its erasures (account erasure spec §8).
+
+`MAIL_SENDER` is `on` (the default, also when unset) or `paused`. Any other
+value stops startup. It is a plain environment value, not a secret. It is not a
+database flag, because a restored dump would bring back the flag's old value
+too. Scaling SkyMail to zero is no substitute: the replay goes to SkyMail's
+API.
+
+Paused, SkyMail:
+
+- still puts the rows left `processing` back to `pending` at startup, as the
+  sender always does. The erase endpoint deletes a pending row to the person,
+  but waits (`202`) on a processing one, and no worker would ever finish it;
+- starts no dispatcher and no workers, so nothing is sent. Mail sent through
+  the API, Keycloak's reset and verification mails among it, is queued and
+  stays `pending`;
+- logs a warning at startup that names `MAIL_SENDER`. When on, the mailer's
+  `Starting up` line carries `"sender":"on"`;
+- serves the API, `/ready` and the erase endpoint as usual.
+  `GET /v1/mail_tasks/summary` answers `sender_paused: true`.
+
+The procedure:
+
+1. In Dokploy, set `MAIL_SENDER=paused` on SkyMail.
+2. `pg_restore` the dump.
+3. Deploy. A redeploy in between, by the secret rotator for example, stays
+   paused, since the environment has not changed.
+4. Core replays its erasures (spec §8): every request completed after the
+   dump was taken. Expect `200` with a receipt for each.
+5. Remove `MAIL_SENDER` and redeploy. The queue is sent.
+
+The replay does not reach everything yet. Core keeps no addresses, so it
+replays with `emails: []`. That erases what is keyed by the subject, but finds
+no mail by address. Queued mail to the erased person stays `pending`, answers
+`200` without being deleted, and step 5 sends it. If that mail names the
+person by a name SkyMail holds for their subject, the replay answers `202`
+while paused instead. How the restored queue is handled before step 5 is open
+(account erasure ticket 16). Until it is settled, do not take step 5 while
+`GET /v1/mail_tasks?status=sending` lists a send created before the dump was
+taken.
+
+A command that still carries the addresses (a request core had not completed)
+deletes the person's queued mail and answers `200` while paused. Another
+person's queued mail that names them waits as it always does (`202`), because
+it goes out as rendered and is cleared afterwards. The person's own queued
+mail is deleted by that first call all the same.
+
 ## Retention boundaries
 
 Archiving a template or list preserves `mail_tasks`, `mail_queue`, and mailing
