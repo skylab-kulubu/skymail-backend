@@ -452,7 +452,6 @@ type approvalAnswer struct {
 	BodyVariables  map[string]any      `json:"body_variables"`
 	SubmittedAt    time.Time           `json:"submitted_at"`
 	DeadlineAt     time.Time           `json:"deadline_at"`
-	TaskID         *uuid.UUID          `json:"task_id"`
 	TaskIDs        []uuid.UUID         `json:"task_ids"`
 	LastEvent      *approvalEvent      `json:"last_event"`
 	RecipientCount *int64              `json:"recipient_count"`
@@ -483,6 +482,15 @@ func (a approvalAnswer) kinds() string {
 		kinds = append(kinds, e.Kind)
 	}
 	return strings.Join(kinds, ",")
+}
+
+// send is the one send a request to a list or to one person queued; the zero
+// id when it queued none, or more than one.
+func (a approvalAnswer) send() uuid.UUID {
+	if len(a.TaskIDs) != 1 {
+		return uuid.Nil
+	}
+	return a.TaskIDs[0]
 }
 
 // A GECEKODU announcement to the club-wide list, filled in the way the
@@ -612,13 +620,18 @@ func TestSubmissionIsCheckedLikeASend(t *testing.T) {
 		status int
 		code   string
 	}{
-		"no template":         {with(func(s map[string]any) { delete(s, "template_id") }), 400, "validation.error"},
-		"unknown template":    {with(func(s map[string]any) { s["template_id"] = uuid.New() }), 422, "mail_approval.template_unavailable"},
-		"no audience":         {with(func(s map[string]any) { delete(s, "mail_list_id") }), 400, "validation.error"},
-		"two audiences":       {with(func(s map[string]any) { s["recipient_email"] = "uye@example.com" }), 400, "validation.error"},
-		"malformed recipient": {with(func(s map[string]any) { delete(s, "mail_list_id"); s["recipient_email"] = "uye" }), 400, "validation.error"},
-		"archived list":       {with(func(s map[string]any) { s["mail_list_id"] = archived.ID }), 422, "mail_approval.audience_unavailable"},
-		"unknown list":        {with(func(s map[string]any) { s["mail_list_id"] = uuid.New() }), 422, "mail_approval.audience_unavailable"},
+		"no template":      {with(func(s map[string]any) { delete(s, "template_id") }), 400, "validation.error"},
+		"unknown template": {with(func(s map[string]any) { s["template_id"] = uuid.New() }), 422, "mail_approval.template_unavailable"},
+		"no audience":      {with(func(s map[string]any) { delete(s, "mail_list_id") }), 400, "validation.error"},
+		"two audiences": {with(func(s map[string]any) {
+			s["recipients"] = []approvalRecipient{{Email: "uye@example.com"}}
+		}), 400, "validation.error"},
+		"malformed recipient": {with(func(s map[string]any) {
+			delete(s, "mail_list_id")
+			s["recipients"] = []approvalRecipient{{Email: "uye"}}
+		}), 400, "validation.error"},
+		"archived list": {with(func(s map[string]any) { s["mail_list_id"] = archived.ID }), 422, "mail_approval.audience_unavailable"},
+		"unknown list":  {with(func(s map[string]any) { s["mail_list_id"] = uuid.New() }), 422, "mail_approval.audience_unavailable"},
 		"required variable blank": {with(func(s map[string]any) {
 			s["body_variables"].(map[string]any)["Subject"] = "  "
 		}), 422, "mail_approval.required_variables_missing"},
@@ -672,8 +685,7 @@ func TestSubmittingToAGroupOrOneRecipient(t *testing.T) {
 	}
 
 	delete(send, "mail_list_id")
-	send["recipient_email"] = "konusmaci@example.com"
-	send["recipient_full_name"] = "Konuşmacı"
+	send["recipients"] = []approvalRecipient{{Email: "konusmaci@example.com", FullName: "Konuşmacı"}}
 	toOne := w.submit("elif", send)
 	if toOne.Audience.Kind != "single" || *toOne.Audience.RecipientEmail != "konusmaci@example.com" {
 		t.Errorf("single audience = %+v", toOne.Audience)
@@ -767,25 +779,25 @@ func TestApprovingSendsExactlyWhatWasSubmittedOnce(t *testing.T) {
 	if status != fiber.StatusOK {
 		t.Fatalf("approve = %d %+v", status, failure)
 	}
-	if approved.State != "approved" || approved.TaskID == nil || approved.kinds() != "submitted,approved" {
-		t.Fatalf("approved = %s task %v history %s", approved.State, approved.TaskID, approved.kinds())
+	if approved.State != "approved" || approved.send() == uuid.Nil || approved.kinds() != "submitted,approved" {
+		t.Fatalf("approved = %s tasks %v history %s", approved.State, approved.TaskIDs, approved.kinds())
 	}
 	last := approved.History[1]
 	if last.Actor == nil || last.Actor.Sub != fatih.sub || last.Note == nil || *last.Note != "Güzel olmuş." ||
-		last.TaskID == nil || *last.TaskID != *approved.TaskID || !last.At.Equal(w.now()) {
+		last.TaskID == nil || *last.TaskID != approved.send() || !last.At.Equal(w.now()) {
 		t.Errorf("approved event = %+v", last)
 	}
 
 	sent := w.mail.of(w.freeBasic.ID)
-	if len(sent) != 1 || sent[0].kind != "list" || sent[0].taskID != *approved.TaskID {
+	if len(sent) != 1 || sent[0].kind != "list" || sent[0].taskID != approved.send() {
 		t.Fatalf("sends of the template = %+v, want the one list send", sent)
 	}
-	task := w.task(*approved.TaskID)
+	task := w.task(approved.send())
 	if task.SentBy != elif.sub || *task.TemplateID != w.freeBasic.ID || *task.MailListID != w.list.ID ||
 		!sameJSON(t, task.BodyVariables, send["body_variables"]) {
 		t.Errorf("the send = %+v %s", task, task.BodyVariables)
 	}
-	rows := w.queuedRows(*approved.TaskID)
+	rows := w.queuedRows(approved.send())
 	ayse := rows["ayse@example.com"]
 	if len(rows) != 2 || ayse.Subject != "GECEKODU başvuruları açıldı" || ayse.BodyHtml == nil ||
 		!strings.Contains(*ayse.BodyHtml, "<strong>5 Nisan</strong>") || !strings.Contains(*ayse.BodyHtml, "<p>Ayşe Kaya</p>") {
@@ -814,7 +826,7 @@ func TestApprovingSendsExactlyWhatWasSubmittedOnce(t *testing.T) {
 
 	// Approving it again sends nothing; with an edit it is refused.
 	status, again, _ := w.act("yusuf", submitted.ID, "approve", nil)
-	if status != fiber.StatusOK || again.State != "approved" || *again.TaskID != *approved.TaskID || again.Notification != nil {
+	if status != fiber.StatusOK || again.State != "approved" || again.send() != approved.send() || again.Notification != nil {
 		t.Errorf("approving again = %d %+v", status, again)
 	}
 	status, _, failure = w.act("yusuf", submitted.ID, "approve", map[string]any{"body_variables": map[string]any{"Subject": "x", "BodyHtml": "y"}})
@@ -840,13 +852,12 @@ func TestApprovingSendsToAGroupOrOneRecipient(t *testing.T) {
 	}
 	sent := w.mail.of(w.freeBasic.ID)
 	if len(sent) != 1 || sent[0].kind != "group" || strings.Join(emails(sent), ",") != "baska@yildizskylab.com,elif@yildizskylab.com" ||
-		*sent[0].mailListID != w.group || sent[0].taskID != *approved.TaskID {
+		*sent[0].mailListID != w.group || sent[0].taskID != approved.send() {
 		t.Fatalf("group send = %+v", sent)
 	}
 
 	delete(send, "mail_list_id")
-	send["recipient_email"] = "konusmaci@example.com"
-	send["recipient_full_name"] = "Konuşmacı"
+	send["recipients"] = []approvalRecipient{{Email: "konusmaci@example.com", FullName: "Konuşmacı"}}
 	toOne := w.submit("elif", send)
 	if status, _, failure := w.act("fatih", toOne.ID, "approve", nil); status != fiber.StatusOK {
 		t.Fatalf("approve single send = %d %+v", status, failure)
@@ -987,8 +998,8 @@ func TestAReturnedEditGoesOutWhenTheSubmitterAcceptsIt(t *testing.T) {
 	if status != fiber.StatusOK {
 		t.Fatalf("accept = %d %+v", status, failure)
 	}
-	if accepted.State != "approved" || accepted.TaskID == nil || accepted.kinds() != "submitted,edited,returned,accepted" ||
-		accepted.History[3].Actor.Sub != elif.sub || *accepted.History[3].TaskID != *accepted.TaskID {
+	if accepted.State != "approved" || accepted.send() == uuid.Nil || accepted.kinds() != "submitted,edited,returned,accepted" ||
+		accepted.History[3].Actor.Sub != elif.sub || *accepted.History[3].TaskID != accepted.send() {
 		t.Fatalf("accepted = %s %s", accepted.State, accepted.kinds())
 	}
 	sent := w.mail.of(w.freeBasic.ID)
@@ -1693,7 +1704,7 @@ func TestAnApproversEditIsSanitisedLikeASendersBody(t *testing.T) {
 	if status != fiber.StatusOK {
 		t.Fatalf("accept = %d %+v", status, failure)
 	}
-	queued := w.queuedRows(*accepted.TaskID)["ayse@example.com"]
+	queued := w.queuedRows(accepted.send())["ayse@example.com"]
 
 	for name, html := range map[string]string{"preview": returned.Preview.HTML, "queued mail": *queued.BodyHtml} {
 		if !strings.Contains(html, "<p>Başvurular <strong>açık</strong></p>") {

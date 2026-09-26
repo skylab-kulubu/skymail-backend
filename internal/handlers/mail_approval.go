@@ -204,8 +204,6 @@ type MailApprovalItem struct {
 	// Pending or returned past this, it expires.
 	DeadlineAt time.Time `json:"deadline_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
-	// Deprecated: the first of task_ids, until the screens read those (ticket 22). Null until approved.
-	TaskID *uuid.UUID `json:"task_id"`
 	// The sends, once approved, in order: a list's one, or one per person, task_ids[i] to recipients[i]. Empty until then.
 	TaskIDs []uuid.UUID `json:"task_ids"`
 	// What happened to it last.
@@ -320,7 +318,7 @@ func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc ke
 // Submit godoc
 //
 //	@Summary		Submit a send for approval
-//	@Description	Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Until the screens send recipients, recipient_email and recipient_full_name still submit a send to one person; neither may come with recipients. Submitting takes skymail:templates:read, and skymail:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing — before the body is checked, when templates:read is missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent.
+//	@Description	Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Submitting takes skymail:templates:read, and skymail:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing — before the body is checked, when templates:read is missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent.
 //	@Description
 //	@Description	Every approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.
 //	@Tags			Mail approval
@@ -328,7 +326,7 @@ func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc ke
 //	@Produce		json
 //	@Param			send	body		requests.SubmitMailApproval	true	"The send"
 //	@Success		201		{object}	handlers.MailApproval		"The request, pending, with notification"
-//	@Failure		400		{object}	apperrors.AppError			"validation.error (params.errors: [{field, code, params}]): no template_id; not exactly one of mail_list_id, recipients and recipient_email, or recipient_full_name with recipients (mail_list_id, exactly_one_of); more than 100 people (recipients, max_length); a missing or malformed address (recipients[i].email, required or invalid_email); an address twice (recipients[i].email, duplicate, params.first naming the first; or, for an address only Postgres finds twice, recipients, duplicate)"
+//	@Failure		400		{object}	apperrors.AppError			"validation.error (params.errors: [{field, code, params}]): no template_id; not exactly one of mail_list_id and recipients (mail_list_id, exactly_one_of); more than 100 people (recipients, max_length); a missing or malformed address (recipients[i].email, required or invalid_email); an address twice (recipients[i].email, duplicate, params.first naming the first; or, for an address only Postgres finds twice, recipients, duplicate)"
 //	@Failure		403		{object}	apperrors.AppError			"server.forbidden: params.missing_roles names what the caller lacks of skymail:templates:read and, for a mailing list, skymail:lists:read"
 //	@Failure		422		{object}	apperrors.AppError			"mail_approval.template_unavailable, mail_approval.audience_unavailable, mail_approval.required_variables_missing (params.missing: [{name, source, reason}]) or mail_approval.unrenderable (params.error)"
 //	@Failure		500		{object}	apperrors.AppError			"Internal Server Error"
