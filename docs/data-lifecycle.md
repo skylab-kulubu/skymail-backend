@@ -398,8 +398,8 @@ one run.
    `--apply`:
 
    ```sh
-   core-backend replay-from-backup --service skymail --restored-at <T>
-   core-backend replay-from-backup --service skymail --restored-at <T> --apply
+   core-backend replay-from-backup --service skymail --dumped-at <T>
+   core-backend replay-from-backup --service skymail --dumped-at <T> --apply
    ```
 
    `<T>` is when the SkyMail dump was taken: `start_utc` of `skymail.dump` in
