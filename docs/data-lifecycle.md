@@ -348,8 +348,7 @@ Paused, SkyMail:
 Pausing alone does not protect the people erased since the dump. Core keeps no
 address once an erasure is done. The replay reads the addresses back from the
 matching core and Keycloak backups (step 5), but an address the person changed
-between two backups is still missed, and a replay with `emails: []` erases
-only what is keyed by the subject. The person's queued mail to an address the
+between two backups is still missed. The person's queued mail to an address the
 replay does not have would stay `pending` and go out when the sender comes
 back on. Another person's queued mail that names them would keep the replay at
 `202`, because only a sent or failed mail's body is cleared. Core cannot say
@@ -388,15 +387,32 @@ one run.
    ```
 
    See below for what it prints.
-5. **Replay.** Core replays its erasures (spec §8): every request completed
-   after the dump was taken. Core keeps no address of an erased person, so it
-   reads each person's addresses from the matching core and Keycloak backups
-   (ADR-0053): the newest core backup taken before that request's
-   `anonymize_core` step and the newest Keycloak backup taken before its
-   `delete_identity` step, each loaded into a temporary Postgres with no
-   network. It sends the normal Erasure command with those addresses, then
-   destroys the temporary databases. Until core's replay tool exists, this is
-   done by hand. Expect `200` with a receipt for each.
+5. **Replay.** Core replays its erasures (spec §8, ADR-0053) with its own
+   tool, `core-backend replay-from-backup` (core #138): every request
+   completed after the dump was taken. Core keeps no address of an erased
+   person, so the tool reads each person's addresses from the matching core
+   and Keycloak backups, loaded into temporary Postgres databases with no
+   network and named by `CORE_SNAPSHOT_DATABASE_URL` and
+   `KEYCLOAK_SNAPSHOT_DATABASE_URL`. It sends the normal Erasure command with
+   those addresses. Run it on core's side, a dry run first and then with
+   `--apply`:
+
+   ```sh
+   core-backend replay-from-backup --service skymail --restored-at <T>
+   core-backend replay-from-backup --service skymail --restored-at <T> --apply
+   ```
+
+   `<T>` is when the SkyMail dump was taken: `start_utc` of `skymail.dump` in
+   the dump folder's `MANIFEST.txt`. It is not the restore instant from
+   step 2. Expect `200` with a receipt for each request.
+
+   **Do not send a replay with `emails: []` first.** SkyMail answers a
+   repeated `request_id` with the receipt it recorded. An `emails: []` replay
+   writes that receipt after erasing only subject-keyed rows, and
+   `replay-from-backup` then gets the receipt back, exits 0 and never erases
+   the e-mail-keyed rows (core #142). Use `emails: []` afterwards, and only
+   for requests `replay-from-backup` reported as FAIL because it found no
+   subject in the backups.
 6. **Unpause.** Check that `GET /v1/mail_tasks?status=sending` lists no send
    created before the restore instant. Then remove `MAIL_SENDER` and
    redeploy. Only the mail queued since the restore is sent.
