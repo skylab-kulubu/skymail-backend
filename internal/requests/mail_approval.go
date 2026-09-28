@@ -11,12 +11,8 @@ type SubmitMailApproval struct {
 	// An internal mailing list or a Keycloak group. Leave it out to send to people.
 	MailListID *uuid.UUID `json:"mail_list_id"`
 	// The people, 1..100, each address once (compared case-insensitively); each gets a send of their own. Leave it out to send to a mailing list.
-	Recipients []MailApprovalRecipient `json:"recipients" validate:"omitempty,max=100,dive"`
-	// Deprecated: one person, until the screens send recipients (ticket 22). Give recipients instead; never both.
-	RecipientEmail string `json:"recipient_email" validate:"omitempty,email"`
-	// Deprecated: the one person's name, with recipient_email.
-	RecipientFullName string                 `json:"recipient_full_name"`
-	BodyVariables     map[string]interface{} `json:"body_variables"`
+	Recipients    []MailApprovalRecipient `json:"recipients" validate:"omitempty,max=100,dive"`
+	BodyVariables map[string]interface{}  `json:"body_variables"`
 }
 
 // MailApprovalRecipient is one person a request goes to.

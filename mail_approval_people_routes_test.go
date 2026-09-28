@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/google/uuid"
 )
 
 // Mail onayı to several people (Yusuf, 2026-09-24; ticket 21): a request
@@ -47,8 +48,8 @@ func TestSubmittingASendToSeveralPeople(t *testing.T) {
 		answer.Audience.RecipientFullName != nil {
 		t.Errorf("audience = %+v, want people with no one-person fields", answer.Audience)
 	}
-	if answer.RecipientCount == nil || *answer.RecipientCount != 3 || answer.TaskID != nil || len(answer.TaskIDs) != 0 {
-		t.Errorf("recipient_count %v, task_id %v, task_ids %v", answer.RecipientCount, answer.TaskID, answer.TaskIDs)
+	if answer.RecipientCount == nil || *answer.RecipientCount != 3 || len(answer.TaskIDs) != 0 {
+		t.Errorf("recipient_count %v, task_ids %v", answer.RecipientCount, answer.TaskIDs)
 	}
 	if answer.PreviewRecipient == nil || *answer.PreviewRecipient != ayseKaya || answer.Preview == nil ||
 		answer.Preview.RenderedFor != ayseKaya || !strings.Contains(answer.Preview.HTML, "<p>Ayşe Kaya</p>") {
@@ -99,8 +100,8 @@ func TestApprovingSendsEachPersonTheirOwn(t *testing.T) {
 	if status != fiber.StatusOK {
 		t.Fatalf("approve = %d %+v", status, failure)
 	}
-	if approved.State != "approved" || len(approved.TaskIDs) != 3 || approved.TaskID == nil || *approved.TaskID != approved.TaskIDs[0] {
-		t.Fatalf("approved: %s task_id %v task_ids %v", approved.State, approved.TaskID, approved.TaskIDs)
+	if approved.State != "approved" || len(approved.TaskIDs) != 3 {
+		t.Fatalf("approved: %s task_ids %v", approved.State, approved.TaskIDs)
 	}
 	if event := approved.History[1]; event.Kind != "approved" || event.TaskID == nil || *event.TaskID != approved.TaskIDs[0] {
 		t.Errorf("approved event = %+v", event)
@@ -254,24 +255,18 @@ func TestPeopleAreCheckedBeforeARequestIsKept(t *testing.T) {
 	}
 	withList := w.peopleSend(ayseKaya)
 	withList["mail_list_id"] = w.list.ID
-	withOldField := w.peopleSend(ayseKaya)
-	withOldField["recipient_email"] = "mehmet@example.com"
-	withOldName := w.peopleSend(ayseKaya)
-	withOldName["recipient_full_name"] = "Mehmet Demir"
 
 	for name, tc := range map[string]struct {
 		send  map[string]any
 		field string
 		code  string
 	}{
-		"no one":                        {w.peopleSend(), "mail_list_id", "exactly_one_of"},
-		"a list and people":             {withList, "mail_list_id", "exactly_one_of"},
-		"people and the one-person one": {withOldField, "mail_list_id", "exactly_one_of"},
-		"people and a one-person name":  {withOldName, "mail_list_id", "exactly_one_of"},
-		"a malformed address":           {w.peopleSend(ayseKaya, approvalRecipient{Email: "mehmet"}), "recipients[1].email", "invalid_email"},
-		"no address":                    {w.peopleSend(approvalRecipient{FullName: "Adı Var"}), "recipients[0].email", "required"},
-		"an address twice":              {w.peopleSend(ayseKaya, mehmetDemir, approvalRecipient{Email: "AYSE@Example.com"}), "recipients[2].email", "duplicate"},
-		"101 people":                    {w.peopleSend(crowd(101)...), "recipients", "max_length"},
+		"no one":              {w.peopleSend(), "mail_list_id", "exactly_one_of"},
+		"a list and people":   {withList, "mail_list_id", "exactly_one_of"},
+		"a malformed address": {w.peopleSend(ayseKaya, approvalRecipient{Email: "mehmet"}), "recipients[1].email", "invalid_email"},
+		"no address":          {w.peopleSend(approvalRecipient{FullName: "Adı Var"}), "recipients[0].email", "required"},
+		"an address twice":    {w.peopleSend(ayseKaya, mehmetDemir, approvalRecipient{Email: "AYSE@Example.com"}), "recipients[2].email", "duplicate"},
+		"101 people":          {w.peopleSend(crowd(101)...), "recipients", "max_length"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var failure struct {
@@ -308,38 +303,78 @@ func TestPeopleAreCheckedBeforeARequestIsKept(t *testing.T) {
 	}
 }
 
-// Until the screens send recipients (ticket 22), recipient_email and
-// recipient_full_name still submit a send to one person, and a request to
-// one person still answers with them — and with task_id, its one send.
-func TestTheOnePersonFieldsStillWork(t *testing.T) {
+// The one-person fields that saw the screens through ticket 22 are gone. A
+// send to one person names them in recipients, and its answer reads as a
+// single send's audience with its one send in task_ids; a body that names its
+// person only the old way names no one.
+func TestOnePersonIsOneOfTheRecipients(t *testing.T) {
 	w := newApprovalWorld(t)
-
-	send := w.listSend()
-	delete(send, "mail_list_id")
-	send["recipient_email"] = "konusmaci@example.com"
-	send["recipient_full_name"] = "Konuşmacı"
-	byOldFields := w.submit("elif", send)
-	byRecipients := w.submit("elif", w.peopleSend(approvalRecipient{Email: "konusmaci@example.com", FullName: "Konuşmacı"}))
-
 	konusmaci := approvalRecipient{Email: "konusmaci@example.com", FullName: "Konuşmacı"}
-	for name, answer := range map[string]approvalAnswer{"recipient_email": byOldFields, "recipients": byRecipients} {
-		if !reflect.DeepEqual(answer.Recipients, []approvalRecipient{konusmaci}) || answer.Audience.Kind != "single" ||
-			answer.Audience.RecipientEmail == nil || *answer.Audience.RecipientEmail != konusmaci.Email ||
-			answer.Audience.RecipientFullName == nil || *answer.Audience.RecipientFullName != konusmaci.FullName {
-			t.Errorf("submitted with %s: recipients %+v, audience %+v", name, answer.Recipients, answer.Audience)
-		}
+
+	oldWay := w.listSend()
+	delete(oldWay, "mail_list_id")
+	oldWay["recipient_email"] = konusmaci.Email
+	oldWay["recipient_full_name"] = konusmaci.FullName
+	var failure struct {
+		Code   string `json:"code"`
+		Params struct {
+			Errors []struct {
+				Field  string         `json:"field"`
+				Code   string         `json:"code"`
+				Params map[string]any `json:"params"`
+			} `json:"errors"`
+		} `json:"params"`
+	}
+	status, raw := w.call("elif", fiber.MethodPost, "/v1/mail_approvals", oldWay, &failure)
+	if status != fiber.StatusBadRequest || failure.Code != "validation.error" || len(failure.Params.Errors) != 1 ||
+		failure.Params.Errors[0].Field != "mail_list_id" || failure.Params.Errors[0].Code != "exactly_one_of" ||
+		!reflect.DeepEqual(failure.Params.Errors[0].Params["fields"], []any{"mail_list_id", "recipients"}) {
+		t.Fatalf("submit with recipient_email = %d %s, want 400 exactly_one_of of mail_list_id and recipients", status, raw)
+	}
+
+	submitted := w.submit("elif", w.peopleSend(konusmaci))
+	if !reflect.DeepEqual(submitted.Recipients, []approvalRecipient{konusmaci}) || submitted.Audience.Kind != "single" ||
+		submitted.Audience.RecipientEmail == nil || *submitted.Audience.RecipientEmail != konusmaci.Email ||
+		submitted.Audience.RecipientFullName == nil || *submitted.Audience.RecipientFullName != konusmaci.FullName {
+		t.Errorf("recipients %+v, audience %+v", submitted.Recipients, submitted.Audience)
 	}
 	vars := w.mail.of(w.requested.ID)[0].variables
 	if vars["AudienceName"] != "Konuşmacı <konusmaci@example.com>" || vars["RecipientCount"] != "1" {
 		t.Errorf("approval-requested variables = %v", vars)
 	}
 
-	status, approved, failure := w.act("fatih", byOldFields.ID, "approve", nil)
-	if status != fiber.StatusOK || len(approved.TaskIDs) != 1 || approved.TaskID == nil || *approved.TaskID != approved.TaskIDs[0] {
-		t.Fatalf("approve = %d %+v: task_id %v task_ids %v", status, failure, approved.TaskID, approved.TaskIDs)
+	status, approved, actFailure := w.act("fatih", submitted.ID, "approve", nil)
+	if status != fiber.StatusOK || approved.send() == uuid.Nil {
+		t.Fatalf("approve = %d %+v: task_ids %v", status, actFailure, approved.TaskIDs)
 	}
-	if sent := w.mail.of(w.freeBasic.ID); len(sent) != 1 || sent[0].kind != "single" || sent[0].taskID != *approved.TaskID {
+	if sent := w.mail.of(w.freeBasic.ID); len(sent) != 1 || sent[0].kind != "single" || sent[0].taskID != approved.send() {
 		t.Fatalf("sends = %+v", sent)
+	}
+
+	// No answer carries task_id; task_ids is a list before approval too.
+	pending := w.submit("elif", w.peopleSend(konusmaci))
+	for name, id := range map[string]uuid.UUID{"pending": pending.ID, "approved": submitted.ID} {
+		_, raw := w.call("elif", fiber.MethodGet, "/v1/mail_approvals/"+id.String(), nil, nil)
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := fields["task_id"]; ok {
+			t.Errorf("%s request answers with task_id: %s", name, raw)
+		}
+		if ids := string(fields["task_ids"]); !strings.HasPrefix(ids, "[") {
+			t.Errorf("%s request: task_ids = %s, want a list", name, ids)
+		}
+	}
+	_, raw = w.call("elif", fiber.MethodGet, "/v1/mail_approvals", nil, nil)
+	var items []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil || len(items) != 2 {
+		t.Fatalf("list = %s (%v)", raw, err)
+	}
+	for _, item := range items {
+		if _, ok := item["task_id"]; ok {
+			t.Errorf("a listed request answers with task_id: %s", raw)
+		}
 	}
 }
 
@@ -421,5 +456,65 @@ func TestSubmittingTakesReadAccessToWhatIsSubmitted(t *testing.T) {
 	}
 	if _, read := w.get("okur", toPeople.ID); read.kinds() != "submitted,rejected,resubmitted" {
 		t.Errorf("after the refused resubmission: %s", read.kinds())
+	}
+}
+
+// Both approval mails say what a request goes to and how many it reaches, so
+// their templates can say "Tüm üyeler listesine" or "3 kişiye" (ticket 22's
+// proposal): AudienceKind as the request's audience.kind, RecipientCount in
+// digits. The approvers hear how many it would reach; the submitter, once it
+// is approved, how many it was sent to, and before that how many it would.
+func TestTheApprovalMailsSayWhatARequestGoesToAndHowMany(t *testing.T) {
+	w := newApprovalWorld(t)
+	last := func(templateID uuid.UUID) map[string]any {
+		t.Helper()
+		sent := w.mail.of(templateID)
+		if len(sent) == 0 {
+			t.Fatalf("no mail of template %s", templateID)
+		}
+		return sent[len(sent)-1].variables
+	}
+	toGroup := w.listSend()
+	toGroup["mail_list_id"] = w.group
+
+	for _, tc := range []struct {
+		name  string
+		send  map[string]any
+		kind  string
+		count string
+	}{
+		{"an internal list", w.listSend(), "mailing_list", "2"},
+		{"a Keycloak group", toGroup, "mailing_list", "2"},
+		{"one person", w.peopleSend(ayseKaya), "single", "1"},
+		{"several people", w.peopleSend(ayseKaya, mehmetDemir, adiYok), "people", "3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			submitted := w.submit("elif", tc.send)
+			if vars := last(w.requested.ID); vars["AudienceKind"] != tc.kind || vars["RecipientCount"] != tc.count {
+				t.Errorf("approval-requested variables = %v, want AudienceKind %s, RecipientCount %s", vars, tc.kind, tc.count)
+			}
+			if status, _, failure := w.act("fatih", submitted.ID, "approve", nil); status != fiber.StatusOK {
+				t.Fatalf("approve = %d %+v", status, failure)
+			}
+			if vars := last(w.resolved.ID); vars["Decision"] != "approved" || vars["AudienceKind"] != tc.kind || vars["RecipientCount"] != tc.count {
+				t.Errorf("approval-resolved variables = %v, want AudienceKind %s, RecipientCount %s", vars, tc.kind, tc.count)
+			}
+		})
+	}
+
+	// Refused, returned or expired, it was sent to no one: RecipientCount is
+	// how many it would have reached.
+	rejected := w.submit("elif", w.peopleSend(ayseKaya, mehmetDemir))
+	w.act("fatih", rejected.ID, "reject", map[string]any{"reason": "Tarih yanlış."})
+	if vars := last(w.resolved.ID); vars["Decision"] != "rejected" || vars["AudienceKind"] != "people" || vars["RecipientCount"] != "2" {
+		t.Errorf("rejection's approval-resolved variables = %v", vars)
+	}
+	w.submit("elif", w.listSend())
+	w.advance(8 * 24 * time.Hour)
+	if n, err := w.handler.ExpireDue(context.Background()); err != nil || n != 1 {
+		t.Fatalf("expired %d: %v", n, err)
+	}
+	if vars := last(w.resolved.ID); vars["Decision"] != "expired" || vars["AudienceKind"] != "mailing_list" || vars["RecipientCount"] != "2" {
+		t.Errorf("expiry's approval-resolved variables = %v", vars)
 	}
 }

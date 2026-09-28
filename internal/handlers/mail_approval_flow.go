@@ -143,7 +143,7 @@ type approvalSend struct {
 }
 
 func approvalSendOf(params requests.SubmitMailApproval) (approvalSend, error) {
-	recipients, err := recipientsOf(params)
+	recipients, err := recipientsOf(params.Recipients)
 	if err != nil {
 		return approvalSend{}, err
 	}
@@ -166,33 +166,24 @@ func approvalSendOf(params requests.SubmitMailApproval) (approvalSend, error) {
 	return send, nil
 }
 
-// errNotOneAudience refuses a submission that names no audience, or more than
-// one of a list, recipients and recipient_email.
+// errNotOneAudience refuses a submission that names no audience, or both a
+// list and recipients.
 func errNotOneAudience() error {
 	return apperrors.ErrValidation.WithParams(map[string]interface{}{
 		"errors": []validator.FieldError{{Field: "mail_list_id", Code: "exactly_one_of", Params: map[string]interface{}{
-			"fields": []string{"mail_list_id", "recipients", "recipient_email"},
+			"fields": []string{"mail_list_id", "recipients"},
 		}}},
 	})
 }
 
-// recipientsOf is the people a submission names, trimmed, in order: its
-// recipients, or — until the screens send those (ticket 22) — the one person
-// of recipient_email and recipient_full_name. Recipients with either of those
-// is refused, and so is an address named twice, whatever its case: everyone
-// is sent to once.
-func recipientsOf(params requests.SubmitMailApproval) ([]mailer.RecipientInfo, error) {
-	email, name := strings.TrimSpace(params.RecipientEmail), strings.TrimSpace(params.RecipientFullName)
-	if len(params.Recipients) > 0 && (email != "" || name != "") {
-		return nil, errNotOneAudience()
-	}
-	if email != "" {
-		return []mailer.RecipientInfo{{FullName: name, Email: email}}, nil
-	}
-	recipients := make([]mailer.RecipientInfo, len(params.Recipients))
+// recipientsOf is the people a submission names, trimmed, in order. An
+// address named twice, whatever its case, is refused: everyone is sent to
+// once.
+func recipientsOf(people []requests.MailApprovalRecipient) ([]mailer.RecipientInfo, error) {
+	recipients := make([]mailer.RecipientInfo, len(people))
 	first := map[string]int{}
 	var duplicates []validator.FieldError
-	for i, r := range params.Recipients {
+	for i, r := range people {
 		recipients[i] = mailer.RecipientInfo{FullName: strings.TrimSpace(r.FullName), Email: strings.TrimSpace(r.Email)}
 		address := strings.ToLower(recipients[i].Email)
 		if j, seen := first[address]; seen {
@@ -984,7 +975,7 @@ func effectiveState(state database.MailApprovalState, deadline, now time.Time) d
 }
 
 func approvalItem(view database.GetMailApprovalRow, groupNames map[uuid.UUID]*string, last *MailApprovalEvent, now time.Time) MailApprovalItem {
-	item := MailApprovalItem{
+	return MailApprovalItem{
 		ID:    view.MailApproval.ID,
 		State: string(effectiveState(view.MailApproval.State, view.MailApproval.DeadlineAt, now)),
 		Submitter: MailApprovalSubmitter{
@@ -1009,10 +1000,6 @@ func approvalItem(view database.GetMailApprovalRow, groupNames map[uuid.UUID]*st
 		TaskIDs:       view.TaskIds,
 		LastEvent:     last,
 	}
-	if len(view.TaskIds) > 0 {
-		item.TaskID = &view.TaskIds[0]
-	}
-	return item
 }
 
 func approvalRecipients(recipients []mailer.RecipientInfo) []MailApprovalRecipient {

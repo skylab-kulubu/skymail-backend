@@ -68,6 +68,30 @@ sunuşun yanıtı `notification.problem: approver_lookup_failed` der.
 Mail onayı bildirimlerindeki linkler `SKYMAIL_UI_URL` altına kurulur
 (varsayılan `https://mail.yildizskylab.com`).
 
+## Hesap silme (Account erasure)
+
+`PUT /internal/v1/account-erasures/{request_id}` core'un silme komutudur
+(ADR-0051). `/v1` dışındadır ve `userinfo`'dan geçmez: token realm'in JWKS'i
+ile yerelde doğrulanır ve `azp` = `core-erasure`, `aud` ∋ `skymail`,
+`resource_access.skymail.roles` ∋ `skymail:account:erase` ister. Yalnız iç
+Docker ağından çağrılır; `X-Forwarded-*`, `Forwarded` ya da `X-Real-Ip`
+taşıyan istek `404` alır. Silinecek kişinin marker'ı account-access
+Redis'te olmalıdır; kapı `off` iken uç `503` döner. Ayrıntı:
+[`docs/data-lifecycle.md`](docs/data-lifecycle.md#account-erasure).
+
+## Mail göndericisi (`MAIL_SENDER`)
+
+`MAIL_SENDER` `on` (varsayılan, yoksa da açık) ya da `paused` olur; başka bir
+değer başlatmayı durdurur. `paused` iken mail kuyruğa yazılır ama gönderilmez:
+dağıtıcı ve işçiler başlamaz, açılışta bir uyarı logu çıkar, API ve `/ready`
+normal çalışır. `GET /v1/mail_tasks/summary` `sender_paused: true` döner.
+Yedekten geri yükleme bu değerle başlar. Sonra dump'ın getirdiği kuyruk
+göndermeden kapatılır: `skymail-backend queue-close-restored --before <RFC3339>`
+önce kuru çalışır, `--apply` ile geri yükleme anından önceki `pending` ve
+`processing` satırları `failed` (`restore: gönderilmedi`) yapar. `--apply`
+yalnız `MAIL_SENDER=paused` iken çalışır. Prosedür ve `docker exec` satırları:
+[`docs/data-lifecycle.md`](docs/data-lifecycle.md#backup-and-restore).
+
 ## Veritabanı migration'ları
 
 Uygulama bekleyen migration'ları servis trafiğe açılmadan önce çalıştırabilir.

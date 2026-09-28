@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/config"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skymail-backend/internal/erasuretoken"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
 	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
@@ -55,6 +57,12 @@ var swaggerDocument = sync.OnceValue(docs.SwaggerInfo.ReadDoc)
 // @host		skymail-api.yildizskylab.com
 // @BasePath	/v1
 func main() {
+	// A maintenance command instead of the server: it needs none of the
+	// server's startup, migrations included.
+	if len(os.Args) > 1 && os.Args[1] == queueCloseRestoredCommandName {
+		os.Exit(runQueueCloseRestoredFromEnv(os.Args[2:], os.Stdout))
+	}
+
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	defer cancelCtx()
 
@@ -67,6 +75,12 @@ func main() {
 	migrationConfig, err := migrations.ConfigFromEnv(config.Value)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid database migration configuration")
+	}
+	// Read before anything runs: a value that is neither on nor paused stops
+	// startup rather than sending a restored queue.
+	mailSender, err := mailer.SenderFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid mail sender configuration")
 	}
 	if migrationConfig.Mode == migrations.ModeApply {
 		version, migrationErr := migrations.Run(ctx, cfg.DatabaseURL, migrationConfig.BaselineVersion)
@@ -93,7 +107,7 @@ func main() {
 		Password:  cfg.SMTPPass,
 		FQDN:      cfg.SMTPFQDN,
 		Plain:     cfg.SMTPPlain,
-	})
+	}, mailSender)
 
 	authMiddleware := middlewares.NewAuthMiddleware(cfg.KeycloakClientID, cfg.KeycloakRealmURL)
 	gateConfig, err := accessgate.ConfigFromEnv(config.Value, cfg.KeycloakRealmURL)
@@ -125,6 +139,11 @@ func main() {
 		ClientID: cfg.KeycloakClientID,
 		UIURL:    config.Value("SKYMAIL_UI_URL"),
 	})
+	erasureHandler := handlers.NewAccountErasureHandler(db, erasuretoken.NewVerifier(erasuretoken.Config{
+		Issuer:         cfg.KeycloakRealmURL,
+		JWKSURL:        cfg.KeycloakRealmURL + "/protocol/openid-connect/certs",
+		ResourceClient: cfg.KeycloakClientID,
+	}), accountAccessGate)
 
 	// The reverse proxy in front of Skymail discards a caller-supplied
 	// X-Forwarded-For and writes its own, so ProxyHeader is only safe to read
@@ -154,6 +173,7 @@ func main() {
 	*/
 
 	registerPublicRoutes(app, accountAccessGate)
+	registerInternalRoutes(app, erasureHandler)
 
 	api := protectedAPI(app, authMiddleware, accountAccessGate)
 
@@ -173,6 +193,8 @@ func main() {
 	registerMailTaskRoutes(api, authMiddleware, mailHandler)
 	registerMailApprovalRoutes(api, authMiddleware, approvalHandler)
 
+	// Paused (MAIL_SENDER=paused), this only resets the rows left processing:
+	// the API, /ready and the erase endpoint serve as ever, and nothing is sent.
 	mailerService.Start(ctx, 3)
 	go expireMailApprovals(ctx, approvalHandler, time.Minute)
 
@@ -326,6 +348,15 @@ func registerPublicRoutes(app *fiber.App, gate accessgate.Reader) {
 			Path:              "",
 			Title:             "Skymail API Documentation",
 		}))
+}
+
+// registerInternalRoutes serves what other SkyLab services call over the
+// Docker network (ADR-0016), outside /v1 and its userinfo chain. The guard
+// answers 404 to anything that came through the public ingress; the erase
+// route then checks its token itself (account erasure spec §2.5).
+func registerInternalRoutes(app *fiber.App, erasure handlers.AccountErasureHandler) {
+	internal := app.Group("/internal", middlewares.InternalRouteGuard())
+	internal.Put("/v1/account-erasures/:request_id", erasure.Erase)
 }
 
 func protectedAPI(app *fiber.App, auth middlewares.AuthMiddleware, gate accessgate.Reader) fiber.Router {
