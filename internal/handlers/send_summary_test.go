@@ -19,6 +19,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
+	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 )
 
 // The club is in Turkey: "today" on the home screen is a Turkish operator's
@@ -88,9 +89,14 @@ func recipientsWith(status database.MailQueueStatus, count int) []seededRecipien
 
 func sendSummaryApp(t *testing.T, db *database.Store, now time.Time, kc keycloak.Client) *fiber.App {
 	t.Helper()
+	return sendSummaryAppWith(t, db, now, kc, &lifecycleMailerStub{})
+}
+
+func sendSummaryAppWith(t *testing.T, db *database.Store, now time.Time, kc keycloak.Client, mail mailer.Mailer) *fiber.App {
+	t.Helper()
 	handler := &mailHandlerImpl{
 		db:     db,
-		mailer: &lifecycleMailerStub{},
+		mailer: mail,
 		kc:     kc,
 		now:    func() time.Time { return now },
 	}
@@ -199,6 +205,37 @@ func TestSendSummaryCountsQueueRowsByStatus(t *testing.T) {
 	want := summaryCounts{Pending: 2, Processing: 1, Sent: 7, Failed: 1}
 	if summary.QueueCounts != want {
 		t.Fatalf("queue_counts = %+v, want %+v", summary.QueueCounts, want)
+	}
+}
+
+// The home screen says when MAIL_SENDER=paused holds the sender back, so an
+// operator looking at a queue that does not move knows why.
+func TestSendSummarySaysWhetherTheSenderIsPaused(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	now := istanbulTime(2026, time.September, 22, 12, 0, 0)
+	seedSend(t, db, seededSend{createdAt: now.Add(-time.Hour), recipients: recipientsWith(database.MailQueueStatusPending, 2)})
+
+	for _, test := range []struct {
+		name   string
+		paused bool
+	}{
+		{name: "on", paused: false},
+		{name: "paused", paused: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			app := sendSummaryAppWith(t, db, now, lifecycleKeycloakStub{}, &lifecycleMailerStub{paused: test.paused})
+			var summary map[string]any
+			getJSON(t, app, "/mail_tasks/summary", &summary)
+			got, present := summary["sender_paused"]
+			if !present || got != test.paused {
+				t.Fatalf("sender_paused = %v (present %v), want %v", got, present, test.paused)
+			}
+			// The queue still reads as it stands: paused mail is pending.
+			counts, _ := summary["queue_counts"].(map[string]any)
+			if counts["pending"] != float64(2) {
+				t.Fatalf("queue_counts = %v, want 2 pending", counts)
+			}
+		})
 	}
 }
 

@@ -162,7 +162,11 @@ neither row nor version behind. The rules live in one place,
 A Mail onayı request (ADR-0031) is kept in `mail_approvals`, and everything
 that happened to it in `mail_approval_events`. Neither is ever deleted or
 rewritten: a request stays when it is sent, rejected, declined or expired, and
-a resubmission is the same request with the events before it kept. The sends
+a resubmission is the same request with the events before it kept. The one
+exception is Account erasure (ADR-0042, ADR-0051): it rewrites the erased
+person's part of both, as [Account erasure](#account-erasure) says. The
+`create_mail_approvals` migration's comment that events are never rewritten
+predates it and is left as applied. The sends
 an approval queues — a list's one, or one per person — are ordinary
 `mail_tasks` rows, kept as every send is; `mail_approval_tasks` names them in
 order, and the `approved` or `accepted` event names the first by `task_id`.
@@ -180,16 +184,25 @@ A resubmission that changes who a request goes to physically deletes the
 ADR-0042's exception for relationship rows whose removal is itself the fact:
 a row says only that the request goes to that person, and the change is
 recorded, before and after, by the `resubmitted` event's `changes`, which is
-never rewritten.
+never rewritten but by Account erasure.
 
 ## Personal data
 
-These fields keep a person's identity with no end date:
+These fields keep a person's identity with no end date, until Account erasure
+takes the person out of them:
 
+- `recipients.full_name` and `email`, and their `mailing_list_recipients` —
+  the people on internal mailing lists.
+- `mail_queue.recipient_full_name`, `recipient_email`, and the mail rendered
+  for them: `subject`, `body`, `body_html`, and `error`, which can quote the
+  address.
 - `mail_tasks.sent_by` — who sent: the Keycloak subject of the token that
   queued the send — for an approved Mail onayı request, its submitter's — or
   `skymail` for the mail SkyMail sends of its own accord, the notice that a
   request expired.
+- `mail_tasks.body_variables` — the values of the send, which may name or
+  address people; for Keycloak's mails, the person's reset or verification
+  link.
 - `archived_by` on templates and mailing lists — who archived.
 - `template_versions.author_sub` with `author_name` — who wrote a version, and
   the name their token carried then.
@@ -203,13 +216,279 @@ These fields keep a person's identity with no end date:
 - `mail_approvals.body_variables` — the values of the send, which may name or
   address people.
 - `mail_approval_events.actor_sub` and `actor_name` — who did each thing to a
-  request — and `changes`, each variable's value, and who a request went to,
-  before and after an edit or a resubmission.
+  request — `note`, and `changes`, each variable's value, and who a request
+  went to, before and after an edit or a resubmission.
 
-SkyMail has no erasure or anonymisation path for account deletion: nothing
-tells it an account was deleted, and nothing clears or replaces these fields.
-This is a known gap, shared by all of them, against ADR-0042's rule that PII
-is erased on account deletion rather than kept.
+## Account erasure
+
+`PUT /internal/v1/account-erasures/{request_id}` is core's Erasure command for
+SkyMail (ADR-0051). Core's `docs/account-erasure-command.md` holds the
+contract; this section is SkyMail's part of it.
+
+- **Reach.** Internal Docker network only (ADR-0016). A request carrying a
+  forwarding header Traefik adds (`X-Forwarded-*`, `Forwarded`, `X-Real-Ip`)
+  gets a bare `404`, so the caller must not set one. The route is outside
+  `/v1` and does not go through `userinfo`.
+- **Token.** Checked locally against the realm's JWKS: signature (RS, PS or
+  ES; never HMAC or unsigned), `iss` exactly `KEYCLOAK_REALM_URL`, `exp`
+  required. Then `azp` = `core-erasure`, `aud` ∋ `skymail`, and the role
+  `skymail:account:erase` under `resource_access.skymail.roles` — roles on any
+  other client do not count. The caller's own access marker is checked as on
+  every route.
+- **Subject must be blocked.** The subject's marker must already be in
+  account-access Redis, read with the same `skymail-reader` ACL as the gate.
+  Missing: `409 subject_not_blocked`. Redis unreachable: `503
+  subject_block_unverifiable`. With `ACCOUNT_ACCESS_GATE_MODE=off`, as in
+  sandbox, the block cannot be read and the answer is `503` too, never `409`.
+- **Body.** `{"request_id", "subject_id", "emails"}`, nothing else, each once,
+  at most 4 KB. `subject_id` is a canonical lower-case UUID and not
+  Silinmiş kullanıcı; `emails` holds 0..3 plain addresses of at most 254
+  characters. Anything else is `400 invalid_erasure_command`.
+
+What it erases, with S the subject, E the addresses (compared whole,
+case-insensitively) and N the full names SkyMail holds on S's actor rows and
+E's recipient rows. Free text is searched for E and N, case-insensitively; a
+single-word name is never searched for, and a namesake's text that contains
+the same full name is cleared too — the accepted cost. A field that names the
+person is cleared whole, never masked.
+
+| Where | Which rows | What happens |
+|---|---|---|
+| `recipients` | `email` in E | deleted, with their `mailing_list_recipients` |
+| `mail_queue`, `pending` | `recipient_email` in E | deleted: never sent |
+| `mail_queue`, `processing` | `recipient_email` in E | waited for (`202`) |
+| `mail_queue`, `sent`/`failed` | `recipient_email` in E | `recipient_full_name` Silinmiş kullanıcı, `recipient_email`, `subject`, `body` `''`, `body_html`, `error` NULL; the row stays for the counts |
+| `mail_queue`, anyone else's, `sent`/`failed` | `subject`, `body` or `body_html` names E or N | those three cleared (`''`, `''`, NULL) |
+| `mail_queue`, anyone else's, `pending`/`processing` | the same | waited for (`202`): it goes out as it was rendered, then it is cleared |
+| `mail_tasks` | `sent_by` = S | Silinmiş kullanıcı |
+| `mail_tasks.body_variables` | names E or N, or every row of the send is to E | `{}` — a send to the person alone, Keycloak's reset and verification mails among them |
+| `mail_approvals` | `submitter_sub` = S | sub and name Silinmiş kullanıcı, `submitter_email` NULL, `submitter_email_unverified` false |
+| `mail_approvals.body_variables` | names E or N | `{}` |
+| `mail_approval_recipients` | `email` in E | deleted; see below |
+| `mail_approval_events` | `actor_sub` = S | `actor_sub` and `actor_name` Silinmiş kullanıcı |
+| `mail_approval_events.note` | actor S, or names E or N | NULL; `[silindi]` on a `rejected` event, whose reason cannot be empty |
+| `mail_approval_events.changes` | names E or N — either shape, `{recipient_email, recipient_full_name}` from before requests went to several people or `{recipients: […]}` | NULL |
+| `template_versions` | `author_sub` = S | `author_sub` and `author_name` Silinmiş kullanıcı |
+| `templates`, `mailing_lists` | `archived_by` = S | Silinmiş kullanıcı |
+
+Silinmiş kullanıcı is the subject `00000000-0000-4000-8000-000000000000`
+with the name `Silinmiş kullanıcı`, the same for everyone. A request's person
+it stands in for has the address `silinmis-kullanici@invalid`.
+
+A Mail onayı request keeps its constraints. When the person was the last one a
+request went to, one Silinmiş kullanıcı takes their place, so the request
+still goes to a list or at least one person. When a send was queued to the
+person, Silinmiş kullanıcı takes their position, so `task_ids[i]` stays the
+send to `recipients[i]`; an address is in a request once, so if a second of
+the person's addresses had a send there, that row goes with its
+`mail_approval_tasks` link and the send itself stays in `mail_tasks`.
+
+Template and version content, list names and the club's mail history as a
+count stay (ADR-0051: editorial record). Pending Mail onayı requests are not
+cancelled; they expire in seven days. There is no suppression list: the
+address can be added to a list again.
+
+- **Order.** One transaction under an advisory lock on `request_id`. The steps
+  that leave the names findable run first. If mail must be waited for, they
+  are committed and the answer is `202` with `Retry-After: 30`; the same
+  `PUT` later finishes, the rows keyed by name last. A pending row to the
+  person is deleted in the first call. The names are read again on every call
+  from the rows that still hold them, so a name only a deleted pending row
+  held is not searched for in a later call — a mail in flight would have to
+  name the person by that name alone.
+- **Answer.** `200 {"request_id","status":"completed","completed_at","counts"}`
+  with `counts` = `recipients_deleted`, `list_memberships_deleted`,
+  `queue_rows_deleted`, `queue_rows_cleared`, `bodies_cleared`,
+  `variables_cleared`, `actor_columns_replaced`, `notes_cleared`,
+  `changes_cleared`, `approval_recipients_removed`,
+  `approval_recipient_placeholders`, `approval_send_links_deleted`. The counts
+  are what the completing call did; work committed by an earlier `202` call
+  is not in them. A repeat, or a concurrent duplicate, returns the stored
+  body without doing the work again. Other answers: `202` (above),
+  `400 invalid_erasure_command`, `401 erasure_unauthorized`,
+  `403 erasure_forbidden`, `404` (ingress), `409 subject_not_blocked`, `503`
+  with `Retry-After` (`subject_block_unverifiable`, `access_gate_unavailable`,
+  `token_keys_unavailable`, `erasure_store_unavailable`). Errors are RFC 7807
+  `application/problem+json` with a fixed `code` and no value from the
+  request.
+- **Logs.** The body is never logged. Log lines carry the request id and a
+  fixed code, a Postgres failure its SQLSTATE only; never the subject, an
+  address or a name.
+- **Proof.** `account_erasure_receipts` (`request_id`, `completed_at`,
+  `counts`) holds no subject and no address. It is the deletion record and is
+  kept at least three years; no code path deletes it.
+
+## Backup and restore
+
+A dump taken before an Account erasure brings the erased person's rows back
+on restore. That includes the mail queue: mail still `pending` or `processing`
+in the dump would go out to the person, and another person's queued mail
+could still name them. So SkyMail restores with its sender paused, closes the
+queue the dump brought back without sending it, and only then lets core
+replay its erasures (account erasure spec §8) and turns the sender back on.
+
+`MAIL_SENDER` is `on` (the default, also when unset) or `paused`. Any other
+value stops startup. It is a plain environment value, not a secret. It is not a
+database flag, because a restored dump would bring back the flag's old value
+too. Scaling SkyMail to zero is no substitute: the replay goes to SkyMail's
+API.
+
+Paused, SkyMail:
+
+- still puts the rows left `processing` back to `pending` at startup, as the
+  sender always does;
+- starts no dispatcher and no workers, so nothing is sent. Mail sent through
+  the API, Keycloak's reset and verification mails among it, is queued and
+  stays `pending`;
+- logs a warning at startup that names `MAIL_SENDER`. When on, the mailer's
+  `Starting up` line carries `"sender":"on"`;
+- serves the API, `/ready` and the erase endpoint as usual.
+  `GET /v1/mail_tasks/summary` answers `sender_paused: true`.
+
+Pausing alone does not protect the people erased since the dump. Core keeps no
+address once an erasure is done. The replay reads the addresses back from the
+matching core and Keycloak backups (step 5), but an address the person changed
+between two backups is still missed, and a replay with `emails: []` erases
+only what is keyed by the subject. The person's queued mail to an address the
+replay does not have would stay `pending` and go out when the sender comes
+back on. Another person's queued mail that names them would keep the replay at
+`202`, because only a sent or failed mail's body is cleared. Core cannot say
+who the mail was for, so the restored queue is closed by time, not by person
+(account erasure ticket 16).
+
+A SkyMail dump can be restored only together with a core and a Keycloak dump
+taken at the same time: without them the replay has no addresses. The SKY LAB
+workspace's `ops/wizards/skymail-production-dump-wizard.sh` takes all three in
+one run.
+
+### The procedure
+
+1. **Pause.** In Dokploy, set `MAIL_SENDER=paused` on SkyMail and deploy.
+   Check that `GET /v1/mail_tasks/summary` answers `sender_paused: true`. The
+   container that is running while the dump lands must already be paused:
+   an unpaused dispatcher looks at the queue every 10 seconds and would send
+   the restored queue as soon as it is there.
+2. **Restore.** Just before `pg_restore` starts, write down the time in UTC
+   on the host: `date -u +%Y-%m-%dT%H:%M:%SZ`. That is the restore instant,
+   `--before` in step 4. Then `pg_restore` the dump.
+3. **Deploy.** SkyMail starts on the restored database, still paused: any
+   pending migrations run, and rows the dump held as `processing` go back to
+   `pending`. A redeploy in between, by the secret rotator for example, stays
+   paused too, since the environment has not changed.
+4. **Close the restored queue.** On the Dokploy host, run the command in
+   SkyMail's own container (with `sudo` if your user cannot run `docker`), a
+   dry run first and then with `--apply`. Set `APP` to the SkyMail backend's
+   App Name in Dokploy, not its display name. Production and sandbox run on
+   the same host, so check that `echo` prints the container being restored.
+
+   ```sh
+   C=$(docker ps --format '{{.Names}}' | grep "^${APP:?App Name}" | head -n 1); echo "$C"
+   docker exec "$C" /app/skymail-backend queue-close-restored --before 2026-09-26T09:00:00Z
+   docker exec "$C" /app/skymail-backend queue-close-restored --before 2026-09-26T09:00:00Z --apply
+   ```
+
+   See below for what it prints.
+5. **Replay.** Core replays its erasures (spec §8): every request completed
+   after the dump was taken. Core keeps no address of an erased person, so it
+   reads each person's addresses from the matching core and Keycloak backups
+   (ADR-0053): the newest core backup taken before that request's
+   `anonymize_core` step and the newest Keycloak backup taken before its
+   `delete_identity` step, each loaded into a temporary Postgres with no
+   network. It sends the normal Erasure command with those addresses, then
+   destroys the temporary databases. Until core's replay tool exists, this is
+   done by hand. Expect `200` with a receipt for each.
+6. **Unpause.** Check that `GET /v1/mail_tasks?status=sending` lists no send
+   created before the restore instant. Then remove `MAIL_SENDER` and
+   redeploy. Only the mail queued since the restore is sent.
+
+### `queue-close-restored`
+
+`skymail-backend queue-close-restored --before <RFC3339> [--apply]` is a
+subcommand of the server's binary. It has no HTTP endpoint. It reads the
+environment the server reads (`DATABASE_URL`, `MAIL_SENDER`), which is why it
+runs through `docker exec` in SkyMail's container.
+
+- `--before` is required: an RFC3339 time with its offset
+  (`2026-09-26T09:00:00Z` or `2026-09-26T12:00:00+03:00`). A time in the future
+  is refused. The rows it acts on are the `pending` and `processing` rows
+  queued before that time. A row without `created_at` counts as one of them:
+  SkyMail stamps every row it queues, so only a dump can hold such a row. Rows
+  queued at or after `--before`, and every `sent` or `failed` row, are never
+  touched.
+- Without `--apply` it only counts, and changes nothing. It runs whatever
+  `MAIL_SENDER` says, and notes when the sender is not paused.
+- `--apply` refuses unless `MAIL_SENDER=paused` in the container, so no worker
+  runs beside it. In one transaction it sets those rows to `failed` with the
+  error `restore: gönderilmedi`. `attempts` stays as it was, since nothing
+  tried them. It prints the same counts for what it closed. Run again, it
+  finds `0`.
+- It prints counts and times only, never an address, a name or a mail. It
+  exits `0` when done, `1` when refused or when the database fails (an apply
+  that fails changes nothing), and `2` for a wrong argument or a missing
+  `DATABASE_URL`.
+
+A dry run prints:
+
+```text
+queue-close-restored: dry run, nothing changed. Add --apply to close these rows.
+before: 2026-09-26T09:00:00Z
+pending: 41
+processing: 0
+tasks: 3
+oldest created_at: 2026-09-24T18:02:11Z
+newest created_at: 2026-09-25T23:40:05Z
+queued at or after --before, left alone: 2
+```
+
+- `pending`, `processing`: the rows the dump held that were still to go out.
+  After step 3's deploy, `processing` is normally `0`.
+- `tasks`: the sends those rows belong to.
+- `oldest created_at`, `newest created_at`: when they were queued, in UTC, or
+  `-` when there are none. The newest should be no later than the dump. If it
+  is later, `--before` is past the restore instant and would close mail queued
+  since: correct it before `--apply`.
+- `without created_at, counted in: N`: printed only when there are such rows.
+- `queued at or after --before, left alone`: mail queued since the restore.
+  It goes out at step 6.
+- `note: …`: printed when `MAIL_SENDER` is not paused. `--apply` would refuse.
+
+`--apply` prints the same lines after
+`queue-close-restored: closed without sending, error "restore: gönderilmedi".`
+
+### Closed mail afterwards
+
+Each closed send shows as failed (`Başarısız`) in the send list, on the home
+screen and in `GET /v1/mail_tasks/summary`. `mail_task_status()` makes a send
+failed as soon as one of its rows is. On a send's page, each closed recipient
+is failed with the error `restore: gönderilmedi`. A list send that was partly
+out when the dump was taken shows its sent count beside it.
+
+A failed row is final. SkyMail has no retry for it: neither the API nor the
+panel sends a failed row again. To send closed mail again, make a new send:
+
+- to a person: the send form, or `POST /v1/mail_tasks/single`, with the same
+  template and values. The address is on the send's page
+  (`GET /v1/mail_tasks/{id}/queue?status=failed`);
+- to a list: `POST /v1/mail_tasks`. It goes to everyone on the list, including
+  those whose mail had gone out before the dump.
+
+Keycloak's reset and verification mails are not sent again: their links are
+stale by then, and the person asks again.
+
+Send closed mail again only when you know who it is for. Until the replay has
+run, and for an address it missed, the restored database still holds the
+addresses of people erased after the dump was taken: their recipients, their
+list memberships and the closed rows to them. The closed rows do not show
+whose erasure they belong to. A Keycloak group is safe to send to again,
+because its members are read from Keycloak at send time and an erased person
+is no longer there. A SkyMail list restored from the dump can still hold an
+erased person. For a person, send again only to someone whose account still
+exists or who asked for it.
+
+A command that carries the addresses (a replay that read them from the
+matching backups, or a request core had not completed when the dump was taken)
+finds the person's mail by address as well. It clears the person's closed mail
+to them and deletes any mail queued to them since the restore.
 
 ## Retention boundaries
 

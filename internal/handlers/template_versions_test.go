@@ -98,7 +98,7 @@ func templateVersionsApp(t *testing.T, db *database.Store) *fiber.App {
 	app.Post("/templates/:id/versions/:versionId/restore", templates.RestoreTemplateVersion)
 	app.Post("/templates/:id/versions/:versionId/discard", templates.DiscardTemplateVersion)
 
-	mails := NewMailHandler(db, mailer.NewMailer(db, mailer.SMTPConfig{}), lifecycleKeycloakStub{})
+	mails := NewMailHandler(db, mailer.NewMailer(db, mailer.SMTPConfig{}, mailer.SenderOn), lifecycleKeycloakStub{})
 	app.Post("/mail_tasks/single", mails.SendSingle)
 	return app
 }

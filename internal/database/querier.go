@@ -32,6 +32,11 @@ type Querier interface {
 	// went to before; none for a request to a list. emails and full_names pair up
 	// by index.
 	ClearMailApprovalRecipients(ctx context.Context, approvalID uuid.UUID) error
+	// Closes the rows CountRestoredQueueItems counts as restored without sending
+	// them: failed, with the error the send's page shows. mail_task_status then
+	// reports their sends as failed. attempts is left as it was: nothing tried
+	// them. It counts what it closed by the status each row had.
+	CloseRestoredQueueItems(ctx context.Context, arg CloseRestoredQueueItemsParams) (CloseRestoredQueueItemsRow, error)
 	CountAllMailingListsIncludingArchived(ctx context.Context) (int64, error)
 	CountAllTemplatesIncludingArchived(ctx context.Context) (int64, error)
 	CountArchivedMailingLists(ctx context.Context) (int64, error)
@@ -47,6 +52,13 @@ type Querier interface {
 	CountMailingLists(ctx context.Context) (int64, error)
 	CountRecipients(ctx context.Context) (int64, error)
 	CountRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) (int64, error)
+	// After a restore from backup (docs/data-lifecycle.md, Backup and restore),
+	// the queue as the dump held it: the rows still to go out, pending or
+	// processing, that were queued before the restore instant. A row without
+	// created_at counts as one of them: SkyMail stamps every row it queues, so
+	// only the dump can hold such a row. left_queued is the rest of the queue,
+	// queued since, which is never touched. Counts and times only.
+	CountRestoredQueueItems(ctx context.Context, before time.Time) (CountRestoredQueueItemsRow, error)
 	CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error)
 	CountTemplates(ctx context.Context) (int64, error)
 	// A new Mail onayı request, pending until its deadline. Every later write of

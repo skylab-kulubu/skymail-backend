@@ -236,6 +236,61 @@ func (q *Queries) ClearMailApprovalRecipients(ctx context.Context, approvalID uu
 	return err
 }
 
+const closeRestoredQueueItems = `-- name: CloseRestoredQueueItems :one
+WITH closing AS (SELECT id, status AS was
+                 FROM mail_queue
+                 WHERE status IN ('pending', 'processing')
+                   AND (created_at IS NULL OR created_at < $1::timestamptz)
+                 FOR UPDATE),
+     closed AS (UPDATE mail_queue q
+                SET status = 'failed',
+                    error  = $2::text
+                FROM closing c
+                WHERE q.id = c.id
+                RETURNING c.was, q.task_id, q.created_at)
+SELECT count(*) FILTER (WHERE was = 'pending')    AS pending,
+       count(*) FILTER (WHERE was = 'processing') AS processing,
+       count(DISTINCT task_id)                     AS tasks,
+       (SELECT created_at FROM closed WHERE created_at IS NOT NULL
+        ORDER BY created_at LIMIT 1)               AS oldest,
+       (SELECT created_at FROM closed WHERE created_at IS NOT NULL
+        ORDER BY created_at DESC LIMIT 1)          AS newest,
+       count(*) FILTER (WHERE created_at IS NULL)  AS undated
+FROM closed
+`
+
+type CloseRestoredQueueItemsParams struct {
+	Before time.Time `json:"before"`
+	Error  string    `json:"error"`
+}
+
+type CloseRestoredQueueItemsRow struct {
+	Pending    int64      `json:"pending"`
+	Processing int64      `json:"processing"`
+	Tasks      int64      `json:"tasks"`
+	Oldest     *time.Time `json:"oldest"`
+	Newest     *time.Time `json:"newest"`
+	Undated    int64      `json:"undated"`
+}
+
+// Closes the rows CountRestoredQueueItems counts as restored without sending
+// them: failed, with the error the send's page shows. mail_task_status then
+// reports their sends as failed. attempts is left as it was: nothing tried
+// them. It counts what it closed by the status each row had.
+func (q *Queries) CloseRestoredQueueItems(ctx context.Context, arg CloseRestoredQueueItemsParams) (CloseRestoredQueueItemsRow, error) {
+	row := q.db.QueryRow(ctx, closeRestoredQueueItems, arg.Before, arg.Error)
+	var i CloseRestoredQueueItemsRow
+	err := row.Scan(
+		&i.Pending,
+		&i.Processing,
+		&i.Tasks,
+		&i.Oldest,
+		&i.Newest,
+		&i.Undated,
+	)
+	return i, err
+}
+
 const countAllMailingListsIncludingArchived = `-- name: CountAllMailingListsIncludingArchived :one
 SELECT count(*)
 FROM mailing_lists
@@ -439,6 +494,56 @@ func (q *Queries) CountRecipientsByMailingListId(ctx context.Context, mailListID
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const countRestoredQueueItems = `-- name: CountRestoredQueueItems :one
+WITH queued AS (SELECT task_id,
+                       status,
+                       created_at,
+                       (created_at IS NULL OR created_at < $1::timestamptz) AS restored
+                FROM mail_queue
+                WHERE status IN ('pending', 'processing'))
+SELECT count(*) FILTER (WHERE restored AND status = 'pending')    AS pending,
+       count(*) FILTER (WHERE restored AND status = 'processing') AS processing,
+       count(DISTINCT task_id) FILTER (WHERE restored)            AS tasks,
+       (SELECT created_at FROM queued WHERE restored AND created_at IS NOT NULL
+        ORDER BY created_at LIMIT 1)                              AS oldest,
+       (SELECT created_at FROM queued WHERE restored AND created_at IS NOT NULL
+        ORDER BY created_at DESC LIMIT 1)                         AS newest,
+       count(*) FILTER (WHERE restored AND created_at IS NULL)    AS undated,
+       count(*) FILTER (WHERE NOT restored)                       AS left_queued
+FROM queued
+`
+
+type CountRestoredQueueItemsRow struct {
+	Pending    int64      `json:"pending"`
+	Processing int64      `json:"processing"`
+	Tasks      int64      `json:"tasks"`
+	Oldest     *time.Time `json:"oldest"`
+	Newest     *time.Time `json:"newest"`
+	Undated    int64      `json:"undated"`
+	LeftQueued int64      `json:"left_queued"`
+}
+
+// After a restore from backup (docs/data-lifecycle.md, Backup and restore),
+// the queue as the dump held it: the rows still to go out, pending or
+// processing, that were queued before the restore instant. A row without
+// created_at counts as one of them: SkyMail stamps every row it queues, so
+// only the dump can hold such a row. left_queued is the rest of the queue,
+// queued since, which is never touched. Counts and times only.
+func (q *Queries) CountRestoredQueueItems(ctx context.Context, before time.Time) (CountRestoredQueueItemsRow, error) {
+	row := q.db.QueryRow(ctx, countRestoredQueueItems, before)
+	var i CountRestoredQueueItemsRow
+	err := row.Scan(
+		&i.Pending,
+		&i.Processing,
+		&i.Tasks,
+		&i.Oldest,
+		&i.Newest,
+		&i.Undated,
+		&i.LeftQueued,
+	)
+	return i, err
 }
 
 const countTemplateVersions = `-- name: CountTemplateVersions :one

@@ -77,7 +77,13 @@ type EnqueueWithRecipientsParams struct {
 }
 
 type Mailer interface {
+	// Start puts the rows a previous process left processing back to pending
+	// and, unless the sender is paused, starts the dispatcher and workerCount
+	// workers.
 	Start(ctx context.Context, workerCount int)
+	// SenderPaused says MAIL_SENDER=paused holds this process's sender back:
+	// mail is queued but none is sent.
+	SenderPaused() bool
 	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error)
 	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
 	EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error)
@@ -112,6 +118,7 @@ type mailerImpl struct {
 	nudge      chan struct{}
 	logger     *zerolog.Logger
 	smtpConfig SMTPConfig
+	sender     Sender
 }
 
 type SMTPConfig struct {
@@ -124,8 +131,13 @@ type SMTPConfig struct {
 	Plain     bool
 }
 
-func NewMailer(db *database.Store, smtpConfig SMTPConfig) Transactional {
+// NewMailer makes the mailer. sender is MAIL_SENDER (SenderFromEnv); anything
+// but SenderPaused sends.
+func NewMailer(db *database.Store, smtpConfig SMTPConfig, sender Sender) Transactional {
 	logger := log.With().Str("service", "mailer").Logger()
+	if sender != SenderPaused {
+		sender = SenderOn
+	}
 
 	return &mailerImpl{
 		db:         db,
@@ -133,15 +145,31 @@ func NewMailer(db *database.Store, smtpConfig SMTPConfig) Transactional {
 		nudge:      make(chan struct{}, 1),
 		logger:     &logger,
 		smtpConfig: smtpConfig,
+		sender:     sender,
 	}
 }
 
-func (m *mailerImpl) Start(ctx context.Context, workerCount int) {
-	m.logger.Info().Int("workers", workerCount).Msg("Starting up")
+func (m *mailerImpl) SenderPaused() bool { return m.sender == SenderPaused }
 
+func (m *mailerImpl) Start(ctx context.Context, workerCount int) {
+	if m.SenderPaused() {
+		m.logger.Warn().Str("sender", string(m.sender)).
+			Msg("Mail sender paused by MAIL_SENDER=paused: mail is queued but nothing will be sent until MAIL_SENDER is removed and the service redeployed")
+	} else {
+		m.logger.Info().Int("workers", workerCount).Str("sender", string(m.sender)).Msg("Starting up")
+	}
+
+	// A row still processing was taken by a worker of a process that is gone,
+	// or a restored dump holds it so. Paused too it goes back to pending: the
+	// erase endpoint deletes a pending row to the person, but waits (202) on a
+	// processing one, which no worker would ever finish.
 	err := m.db.ResetDeadJobs(ctx)
 	if err != nil {
 		m.logger.Err(err).Msg("Failed to reset dead jobs")
+	}
+
+	if m.SenderPaused() {
+		return
 	}
 
 	for i := 0; i < workerCount; i++ {
