@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -334,5 +335,69 @@ func TestTrustedProxyRanges(t *testing.T) {
 				t.Fatalf("trustedProxyRanges(%q) = %v, want %v", tc.raw, got, tc.want)
 			}
 		})
+	}
+}
+
+// An admin's bearer (many groups and roles) plus the browser's
+// .yildizskylab.com cookies ran past Fiber's 4 KiB read buffer, and every
+// call answered 431 wrapped as a 500 (2026-10-04).
+func TestServerAcceptsLargeAuthorizationHeader(t *testing.T) {
+	if got := getWithAuthorization(t, strings.Repeat("a", 10<<10)); got != fiber.StatusNoContent {
+		t.Fatalf("status = %d, want 204", got)
+	}
+}
+
+func TestServerAnswersOversizedHeaderWith431(t *testing.T) {
+	if got := getWithAuthorization(t, strings.Repeat("a", 20<<10)); got != fiber.StatusRequestHeaderFieldsTooLarge {
+		t.Fatalf("status = %d, want 431", got)
+	}
+}
+
+// getWithAuthorization serves the production Fiber config on a real socket:
+// app.Test reports a header that overflows the read buffer as its own error
+// instead of returning the response the client gets.
+func getWithAuthorization(t *testing.T, token string) int {
+	t.Helper()
+	app := fiber.New(newFiberConfig(nil, nil))
+	app.Get("/", func(c fiber.Ctx) error { return c.SendStatus(fiber.StatusNoContent) })
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = app.Listener(listener, fiber.ListenConfig{DisableStartupMessage: true}) }()
+	t.Cleanup(func() { _ = app.Shutdown() })
+
+	request, err := http.NewRequest(fiber.MethodGet, "http://"+listener.Addr().String()+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set(fiber.HeaderAuthorization, "Bearer "+token)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	return response.StatusCode
+}
+
+func TestErrorHandlerKeepsFiberClientErrorStatus(t *testing.T) {
+	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
+	app.Post("/", func(fiber.Ctx) error { return fiber.ErrRequestEntityTooLarge })
+
+	response, err := app.Test(httptest.NewRequest(fiber.MethodPost, "/", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != fiber.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", response.StatusCode)
+	}
+	var body struct {
+		Params map[string]any `json:"params"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Params["original_code"] != float64(fiber.StatusRequestEntityTooLarge) {
+		t.Fatalf("params = %v", body.Params)
 	}
 }
