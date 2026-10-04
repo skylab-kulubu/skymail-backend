@@ -56,6 +56,11 @@ func FromFiberError(f *fiber.Error) *AppError {
 		err = *ErrStatusTooManyRequests
 	default:
 		err = *ErrUnknownError
+		// Keep the status Fiber chose (431 header too large, 413 body too
+		// large, 400 malformed request): it is the client's error, not ours.
+		if f.Code >= 400 && f.Code < 600 {
+			err.Status = f.Code
+		}
 	}
 
 	return err.WithParams(map[string]interface{}{
