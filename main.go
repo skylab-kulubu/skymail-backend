@@ -145,20 +145,7 @@ func main() {
 		ResourceClient: cfg.KeycloakClientID,
 	}), accountAccessGate)
 
-	// The reverse proxy in front of Skymail discards a caller-supplied
-	// X-Forwarded-For and writes its own, so ProxyHeader is only safe to read
-	// when the connection came from one of those proxies. Without TrustProxy
-	// Fiber ignores the header entirely and ctx.IP() reports the proxy.
-	app := fiber.New(fiber.Config{
-		StructValidator:    vld,
-		JSONDecoder:        sonic.Unmarshal,
-		JSONEncoder:        sonic.Marshal,
-		ErrorHandler:       errorHandler,
-		TrustProxy:         true,
-		TrustProxyConfig:   fiber.TrustProxyConfig{Proxies: trustedProxies},
-		ProxyHeader:        fiber.HeaderXForwardedFor,
-		EnableIPValidation: true,
-	})
+	app := fiber.New(newFiberConfig(vld, trustedProxies))
 
 	app.Use(serverRequestID())
 	app.Use(recover.New())
@@ -371,6 +358,28 @@ func unavailable(c fiber.Ctx) error {
 	c.Set(fiber.HeaderCacheControl, "no-store")
 	c.Set(fiber.HeaderRetryAfter, "1")
 	return apperrors.ErrServiceUnavailable
+}
+
+func newFiberConfig(vld fiber.StructValidator, trustedProxies []string) fiber.Config {
+	// The reverse proxy in front of Skymail discards a caller-supplied
+	// X-Forwarded-For and writes its own, so ProxyHeader is only safe to read
+	// when the connection came from one of those proxies. Without TrustProxy
+	// Fiber ignores the header entirely and ctx.IP() reports the proxy.
+	return fiber.Config{
+		StructValidator: vld,
+		JSONDecoder:     sonic.Unmarshal,
+		JSONEncoder:     sonic.Marshal,
+		ErrorHandler:    errorHandler,
+		// Fiber's 4 KiB read buffer also caps the request headers, and an
+		// admin's bearer (many groups and roles) plus the browser's
+		// .yildizskylab.com cookies ran over it: every call answered 431.
+		// 16 KiB matches core-backend and Node's default.
+		ReadBufferSize:     16 << 10,
+		TrustProxy:         true,
+		TrustProxyConfig:   fiber.TrustProxyConfig{Proxies: trustedProxies},
+		ProxyHeader:        fiber.HeaderXForwardedFor,
+		EnableIPValidation: true,
+	}
 }
 
 func errorHandler(ctx fiber.Ctx, err error) error {
