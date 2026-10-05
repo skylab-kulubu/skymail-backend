@@ -22,6 +22,9 @@ type Config struct {
 	SMTPFQDN         string `mapstructure:"SMTP_FQDN" validate:"required"`
 	SMTPPlain        bool   `mapstructure:"SMTP_PLAIN"`
 	KeycloakRealmURL string `mapstructure:"KEYCLOAK_REALM_URL" validate:"required"`
+	// Optional: where Admin REST and the service account's token for it go
+	// instead of KEYCLOAK_REALM_URL's host. Token checks stay on the realm URL.
+	KeycloakAdminURL string `mapstructure:"KEYCLOAK_ADMIN_URL"`
 	// The Keycloak client whose roles SkyMail's permissions are: skymail when unset.
 	KeycloakClientID            string `mapstructure:"KEYCLOAK_CLIENT_ID"`
 	KeycloakServiceClientID     string `mapstructure:"KEYCLOAK_SERVICE_CLIENT_ID" validate:"required"`
