@@ -86,7 +86,7 @@ func newNestedGroupServer(t *testing.T) (keycloak.Client, nestedIDs) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return keycloak.NewClient(srv.URL+"/realms/e-skylab", "skymail", "secret"), ids
+	return keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skymail", "secret"), ids
 }
 
 // An approver holds the role directly or through a group, a subgroup of one
@@ -135,7 +135,7 @@ func TestClientRoleMembersIncludesGroupsAndSkipsDisabled(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "skymail-backend", "secret")
+	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skymail-backend", "secret")
 
 	members, err := kc.ClientRoleMembers(context.Background(), "skymail", "skymail:mails:approve")
 	if err != nil {
@@ -169,7 +169,7 @@ func TestClientRoleMembersRefusesAnUnknownClient(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "skymail-backend", "secret")
+	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skymail-backend", "secret")
 
 	if _, err := kc.ClientRoleMembers(context.Background(), "skymail", "skymail:mails:approve"); err == nil {
 		t.Fatal("an unknown client gave role members")
@@ -222,7 +222,7 @@ func TestClientRoleMembersReadsEveryPageOfGroups(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "skymail-backend", "secret")
+	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skymail-backend", "secret")
 
 	members, err := kc.ClientRoleMembers(context.Background(), "skymail", "skymail:mails:approve")
 	if err != nil {

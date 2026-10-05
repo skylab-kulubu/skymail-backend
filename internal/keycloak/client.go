@@ -25,8 +25,10 @@ type Client interface {
 }
 
 type clientImpl struct {
-	gc           *gocloak.GoCloak
-	base         string
+	gc *gocloak.GoCloak
+	// adminBase is where Admin REST (/admin/realms/<realm>/…) and the
+	// service account's token request go.
+	adminBase    string
 	clientID     string
 	clientSecret string
 	realm        string
@@ -36,21 +38,74 @@ type clientImpl struct {
 	tokenExpiry time.Time
 }
 
-func NewClient(realmURL, clientID, clientSecret string) Client {
+// NewClient reads the realm realmURL (KEYCLOAK_REALM_URL,
+// <base>/realms/<realm>) names through Admin REST with the service account
+// clientID. Admin REST and the service account's token request go to
+// adminURL (KEYCLOAK_ADMIN_URL, e.g. Keycloak inside the Docker network) when
+// it is not empty, and to realmURL's base when it is. Keycloak names its
+// public address in iss whichever address issued the token, and SkyMail
+// never checks this token itself: Keycloak does.
+func NewClient(realmURL, adminURL, clientID, clientSecret string) Client {
 	parts := strings.SplitN(realmURL, "/realms/", 2)
 	baseURL := parts[0]
 	realm := ""
 	if len(parts) == 2 {
 		realm = parts[1]
 	}
+	if admin := keycloakBase(adminURL); admin != "" {
+		baseURL = admin
+	}
 
 	return &clientImpl{
+		// gocloak sends the token request and its own Admin REST calls to
+		// baseURL.
 		gc:           gocloak.NewClient(baseURL),
-		base:         baseURL,
+		adminBase:    baseURL,
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		realm:        realm,
 	}
+}
+
+// keycloakBase is a Keycloak base URL without surrounding blanks, trailing
+// slashes or a /realms/<realm> suffix.
+func keycloakBase(raw string) string {
+	base := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if before, _, found := strings.Cut(base, "/realms/"); found {
+		base = strings.TrimRight(before, "/")
+	}
+	return base
+}
+
+// ParseAdminURL checks KEYCLOAK_ADMIN_URL and answers the base SkyMail sends
+// Admin REST to: "" when it is unset or blank, otherwise an absolute http(s)
+// URL without trailing slashes or a /realms/<realm> suffix, e.g.
+// http://keycloak:8080. A context path is kept. The errors name the
+// variable, never its value.
+func ParseAdminURL(raw string) (string, error) {
+	base := keycloakBase(raw)
+	if base == "" {
+		return "", nil
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return "", errors.New("KEYCLOAK_ADMIN_URL is not a URL")
+	}
+	if scheme := strings.ToLower(u.Scheme); (scheme != "http" && scheme != "https") || u.Host == "" || u.Opaque != "" {
+		return "", errors.New("KEYCLOAK_ADMIN_URL must be an absolute http or https URL, e.g. http://keycloak:8080")
+	}
+	if u.User != nil {
+		return "", errors.New("KEYCLOAK_ADMIN_URL must not carry credentials")
+	}
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return "", errors.New("KEYCLOAK_ADMIN_URL must not have a query or a fragment")
+	}
+	for _, segment := range strings.Split(u.Path, "/") {
+		if segment == "admin" || segment == "realms" {
+			return "", errors.New("KEYCLOAK_ADMIN_URL is Keycloak's base URL; SkyMail adds /admin/realms/<realm> itself")
+		}
+	}
+	return base, nil
 }
 
 func (c *clientImpl) getToken(ctx context.Context) (string, error) {
@@ -137,7 +192,7 @@ func (c *clientImpl) children(ctx context.Context, token, groupID string) ([]*go
 				"max":                 strconv.Itoa(pageSize),
 				"briefRepresentation": "false",
 			}).
-			Get(c.base + "/admin/realms/" + c.realm + "/groups/" + groupID + "/children")
+			Get(c.adminBase + "/admin/realms/" + c.realm + "/groups/" + groupID + "/children")
 		if err != nil {
 			return nil, err
 		}
@@ -297,7 +352,7 @@ func (c *clientImpl) roleGroups(ctx context.Context, token, idOfClient, role str
 				"max":                 strconv.Itoa(pageSize),
 				"briefRepresentation": "true",
 			}).
-			Get(c.base + "/admin/realms/" + c.realm + "/clients/" + idOfClient + "/roles/" + url.PathEscape(role) + "/groups")
+			Get(c.adminBase + "/admin/realms/" + c.realm + "/clients/" + idOfClient + "/roles/" + url.PathEscape(role) + "/groups")
 		if err != nil {
 			return nil, err
 		}
