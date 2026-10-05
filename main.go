@@ -82,6 +82,10 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid mail sender configuration")
 	}
+	keycloakAdminURL, err := keycloak.ParseAdminURL(cfg.KeycloakAdminURL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid Keycloak configuration")
+	}
 	if migrationConfig.Mode == migrations.ModeApply {
 		version, migrationErr := migrations.Run(ctx, cfg.DatabaseURL, migrationConfig.BaselineVersion)
 		if migrationErr != nil {
@@ -130,7 +134,10 @@ func main() {
 	}
 	log.Info().Str("ranges", strings.Join(trustedProxies, ",")).Msg("trusted proxy ranges")
 
-	kcClient := keycloak.NewClient(cfg.KeycloakRealmURL, cfg.KeycloakServiceClientID, cfg.KeycloakServiceClientSecret)
+	if keycloakAdminURL != "" {
+		log.Info().Str("admin_url", keycloakAdminURL).Msg("keycloak admin REST: KEYCLOAK_ADMIN_URL (tokens are still checked against KEYCLOAK_REALM_URL)")
+	}
+	kcClient := keycloak.NewClient(cfg.KeycloakRealmURL, keycloakAdminURL, cfg.KeycloakServiceClientID, cfg.KeycloakServiceClientSecret)
 
 	templateHandler := handlers.NewTemplateHandler(db)
 	listHandler := handlers.NewListHandler(db, kcClient)
@@ -139,11 +146,7 @@ func main() {
 		ClientID: cfg.KeycloakClientID,
 		UIURL:    config.Value("SKYMAIL_UI_URL"),
 	})
-	erasureHandler := handlers.NewAccountErasureHandler(db, erasuretoken.NewVerifier(erasuretoken.Config{
-		Issuer:         cfg.KeycloakRealmURL,
-		JWKSURL:        cfg.KeycloakRealmURL + "/protocol/openid-connect/certs",
-		ResourceClient: cfg.KeycloakClientID,
-	}), accountAccessGate)
+	erasureHandler := handlers.NewAccountErasureHandler(db, erasuretoken.NewVerifier(erasureTokenConfig(cfg)), accountAccessGate)
 
 	app := fiber.New(newFiberConfig(vld, trustedProxies))
 
@@ -192,6 +195,17 @@ func main() {
 
 	if err = app.Listen(addr); err != nil {
 		log.Fatal().Err(err).Msg("error starting server")
+	}
+}
+
+// erasureTokenConfig is how the erase route checks core's token: the exact
+// issuer KEYCLOAK_REALM_URL and that realm's keys. KEYCLOAK_ADMIN_URL plays
+// no part.
+func erasureTokenConfig(cfg config.Config) erasuretoken.Config {
+	return erasuretoken.Config{
+		Issuer:         cfg.KeycloakRealmURL,
+		JWKSURL:        cfg.KeycloakRealmURL + "/protocol/openid-connect/certs",
+		ResourceClient: cfg.KeycloakClientID,
 	}
 }
 

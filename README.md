@@ -65,6 +65,20 @@ gerekir:
 `view-clients` yoksa mail onayı yine çalışır, ama onaycılar bulunamaz ve
 sunuşun yanıtı `notification.problem: approver_lookup_failed` der.
 
+Bu Admin REST çağrıları (`/admin/realms/<realm>/…`) ve service account'un
+onlar için aldığı token, `KEYCLOAK_ADMIN_URL` verilmişse oraya gider (ör.
+Docker ağının içinden `http://<keycloak servisi>:8080`); verilmemişse
+bugünkü gibi `KEYCLOAK_REALM_URL`'in köküne. Değer `KEYCLOAK_REALM_URL`'in
+kökü gibi bir taban adrestir: sondaki `/` ve `/realms/<realm>` atılır;
+mutlak `http`/`https` olmayan, kimlik bilgisi, sorgu ya da `/admin`,
+`/realms` taşıyan değer açılışı durdurur (hata değeri değil değişkeni
+söyler). Açılışta `keycloak admin REST: KEYCLOAK_ADMIN_URL` satırı yazılır.
+Token denetimleri değişmez: `userinfo`, silme ucunun issuer'ı ve JWKS'i,
+erişim kapısının issuer eşitliği `KEYCLOAK_REALM_URL`'de kalır. Keycloak
+token'ı hangi adresten verirse versin `iss`'e public adını (`KC_HOSTNAME`)
+yazar. Amaç, Keycloak'ın public adında `/admin`'i kenarda kapatabilmek
+(Keycloak'ın reverse proxy kılavuzu `/admin/`'i dışarı açmaz).
+
 Mail onayı bildirimlerindeki linkler `SKYMAIL_UI_URL` altına kurulur
 (varsayılan `https://mail.yildizskylab.com`).
 
