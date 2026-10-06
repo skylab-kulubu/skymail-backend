@@ -53,7 +53,7 @@ func templateRoutesApp(t *testing.T, roles ...string) (*fiber.App, database.Temp
 		c.Locals("roles", roles)
 		return c.Next()
 	})
-	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab")
+	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
 	registerTemplateRoutes(api, auth, handlers.NewTemplateHandler(store))
 	return app, template
 }
