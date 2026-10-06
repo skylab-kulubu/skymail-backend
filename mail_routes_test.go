@@ -62,7 +62,7 @@ func mailRoutesApp(t *testing.T, roles ...string) *fiber.App {
 		c.Locals("roles", roles)
 		return c.Next()
 	})
-	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab")
+	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
 	registerMailTaskRoutes(api, auth, handlers.NewMailHandler(store, idleMailer{}, noGroups{}))
 	return app
 }

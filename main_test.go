@@ -194,7 +194,7 @@ func TestProtectedAPIUsesUserInfoSubjectForHumanAndClientCredentials(t *testing.
 			order := []string{}
 			gate := &routeTestGate{decision: accessgate.Allowed, order: &order}
 			app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
-			api := protectedAPI(app, middlewares.NewAuthMiddleware("skymail", userinfo.URL), gate)
+			api := protectedAPI(app, middlewares.NewAuthMiddleware("skymail", userinfo.URL, middlewares.AudienceOff), gate)
 			api.Get("/probe", func(c fiber.Ctx) error { return c.SendStatus(fiber.StatusNoContent) })
 			request := httptest.NewRequest(fiber.MethodGet, "/v1/probe", nil)
 			request.Header.Set(fiber.HeaderAuthorization, "Bearer valid-token")
@@ -215,7 +215,7 @@ func TestProtectedAPIDoesNotQueryGateBeforeAuthenticationSucceeds(t *testing.T) 
 
 	gate := &routeTestGate{decision: accessgate.Allowed}
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
-	api := protectedAPI(app, middlewares.NewAuthMiddleware("skymail", "http://userinfo.invalid"), gate)
+	api := protectedAPI(app, middlewares.NewAuthMiddleware("skymail", "http://userinfo.invalid", middlewares.AudienceOff), gate)
 	api.Get("/probe", func(c fiber.Ctx) error { return c.SendStatus(fiber.StatusNoContent) })
 
 	response, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/v1/probe", nil))

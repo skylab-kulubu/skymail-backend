@@ -82,6 +82,36 @@ yazar. Amaç, Keycloak'ın public adında `/admin`'i kenarda kapatabilmek
 Mail onayı bildirimlerindeki linkler `SKYMAIL_UI_URL` altına kurulur
 (varsayılan `https://mail.yildizskylab.com`).
 
+## `/v1` token audience'ı (`V1_TOKEN_AUDIENCE_MODE`)
+
+`/v1` token'ı Keycloak `userinfo`'suna sorar. `userinfo` token'ın canlı
+olduğunu kanıtlar ama kimin için verildiğini söylemez. Bu değişken `aud`'unda
+`KEYCLOAK_CLIENT_ID` (varsayılan `skymail`) olmayan token'a ne yapılacağını
+seçer (RFC 9068 §4):
+
+- `off` (varsayılan, yoksa da): `aud` okunmaz, davranış öncekiyle aynı.
+- `log`: istek kabul edilir. `userinfo`'dan ve rol denetiminden geçen her
+  istek için bir uyarı satırı yazılır:
+  `"event":"v1_token_audience_missing","azp":"<istemci>","mode":"log"`.
+  Satırda yalnız çağıran istemcinin `azp`'si ve mod vardır. Token, `sub`, ad,
+  e-posta ve IP yazılmaz. `azp`'siz ya da JWT olmayan token `"azp":"none"`
+  olarak yazılır.
+- `enforce`: aynı token'a `401` döner,
+  `WWW-Authenticate: Bearer error="invalid_token"` ile. Satır `"mode":"enforce"`
+  ile yazılır. Rol denetiminden önce çalışır: `aud`'u ve rolü olmayan token
+  `403` değil `401` alır.
+
+Başka bir değer açılışı durdurur. Açılışta `v1 token audience check` satırı
+modu yazar. `aud`, `userinfo` kabul ettikten sonra token'dan okunur: imzayı,
+issuer'ı ve süreyi Keycloak denetlemiştir. Silme ucu (`/internal`) bundan
+etkilenmez, kendi yerel JWKS denetimiyle `aud`'u zaten şart koşar.
+
+Bir haftalık sayım (production sunucusunda, salt okunur):
+
+```bash
+docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | grep -F '"event":"v1_token_audience_missing"' | grep -o '"azp":"[^"]*","mode":"[^"]*"' | sort | uniq -c | sort -rn
+```
+
 ## Hesap silme (Account erasure)
 
 `PUT /internal/v1/account-erasures/{request_id}` core'un silme komutudur
