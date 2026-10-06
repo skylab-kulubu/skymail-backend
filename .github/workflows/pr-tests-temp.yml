@@ -1,0 +1,19 @@
+name: Temporary PR tests
+
+on:
+  push:
+    branches: [feat/v1-audience-check]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go build .
+      - run: go test -count=1 -v -run 'Audience|Auth|Expired|Rejected|IdentityProvider|Unreadable|Accepted|Missing' ./internal/middlewares/
+      - run: go test -p 2 -count=1 ./...
