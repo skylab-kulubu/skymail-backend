@@ -349,7 +349,7 @@ func newApprovalWorldWithPool(t *testing.T, poolSize int) *approvalWorld {
 		c.Locals("roles", person.roles)
 		return c.Next()
 	})
-	registerMailApprovalRoutes(api, middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab"), w.handler)
+	registerMailApprovalRoutes(api, middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff), w.handler)
 	w.app = app
 	return w
 }

@@ -33,7 +33,7 @@ func userinfoStub(t *testing.T, status int, contentType, body string) string {
 func authApp(realmURL string) (*fiber.App, *int) {
 	reached := 0
 	app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-	app.Use(NewAuthMiddleware("skymail", realmURL).Authenticate)
+	app.Use(NewAuthMiddleware("skymail", realmURL, AudienceOff).Authenticate)
 	app.Get("/probe", func(c fiber.Ctx) error {
 		reached++
 		return c.SendStatus(fiber.StatusNoContent)
@@ -186,7 +186,7 @@ func TestAuthenticatedNameIsTheTokensNameOrUsername(t *testing.T) {
 				`,"resource_access":{"skymail":{"roles":["skymail:access"]}}}`
 			var got any
 			app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-			app.Use(NewAuthMiddleware("skymail", userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body)).Authenticate)
+			app.Use(NewAuthMiddleware("skymail", userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body), AudienceOff).Authenticate)
 			app.Get("/probe", func(c fiber.Ctx) error {
 				got = c.Locals("user_name")
 				return c.SendStatus(fiber.StatusNoContent)
@@ -225,7 +225,7 @@ func TestAuthenticatedEmailIsTheTokensVerifiedEmail(t *testing.T) {
 				`,"resource_access":{"skymail":{"roles":["skymail:access"]}}}`
 			var got, unverified any
 			app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-			app.Use(NewAuthMiddleware("skymail", userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body)).Authenticate)
+			app.Use(NewAuthMiddleware("skymail", userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body), AudienceOff).Authenticate)
 			app.Get("/probe", func(c fiber.Ctx) error {
 				got = c.Locals("user_email")
 				unverified = c.Locals("user_email_unverified")

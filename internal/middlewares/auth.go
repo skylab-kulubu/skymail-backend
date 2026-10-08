@@ -19,6 +19,7 @@ type AuthMiddleware interface {
 type authMiddlewareImpl struct {
 	clientID string
 	realmURL string
+	audience AudienceMode
 	client   *client.Client
 	logger   *zerolog.Logger
 }
@@ -34,11 +35,19 @@ type userInfo struct {
 	} `json:"resource_access"`
 }
 
-func NewAuthMiddleware(clientID string, realmURL string) AuthMiddleware {
-	logger := log.With().Str("service", "auth").Logger()
+// NewAuthMiddleware authenticates /v1 with Keycloak's userinfo, reads the
+// roles on clientID, and treats a token whose aud does not name clientID as
+// audience says (V1_TOKEN_AUDIENCE_MODE).
+func NewAuthMiddleware(clientID string, realmURL string, audience AudienceMode) AuthMiddleware {
+	return newAuthMiddleware(clientID, realmURL, audience, &log.Logger)
+}
+
+func newAuthMiddleware(clientID string, realmURL string, audience AudienceMode, base *zerolog.Logger) *authMiddlewareImpl {
+	logger := base.With().Str("service", "auth").Logger()
 	return &authMiddlewareImpl{
 		clientID: clientID,
 		realmURL: realmURL,
+		audience: audience,
 		client:   client.New(),
 		logger:   &logger,
 	}
@@ -98,6 +107,16 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) er
 		return apperrors.ErrForbidden
 	}
 
+	forUs, azp := true, ""
+	if a.audience == AudienceLog || a.audience == AudienceEnforce {
+		forUs, azp = tokenAudience(tokenStr, a.clientID)
+	}
+	if !forUs && a.audience == AudienceEnforce {
+		a.logMissingAudience(azp)
+		c.Set(fiber.HeaderWWWAuthenticate, `Bearer error="invalid_token"`)
+		return apperrors.ErrUnauthorized
+	}
+
 	roles := info.ResourceAccess[a.clientID].Roles
 	if len(roles) == 0 {
 		roles = rolesFromJWT(tokenStr, a.clientID)
@@ -105,6 +124,10 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) er
 
 	if len(roles) == 0 {
 		return apperrors.ErrForbidden
+	}
+
+	if !forUs {
+		a.logMissingAudience(azp)
 	}
 
 	c.Locals("user_id", info.ID)
@@ -120,6 +143,19 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) er
 		}
 	}
 	return c.Next()
+}
+
+// logMissingAudience writes the line a wizard counts per client: azp and the
+// mode, nothing else (AudienceMissingEvent).
+func (a *authMiddlewareImpl) logMissingAudience(azp string) {
+	if azp == "" {
+		azp = "none"
+	}
+	a.logger.Warn().
+		Str("event", AudienceMissingEvent).
+		Str("azp", azp).
+		Str("mode", string(a.audience)).
+		Msg("v1 token aud does not name SkyMail")
 }
 
 // displayName is what the caller is called: a person's token carries their

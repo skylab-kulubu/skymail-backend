@@ -86,6 +86,10 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid Keycloak configuration")
 	}
+	audienceMode, err := middlewares.AudienceModeFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid v1 token audience configuration")
+	}
 	if migrationConfig.Mode == migrations.ModeApply {
 		version, migrationErr := migrations.Run(ctx, cfg.DatabaseURL, migrationConfig.BaselineVersion)
 		if migrationErr != nil {
@@ -113,7 +117,8 @@ func main() {
 		Plain:     cfg.SMTPPlain,
 	}, mailSender)
 
-	authMiddleware := middlewares.NewAuthMiddleware(cfg.KeycloakClientID, cfg.KeycloakRealmURL)
+	log.Info().Str("mode", string(audienceMode)).Str("audience", cfg.KeycloakClientID).Msg("v1 token audience check (V1_TOKEN_AUDIENCE_MODE)")
+	authMiddleware := middlewares.NewAuthMiddleware(cfg.KeycloakClientID, cfg.KeycloakRealmURL, audienceMode)
 	gateConfig, err := accessgate.ConfigFromEnv(config.Value, cfg.KeycloakRealmURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid account access gate configuration")
