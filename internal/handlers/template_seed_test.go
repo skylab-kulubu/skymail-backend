@@ -158,7 +158,7 @@ func TestASeedIsRefusedWhileAnOperatorsDraftIsNewerThanTheLastSeed(t *testing.T)
 	}
 
 	after := templateRow(t, db, seeded.ID)
-	if after.HtmlContent != before.HtmlContent || after.Subject != before.Subject || after.UpdatedAt != before.UpdatedAt ||
+	if after.HtmlContent != before.HtmlContent || after.Subject != before.Subject || !after.UpdatedAt.Equal(before.UpdatedAt) ||
 		*after.PublishedVersionID != *before.PublishedVersionID {
 		t.Fatalf("a refused seed changed the row: %+v", after)
 	}
@@ -570,7 +570,7 @@ func TestARefusedSeedIsKeptOnTheTemplateUntilASeedGoesThrough(t *testing.T) {
 		t.Fatalf("the template by key is served with seed_refusal %+v, want %+v", byKey, first)
 	}
 	row := templateRow(t, db, seeded.ID)
-	if row.UpdatedAt != seeded.UpdatedAt {
+	if !row.UpdatedAt.Equal(seeded.UpdatedAt) {
 		t.Fatalf("recording a refusal moved updated_at: %v, was %v", row.UpdatedAt, seeded.UpdatedAt)
 	}
 
