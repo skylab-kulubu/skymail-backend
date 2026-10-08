@@ -1,0 +1,76 @@
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer push to the same pull request makes the older run pointless.
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The job's name is the check's name, which is what a branch protection rule
+  # asks for.
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # The integration tests start their own throwaway PostgreSQL and Redis
+      # containers through the runner's Docker (internal/testpostgres), so
+      # there is no `services:` database. Pulling the images now keeps them
+      # off the tests' clock.
+      - name: Start fetching what the integration tests use
+        run: |
+          for image in postgres:17-alpine redis:7-alpine; do
+            nohup docker pull --quiet "$image" >/dev/null 2>&1 &
+          done
+
+      - uses: actions/checkout@v4
+
+      # The newest 1.25 patch release, which is what the Dockerfile builds
+      # with (golang:1.25-alpine). go.mod's `go 1.25.0` is only the minimum.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          check-latest: true
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-formatted:"
+            echo "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # The binary the Dockerfile builds, the way it builds it.
+      - name: go build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+        run: go build -o "$RUNNER_TEMP/skymail-backend" .
+
+      # The runner's clock is UTC; the tests must pass there as well as in
+      # Europe/Istanbul.
+      - name: go test
+        shell: bash
+        run: go test -count=1 -timeout 15m -v ./... 2>&1 | tee "$RUNNER_TEMP/test.log"
+
+      # A test that cannot reach Docker skips itself and the run stays green,
+      # which would mean the database tests did not run. Fail on any skip.
+      - name: No test may skip
+        run: |
+          if grep -E '^\s*--- SKIP' "$RUNNER_TEMP/test.log"; then
+            echo "A test was skipped (often for want of Docker); see above."
+            exit 1
+          fi
