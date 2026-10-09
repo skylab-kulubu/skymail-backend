@@ -15,6 +15,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
+	"github.com/skylab-kulubu/skymail-backend/internal/health"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 )
 
@@ -232,7 +233,7 @@ func TestPublicDocsLivenessAndReadinessBehavior(t *testing.T) {
 
 	gate := &routeTestGate{decision: accessgate.Unavailable, readyErr: errors.New("contract mismatch")}
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
-	registerPublicRoutes(app, gate)
+	registerPublicRoutes(app, gate, nil)
 
 	for _, path := range []string{"/health", "/docs/openapi.json"} {
 		response, err := app.Test(httptest.NewRequest(fiber.MethodGet, path, nil))
@@ -268,10 +269,68 @@ func TestReadinessIsProcessOnlyWhenGateIsOff(t *testing.T) {
 	t.Parallel()
 
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
-	registerPublicRoutes(app, nil)
+	registerPublicRoutes(app, nil, nil)
 	response, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/ready", nil))
 	if err != nil || response.StatusCode != fiber.StatusNoContent {
 		t.Fatalf("response=%v err=%v", response, err)
+	}
+}
+
+type readyTestDatabase struct{ err error }
+
+func (d readyTestDatabase) Ping(context.Context) error { return d.err }
+
+func readyStatus(t *testing.T, app *fiber.App, path string) int {
+	t.Helper()
+	response, err := app.Test(httptest.NewRequest(fiber.MethodGet, path, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	return response.StatusCode
+}
+
+// /ready is the task and its database, then the account access gate (enforce
+// mode only); ?gate=skip, the container's health check, leaves the gate out.
+// /health stays 204 whatever (release checks read it), and nothing says why.
+func TestReadinessAsksTheDatabaseAndTheGateUnlessSkipped(t *testing.T) {
+	t.Parallel()
+
+	down := health.NewReadiness(readyTestDatabase{err: errors.New("connection refused")}, health.Options{})
+	gate := &routeTestGate{readyErr: nil}
+	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
+	registerPublicRoutes(app, gate, down)
+	for _, path := range []string{"/ready", "/ready?gate=skip"} {
+		if got := readyStatus(t, app, path); got != fiber.StatusServiceUnavailable {
+			t.Fatalf("database down: GET %s = %d, want 503", path, got)
+		}
+	}
+	if gate.ready != 0 {
+		t.Fatalf("the gate was asked %d times with the database down", gate.ready)
+	}
+	if got := readyStatus(t, app, "/health"); got != fiber.StatusNoContent {
+		t.Fatalf("database down: GET /health = %d, want 204", got)
+	}
+
+	up := health.NewReadiness(readyTestDatabase{}, health.Options{})
+	gateDown := &routeTestGate{readyErr: errors.New("contract mismatch")}
+	app = fiber.New(fiber.Config{ErrorHandler: errorHandler})
+	registerPublicRoutes(app, gateDown, up)
+	if got := readyStatus(t, app, "/ready"); got != fiber.StatusServiceUnavailable || gateDown.ready != 1 {
+		t.Fatalf("gate down: GET /ready = %d (gate asked %d), want 503 after asking it", got, gateDown.ready)
+	}
+	if got := readyStatus(t, app, "/ready?gate=skip"); got != fiber.StatusNoContent || gateDown.ready != 1 {
+		t.Fatalf("gate down: GET /ready?gate=skip = %d (gate asked %d), want 204 without asking it", got, gateDown.ready)
+	}
+
+	up.Drain()
+	for _, path := range []string{"/ready", "/ready?gate=skip"} {
+		if got := readyStatus(t, app, path); got != fiber.StatusServiceUnavailable {
+			t.Fatalf("draining: GET %s = %d, want 503", path, got)
+		}
+	}
+	if got := readyStatus(t, app, "/health"); got != fiber.StatusNoContent {
+		t.Fatalf("draining: GET /health = %d, want 204", got)
 	}
 }
 
