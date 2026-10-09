@@ -131,8 +131,10 @@ func TestStartFirstOverlapSendsEveryRowOnce(t *testing.T) {
 	captureMailerLogs(t)
 	db, ids := pendingQueue(t, 24)
 	relay := newRelay()
+	// A worker makes its SMTP client at startup; deliver replaces the send.
+	smtp := startFakeSMTP(t).config()
 
-	old := mailer.NewMailer(db, mailer.SMTPConfig{}, mailer.SenderOn)
+	old := mailer.NewMailer(db, smtp, mailer.SenderOn)
 	mailer.SetDeliver(old, relay.deliverAfter("old", 150*time.Millisecond))
 	startMailer(t, old, 3)
 	old.Wake()
@@ -149,7 +151,7 @@ func TestStartFirstOverlapSendsEveryRowOnce(t *testing.T) {
 		t.Fatalf("old task holds %d rows, want 1 to 3: one per worker", heldByOld)
 	}
 
-	replacement := mailer.NewMailer(db, mailer.SMTPConfig{}, mailer.SenderOn)
+	replacement := mailer.NewMailer(db, smtp, mailer.SenderOn)
 	if mailer.Claimant(replacement) == mailer.Claimant(old) {
 		t.Fatalf("two processes share the claimant %q", mailer.Claimant(old))
 	}
@@ -189,9 +191,11 @@ func TestRowsOfAHungTaskGoToAnotherTaskOnlyAfterTheLease(t *testing.T) {
 	logs := captureMailerLogs(t)
 	db, ids := pendingQueue(t, 2)
 	relay := newRelay()
+	// A worker makes its SMTP client at startup; deliver replaces the send.
+	smtp := startFakeSMTP(t).config()
 
 	release := make(chan struct{})
-	hung := mailer.NewMailer(db, mailer.SMTPConfig{}, mailer.SenderOn)
+	hung := mailer.NewMailer(db, smtp, mailer.SenderOn)
 	mailer.SetDeliver(hung, func(ctx context.Context, job database.MailQueue) error {
 		select {
 		case <-release:
@@ -213,7 +217,7 @@ func TestRowsOfAHungTaskGoToAnotherTaskOnlyAfterTheLease(t *testing.T) {
 	})
 
 	// Within the lease another task, starting, leaves them to the hung one.
-	second := mailer.NewMailer(db, mailer.SMTPConfig{}, mailer.SenderOn)
+	second := mailer.NewMailer(db, smtp, mailer.SenderOn)
 	mailer.SetDeliver(second, relay.deliverAfter("second", 0))
 	startMailer(t, second, 3)
 	second.Wake()
@@ -232,7 +236,7 @@ func TestRowsOfAHungTaskGoToAnotherTaskOnlyAfterTheLease(t *testing.T) {
 		`UPDATE mail_queue SET claimed_at = NOW() - INTERVAL '11 minutes'`); err != nil {
 		t.Fatal(err)
 	}
-	third := mailer.NewMailer(db, mailer.SMTPConfig{}, mailer.SenderOn)
+	third := mailer.NewMailer(db, smtp, mailer.SenderOn)
 	mailer.SetDeliver(third, relay.deliverAfter("third", 0))
 	startMailer(t, third, 3)
 	waitFor(t, "both rows to be sent", 20*time.Second, func() bool {

@@ -78,10 +78,11 @@ func TestClaimTakesAtMostMaxRowsAndLeasesThemToTheProcess(t *testing.T) {
 	if len(taken) != 2 {
 		t.Fatalf("took %d rows, want 2", len(taken))
 	}
+	// The two due longest; RETURNING keeps no order.
+	if !(taken[0].ID == ids[0] && taken[1].ID == ids[1]) && !(taken[0].ID == ids[1] && taken[1].ID == ids[0]) {
+		t.Errorf("took %s and %s, want the two due longest, %s and %s", taken[0].ID, taken[1].ID, ids[0], ids[1])
+	}
 	for i, row := range taken {
-		if row.ID != ids[i] {
-			t.Errorf("row %d = %s, want the oldest due %s", i, row.ID, ids[i])
-		}
 		if row.ClaimedBy == nil || *row.ClaimedBy != "skymail-a-1" || row.ClaimedAt == nil {
 			t.Errorf("row %d claim = %v at %v, want skymail-a-1 now", i, row.ClaimedBy, row.ClaimedAt)
 		} else if age := time.Since(*row.ClaimedAt); age < -time.Minute || age > time.Minute {
