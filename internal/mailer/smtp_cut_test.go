@@ -27,6 +27,7 @@ type scriptedRelay struct {
 
 	mu      sync.Mutex
 	taken   int
+	verbs   []string
 	stalled chan struct{}
 	dropped chan struct{}
 }
@@ -80,6 +81,9 @@ func (r *scriptedRelay) serve(conn net.Conn) {
 			return
 		}
 		verb := strings.ToUpper(strings.Fields(strings.TrimSpace(line) + " x")[0])
+		r.mu.Lock()
+		r.verbs = append(r.verbs, verb)
+		r.mu.Unlock()
 		if verb == r.stallOn {
 			close(r.stalled)
 			// Says nothing more; returns once the client drops the
@@ -114,6 +118,18 @@ func (r *scriptedRelay) serve(conn net.Conn) {
 			reply("250 OK")
 		}
 	}
+}
+
+// saw reports whether the relay was sent verb.
+func (r *scriptedRelay) saw(verb string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, v := range r.verbs {
+		if v == verb {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *scriptedRelay) mailsTaken() int {
@@ -197,34 +213,57 @@ func TestShutdownCutsTheSMTPConversationOfASendInProgress(t *testing.T) {
 	}
 }
 
-// A relay that took the mail (250 after DATA) has it: the row is sent even
-// when the QUIT after it stalls and shutdown cuts the connection, never left
-// processing to go out a second time after the lease.
-func TestAMailTheRelayTookIsSentEvenIfQUITIsCutOff(t *testing.T) {
-	captureMailerLogs(t)
-	db, ids := pendingQueue(t, 1)
-	relay := startScriptedRelay(t, "QUIT")
-	m := mailer.NewMailer(db, relayConfig(relay), mailer.SenderOn)
-	plainSMTP(m)
-	ctx, cut := context.WithCancel(context.Background())
-	t.Cleanup(cut)
-	m.Start(ctx, 1)
-	m.Wake()
-	select {
-	case <-relay.stalled:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the send did not reach QUIT")
-	}
-	if n := relay.mailsTaken(); n != 1 {
-		t.Fatalf("the relay took %d mails before QUIT, want 1", n)
-	}
+// What go-mail says after the relay's 250 to DATA: RSET (and, unless
+// WithoutNoop, a NOOP before it), then QUIT. None of it is the mail.
+var afterTheMail = []string{"NOOP", "RSET", "QUIT"}
 
-	cut()
-	waitFor(t, "the row to be marked sent", 5*time.Second, func() bool {
-		return leaseRows(t, db)[ids[0]].Status == "sent"
-	})
-	if row := leaseRows(t, db)[ids[0]]; row.Attempts != 0 {
-		t.Fatalf("row = %+v, want sent with no failed attempt", row)
+// A relay that took the mail (250 after DATA) has it: the row is sent even
+// when what go-mail says after it stalls and shutdown cuts the connection,
+// never left processing to go out a second time once the lease runs out.
+func TestAMailTheRelayTookIsSentEvenIfWhatFollowsIsCutOff(t *testing.T) {
+	for _, stallOn := range afterTheMail {
+		t.Run(stallOn, func(t *testing.T) {
+			captureMailerLogs(t)
+			db, ids := pendingQueue(t, 1)
+			relay := startScriptedRelay(t, stallOn)
+			m := mailer.NewMailer(db, relayConfig(relay), mailer.SenderOn)
+			plainSMTP(m)
+			ctx, cut := context.WithCancel(context.Background())
+			t.Cleanup(cut)
+			m.Start(ctx, 1)
+			m.Wake()
+			select {
+			case <-relay.stalled:
+				// The relay took the mail and stopped answering.
+			case <-time.After(3 * time.Second):
+				// Nothing it stalls on was said: the send went through.
+			}
+			cut()
+			waitFor(t, "the row to be marked sent", 5*time.Second, func() bool {
+				return leaseRows(t, db)[ids[0]].Status == "sent"
+			})
+			if row := leaseRows(t, db)[ids[0]]; row.Attempts != 0 {
+				t.Fatalf("row = %+v, want sent with no failed attempt", row)
+			}
+			if n := relay.mailsTaken(); n != 1 {
+				t.Fatalf("the relay took %d mails, want 1", n)
+			}
+
+			// The lease runs out; another task finds nothing to send again.
+			if _, err := db.Conn.Exec(context.Background(),
+				`UPDATE mail_queue SET claimed_at = NOW() - INTERVAL '11 minutes'`); err != nil {
+				t.Fatal(err)
+			}
+			second := startScriptedRelay(t, "")
+			next := mailer.NewMailer(db, relayConfig(second), mailer.SenderOn)
+			plainSMTP(next)
+			startMailer(t, next, 1)
+			next.Wake()
+			time.Sleep(time.Second)
+			if n := second.mailsTaken() + relay.mailsTaken(); n != 1 {
+				t.Fatalf("the mail went out %d times in all, want once", n)
+			}
+		})
 	}
 }
 
@@ -273,37 +312,50 @@ func TestCancellingASendEndsItsSMTPConversation(t *testing.T) {
 	}
 }
 
-// A mail the relay took is sent, whatever happens to the QUIT after it: a
-// QUIT that fails or is cut off is no failed send (a retry would mail the
-// person twice).
+// A mail the relay took is sent, whatever happens to what go-mail says after
+// it (NOOP, RSET, QUIT): one of them failing, stalling or being cut off is no
+// failed send (a retry would mail the person twice). SkyMail sends no NOOP.
 func TestASendIsDoneOnceTheRelayTookTheMail(t *testing.T) {
-	relay := startScriptedRelay(t, "QUIT")
-	m := mailer.NewMailer(nil, relayConfig(relay), mailer.SenderOn)
-	plainSMTP(m)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sent := make(chan error, 1)
-	go func() {
-		sent <- mailer.SendOnce(ctx, m, database.MailQueue{
-			ID: uuid.New(), RecipientFullName: "Alıcı", RecipientEmail: "alici@example.com",
-			Subject: "Konu", Body: "Gövde",
+	for _, stallOn := range afterTheMail {
+		t.Run(stallOn, func(t *testing.T) {
+			relay := startScriptedRelay(t, stallOn)
+			m := mailer.NewMailer(nil, relayConfig(relay), mailer.SenderOn)
+			plainSMTP(m)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			sent := make(chan error, 1)
+			go func() {
+				sent <- mailer.SendOnce(ctx, m, database.MailQueue{
+					ID: uuid.New(), RecipientFullName: "Alıcı", RecipientEmail: "alici@example.com",
+					Subject: "Konu", Body: "Gövde",
+				})
+			}()
+			var err error
+			select {
+			case <-relay.stalled:
+				cancel()
+				select {
+				case err = <-sent:
+				case <-time.After(3 * time.Second):
+					t.Fatalf("a send stalled on %s did not end when cancelled", stallOn)
+				}
+			case err = <-sent:
+				// Nothing it stalls on was said: the send went through.
+				if stallOn != "NOOP" {
+					t.Fatalf("the send ended (%v) before the relay stalled on %s", err, stallOn)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatalf("the send neither reached %s nor ended", stallOn)
+			}
+			if err != nil {
+				t.Fatalf("a send whose mail the relay took = %v, want success", err)
+			}
+			if n := relay.mailsTaken(); n != 1 {
+				t.Fatalf("the relay took %d mails, want 1", n)
+			}
+			if relay.saw("NOOP") {
+				t.Fatal("the send said NOOP; SkyMail's client is WithoutNoop")
+			}
 		})
-	}()
-	select {
-	case <-relay.stalled:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the send did not reach QUIT")
-	}
-	cancel()
-	select {
-	case err := <-sent:
-		if err != nil {
-			t.Fatalf("a send whose mail the relay took = %v, want success", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("a send stalled on QUIT did not end when cancelled")
-	}
-	if n := relay.mailsTaken(); n != 1 {
-		t.Fatalf("the relay took %d mails, want 1", n)
 	}
 }

@@ -806,6 +806,10 @@ func (m *mailerImpl) newSMTPClient() (*mail.Client, error) {
 		mail.WithUsername(m.smtpConfig.User),
 		mail.WithPassword(m.smtpConfig.Password),
 		mail.WithTLSPolicy(mail.TLSMandatory),
+		// go-mail otherwise says NOOP before the mail and again after the
+		// relay took it (before RSET): one more round trip that can only
+		// fail a send that has gone through.
+		mail.WithoutNoop(),
 	}, m.clientOptions...)
 	return mail.NewClient(m.smtpConfig.Host, options...)
 }
@@ -985,10 +989,17 @@ func (m *mailerImpl) sendEmail(ctx context.Context, client *mail.Client, job dat
 	}
 	defer func() { _ = client.CloseWithSMTPClient(smtpClient) }()
 	if err := client.SendWithSMTPClient(smtpClient, msg); err != nil {
-		return fmt.Errorf("send failed: %w", err)
+		if !msg.IsDelivered() {
+			return fmt.Errorf("send failed: %w", err)
+		}
+		// The relay took the mail with the 250 after DATA; what failed is
+		// the RSET go-mail says after it (the relay hung up, or the
+		// shutdown cut the connection). Retrying would mail the person
+		// twice.
+		m.logger.Warn().Err(err).Str("job_id", job.ID.String()).
+			Msg("The relay took the mail; the SMTP exchange after it failed: counted as sent")
 	}
-	// The relay took the mail with the 250 after DATA. A QUIT that fails
-	// or is cut off after it is no failed send: retrying would mail the
-	// person twice (go-mail's DialAndSend reports it as one).
+	// Nor is a QUIT that fails or is cut off a failed send (go-mail's
+	// DialAndSend reports it as one).
 	return nil
 }

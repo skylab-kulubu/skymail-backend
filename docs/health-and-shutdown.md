@@ -153,8 +153,10 @@ ends the conversation then and there:
   have taken it; the row goes again after the lease, so the person may get it
   twice, as after a crash. That window is a round trip;
 - once the relay has answered `250`, the mail is sent, whatever happens to
-  the QUIT after it: a QUIT that fails, stalls or is cut off is no failed
-  send. The worker writes `sent` with a context of its own (5 s, not the
+  what go-mail says after it (`RSET`, then `QUIT`; SkyMail's client sends no
+  `NOOP`, `mail.WithoutNoop`): one of them failing, stalling or being cut
+  off, or the relay hanging up, is no failed send (go-mail marks the message
+  delivered at the `250`, `Msg.IsDelivered`; a warning is logged). The worker writes `sent` with a context of its own (5 s, not the
   cancelled one) within the 3 s left before 25 s, normally in milliseconds.
   If even that does not land (the database is gone too), the row goes again
   after the lease.
