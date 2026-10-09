@@ -82,6 +82,12 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid mail sender configuration")
 	}
+	// How long a queue row this process takes stays its own: past it, another
+	// process may put the row back and send it.
+	queueLease, err := mailer.QueueLeaseFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid mail queue lease configuration")
+	}
 	keycloakAdminURL, err := keycloak.ParseAdminURL(cfg.KeycloakAdminURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid Keycloak configuration")
@@ -115,7 +121,7 @@ func main() {
 		Password:  cfg.SMTPPass,
 		FQDN:      cfg.SMTPFQDN,
 		Plain:     cfg.SMTPPlain,
-	}, mailSender)
+	}, mailSender, mailer.WithQueueLease(queueLease))
 
 	log.Info().Str("mode", string(audienceMode)).Str("audience", cfg.KeycloakClientID).Msg("v1 token audience check (V1_TOKEN_AUDIENCE_MODE)")
 	authMiddleware := middlewares.NewAuthMiddleware(cfg.KeycloakClientID, cfg.KeycloakRealmURL, audienceMode)
@@ -188,8 +194,9 @@ func main() {
 	registerMailTaskRoutes(api, authMiddleware, mailHandler)
 	registerMailApprovalRoutes(api, authMiddleware, approvalHandler)
 
-	// Paused (MAIL_SENDER=paused), this only resets the rows left processing:
-	// the API, /ready and the erase endpoint serve as ever, and nothing is sent.
+	// Paused (MAIL_SENDER=paused), this only puts back the processing rows
+	// whose lease ran out: the API, /ready and the erase endpoint serve as
+	// ever, and nothing is sent.
 	mailerService.Start(ctx, 3)
 	go expireMailApprovals(ctx, approvalHandler, time.Minute)
 

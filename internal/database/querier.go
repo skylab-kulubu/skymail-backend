@@ -176,7 +176,10 @@ type Querier interface {
 	// the seed's upsert can judge the template before it writes: every other
 	// writer of the template waits until it has. No row: the key is new.
 	LockTemplateByKey(ctx context.Context, key *string) (Template, error)
-	ProcessQueueItems(ctx context.Context) ([]MailQueue, error)
+	// Takes up to max_rows due rows for one process, leased to it: claimed_by
+	// names the process, claimed_at starts the lease. The process asks for as many
+	// rows as it has idle workers, so no row waits taken in a process's memory.
+	ProcessQueueItems(ctx context.Context, arg ProcessQueueItemsParams) ([]MailQueue, error)
 	// Publishes a draft: marks it published and copies it onto the template row,
 	// which the send path reads — its name, subject and render. react_email_content,
 	// the column the old panel edits, gets the JSX source only when JSX is the
@@ -239,7 +242,10 @@ type Querier interface {
 	RemoveOperatorRequiredVariable(ctx context.Context, arg RemoveOperatorRequiredVariableParams) (Template, error)
 	RemoveRecipientFromMailingListByID(ctx context.Context, arg RemoveRecipientFromMailingListByIDParams) error
 	RescheduleMailQueueItem(ctx context.Context, arg RescheduleMailQueueItemParams) (int, error)
-	ResetDeadJobs(ctx context.Context) error
+	// Puts back to pending the processing rows whose lease has run out: the
+	// process that took them is gone, or a restored dump holds them so. A row
+	// another process took within the lease is left to it.
+	ResetDeadJobs(ctx context.Context, leaseSeconds int) (int64, error)
 	RestoreMailingList(ctx context.Context, id uuid.UUID) (MailingList, error)
 	RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, error)
 	// A resubmission: what would be sent, as the submitter now fills it in,
@@ -250,14 +256,24 @@ type Querier interface {
 	// A NULL deadline leaves the request's deadline as it is.
 	SetMailApprovalState(ctx context.Context, arg SetMailApprovalStateParams) (MailApproval, error)
 	SetMailApprovalVariables(ctx context.Context, arg SetMailApprovalVariablesParams) (MailApproval, error)
-	SetMailQueueItemFailed(ctx context.Context, arg SetMailQueueItemFailedParams) error
-	SetMailQueueItemSent(ctx context.Context, id uuid.UUID) error
+	SetMailQueueItemFailed(ctx context.Context, arg SetMailQueueItemFailedParams) (int64, error)
+	// The three outcomes of a send are written only by the claim that holds the
+	// row: still processing, claimed by this process, at the claimed_at the claim
+	// returned. A claim whose lease ran out changes nothing once the row was put
+	// back or taken again, by another process or by this one (claimed_at differs
+	// then); zero rows says so. A sent or failed row keeps its claim: the process
+	// that finished it.
+	SetMailQueueItemSent(ctx context.Context, arg SetMailQueueItemSentParams) (int64, error)
 	// Keeps an internal list from being archived while a send to it is checked
 	// and queued. No row: the id is not an internal list's.
 	ShareLockMailingList(ctx context.Context, id uuid.UUID) (MailingList, error)
 	// Keeps a template from being published over, archived or changed while a
 	// send of it is checked and queued; other sends of it share the lock.
 	ShareLockTemplate(ctx context.Context, id uuid.UUID) (Template, error)
+	// A processing row without claimed_at was taken by an image from before the
+	// lease, or comes from a dump made before it. Its lease starts now, the first
+	// time a process sees it: the image that took it may be sending it still.
+	StartLeaseOnUnclaimedJobs(ctx context.Context) (int64, error)
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
 	UpdateRecipient(ctx context.Context, arg UpdateRecipientParams) (Recipient, error)
 	UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) (Template, error)
