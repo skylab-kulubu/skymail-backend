@@ -25,3 +25,9 @@ func SetSendBudget(m Transactional, budget time.Duration) { m.(*mailerImpl).send
 
 // DialWithin is the dialler the workers give go-mail.
 var DialWithin = dialWithin
+
+// StartWithoutWorkers starts m taking rows for slots workers without running
+// any: what the dispatcher takes waits in the channel.
+func StartWithoutWorkers(m Transactional, ctx context.Context, slots int) {
+	m.(*mailerImpl).start(ctx, slots, 0)
+}

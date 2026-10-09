@@ -2890,6 +2890,36 @@ func (q *Queries) RecordTemplateRowAsVersion(ctx context.Context, arg RecordTemp
 	return result.RowsAffected(), nil
 }
 
+const releaseMailQueueItem = `-- name: ReleaseMailQueueItem :execrows
+UPDATE mail_queue
+SET status     = 'pending',
+    claimed_at = NULL,
+    claimed_by = NULL
+WHERE id = $1
+  AND status = 'processing'
+  AND claimed_by = $2::text
+  AND claimed_at = $3::timestamptz
+`
+
+type ReleaseMailQueueItemParams struct {
+	ID        uuid.UUID `json:"id"`
+	ClaimedBy string    `json:"claimed_by"`
+	ClaimedAt time.Time `json:"claimed_at"`
+}
+
+// Gives back a row this process took and never began to send: at shutdown,
+// a row the dispatcher handed to the workers' channel that no worker took.
+// It is pending again at once, with its attempts and due time as they were,
+// so another process sends it without waiting out the lease. Fenced like the
+// outcomes: only this claim of the row.
+func (q *Queries) ReleaseMailQueueItem(ctx context.Context, arg ReleaseMailQueueItemParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseMailQueueItem, arg.ID, arg.ClaimedBy, arg.ClaimedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const removeOperatorRequiredVariable = `-- name: RemoveOperatorRequiredVariable :one
 UPDATE templates
 SET operator_required_variables = array_remove(operator_required_variables, $1::text)

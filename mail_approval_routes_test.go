@@ -1495,7 +1495,7 @@ func TestANotificationThatCannotGoOutSaysWhy(t *testing.T) {
 // is in it with its answer.
 func TestOpenAPIDocumentDescribesMailApproval(t *testing.T) {
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
-	registerPublicRoutes(app, nil)
+	registerPublicRoutes(app, nil, nil)
 
 	response, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/docs/openapi.json", nil))
 	if err != nil {

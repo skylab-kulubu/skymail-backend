@@ -138,7 +138,7 @@ func TestSendSummaryIsServedWithMailsRead(t *testing.T) {
 
 func TestOpenAPIDocumentDescribesTheSendSummaryAndStatusFilter(t *testing.T) {
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
-	registerPublicRoutes(app, nil)
+	registerPublicRoutes(app, nil, nil)
 
 	response, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/docs/openapi.json", nil))
 	if err != nil {
