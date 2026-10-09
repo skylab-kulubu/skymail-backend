@@ -55,7 +55,11 @@ yüzden geri dönüşte şemayı geri almak gerekmez.
    bırakır ve sonra o satırı eski bir `claimed_at` ile `processing` yapabilir.
    Yeni görev böyle bir satırı kirası dolmuş sayıp eski görev gönderirken
    `pending`'e geri alır (çift e-posta). Temizlik bu satırları damgalama yoluna
-   sokar (kira ilk görüldükleri an başlar):
+   sokar (kira ilk görüldükleri an başlar). **Bu `UPDATE`'i yalnız eski imaj
+   çalışırken, yeni imajı deploy etmeden önce koşun.** Yeni imaj ayaktayken
+   koşulursa onun canlı taleplerinin `claimed_at`'i silinir: sonuç yazımları 0
+   satır döner, satırlar yeniden damgalanır ve bir kira sonra `pending`'e
+   geri alınır (çift e-posta).
 
    ```sql
    UPDATE mail_queue SET claimed_at = NULL, claimed_by = NULL WHERE status IN ('pending', 'processing');
@@ -76,3 +80,8 @@ UPDATE schema_migrations SET version = 20260925200000, dirty = false;
 
 Değer, başarısız migration'dan bir önceki sürümdür; `db/migrations`'daki
 sıraya bakın.
+
+Sürüm kirli kaldıkça **eski imaj da `apply` modunda açılmaz** (o da kirli
+sürümü görüp durur); eski imaja dönmek tek başına kurtarmaz. Kurtarma bitene
+kadar her deploy ve yeniden başlama, gece sır rotasyonunun yeniden deploy'ları
+dahil, başarısız olur (start-first'te çalışan görev ayakta kalır).
