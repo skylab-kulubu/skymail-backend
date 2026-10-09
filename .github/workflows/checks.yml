@@ -53,6 +53,16 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # internal/database is generated from query.sql and db/migrations by the
+      # sqlc the generated files name; a change to one without the other fails
+      # here.
+      - uses: sqlc-dev/setup-sqlc@v4
+        with:
+          sqlc-version: "1.31.1"
+
+      - name: sqlc diff
+        run: sqlc diff
+
       # The binary the Dockerfile builds, the way it builds it.
       - name: go build
         env:

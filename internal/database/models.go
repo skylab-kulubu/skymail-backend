@@ -298,6 +298,8 @@ type MailQueue struct {
 	CreatedAt         *time.Time          `json:"created_at"`
 	Attempts          int                 `json:"attempts"`
 	NextAttemptAt     time.Time           `json:"next_attempt_at"`
+	ClaimedAt         *time.Time          `json:"claimed_at"`
+	ClaimedBy         *string             `json:"claimed_by"`
 }
 
 type MailTask struct {

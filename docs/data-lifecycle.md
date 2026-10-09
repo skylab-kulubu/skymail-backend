@@ -335,8 +335,13 @@ API.
 
 Paused, SkyMail:
 
-- still puts the rows left `processing` back to `pending` at startup, as the
-  sender always does;
+- still puts back to `pending` the `processing` rows whose queue lease has
+  run out (`MAIL_QUEUE_LEASE`, 10 minutes by default; README), at startup and
+  every fifth of the lease after, as the sender always does. A row within its
+  lease is left alone: under Dokploy's start-first deploy the old task is
+  still sending what it took. A `processing` row without `claimed_at` (taken
+  by an image from before the lease, or from a dump made before it) gets its
+  lease started when it is first seen and goes back one lease later;
 - starts no dispatcher and no workers, so nothing is sent. Mail sent through
   the API, Keycloak's reset and verification mails among it, is queued and
   stays `pending`;
@@ -372,8 +377,11 @@ one run.
    `--before` in step 4. Then `pg_restore` the dump.
 3. **Deploy.** SkyMail starts on the restored database, still paused: any
    pending migrations run, and rows the dump held as `processing` go back to
-   `pending`. A redeploy in between, by the secret rotator for example, stays
-   paused too, since the environment has not changed.
+   `pending` once their lease has run out (at once for a dump older than the
+   lease; one lease after startup for a row the dump holds without
+   `claimed_at`). Step 4 closes them either way. A redeploy in between, by the
+   secret rotator for example, stays paused too, since the environment has
+   not changed.
 4. **Close the restored queue.** On the Dokploy host, run the command in
    SkyMail's own container (with `sudo` if your user cannot run `docker`), a
    dry run first and then with `--apply`. Set `APP` to the SkyMail backend's
