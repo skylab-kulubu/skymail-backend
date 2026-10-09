@@ -131,6 +131,8 @@ type mailerImpl struct {
 	// only workers - taken rows, so no taken row waits in this process.
 	workers int
 	taken   atomic.Int32
+	// sendBudget bounds one SMTP send from dial to QUIT (SendBudget).
+	sendBudget time.Duration
 	// deliver sends one row; tests replace it.
 	deliver func(ctx context.Context, client *mail.Client, job database.MailQueue) error
 }
@@ -161,6 +163,7 @@ func NewMailer(db *database.Store, smtpConfig SMTPConfig, sender Sender, opts ..
 		sender:     sender,
 		claimant:   newClaimant(),
 		lease:      DefaultQueueLease,
+		sendBudget: SendBudget,
 	}
 	m.deliver = m.sendEmail
 	for _, opt := range opts {
@@ -206,7 +209,10 @@ func (m *mailerImpl) Start(ctx context.Context, workerCount int) {
 // reapEvery is how often a process looks for rows whose lease has run out: a
 // fifth of the lease, so a dead process's rows wait at most a lease and a fifth.
 func (m *mailerImpl) reapEvery() time.Duration {
-	return m.lease / 5
+	if every := m.lease / 5; every >= time.Second {
+		return every
+	}
+	return time.Second
 }
 
 func (m *mailerImpl) startReaper(ctx context.Context) {
@@ -631,6 +637,7 @@ func (m *mailerImpl) startWorker(ctx context.Context, id int) {
 	}
 
 	client, err := mail.NewClient(m.smtpConfig.Host,
+		mail.WithDialContextFunc(dialWithin(m.sendBudget)),
 		mail.WithPort(m.smtpConfig.Port),
 		mail.WithSMTPAuth(authType),
 		mail.WithUsername(m.smtpConfig.User),
@@ -661,6 +668,7 @@ func (m *mailerImpl) startWorker(ctx context.Context, id int) {
 				n, err := m.db.SetMailQueueItemSent(ctx, database.SetMailQueueItemSentParams{
 					ID:        job.ID,
 					ClaimedBy: m.claimant,
+					ClaimedAt: claimedAt(job),
 				})
 				if err != nil {
 					logger.Err(err).Str("job_id", job.ID.String()).Msg("Failed to set mail queue item")
@@ -674,6 +682,15 @@ func (m *mailerImpl) startWorker(ctx context.Context, id int) {
 			m.wake()
 		}
 	}
+}
+
+// claimedAt is when this claim of job began, which with the claimant fences
+// its outcome: a later claim of the row, by this process too, has another.
+func claimedAt(job database.MailQueue) time.Time {
+	if job.ClaimedAt == nil {
+		return time.Time{}
+	}
+	return *job.ClaimedAt
 }
 
 // lostLease logs an outcome this process could not record: the row's lease
@@ -707,6 +724,7 @@ func (m *mailerImpl) recordSendFailure(ctx context.Context, logger *zerolog.Logg
 		n, err := m.db.SetMailQueueItemFailed(ctx, database.SetMailQueueItemFailedParams{
 			ID:        job.ID,
 			ClaimedBy: m.claimant,
+			ClaimedAt: claimedAt(job),
 			Error:     &reason,
 		})
 		if err != nil {
@@ -721,6 +739,7 @@ func (m *mailerImpl) recordSendFailure(ctx context.Context, logger *zerolog.Logg
 	attempts, err := m.db.RescheduleMailQueueItem(ctx, database.RescheduleMailQueueItemParams{
 		ID:           job.ID,
 		ClaimedBy:    m.claimant,
+		ClaimedAt:    claimedAt(job),
 		Error:        &reason,
 		DelaySeconds: int(delay.Seconds()),
 	})

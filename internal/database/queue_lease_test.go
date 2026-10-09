@@ -184,56 +184,89 @@ func TestUnclaimedProcessingRowGetsALeaseBeforeItCanBeReset(t *testing.T) {
 	}
 }
 
-// A process whose lease ran out may still finish its send. What it then
-// records must not overwrite the row another process has taken since.
-func TestOnlyTheProcessHoldingARowRecordsItsOutcome(t *testing.T) {
-	db := lifecycleStore(t)
+// takeOne claims the one due row for claimant and returns the claim.
+func takeOne(t *testing.T, db *Store, claimant string) MailQueue {
+	t.Helper()
+	taken, err := db.ProcessQueueItems(context.Background(), ProcessQueueItemsParams{ClaimedBy: claimant, MaxRows: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(taken) != 1 || taken[0].ClaimedAt == nil {
+		t.Fatalf("%s took %v, want one claimed row", claimant, taken)
+	}
+	return taken[0]
+}
+
+// expire runs a row's lease out and lets the reset put it back.
+func expire(t *testing.T, db *Store, id uuid.UUID) {
+	t.Helper()
+	claimedAgo(t, db, id, 11*time.Minute)
+	if n, err := db.ResetDeadJobs(context.Background(), leaseSeconds); err != nil || n != 1 {
+		t.Fatalf("reset %d rows (%v), want 1", n, err)
+	}
+}
+
+// stale tries all three outcomes for an old claim and checks none lands.
+func stale(t *testing.T, db *Store, old MailQueue) {
+	t.Helper()
 	ctx := context.Background()
-	ids := queueOf(t, db, 1)
-	row := ids[0]
-
-	if _, err := db.ProcessQueueItems(ctx, ProcessQueueItemsParams{ClaimedBy: "skymail-a-1", MaxRows: 1}); err != nil {
-		t.Fatal(err)
-	}
-	claimedAgo(t, db, row, 11*time.Minute)
-	if _, err := db.ResetDeadJobs(ctx, leaseSeconds); err != nil {
-		t.Fatal(err)
-	}
-
-	// Put back, nobody's yet: the old holder records nothing.
-	if n, err := db.SetMailQueueItemSent(ctx, SetMailQueueItemSentParams{ID: row, ClaimedBy: "skymail-a-1"}); err != nil || n != 0 {
-		t.Fatalf("stale sent touched %d rows (%v)", n, err)
-	}
-	if c := claimOf(t, db, row); c.Status != "pending" {
-		t.Fatalf("row after a stale sent = %+v, want pending", c)
-	}
-
-	if _, err := db.ProcessQueueItems(ctx, ProcessQueueItemsParams{ClaimedBy: "skymail-b-2", MaxRows: 1}); err != nil {
-		t.Fatal(err)
-	}
 	reason := "dial tcp: connection refused"
-	if n, err := db.SetMailQueueItemSent(ctx, SetMailQueueItemSentParams{ID: row, ClaimedBy: "skymail-a-1"}); err != nil || n != 0 {
+	if n, err := db.SetMailQueueItemSent(ctx, SetMailQueueItemSentParams{
+		ID: old.ID, ClaimedBy: *old.ClaimedBy, ClaimedAt: *old.ClaimedAt,
+	}); err != nil || n != 0 {
 		t.Fatalf("stale sent touched %d rows (%v)", n, err)
 	}
-	if n, err := db.SetMailQueueItemFailed(ctx, SetMailQueueItemFailedParams{ID: row, ClaimedBy: "skymail-a-1", Error: &reason}); err != nil || n != 0 {
+	if n, err := db.SetMailQueueItemFailed(ctx, SetMailQueueItemFailedParams{
+		ID: old.ID, ClaimedBy: *old.ClaimedBy, ClaimedAt: *old.ClaimedAt, Error: &reason,
+	}); err != nil || n != 0 {
 		t.Fatalf("stale failed touched %d rows (%v)", n, err)
 	}
 	if _, err := db.RescheduleMailQueueItem(ctx, RescheduleMailQueueItemParams{
-		ID: row, ClaimedBy: "skymail-a-1", Error: &reason, DelaySeconds: 30,
+		ID: old.ID, ClaimedBy: *old.ClaimedBy, ClaimedAt: *old.ClaimedAt, Error: &reason, DelaySeconds: 30,
 	}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("stale reschedule err = %v, want no rows", err)
 	}
+}
+
+func attemptsOf(t *testing.T, db *Store, id uuid.UUID) int {
+	t.Helper()
+	var attempts int
+	if err := db.Conn.QueryRow(context.Background(), `SELECT attempts FROM mail_queue WHERE id = $1`, id).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	return attempts
+}
+
+// A process whose lease ran out may still finish its send. What it then
+// records must not overwrite the row another process has taken since.
+func TestOnlyTheClaimHoldingARowRecordsItsOutcome(t *testing.T) {
+	db := lifecycleStore(t)
+	ctx := context.Background()
+	row := queueOf(t, db, 1)[0]
+
+	first := takeOne(t, db, "skymail-a-1")
+	expire(t, db, row)
+
+	// Put back, nobody's yet: the old claim records nothing.
+	stale(t, db, first)
+	if c := claimOf(t, db, row); c.Status != "pending" {
+		t.Fatalf("row after stale outcomes = %+v, want pending", c)
+	}
+
+	// Taken by another process: the old claim still records nothing.
+	second := takeOne(t, db, "skymail-b-2")
+	stale(t, db, first)
 	if c := claimOf(t, db, row); c.Status != "processing" || c.ClaimedBy == nil || *c.ClaimedBy != "skymail-b-2" {
 		t.Fatalf("row after the stale outcomes = %+v, want processing for skymail-b-2", c)
 	}
-	var attempts int
-	if err := db.Conn.QueryRow(ctx, `SELECT attempts FROM mail_queue WHERE id = $1`, row).Scan(&attempts); err != nil || attempts != 0 {
-		t.Fatalf("attempts = %d (%v), want 0", attempts, err)
+	if n := attemptsOf(t, db, row); n != 0 {
+		t.Fatalf("attempts = %d, want 0", n)
 	}
 
 	// The holder reschedules: back to pending, unclaimed, one attempt.
+	reason := "421 try again later"
 	attempts, err := db.RescheduleMailQueueItem(ctx, RescheduleMailQueueItemParams{
-		ID: row, ClaimedBy: "skymail-b-2", Error: &reason, DelaySeconds: 0,
+		ID: row, ClaimedBy: *second.ClaimedBy, ClaimedAt: *second.ClaimedAt, Error: &reason, DelaySeconds: 0,
 	})
 	if err != nil || attempts != 1 {
 		t.Fatalf("reschedule = %d (%v), want 1", attempts, err)
@@ -243,17 +276,48 @@ func TestOnlyTheProcessHoldingARowRecordsItsOutcome(t *testing.T) {
 	}
 
 	// Taken again and sent by its holder: sent, and it keeps who sent it.
-	if _, err := db.ProcessQueueItems(ctx, ProcessQueueItemsParams{ClaimedBy: "skymail-b-2", MaxRows: 1}); err != nil {
-		t.Fatal(err)
-	}
-	if n, err := db.SetMailQueueItemSent(ctx, SetMailQueueItemSentParams{ID: row, ClaimedBy: "skymail-b-2"}); err != nil || n != 1 {
+	third := takeOne(t, db, "skymail-b-2")
+	if n, err := db.SetMailQueueItemSent(ctx, SetMailQueueItemSentParams{
+		ID: row, ClaimedBy: *third.ClaimedBy, ClaimedAt: *third.ClaimedAt,
+	}); err != nil || n != 1 {
 		t.Fatalf("sent touched %d rows (%v), want 1", n, err)
 	}
 	if c := claimOf(t, db, row); c.Status != "sent" || c.ClaimedBy == nil || *c.ClaimedBy != "skymail-b-2" {
 		t.Fatalf("sent row = %+v", c)
 	}
-	// A sent row is final: a late failure from anyone changes nothing.
-	if n, err := db.SetMailQueueItemFailed(ctx, SetMailQueueItemFailedParams{ID: row, ClaimedBy: "skymail-b-2", Error: &reason}); err != nil || n != 0 {
+	// A sent row is final: a late failure from its own claim changes nothing.
+	if n, err := db.SetMailQueueItemFailed(ctx, SetMailQueueItemFailedParams{
+		ID: row, ClaimedBy: *third.ClaimedBy, ClaimedAt: *third.ClaimedAt, Error: &reason,
+	}); err != nil || n != 0 {
 		t.Fatalf("failed over a sent row touched %d rows (%v)", n, err)
+	}
+}
+
+// One process can take the same row twice: its first claim's lease ran out
+// (a worker stuck in a send) and its own dispatcher took the row again. The
+// first claim's late outcome must not land on the second.
+func TestALateOutcomeOfTheSameProcessesEarlierClaimDoesNotLand(t *testing.T) {
+	db := lifecycleStore(t)
+	ctx := context.Background()
+	row := queueOf(t, db, 1)[0]
+
+	first := takeOne(t, db, "skymail-a-1")
+	expire(t, db, row)
+	second := takeOne(t, db, "skymail-a-1")
+	if second.ClaimedAt.Equal(*first.ClaimedAt) {
+		t.Fatalf("both claims at %v", first.ClaimedAt)
+	}
+
+	stale(t, db, first)
+	if c := claimOf(t, db, row); c.Status != "processing" || c.ClaimedAt == nil || !c.ClaimedAt.Equal(*second.ClaimedAt) {
+		t.Fatalf("row after the first claim's outcomes = %+v, want the second claim's", c)
+	}
+	if n := attemptsOf(t, db, row); n != 0 {
+		t.Fatalf("attempts = %d, want 0", n)
+	}
+	if n, err := db.SetMailQueueItemSent(ctx, SetMailQueueItemSentParams{
+		ID: row, ClaimedBy: *second.ClaimedBy, ClaimedAt: *second.ClaimedAt,
+	}); err != nil || n != 1 {
+		t.Fatalf("the second claim's sent touched %d rows (%v), want 1", n, err)
 	}
 }

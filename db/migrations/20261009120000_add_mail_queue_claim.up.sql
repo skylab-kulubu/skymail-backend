@@ -11,6 +11,17 @@
 -- queue as before. A processing row without claimed_at was taken by such an
 -- image (or comes from a dump made before this migration); the mailer stamps
 -- it the first time it sees it and lets the lease run from there.
+--
+-- ADD COLUMN takes mail_queue's ACCESS EXCLUSIVE lock for an instant, but it
+-- waits behind any transaction holding the table, and every queue query waits
+-- behind it. lock_timeout gives up after 5 seconds instead: the migration
+-- fails, rolled back, the new task does not start and the old one keeps
+-- sending. golang-migrate leaves the version dirty then; recovery is in
+-- docs/database-migrations.md. RESET puts the session's setting back.
+SET lock_timeout = '5s';
+
 ALTER TABLE mail_queue
     ADD COLUMN claimed_at TIMESTAMPTZ,
     ADD COLUMN claimed_by TEXT;
+
+RESET lock_timeout;

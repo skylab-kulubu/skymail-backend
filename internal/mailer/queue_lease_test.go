@@ -3,6 +3,7 @@ package mailer_test
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -265,5 +266,35 @@ func TestRowsOfAHungTaskGoToAnotherTaskOnlyAfterTheLease(t *testing.T) {
 		if row.Status != "sent" || row.Attempts != 0 || row.ClaimedBy == mailer.Claimant(hung) {
 			t.Errorf("row %s = %+v, want sent by another task with no failed attempt", id, row)
 		}
+	}
+}
+
+// A relay that takes the connection and then says nothing holds a send only
+// for the send budget: the send fails and the row is rescheduled within its
+// lease, instead of a worker waiting past the lease while another process
+// sends the row too.
+func TestASendToAStalledRelayEndsWithinTheBudget(t *testing.T) {
+	captureMailerLogs(t)
+	db, ids := pendingQueue(t, 1)
+	relay := silentRelay(t)
+
+	m := mailer.NewMailer(db, mailer.SMTPConfig{
+		FromEmail: "skymail@example.com",
+		Host:      "127.0.0.1",
+		Port:      relay.Addr().(*net.TCPAddr).Port,
+		User:      "skymail",
+		Password:  "test",
+		FQDN:      "example.com",
+	}, mailer.SenderOn)
+	mailer.SetSendBudget(m, time.Second)
+	startMailer(t, m, 1)
+	m.Wake()
+
+	waitFor(t, "the stalled send to be rescheduled", 15*time.Second, func() bool {
+		row := leaseRows(t, db)[ids[0]]
+		return row.Status == "pending" && row.Attempts == 1
+	})
+	if row := leaseRows(t, db)[ids[0]]; row.ClaimedBy != "" {
+		t.Fatalf("rescheduled row = %+v, want unclaimed", row)
 	}
 }

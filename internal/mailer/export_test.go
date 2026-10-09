@@ -2,6 +2,7 @@ package mailer
 
 import (
 	"context"
+	"time"
 
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/wneessen/go-mail"
@@ -17,3 +18,10 @@ func SetDeliver(m Transactional, deliver func(ctx context.Context, job database.
 
 // Claimant is the name m writes in the rows it takes (claimed_by).
 func Claimant(m Transactional) string { return m.(*mailerImpl).claimant }
+
+// SetSendBudget bounds m's SMTP sends to budget instead of SendBudget. Call it
+// before Start.
+func SetSendBudget(m Transactional, budget time.Duration) { m.(*mailerImpl).sendBudget = budget }
+
+// DialWithin is the dialler the workers give go-mail.
+var DialWithin = dialWithin

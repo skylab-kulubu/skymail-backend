@@ -2960,6 +2960,7 @@ SET status          = 'pending',
 WHERE id = $3
   AND status = 'processing'
   AND claimed_by = $4::text
+  AND claimed_at = $5::timestamptz
 RETURNING attempts
 `
 
@@ -2968,6 +2969,7 @@ type RescheduleMailQueueItemParams struct {
 	DelaySeconds int       `json:"delay_seconds"`
 	ID           uuid.UUID `json:"id"`
 	ClaimedBy    string    `json:"claimed_by"`
+	ClaimedAt    time.Time `json:"claimed_at"`
 }
 
 func (q *Queries) RescheduleMailQueueItem(ctx context.Context, arg RescheduleMailQueueItemParams) (int, error) {
@@ -2976,6 +2978,7 @@ func (q *Queries) RescheduleMailQueueItem(ctx context.Context, arg RescheduleMai
 		arg.DelaySeconds,
 		arg.ID,
 		arg.ClaimedBy,
+		arg.ClaimedAt,
 	)
 	var attempts int
 	err := row.Scan(&attempts)
@@ -3207,16 +3210,23 @@ SET status    = 'failed',
 WHERE id = $2
   AND status = 'processing'
   AND claimed_by = $3::text
+  AND claimed_at = $4::timestamptz
 `
 
 type SetMailQueueItemFailedParams struct {
 	Error     *string   `json:"error"`
 	ID        uuid.UUID `json:"id"`
 	ClaimedBy string    `json:"claimed_by"`
+	ClaimedAt time.Time `json:"claimed_at"`
 }
 
 func (q *Queries) SetMailQueueItemFailed(ctx context.Context, arg SetMailQueueItemFailedParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setMailQueueItemFailed, arg.Error, arg.ID, arg.ClaimedBy)
+	result, err := q.db.Exec(ctx, setMailQueueItemFailed,
+		arg.Error,
+		arg.ID,
+		arg.ClaimedBy,
+		arg.ClaimedAt,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -3230,20 +3240,23 @@ SET status    = 'sent',
 WHERE id = $1
   AND status = 'processing'
   AND claimed_by = $2::text
+  AND claimed_at = $3::timestamptz
 `
 
 type SetMailQueueItemSentParams struct {
 	ID        uuid.UUID `json:"id"`
 	ClaimedBy string    `json:"claimed_by"`
+	ClaimedAt time.Time `json:"claimed_at"`
 }
 
-// The three outcomes of a send are written only by the process that holds the
-// row: still processing and claimed by it. A process whose lease ran out and
-// whose row was put back, or taken by another process, changes nothing; zero
-// rows says so. A sent or failed row keeps its claim: the process that
-// finished it.
+// The three outcomes of a send are written only by the claim that holds the
+// row: still processing, claimed by this process, at the claimed_at the claim
+// returned. A claim whose lease ran out changes nothing once the row was put
+// back or taken again, by another process or by this one (claimed_at differs
+// then); zero rows says so. A sent or failed row keeps its claim: the process
+// that finished it.
 func (q *Queries) SetMailQueueItemSent(ctx context.Context, arg SetMailQueueItemSentParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setMailQueueItemSent, arg.ID, arg.ClaimedBy)
+	result, err := q.db.Exec(ctx, setMailQueueItemSent, arg.ID, arg.ClaimedBy, arg.ClaimedAt)
 	if err != nil {
 		return 0, err
 	}

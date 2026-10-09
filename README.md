@@ -148,11 +148,15 @@ olmaz). Gönderimin sonucunu (gönderildi, başarısız, yeniden dene) yalnız s
 tutan süreç yazar; kirası dolmuş ve satırı başkasına geçmiş süreç hiçbir şey
 yazmaz, bir uyarı logu bırakır.
 
-`MAIL_QUEUE_LEASE` bir Go süresidir (`10m`, `15m`, `1h`); yoksa `10m`. `1m`'den
-kısa ya da okunamayan değer açılışı durdurur. Kira tek bir SMTP gönderimini
-kapsamalıdır; ölen bir sürecin satırları en geç kira + kiranın beşte biri
-sonra başka süreçle gider. Kira uzatma yoktur: süreç satırı ancak bir işçi
-göndermeye hazırken alır.
+`MAIL_QUEUE_LEASE` bir Go süresidir (`10m`, `15m`, `1h`); yoksa `10m`. `5m`'den
+kısa, `24h`'ten uzun ya da okunamayan değer açılışı durdurur. Bir SMTP
+gönderimi bağlantıdan QUIT'e (karşılama, EHLO, STARTTLS, AUTH, DATA dahil) en
+çok 1 dakika sürer: bağlantının deadline'ı go-mail'in kendi deadline'larıyla
+uzamaz. Böylece kira her zaman gönderimden uzundur. Ölen bir sürecin satırları
+en geç kira + kiranın beşte biri sonra başka süreçle gider. Kira uzatma yoktur:
+süreç satırı ancak bir işçi göndermeye hazırken alır. Sonuç yazımı
+`claimed_by` ile birlikte `claimed_at`'e de bakar: aynı süreç satırı kirası
+dolduktan sonra yeniden almışsa eski talebin sonucu da yazılmaz.
 
 ## Veritabanı migration'ları
 

@@ -257,11 +257,12 @@ type Querier interface {
 	SetMailApprovalState(ctx context.Context, arg SetMailApprovalStateParams) (MailApproval, error)
 	SetMailApprovalVariables(ctx context.Context, arg SetMailApprovalVariablesParams) (MailApproval, error)
 	SetMailQueueItemFailed(ctx context.Context, arg SetMailQueueItemFailedParams) (int64, error)
-	// The three outcomes of a send are written only by the process that holds the
-	// row: still processing and claimed by it. A process whose lease ran out and
-	// whose row was put back, or taken by another process, changes nothing; zero
-	// rows says so. A sent or failed row keeps its claim: the process that
-	// finished it.
+	// The three outcomes of a send are written only by the claim that holds the
+	// row: still processing, claimed by this process, at the claimed_at the claim
+	// returned. A claim whose lease ran out changes nothing once the row was put
+	// back or taken again, by another process or by this one (claimed_at differs
+	// then); zero rows says so. A sent or failed row keeps its claim: the process
+	// that finished it.
 	SetMailQueueItemSent(ctx context.Context, arg SetMailQueueItemSentParams) (int64, error)
 	// Keeps an internal list from being archived while a send to it is checked
 	// and queued. No row: the id is not an internal list's.

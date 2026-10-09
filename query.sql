@@ -700,18 +700,20 @@ SELECT count(*) FILTER (WHERE was = 'pending')    AS pending,
        count(*) FILTER (WHERE created_at IS NULL)  AS undated
 FROM closed;
 
--- The three outcomes of a send are written only by the process that holds the
--- row: still processing and claimed by it. A process whose lease ran out and
--- whose row was put back, or taken by another process, changes nothing; zero
--- rows says so. A sent or failed row keeps its claim: the process that
--- finished it.
+-- The three outcomes of a send are written only by the claim that holds the
+-- row: still processing, claimed by this process, at the claimed_at the claim
+-- returned. A claim whose lease ran out changes nothing once the row was put
+-- back or taken again, by another process or by this one (claimed_at differs
+-- then); zero rows says so. A sent or failed row keeps its claim: the process
+-- that finished it.
 -- name: SetMailQueueItemSent :execrows
 UPDATE mail_queue
 SET status    = 'sent',
     error     = NULL
 WHERE id = sqlc.arg(id)
   AND status = 'processing'
-  AND claimed_by = sqlc.arg(claimed_by)::text;
+  AND claimed_by = sqlc.arg(claimed_by)::text
+  AND claimed_at = sqlc.arg(claimed_at)::timestamptz;
 
 -- name: SetMailQueueItemFailed :execrows
 UPDATE mail_queue
@@ -720,7 +722,8 @@ SET status    = 'failed',
     error     = sqlc.narg(error)::text
 WHERE id = sqlc.arg(id)
   AND status = 'processing'
-  AND claimed_by = sqlc.arg(claimed_by)::text;
+  AND claimed_by = sqlc.arg(claimed_by)::text
+  AND claimed_at = sqlc.arg(claimed_at)::timestamptz;
 
 -- name: RescheduleMailQueueItem :one
 UPDATE mail_queue
@@ -733,6 +736,7 @@ SET status          = 'pending',
 WHERE id = sqlc.arg(id)
   AND status = 'processing'
   AND claimed_by = sqlc.arg(claimed_by)::text
+  AND claimed_at = sqlc.arg(claimed_at)::timestamptz
 RETURNING attempts;
 
 -- name: CreateMailTask :many
