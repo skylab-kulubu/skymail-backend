@@ -650,6 +650,21 @@ SET status     = 'pending',
 WHERE status = 'processing'
   AND claimed_at < NOW() - (sqlc.arg(lease_seconds)::int * INTERVAL '1 second');
 
+-- Gives back a row this process took and never began to send: at shutdown,
+-- a row the dispatcher handed to the workers' channel that no worker took.
+-- It is pending again at once, with its attempts and due time as they were,
+-- so another process sends it without waiting out the lease. Fenced like the
+-- outcomes: only this claim of the row.
+-- name: ReleaseMailQueueItem :execrows
+UPDATE mail_queue
+SET status     = 'pending',
+    claimed_at = NULL,
+    claimed_by = NULL
+WHERE id = sqlc.arg(id)
+  AND status = 'processing'
+  AND claimed_by = sqlc.arg(claimed_by)::text
+  AND claimed_at = sqlc.arg(claimed_at)::timestamptz;
+
 -- After a restore from backup (docs/data-lifecycle.md, Backup and restore),
 -- the queue as the dump held it: the rows still to go out, pending or
 -- processing, that were queued before the restore instant. A row without

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	htmlt "html/template"
+	"sync"
 	"sync/atomic"
 	textt "text/template"
 	"time"
@@ -112,6 +113,19 @@ type Transactional interface {
 	// transaction a Queue wrote in commits; the dispatcher's tick finds the
 	// rows anyway, only later.
 	Wake()
+	// Stop stops sending for shutdown (docs/health-and-shutdown.md): the
+	// dispatcher takes no more rows; the rows it took that no worker has
+	// begun go back to pending at once, so another process sends them
+	// without waiting out the lease; the sends in progress finish and record
+	// their outcome; the reaper stops. It returns once all that is done, or
+	// with ctx's error when ctx ends first: a send still in progress then
+	// keeps its row until the lease runs out, and ending Start's context
+	// cuts it off without counting a failed attempt. Queueing still works.
+	Stop(ctx context.Context) error
+	// Stopped closes once the dispatcher, the workers and the reaper Start
+	// began have all returned: after Stop, or once Start's context has ended
+	// and the sends it cut off have given up. It never closes without Start.
+	Stopped() <-chan struct{}
 }
 
 type mailerImpl struct {
@@ -135,6 +149,21 @@ type mailerImpl struct {
 	sendBudget time.Duration
 	// deliver sends one row; tests replace it.
 	deliver func(ctx context.Context, client *mail.Client, job database.MailQueue) error
+	// clientOptions are added to the workers' SMTP client options; tests
+	// set them.
+	clientOptions []mail.Option
+
+	// stop closes when Stop is called; stopOnce closes it. dispatching,
+	// sending and reaping are the dispatcher, the workers and the reaper,
+	// which Stop waits for.
+	stop        chan struct{}
+	stopOnce    sync.Once
+	dispatching sync.WaitGroup
+	sending     sync.WaitGroup
+	reaping     sync.WaitGroup
+	// stopped closes once the dispatcher, the workers and the reaper have
+	// all returned.
+	stopped chan struct{}
 }
 
 type SMTPConfig struct {
@@ -164,6 +193,8 @@ func NewMailer(db *database.Store, smtpConfig SMTPConfig, sender Sender, opts ..
 		claimant:   newClaimant(),
 		lease:      DefaultQueueLease,
 		sendBudget: SendBudget,
+		stop:       make(chan struct{}),
+		stopped:    make(chan struct{}),
 	}
 	m.deliver = m.sendEmail
 	for _, opt := range opts {
@@ -175,6 +206,13 @@ func NewMailer(db *database.Store, smtpConfig SMTPConfig, sender Sender, opts ..
 func (m *mailerImpl) SenderPaused() bool { return m.sender == SenderPaused }
 
 func (m *mailerImpl) Start(ctx context.Context, workerCount int) {
+	m.start(ctx, workerCount, workerCount)
+}
+
+// start takes rows for slots workers at a time and runs workers of them;
+// Start runs one per slot. Tests run none, to hold taken rows in the channel.
+func (m *mailerImpl) start(ctx context.Context, slots, workers int) {
+	workerCount := slots
 	if m.SenderPaused() {
 		m.logger.Warn().Str("sender", string(m.sender)).Str("claimant", m.claimant).
 			Msg("Mail sender paused by MAIL_SENDER=paused: mail is queued but nothing will be sent until MAIL_SENDER is removed and the service redeployed")
@@ -191,19 +229,135 @@ func (m *mailerImpl) Start(ctx context.Context, workerCount int) {
 	// one, which no worker would ever finish. Rows a process leaves behind
 	// while this one runs are found by the reaper.
 	m.reclaimExpired(ctx)
-	go m.startReaper(ctx)
+	m.reaping.Add(1)
+	go func() {
+		defer m.reaping.Done()
+		m.startReaper(ctx)
+	}()
 
 	if m.SenderPaused() {
+		m.closeWhenStopped()
 		return
 	}
 
 	m.workers = workerCount
 	m.jobs = make(chan database.MailQueue, workerCount)
-	for i := 0; i < workerCount; i++ {
-		go m.startWorker(ctx, i)
+	for i := 0; i < workers; i++ {
+		m.sending.Add(1)
+		go func() {
+			defer m.sending.Done()
+			m.startWorker(ctx, i)
+		}()
 	}
 
-	go m.startDispatcher(ctx)
+	m.dispatching.Add(1)
+	go func() {
+		defer m.dispatching.Done()
+		m.startDispatcher(ctx)
+	}()
+	m.closeWhenStopped()
+}
+
+// closeWhenStopped closes stopped once everything start began has returned.
+func (m *mailerImpl) closeWhenStopped() {
+	go func() {
+		m.dispatching.Wait()
+		m.sending.Wait()
+		m.reaping.Wait()
+		close(m.stopped)
+	}()
+}
+
+func (m *mailerImpl) Stopped() <-chan struct{} { return m.stopped }
+
+// stopping reports whether Stop was called.
+func (m *mailerImpl) stopping() bool {
+	select {
+	case <-m.stop:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *mailerImpl) Stop(ctx context.Context) error {
+	m.stopOnce.Do(func() { close(m.stop) })
+	started := time.Now()
+
+	// The dispatcher finishes the take it is in, if any, and puts what it
+	// took in the channel; after it nothing more is taken.
+	if err := waitGroup(ctx, &m.dispatching); err != nil {
+		m.logger.Warn().Err(err).Msg("Stop: the dispatcher did not stop in time")
+		return err
+	}
+	released := m.releaseWaiting(ctx)
+	if err := waitGroup(ctx, &m.sending); err != nil {
+		m.logger.Warn().Err(err).Int("released", released).Int32("in_progress", m.taken.Load()).
+			Dur("lease", m.lease).
+			Msg("Stop: sends still in progress at the deadline keep their rows until the lease runs out")
+		return err
+	}
+	// A worker that stopped between taking a row and seeing the stop gave
+	// it back itself; one that saw the stop first left the row here.
+	released += m.releaseWaiting(ctx)
+	if err := waitGroup(ctx, &m.reaping); err != nil {
+		return err
+	}
+	m.logger.Info().Int("released", released).Dur("took", time.Since(started).Round(time.Millisecond)).
+		Msg("Stopped: rows taken and not begun are pending again; sends in progress finished")
+	return nil
+}
+
+// waitGroup waits for group until ctx ends.
+func waitGroup(ctx context.Context, group *sync.WaitGroup) error {
+	done := make(chan struct{})
+	go func() {
+		group.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// releaseWaiting gives back every row waiting in the workers' channel and
+// returns how many it gave back.
+func (m *mailerImpl) releaseWaiting(ctx context.Context) int {
+	released := 0
+	for {
+		select {
+		case job := <-m.jobs:
+			if m.release(ctx, m.logger, job) {
+				released++
+			}
+		default:
+			return released
+		}
+	}
+}
+
+// release gives back a row this process took and has not begun to send: it
+// is pending again, unclaimed, with no attempt counted.
+func (m *mailerImpl) release(ctx context.Context, logger *zerolog.Logger, job database.MailQueue) bool {
+	defer m.taken.Add(-1)
+	n, err := m.db.ReleaseMailQueueItem(ctx, database.ReleaseMailQueueItemParams{
+		ID:        job.ID,
+		ClaimedBy: m.claimant,
+		ClaimedAt: claimedAt(job),
+	})
+	if err != nil {
+		logger.Err(err).Str("job_id", job.ID.String()).Dur("lease", m.lease).
+			Msg("Failed to give back a mail queue item at shutdown: it is sent after its lease runs out")
+		return false
+	}
+	if n == 0 {
+		m.lostLease(logger, job, "released")
+		return false
+	}
+	return true
 }
 
 // reapEvery is how often a process looks for rows whose lease has run out: a
@@ -221,6 +375,8 @@ func (m *mailerImpl) startReaper(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-m.stop:
 			return
 		case <-ticker.C:
 			m.reclaimExpired(ctx)
@@ -567,6 +723,10 @@ func (m *mailerImpl) startDispatcher(ctx context.Context) {
 			logger.Info().Msg("Shutting down")
 			return
 
+		case <-m.stop:
+			logger.Info().Msg("Stopped: taking no more rows")
+			return
+
 		case <-ticker.C:
 			if !m.drainQueue(ctx, &logger) {
 				return
@@ -585,6 +745,10 @@ func (m *mailerImpl) startDispatcher(ctx context.Context) {
 // drainQueue takes as many due rows as this process has idle workers. A
 // worker that finishes a row wakes the dispatcher, which takes the next.
 func (m *mailerImpl) drainQueue(ctx context.Context, logger *zerolog.Logger) bool {
+	// The tick or a nudge may win the select over a stop already made.
+	if m.stopping() {
+		return false
+	}
 	idle := m.workers - int(m.taken.Load())
 	if idle <= 0 {
 		return true
@@ -603,6 +767,9 @@ func (m *mailerImpl) drainQueue(ctx context.Context, logger *zerolog.Logger) boo
 		logger.Debug().Int("count", len(items)).Msg("Pulled pending jobs from database")
 	}
 
+	// The channel holds a row per worker and no more rows are taken than
+	// workers are idle, so this never waits on a worker; at a stop the rows
+	// are in the channel, where Stop gives them back.
 	for _, item := range items {
 		select {
 		case m.jobs <- item:
@@ -625,25 +792,32 @@ func (m *mailerImpl) wake() {
 	}
 }
 
-func (m *mailerImpl) startWorker(ctx context.Context, id int) {
-	logger := m.logger.With().Str("component", "worker").Int("worker_id", id).Logger()
-
-	var authType mail.SMTPAuthType
-
+// newSMTPClient is a worker's SMTP client: STARTTLS required, each send
+// bounded by sendBudget from its dial.
+func (m *mailerImpl) newSMTPClient() (*mail.Client, error) {
+	authType := mail.SMTPAuthLogin
 	if m.smtpConfig.Plain {
 		authType = mail.SMTPAuthPlain
-	} else {
-		authType = mail.SMTPAuthLogin
 	}
-
-	client, err := mail.NewClient(m.smtpConfig.Host,
+	options := append([]mail.Option{
 		mail.WithDialContextFunc(dialWithin(m.sendBudget)),
 		mail.WithPort(m.smtpConfig.Port),
 		mail.WithSMTPAuth(authType),
 		mail.WithUsername(m.smtpConfig.User),
 		mail.WithPassword(m.smtpConfig.Password),
 		mail.WithTLSPolicy(mail.TLSMandatory),
-	)
+		// go-mail otherwise says NOOP before the mail and again after the
+		// relay took it (before RSET): one more round trip that can only
+		// fail a send that has gone through.
+		mail.WithoutNoop(),
+	}, m.clientOptions...)
+	return mail.NewClient(m.smtpConfig.Host, options...)
+}
+
+func (m *mailerImpl) startWorker(ctx context.Context, id int) {
+	logger := m.logger.With().Str("component", "worker").Int("worker_id", id).Logger()
+
+	client, err := m.newSMTPClient()
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to create SMTP client")
 		return
@@ -656,31 +830,58 @@ func (m *mailerImpl) startWorker(ctx context.Context, id int) {
 		case <-ctx.Done():
 			logger.Info().Msg("Shutting down")
 			return
+		case <-m.stop:
+			logger.Info().Msg("Stopped")
+			return
 		case job := <-m.jobs:
-			logger.Debug().Str("job_id", job.ID.String()).Msg("Worker picked up job")
-
-			err := m.deliver(ctx, client, job)
-			if err != nil {
-				m.recordSendFailure(ctx, &logger, job, err)
-			} else {
-				logger.Debug().Str("job_id", job.ID.String()).Msg("Sent email")
-
-				n, err := m.db.SetMailQueueItemSent(ctx, database.SetMailQueueItemSentParams{
-					ID:        job.ID,
-					ClaimedBy: m.claimant,
-					ClaimedAt: claimedAt(job),
-				})
-				if err != nil {
-					logger.Err(err).Str("job_id", job.ID.String()).Msg("Failed to set mail queue item")
-				} else if n == 0 {
-					m.lostLease(&logger, job, "sent")
-				}
+			if m.stopping() {
+				// The row and the stop came together: give the row back
+				// rather than begin it.
+				m.release(ctx, &logger, job)
+				continue
 			}
+			logger.Debug().Str("job_id", job.ID.String()).Msg("Worker picked up job")
+			m.send(ctx, client, &logger, job)
 
 			// This worker is idle again: the dispatcher may take a row for it.
 			m.taken.Add(-1)
 			m.wake()
 		}
+	}
+}
+
+// outcomeTimeout bounds writing a send's outcome.
+const outcomeTimeout = 5 * time.Second
+
+// send sends job and records the outcome. The outcome is written even when
+// ctx ended as the send finished: a mail the relay took and the row not
+// saying so would go out again after the lease. A send cut off because ctx
+// ended (the process going away) is no failed attempt: the row keeps its
+// claim and is put back when the lease runs out.
+func (m *mailerImpl) send(ctx context.Context, client *mail.Client, logger *zerolog.Logger, job database.MailQueue) {
+	err := m.deliver(ctx, client, job)
+	if err != nil && ctx.Err() != nil {
+		logger.Warn().Err(err).Str("job_id", job.ID.String()).Dur("lease", m.lease).
+			Msg("Send cut off by shutdown: no attempt counted; the row is sent again after its lease runs out")
+		return
+	}
+	record, cancel := context.WithTimeout(context.WithoutCancel(ctx), outcomeTimeout)
+	defer cancel()
+	if err != nil {
+		m.recordSendFailure(record, logger, job, err)
+		return
+	}
+	logger.Debug().Str("job_id", job.ID.String()).Msg("Sent email")
+
+	n, err := m.db.SetMailQueueItemSent(record, database.SetMailQueueItemSentParams{
+		ID:        job.ID,
+		ClaimedBy: m.claimant,
+		ClaimedAt: claimedAt(job),
+	})
+	if err != nil {
+		logger.Err(err).Str("job_id", job.ID.String()).Msg("Failed to set mail queue item")
+	} else if n == 0 {
+		m.lostLease(logger, job, "sent")
 	}
 }
 
@@ -777,5 +978,28 @@ func (m *mailerImpl) sendEmail(ctx context.Context, client *mail.Client, job dat
 		msg.AddAlternativeString(mail.TypeTextHTML, *job.BodyHtml)
 	}
 
-	return client.DialAndSendWithContext(ctx, msg)
+	// The send's own context, ended when the send returns: the connection
+	// is closed when it ends (withSend), on ctx's cancellation as on any
+	// other way out, a failed dial included.
+	send, done := context.WithCancel(ctx)
+	defer done()
+	smtpClient, err := client.DialToSMTPClientWithContext(withSend(send))
+	if err != nil {
+		return fmt.Errorf("dial failed: %w", err)
+	}
+	defer func() { _ = client.CloseWithSMTPClient(smtpClient) }()
+	if err := client.SendWithSMTPClient(smtpClient, msg); err != nil {
+		if !msg.IsDelivered() {
+			return fmt.Errorf("send failed: %w", err)
+		}
+		// The relay took the mail with the 250 after DATA; what failed is
+		// the RSET go-mail says after it (the relay hung up, or the
+		// shutdown cut the connection). Retrying would mail the person
+		// twice.
+		m.logger.Warn().Err(err).Str("job_id", job.ID.String()).
+			Msg("The relay took the mail; the SMTP exchange after it failed: counted as sent")
+	}
+	// Nor is a QUIT that fails or is cut off a failed send (go-mail's
+	// DialAndSend reports it as one).
+	return nil
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/erasuretoken"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
+	"github.com/skylab-kulubu/skymail-backend/internal/health"
 	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
@@ -57,14 +58,25 @@ var swaggerDocument = sync.OnceValue(docs.SwaggerInfo.ReadDoc)
 // @host		skymail-api.yildizskylab.com
 // @BasePath	/v1
 func main() {
-	// A maintenance command instead of the server: it needs none of the
-	// server's startup, migrations included.
-	if len(os.Args) > 1 && os.Args[1] == queueCloseRestoredCommandName {
-		os.Exit(runQueueCloseRestoredFromEnv(os.Args[2:], os.Stdout))
+	// A maintenance command or the container's health check instead of the
+	// server: they need none of the server's startup, migrations included.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case queueCloseRestoredCommandName:
+			os.Exit(runQueueCloseRestoredFromEnv(os.Args[2:], os.Stdout))
+		case healthcheckCommandName:
+			os.Exit(runHealthcheck(os.Args[2:], healthcheckEnv(), os.Stderr))
+		}
 	}
 
-	ctx, cancelCtx := context.WithCancel(context.Background())
-	defer cancelCtx()
+	// SIGTERM (Docker's stop) or SIGINT ends stop; serve then shuts down in
+	// order (docs/health-and-shutdown.md). A second signal kills at once.
+	stop, releaseSignals := stopSignals()
+	defer releaseSignals()
+	go func() {
+		<-stop.Done()
+		releaseSignals()
+	}()
 
 	vld := validator.NewStructValidator()
 
@@ -97,7 +109,13 @@ func main() {
 		log.Fatal().Err(err).Msg("invalid v1 token audience configuration")
 	}
 	if migrationConfig.Mode == migrations.ModeApply {
-		version, migrationErr := migrations.Run(ctx, cfg.DatabaseURL, migrationConfig.BaselineVersion)
+		// A stop signal ends a wait for another process's migrations, never
+		// a migration under way.
+		version, migrationErr := migrations.Run(stop, cfg.DatabaseURL, migrationConfig.BaselineVersion)
+		if migrationErr != nil && stop.Err() != nil {
+			log.Info().Err(migrationErr).Msg("stop signal while waiting for another process's migrations: exiting")
+			return
+		}
 		if migrationErr != nil {
 			log.Fatal().Err(migrationErr).Msg("database migration failed")
 		}
@@ -106,11 +124,20 @@ func main() {
 		log.Warn().Msg("database migrations disabled: DATABASE_MIGRATIONS_MODE is not apply")
 	}
 
-	conn, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	conn, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("error connecting to database")
 	}
-	defer conn.Close()
+	// /ready pings on a connection of its own (docs/health-and-shutdown.md).
+	readinessDatabase, err := openReadinessDatabase(cfg.DatabaseURL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("error configuring readiness")
+	}
+	readiness := health.NewReadiness(readinessDatabase, health.Options{
+		Logf: func(format string, args ...any) { log.Warn().Msgf(format, args...) },
+	})
+	// Closed in this order once shutdown has stopped everything else.
+	var closers []closing
 
 	db := database.NewStore(conn)
 	mailerService := mailer.NewMailer(db, mailer.SMTPConfig{
@@ -135,7 +162,7 @@ func main() {
 		if redisErr != nil {
 			log.Fatal().Err(redisErr).Msg("error configuring account access gate")
 		}
-		defer redisClient.Close()
+		closers = append(closers, closing{name: "the account access gate's Redis client", close: func() { _ = redisClient.Close() }})
 		accountAccessGate = accessgate.NewRedisGate(redisClient, gateConfig.OperationTimeout)
 	}
 
@@ -173,7 +200,7 @@ func main() {
 		}))
 	*/
 
-	registerPublicRoutes(app, accountAccessGate)
+	registerPublicRoutes(app, accountAccessGate, readiness)
 	registerInternalRoutes(app, erasureHandler)
 
 	api := protectedAPI(app, authMiddleware, accountAccessGate)
@@ -194,18 +221,50 @@ func main() {
 	registerMailTaskRoutes(api, authMiddleware, mailHandler)
 	registerMailApprovalRoutes(api, authMiddleware, approvalHandler)
 
+	// The background work's context: shutdown cancels it only after the
+	// mailer has stopped (or its time ran out), which cuts off a send still
+	// in progress and leaves its row to the lease.
+	workers, stopWorkers := context.WithCancel(context.Background())
+	defer stopWorkers()
 	// Paused (MAIL_SENDER=paused), this only puts back the processing rows
 	// whose lease ran out: the API, /ready and the erase endpoint serve as
 	// ever, and nothing is sent.
-	mailerService.Start(ctx, 3)
-	go expireMailApprovals(ctx, approvalHandler, time.Minute)
+	mailerService.Start(workers, 3)
+	approvalsStopped := make(chan struct{})
+	go func() {
+		defer close(approvalsStopped)
+		expireMailApprovals(workers, approvalHandler, time.Minute)
+	}()
 
 	addr := fmt.Sprintf(":%d", 3000)
 	if cfg.AppPort != 0 {
 		addr = fmt.Sprintf(":%d", cfg.AppPort)
 	}
+	// Fiber's Listen network, opened here so that shutdown can close it.
+	ln, err := net.Listen("tcp4", addr)
+	if err != nil {
+		log.Fatal().Err(err).Msg("error starting server")
+	}
 
-	if err = app.Listen(addr); err != nil {
+	closers = append(closers,
+		closing{name: "the readiness database pool", close: readinessDatabase.Close},
+		closing{name: "the database pool", close: conn.Close},
+	)
+	err = serve(stop, app, ln, shutdownPlan{
+		Readiness:    readiness,
+		HTTPDrain:    httpDrainTimeout,
+		Total:        shutdownTimeout,
+		StopMailer:   mailerService.Stop,
+		SendCutGrace: sendCutGrace,
+		StopWorkers:  stopWorkers,
+		Wait: []stopping{
+			{name: "the mail approval expiry sweep", done: approvalsStopped},
+			{name: "the mailer's sends", done: mailerService.Stopped()},
+		},
+		Close: closers,
+		Logf:  func(format string, args ...any) { log.Info().Msgf(format, args...) },
+	})
+	if err != nil {
 		log.Fatal().Err(err).Msg("error starting server")
 	}
 }
@@ -338,13 +397,22 @@ func serverRequestID() fiber.Handler {
 	}
 }
 
-func registerPublicRoutes(app *fiber.App, gate accessgate.Reader) {
+// registerPublicRoutes serves liveness, readiness and the API docs.
+// /health is liveness: 204 while the process answers (release checks read
+// it). /ready is readiness: the task is not shutting down and its database
+// answers, then the account access gate (enforce mode only); ?gate=skip, the
+// container's health check, leaves the gate out (docs/health-and-shutdown.md).
+// A nil readiness asks no database.
+func registerPublicRoutes(app *fiber.App, gate accessgate.Reader, readiness *health.Readiness) {
 	document := swaggerDocument()
 	app.Get("/health", func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusNoContent)
 	})
 	app.Get("/ready", func(c fiber.Ctx) error {
-		if gate != nil {
+		if err := readiness.Check(c.Context()); err != nil {
+			return unavailable(c)
+		}
+		if gate != nil && c.Query("gate") != "skip" {
 			if err := gate.Ready(c.Context()); err != nil {
 				return unavailable(c)
 			}

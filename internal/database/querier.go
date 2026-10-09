@@ -236,6 +236,12 @@ type Querier interface {
 	//
 	// Affects one row when a version was recorded and none when not.
 	RecordTemplateRowAsVersion(ctx context.Context, arg RecordTemplateRowAsVersionParams) (int64, error)
+	// Gives back a row this process took and never began to send: at shutdown,
+	// a row the dispatcher handed to the workers' channel that no worker took.
+	// It is pending again at once, with its attempts and due time as they were,
+	// so another process sends it without waiting out the lease. Fenced like the
+	// outcomes: only this claim of the row.
+	ReleaseMailQueueItem(ctx context.Context, arg ReleaseMailQueueItemParams) (int64, error)
 	// Releases a variable operators marked. It cannot release a contract one: the
 	// sets never share a name, so a contract name is simply not in the operators'
 	// set, and the caller sees it in the contract set it returns.

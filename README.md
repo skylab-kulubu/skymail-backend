@@ -21,9 +21,16 @@
 
 ## Health endpoints
 
-`GET /health` is process-only liveness. `GET /ready` additionally verifies the
-exact shared account-access contract when the access gate is in `enforce` mode.
-API documentation under `/docs` remains public. See
+`GET /health` is process-only liveness (always `204`). `GET /ready` answers
+`503` while the task is shutting down or its database does not answer, and
+additionally verifies the exact shared account-access contract when the access
+gate is in `enforce` mode; `GET /ready?gate=skip` leaves the gate out and is
+what the container's health check (`skymail-backend healthcheck`, the image's
+`HEALTHCHECK`) asks. On SIGTERM the service drains HTTP, gives back the queue
+rows it took and has not begun, lets the sends in progress finish and exits
+within 25 s: run it with a stop grace period of 30 s. Details and the Swarm
+values: [`docs/health-and-shutdown.md`](docs/health-and-shutdown.md). API
+documentation under `/docs` remains public. See
 [`docs/account-access-gate.md`](docs/account-access-gate.md) for the deployment
 contract and required configuration.
 
@@ -161,9 +168,20 @@ dolduktan sonra yeniden almışsa eski talebin sonucu da yazılmaz.
 ## Veritabanı migration'ları
 
 Uygulama bekleyen migration'ları servis trafiğe açılmadan önce çalıştırabilir.
-Mevcut sürümlendirilmemiş kurulumun güvenli baseline işlemi ve gerekli environment
-değerleri için [`docs/database-migrations.md`](docs/database-migrations.md)
-belgesine bakın.
+Aynı anda açılan görevler sırayla migrate eder: biri bitirene dek ötekiler
+bekler (en çok 5 dakika), sonra yapacak iş bulmaz. Mevcut sürümlendirilmemiş
+kurulumun güvenli baseline işlemi, expand/contract kuralı ve gerekli
+environment değerleri için
+[`docs/database-migrations.md`](docs/database-migrations.md) belgesine bakın.
+
+## Veritabanı bağlantıları (`DATABASE_URL`)
+
+`DATABASE_URL` havuz sınırı taşıyabilir ve taşımalıdır:
+`postgres://…/skymail?sslmode=…&pool_max_conns=5`. Yoksa pgx'in varsayılanı
+max(4, CPU) olur. Bir görev ana havuz + `/ready`'nin kendi 1 bağlantısını
+tutar (migrate ederken geçici 1 + golang-migrate'in kendi bağlantısı);
+start-first deploy'da iki görev birlikte. `pool_*` ayarları yalnız havuza
+gider, migration bağlantıları onları atar.
 
 
 ## Katkıda Bulunanlar 🧙‍♂️
