@@ -136,6 +136,24 @@ göndermeden kapatılır: `skymail-backend queue-close-restored --before <RFC333
 yalnız `MAIL_SENDER=paused` iken çalışır. Prosedür ve `docker exec` satırları:
 [`docs/data-lifecycle.md`](docs/data-lifecycle.md#backup-and-restore).
 
+## Mail kuyruğu kirası (`MAIL_QUEUE_LEASE`)
+
+Dağıtıcı bir kuyruk satırını aldığında satır o sürecin olur: `claimed_by`
+süreci (host adı + açılışta seçilen rastgele ek), `claimed_at` alış anını
+yazar. Süreç yalnız boş işçisi kadar satır alır. `processing` bir satır ancak
+kirası dolunca (`claimed_at` kiradan eski) `pending`'e geri döner: açılışta ve
+sonra kiranın beşte birinde bir. Dokploy'un start-first deploy'unda eski görev
+o an gönderdiği satırları bitirir, yeni görev onlara dokunmaz (çift e-posta
+olmaz). Gönderimin sonucunu (gönderildi, başarısız, yeniden dene) yalnız satırı
+tutan süreç yazar; kirası dolmuş ve satırı başkasına geçmiş süreç hiçbir şey
+yazmaz, bir uyarı logu bırakır.
+
+`MAIL_QUEUE_LEASE` bir Go süresidir (`10m`, `15m`, `1h`); yoksa `10m`. `1m`'den
+kısa ya da okunamayan değer açılışı durdurur. Kira tek bir SMTP gönderimini
+kapsamalıdır; ölen bir sürecin satırları en geç kira + kiranın beşte biri
+sonra başka süreçle gider. Kira uzatma yoktur: süreç satırı ancak bir işçi
+göndermeye hazırken alır.
+
 ## Veritabanı migration'ları
 
 Uygulama bekleyen migration'ları servis trafiğe açılmadan önce çalıştırabilir.

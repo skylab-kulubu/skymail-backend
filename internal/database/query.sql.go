@@ -2485,18 +2485,28 @@ func (q *Queries) LockTemplateByKey(ctx context.Context, key *string) (Template,
 
 const processQueueItems = `-- name: ProcessQueueItems :many
 UPDATE mail_queue
-SET status = 'processing'
+SET status     = 'processing',
+    claimed_at = NOW(),
+    claimed_by = $1::text
 WHERE id IN (SELECT id
              FROM mail_queue
              WHERE status = 'pending'
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
-             LIMIT 100 FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at
+             LIMIT $2::int FOR UPDATE SKIP LOCKED)
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by
 `
 
-func (q *Queries) ProcessQueueItems(ctx context.Context) ([]MailQueue, error) {
-	rows, err := q.db.Query(ctx, processQueueItems)
+type ProcessQueueItemsParams struct {
+	ClaimedBy string `json:"claimed_by"`
+	MaxRows   int    `json:"max_rows"`
+}
+
+// Takes up to max_rows due rows for one process, leased to it: claimed_by
+// names the process, claimed_at starts the lease. The process asks for as many
+// rows as it has idle workers, so no row waits taken in a process's memory.
+func (q *Queries) ProcessQueueItems(ctx context.Context, arg ProcessQueueItemsParams) ([]MailQueue, error) {
+	rows, err := q.db.Query(ctx, processQueueItems, arg.ClaimedBy, arg.MaxRows)
 	if err != nil {
 		return nil, err
 	}
@@ -2517,6 +2527,8 @@ func (q *Queries) ProcessQueueItems(ctx context.Context) ([]MailQueue, error) {
 			&i.CreatedAt,
 			&i.Attempts,
 			&i.NextAttemptAt,
+			&i.ClaimedAt,
+			&i.ClaimedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -2942,8 +2954,12 @@ UPDATE mail_queue
 SET status          = 'pending',
     attempts        = attempts + 1,
     error           = $1::text,
-    next_attempt_at = NOW() + ($2::int * INTERVAL '1 second')
+    next_attempt_at = NOW() + ($2::int * INTERVAL '1 second'),
+    claimed_at      = NULL,
+    claimed_by      = NULL
 WHERE id = $3
+  AND status = 'processing'
+  AND claimed_by = $4::text
 RETURNING attempts
 `
 
@@ -2951,24 +2967,39 @@ type RescheduleMailQueueItemParams struct {
 	Error        *string   `json:"error"`
 	DelaySeconds int       `json:"delay_seconds"`
 	ID           uuid.UUID `json:"id"`
+	ClaimedBy    string    `json:"claimed_by"`
 }
 
 func (q *Queries) RescheduleMailQueueItem(ctx context.Context, arg RescheduleMailQueueItemParams) (int, error) {
-	row := q.db.QueryRow(ctx, rescheduleMailQueueItem, arg.Error, arg.DelaySeconds, arg.ID)
+	row := q.db.QueryRow(ctx, rescheduleMailQueueItem,
+		arg.Error,
+		arg.DelaySeconds,
+		arg.ID,
+		arg.ClaimedBy,
+	)
 	var attempts int
 	err := row.Scan(&attempts)
 	return attempts, err
 }
 
-const resetDeadJobs = `-- name: ResetDeadJobs :exec
+const resetDeadJobs = `-- name: ResetDeadJobs :execrows
 UPDATE mail_queue
-SET status = 'pending'
+SET status     = 'pending',
+    claimed_at = NULL,
+    claimed_by = NULL
 WHERE status = 'processing'
+  AND claimed_at < NOW() - ($1::int * INTERVAL '1 second')
 `
 
-func (q *Queries) ResetDeadJobs(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, resetDeadJobs)
-	return err
+// Puts back to pending the processing rows whose lease has run out: the
+// process that took them is gone, or a restored dump holds them so. A row
+// another process took within the lease is left to it.
+func (q *Queries) ResetDeadJobs(ctx context.Context, leaseSeconds int) (int64, error) {
+	result, err := q.db.Exec(ctx, resetDeadJobs, leaseSeconds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const restoreMailingList = `-- name: RestoreMailingList :one
@@ -3168,34 +3199,55 @@ func (q *Queries) SetMailApprovalVariables(ctx context.Context, arg SetMailAppro
 	return i, err
 }
 
-const setMailQueueItemFailed = `-- name: SetMailQueueItemFailed :exec
+const setMailQueueItemFailed = `-- name: SetMailQueueItemFailed :execrows
 UPDATE mail_queue
 SET status    = 'failed',
     attempts  = attempts + 1,
-    error     = $2
-WHERE id = $1
+    error     = $1::text
+WHERE id = $2
+  AND status = 'processing'
+  AND claimed_by = $3::text
 `
 
 type SetMailQueueItemFailedParams struct {
-	ID    uuid.UUID `json:"id"`
-	Error *string   `json:"error"`
+	Error     *string   `json:"error"`
+	ID        uuid.UUID `json:"id"`
+	ClaimedBy string    `json:"claimed_by"`
 }
 
-func (q *Queries) SetMailQueueItemFailed(ctx context.Context, arg SetMailQueueItemFailedParams) error {
-	_, err := q.db.Exec(ctx, setMailQueueItemFailed, arg.ID, arg.Error)
-	return err
+func (q *Queries) SetMailQueueItemFailed(ctx context.Context, arg SetMailQueueItemFailedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setMailQueueItemFailed, arg.Error, arg.ID, arg.ClaimedBy)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const setMailQueueItemSent = `-- name: SetMailQueueItemSent :exec
+const setMailQueueItemSent = `-- name: SetMailQueueItemSent :execrows
 UPDATE mail_queue
 SET status    = 'sent',
     error     = NULL
 WHERE id = $1
+  AND status = 'processing'
+  AND claimed_by = $2::text
 `
 
-func (q *Queries) SetMailQueueItemSent(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, setMailQueueItemSent, id)
-	return err
+type SetMailQueueItemSentParams struct {
+	ID        uuid.UUID `json:"id"`
+	ClaimedBy string    `json:"claimed_by"`
+}
+
+// The three outcomes of a send are written only by the process that holds the
+// row: still processing and claimed by it. A process whose lease ran out and
+// whose row was put back, or taken by another process, changes nothing; zero
+// rows says so. A sent or failed row keeps its claim: the process that
+// finished it.
+func (q *Queries) SetMailQueueItemSent(ctx context.Context, arg SetMailQueueItemSentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setMailQueueItemSent, arg.ID, arg.ClaimedBy)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const shareLockMailingList = `-- name: ShareLockMailingList :one
@@ -3255,6 +3307,24 @@ func (q *Queries) ShareLockTemplate(ctx context.Context, id uuid.UUID) (Template
 		&i.SeedRefusedPayloadSha256,
 	)
 	return i, err
+}
+
+const startLeaseOnUnclaimedJobs = `-- name: StartLeaseOnUnclaimedJobs :execrows
+UPDATE mail_queue
+SET claimed_at = NOW()
+WHERE status = 'processing'
+  AND claimed_at IS NULL
+`
+
+// A processing row without claimed_at was taken by an image from before the
+// lease, or comes from a dump made before it. Its lease starts now, the first
+// time a process sees it: the image that took it may be sending it still.
+func (q *Queries) StartLeaseOnUnclaimedJobs(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, startLeaseOnUnclaimedJobs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateMailingList = `-- name: UpdateMailingList :one

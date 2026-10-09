@@ -669,7 +669,8 @@ func countingSMTP(t *testing.T) (mailer.SMTPConfig, *atomic.Int32) {
 }
 
 // A restore brings the queue back as the dump held it: mail to the person a
-// worker had taken (processing) and mail still waiting (pending). SkyMail
+// worker had taken (processing, its lease long run out by the time the dump
+// is restored) and mail still waiting (pending). SkyMail
 // starts with MAIL_SENDER=paused and core replays the erasure (account erasure
 // spec §8). The replay has to finish with 200 — not wait with 202 on a row no
 // worker will ever finish — and nothing may reach the person.
@@ -697,13 +698,13 @@ func TestErasureReplayAfterARestoreCompletesWithTheSenderPaused(t *testing.T) {
 		INSERT INTO mail_tasks (id, sent_by, template_id, mail_list_id, body_variables) VALUES
 		    ('40000000-0000-4000-8000-00000000000a', '8d4f2c1e-7a6b-4c5d-9e8f-000000000001', '10000000-0000-4000-8000-000000000001',
 		     '20000000-0000-4000-8000-000000000001', '{}');
-		INSERT INTO mail_queue (id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status) VALUES
+		INSERT INTO mail_queue (id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, claimed_at) VALUES
 		    ('50000000-0000-4000-8000-0000000000a1', '40000000-0000-4000-8000-00000000000a', 'Deniz Yılmaz', 'deniz@example.com',
-		     'Duyuru', 'Merhaba', '<p>Merhaba</p>', 'processing'),
+		     'Duyuru', 'Merhaba', '<p>Merhaba</p>', 'processing', NOW() - INTERVAL '1 hour'),
 		    ('50000000-0000-4000-8000-0000000000a2', '40000000-0000-4000-8000-00000000000a', 'Deniz Yılmaz', 'deniz.yilmaz@std.yildiz.edu.tr',
-		     'Duyuru', 'Merhaba', '<p>Merhaba</p>', 'pending'),
+		     'Duyuru', 'Merhaba', '<p>Merhaba</p>', 'pending', NULL),
 		    ('50000000-0000-4000-8000-0000000000a3', '40000000-0000-4000-8000-00000000000a', 'Ayşe Kaya', 'ayse@example.com',
-		     'Duyuru', 'Merhaba', '<p>Merhaba</p>', 'pending');`); err != nil {
+		     'Duyuru', 'Merhaba', '<p>Merhaba</p>', 'pending', NULL);`); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.Set(ctx, accessgate.MarkerKey(erasureSubject), accessgate.MarkerValue, 0).Err(); err != nil {
@@ -776,11 +777,11 @@ func TestErasureReplayWithTheSenderPausedWaitsOnlyOnOthersMailNamingThePerson(t 
 		    ('30000000-0000-4000-8000-000000000001', 'Deniz Yılmaz', 'deniz@example.com');
 		INSERT INTO mail_tasks (id, sent_by, body_variables) VALUES
 		    ('40000000-0000-4000-8000-00000000000a', '8d4f2c1e-7a6b-4c5d-9e8f-000000000001', '{}');
-		INSERT INTO mail_queue (id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status) VALUES
+		INSERT INTO mail_queue (id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, claimed_at) VALUES
 		    ('50000000-0000-4000-8000-0000000000a1', '40000000-0000-4000-8000-00000000000a', 'Deniz Yılmaz', 'deniz@example.com',
-		     'Duyuru', 'Merhaba', '<p>Merhaba</p>', 'processing'),
+		     'Duyuru', 'Merhaba', '<p>Merhaba</p>', 'processing', NOW() - INTERVAL '1 hour'),
 		    ('50000000-0000-4000-8000-0000000000a3', '40000000-0000-4000-8000-00000000000a', 'Ayşe Kaya', 'ayse@example.com',
-		     'Mail onayı', 'Deniz Yılmaz bir gönderim sundu', '<p>Deniz Yılmaz bir gönderim sundu</p>', 'pending');`); err != nil {
+		     'Mail onayı', 'Deniz Yılmaz bir gönderim sundu', '<p>Deniz Yılmaz bir gönderim sundu</p>', 'pending', NULL);`); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.Set(ctx, accessgate.MarkerKey(erasureSubject), accessgate.MarkerValue, 0).Err(); err != nil {

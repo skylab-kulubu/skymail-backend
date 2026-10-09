@@ -100,7 +100,8 @@ func captureMailerLogs(t *testing.T) *mailerLogs {
 }
 
 // restoredQueue is a database as a restored dump leaves it: one row a worker
-// had taken (processing) and one still waiting (pending), both due now.
+// had taken (processing, its lease long run out by the time the dump is
+// restored) and one still waiting (pending), both due now.
 func restoredQueue(t *testing.T) *database.Store {
 	t.Helper()
 	ctx := context.Background()
@@ -111,11 +112,12 @@ func restoredQueue(t *testing.T) *database.Store {
 	if _, err := postgres.Pool.Exec(ctx, `
 		INSERT INTO mail_tasks (id, sent_by, body_variables)
 		VALUES ('40000000-0000-4000-8000-000000000001', '31ef736f-72da-4a40-8791-d523199cf9f0', '{}');
-		INSERT INTO mail_queue (id, task_id, recipient_full_name, recipient_email, subject, body, status, next_attempt_at) VALUES
+		INSERT INTO mail_queue (id, task_id, recipient_full_name, recipient_email, subject, body, status, next_attempt_at,
+		                        claimed_at, claimed_by) VALUES
 		    ('50000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-000000000001', 'Alıcı Bir', 'alici1@example.com',
-		     'Konu', 'Gövde', 'processing', NOW() - INTERVAL '1 minute'),
+		     'Konu', 'Gövde', 'processing', NOW() - INTERVAL '1 minute', NOW() - INTERVAL '1 hour', 'skymail-before-the-dump'),
 		    ('50000000-0000-4000-8000-000000000002', '40000000-0000-4000-8000-000000000001', 'Alıcı İki', 'alici2@example.com',
-		     'Konu', 'Gövde', 'pending', NOW() - INTERVAL '1 minute');`); err != nil {
+		     'Konu', 'Gövde', 'pending', NOW() - INTERVAL '1 minute', NULL, NULL);`); err != nil {
 		t.Fatal(err)
 	}
 	return database.NewStore(postgres.Pool)
@@ -170,8 +172,9 @@ func TestPausedStartResetsProcessingRowsAndSendsNothing(t *testing.T) {
 	}
 	startMailer(t, m, 3)
 
-	// The processing row has no worker to finish it. It goes back to pending,
-	// or the erase endpoint would answer 202 for it forever.
+	// The processing row has no worker to finish it and its lease ran out. It
+	// goes back to pending, or the erase endpoint would answer 202 for it
+	// forever.
 	want := map[string]queueRow{
 		"50000000-0000-4000-8000-000000000001": {Status: "pending"},
 		"50000000-0000-4000-8000-000000000002": {Status: "pending"},

@@ -614,21 +614,41 @@ FROM mailing_list_recipients
 WHERE mail_list_id = $1
   AND recipient_id = $2;
 
+-- Takes up to max_rows due rows for one process, leased to it: claimed_by
+-- names the process, claimed_at starts the lease. The process asks for as many
+-- rows as it has idle workers, so no row waits taken in a process's memory.
 -- name: ProcessQueueItems :many
 UPDATE mail_queue
-SET status = 'processing'
+SET status     = 'processing',
+    claimed_at = NOW(),
+    claimed_by = sqlc.arg(claimed_by)::text
 WHERE id IN (SELECT id
              FROM mail_queue
              WHERE status = 'pending'
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
-             LIMIT 100 FOR UPDATE SKIP LOCKED)
+             LIMIT sqlc.arg(max_rows)::int FOR UPDATE SKIP LOCKED)
 RETURNING *;
 
--- name: ResetDeadJobs :exec
+-- A processing row without claimed_at was taken by an image from before the
+-- lease, or comes from a dump made before it. Its lease starts now, the first
+-- time a process sees it: the image that took it may be sending it still.
+-- name: StartLeaseOnUnclaimedJobs :execrows
 UPDATE mail_queue
-SET status = 'pending'
-WHERE status = 'processing';
+SET claimed_at = NOW()
+WHERE status = 'processing'
+  AND claimed_at IS NULL;
+
+-- Puts back to pending the processing rows whose lease has run out: the
+-- process that took them is gone, or a restored dump holds them so. A row
+-- another process took within the lease is left to it.
+-- name: ResetDeadJobs :execrows
+UPDATE mail_queue
+SET status     = 'pending',
+    claimed_at = NULL,
+    claimed_by = NULL
+WHERE status = 'processing'
+  AND claimed_at < NOW() - (sqlc.arg(lease_seconds)::int * INTERVAL '1 second');
 
 -- After a restore from backup (docs/data-lifecycle.md, Backup and restore),
 -- the queue as the dump held it: the rows still to go out, pending or
@@ -680,26 +700,39 @@ SELECT count(*) FILTER (WHERE was = 'pending')    AS pending,
        count(*) FILTER (WHERE created_at IS NULL)  AS undated
 FROM closed;
 
--- name: SetMailQueueItemSent :exec
+-- The three outcomes of a send are written only by the process that holds the
+-- row: still processing and claimed by it. A process whose lease ran out and
+-- whose row was put back, or taken by another process, changes nothing; zero
+-- rows says so. A sent or failed row keeps its claim: the process that
+-- finished it.
+-- name: SetMailQueueItemSent :execrows
 UPDATE mail_queue
 SET status    = 'sent',
     error     = NULL
-WHERE id = $1;
+WHERE id = sqlc.arg(id)
+  AND status = 'processing'
+  AND claimed_by = sqlc.arg(claimed_by)::text;
 
--- name: SetMailQueueItemFailed :exec
+-- name: SetMailQueueItemFailed :execrows
 UPDATE mail_queue
 SET status    = 'failed',
     attempts  = attempts + 1,
-    error     = $2
-WHERE id = $1;
+    error     = sqlc.narg(error)::text
+WHERE id = sqlc.arg(id)
+  AND status = 'processing'
+  AND claimed_by = sqlc.arg(claimed_by)::text;
 
 -- name: RescheduleMailQueueItem :one
 UPDATE mail_queue
 SET status          = 'pending',
     attempts        = attempts + 1,
     error           = sqlc.narg(error)::text,
-    next_attempt_at = NOW() + (sqlc.arg(delay_seconds)::int * INTERVAL '1 second')
+    next_attempt_at = NOW() + (sqlc.arg(delay_seconds)::int * INTERVAL '1 second'),
+    claimed_at      = NULL,
+    claimed_by      = NULL
 WHERE id = sqlc.arg(id)
+  AND status = 'processing'
+  AND claimed_by = sqlc.arg(claimed_by)::text
 RETURNING attempts;
 
 -- name: CreateMailTask :many

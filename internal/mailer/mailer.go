@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	htmlt "html/template"
+	"sync/atomic"
 	textt "text/template"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
@@ -77,9 +79,9 @@ type EnqueueWithRecipientsParams struct {
 }
 
 type Mailer interface {
-	// Start puts the rows a previous process left processing back to pending
-	// and, unless the sender is paused, starts the dispatcher and workerCount
-	// workers.
+	// Start puts back to pending the processing rows whose lease has run out,
+	// keeps doing so while ctx lives, and, unless the sender is paused, starts
+	// the dispatcher and workerCount workers.
 	Start(ctx context.Context, workerCount int)
 	// SenderPaused says MAIL_SENDER=paused holds this process's sender back:
 	// mail is queued but none is sent.
@@ -119,6 +121,18 @@ type mailerImpl struct {
 	logger     *zerolog.Logger
 	smtpConfig SMTPConfig
 	sender     Sender
+
+	// claimant names this process in the rows it takes (claimed_by); lease is
+	// how long a taken row stays its own.
+	claimant string
+	lease    time.Duration
+	// workers is how many rows this process sends at once, and taken how many
+	// rows it holds now, in the channel or with a worker. The dispatcher takes
+	// only workers - taken rows, so no taken row waits in this process.
+	workers int
+	taken   atomic.Int32
+	// deliver sends one row; tests replace it.
+	deliver func(ctx context.Context, client *mail.Client, job database.MailQueue) error
 }
 
 type SMTPConfig struct {
@@ -133,50 +147,103 @@ type SMTPConfig struct {
 
 // NewMailer makes the mailer. sender is MAIL_SENDER (SenderFromEnv); anything
 // but SenderPaused sends.
-func NewMailer(db *database.Store, smtpConfig SMTPConfig, sender Sender) Transactional {
+func NewMailer(db *database.Store, smtpConfig SMTPConfig, sender Sender, opts ...Option) Transactional {
 	logger := log.With().Str("service", "mailer").Logger()
 	if sender != SenderPaused {
 		sender = SenderOn
 	}
 
-	return &mailerImpl{
+	m := &mailerImpl{
 		db:         db,
-		jobs:       make(chan database.MailQueue, 100),
 		nudge:      make(chan struct{}, 1),
 		logger:     &logger,
 		smtpConfig: smtpConfig,
 		sender:     sender,
+		claimant:   newClaimant(),
+		lease:      DefaultQueueLease,
 	}
+	m.deliver = m.sendEmail
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 func (m *mailerImpl) SenderPaused() bool { return m.sender == SenderPaused }
 
 func (m *mailerImpl) Start(ctx context.Context, workerCount int) {
 	if m.SenderPaused() {
-		m.logger.Warn().Str("sender", string(m.sender)).
+		m.logger.Warn().Str("sender", string(m.sender)).Str("claimant", m.claimant).
 			Msg("Mail sender paused by MAIL_SENDER=paused: mail is queued but nothing will be sent until MAIL_SENDER is removed and the service redeployed")
 	} else {
-		m.logger.Info().Int("workers", workerCount).Str("sender", string(m.sender)).Msg("Starting up")
+		m.logger.Info().Int("workers", workerCount).Str("sender", string(m.sender)).
+			Str("claimant", m.claimant).Dur("lease", m.lease).Msg("Starting up")
 	}
 
-	// A row still processing was taken by a worker of a process that is gone,
-	// or a restored dump holds it so. Paused too it goes back to pending: the
-	// erase endpoint deletes a pending row to the person, but waits (202) on a
-	// processing one, which no worker would ever finish.
-	err := m.db.ResetDeadJobs(ctx)
-	if err != nil {
-		m.logger.Err(err).Msg("Failed to reset dead jobs")
-	}
+	// A row still processing past its lease was taken by a process that is
+	// gone, or a restored dump holds it so. A row within its lease is left
+	// alone: under a start-first deploy the old task is still sending what it
+	// took. Paused too an expired row goes back to pending: the erase endpoint
+	// deletes a pending row to the person, but waits (202) on a processing
+	// one, which no worker would ever finish. Rows a process leaves behind
+	// while this one runs are found by the reaper.
+	m.reclaimExpired(ctx)
+	go m.startReaper(ctx)
 
 	if m.SenderPaused() {
 		return
 	}
 
+	m.workers = workerCount
+	m.jobs = make(chan database.MailQueue, workerCount)
 	for i := 0; i < workerCount; i++ {
 		go m.startWorker(ctx, i)
 	}
 
 	go m.startDispatcher(ctx)
+}
+
+// reapEvery is how often a process looks for rows whose lease has run out: a
+// fifth of the lease, so a dead process's rows wait at most a lease and a fifth.
+func (m *mailerImpl) reapEvery() time.Duration {
+	return m.lease / 5
+}
+
+func (m *mailerImpl) startReaper(ctx context.Context) {
+	ticker := time.NewTicker(m.reapEvery())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.reclaimExpired(ctx)
+		}
+	}
+}
+
+// reclaimExpired starts the lease of every processing row that has none (taken
+// by an image from before the lease) and puts back to pending every processing
+// row whose lease has run out.
+func (m *mailerImpl) reclaimExpired(ctx context.Context) {
+	stamped, err := m.db.StartLeaseOnUnclaimedJobs(ctx)
+	if err != nil {
+		m.logger.Err(err).Msg("Failed to start the lease of unclaimed jobs")
+	} else if stamped > 0 {
+		m.logger.Info().Int64("count", stamped).Dur("lease", m.lease).
+			Msg("Processing rows without a claim: their lease starts now")
+	}
+
+	reset, err := m.db.ResetDeadJobs(ctx, int(m.lease.Seconds()))
+	if err != nil {
+		m.logger.Err(err).Msg("Failed to reset dead jobs")
+		return
+	}
+	if reset > 0 {
+		m.logger.Warn().Int64("count", reset).Dur("lease", m.lease).
+			Msg("Put processing rows whose lease ran out back to pending")
+		m.wake()
+	}
 }
 
 type commonMailRow struct {
@@ -509,13 +576,24 @@ func (m *mailerImpl) startDispatcher(ctx context.Context) {
 	}
 }
 
+// drainQueue takes as many due rows as this process has idle workers. A
+// worker that finishes a row wakes the dispatcher, which takes the next.
 func (m *mailerImpl) drainQueue(ctx context.Context, logger *zerolog.Logger) bool {
-	items, err := m.db.ProcessQueueItems(ctx)
+	idle := m.workers - int(m.taken.Load())
+	if idle <= 0 {
+		return true
+	}
+
+	items, err := m.db.ProcessQueueItems(ctx, database.ProcessQueueItemsParams{
+		ClaimedBy: m.claimant,
+		MaxRows:   idle,
+	})
 	if err != nil {
 		logger.Err(err).Msg("Failed to process queue items")
 	}
 
 	if len(items) > 0 {
+		m.taken.Add(int32(len(items)))
 		logger.Debug().Int("count", len(items)).Msg("Pulled pending jobs from database")
 	}
 
@@ -574,19 +652,37 @@ func (m *mailerImpl) startWorker(ctx context.Context, id int) {
 		case job := <-m.jobs:
 			logger.Debug().Str("job_id", job.ID.String()).Msg("Worker picked up job")
 
-			err := m.sendEmail(ctx, client, job)
+			err := m.deliver(ctx, client, job)
 			if err != nil {
 				m.recordSendFailure(ctx, &logger, job, err)
 			} else {
 				logger.Debug().Str("job_id", job.ID.String()).Msg("Sent email")
 
-				err := m.db.SetMailQueueItemSent(ctx, job.ID)
+				n, err := m.db.SetMailQueueItemSent(ctx, database.SetMailQueueItemSentParams{
+					ID:        job.ID,
+					ClaimedBy: m.claimant,
+				})
 				if err != nil {
 					logger.Err(err).Str("job_id", job.ID.String()).Msg("Failed to set mail queue item")
+				} else if n == 0 {
+					m.lostLease(&logger, job, "sent")
 				}
 			}
+
+			// This worker is idle again: the dispatcher may take a row for it.
+			m.taken.Add(-1)
+			m.wake()
 		}
 	}
+}
+
+// lostLease logs an outcome this process could not record: the row's lease
+// ran out and it was put back to pending, or another process took it since.
+// That process sends it and records the outcome.
+func (m *mailerImpl) lostLease(logger *zerolog.Logger, job database.MailQueue, outcome string) {
+	logger.Warn().Str("job_id", job.ID.String()).Str("outcome", outcome).
+		Str("claimant", m.claimant).Dur("lease", m.lease).
+		Msg("Lease on the mail queue item ran out: outcome not recorded")
 }
 
 // permanentError marks a failure that retrying cannot fix — a malformed address
@@ -608,11 +704,15 @@ func (m *mailerImpl) recordSendFailure(ctx context.Context, logger *zerolog.Logg
 			Int("attempts", job.Attempts+1).
 			Msg("Giving up on email")
 
-		if err := m.db.SetMailQueueItemFailed(ctx, database.SetMailQueueItemFailedParams{
-			ID:    job.ID,
-			Error: &reason,
-		}); err != nil {
+		n, err := m.db.SetMailQueueItemFailed(ctx, database.SetMailQueueItemFailedParams{
+			ID:        job.ID,
+			ClaimedBy: m.claimant,
+			Error:     &reason,
+		})
+		if err != nil {
 			logger.Err(err).Str("job_id", job.ID.String()).Msg("Failed to set mail queue item")
+		} else if n == 0 {
+			m.lostLease(logger, job, "failed")
 		}
 		return
 	}
@@ -620,9 +720,14 @@ func (m *mailerImpl) recordSendFailure(ctx context.Context, logger *zerolog.Logg
 	delay := retryDelay(job.Attempts)
 	attempts, err := m.db.RescheduleMailQueueItem(ctx, database.RescheduleMailQueueItemParams{
 		ID:           job.ID,
+		ClaimedBy:    m.claimant,
 		Error:        &reason,
 		DelaySeconds: int(delay.Seconds()),
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		m.lostLease(logger, job, "retry")
+		return
+	}
 	if err != nil {
 		logger.Err(err).Str("job_id", job.ID.String()).Msg("Failed to reschedule mail queue item")
 		return
