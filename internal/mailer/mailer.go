@@ -122,6 +122,10 @@ type Transactional interface {
 	// keeps its row until the lease runs out, and ending Start's context
 	// cuts it off without counting a failed attempt. Queueing still works.
 	Stop(ctx context.Context) error
+	// Stopped closes once the dispatcher, the workers and the reaper Start
+	// began have all returned: after Stop, or once Start's context has ended
+	// and the sends it cut off have given up. It never closes without Start.
+	Stopped() <-chan struct{}
 }
 
 type mailerImpl struct {
@@ -145,6 +149,9 @@ type mailerImpl struct {
 	sendBudget time.Duration
 	// deliver sends one row; tests replace it.
 	deliver func(ctx context.Context, client *mail.Client, job database.MailQueue) error
+	// clientOptions are added to the workers' SMTP client options; tests
+	// set them.
+	clientOptions []mail.Option
 
 	// stop closes when Stop is called; stopOnce closes it. dispatching,
 	// sending and reaping are the dispatcher, the workers and the reaper,
@@ -154,6 +161,9 @@ type mailerImpl struct {
 	dispatching sync.WaitGroup
 	sending     sync.WaitGroup
 	reaping     sync.WaitGroup
+	// stopped closes once the dispatcher, the workers and the reaper have
+	// all returned.
+	stopped chan struct{}
 }
 
 type SMTPConfig struct {
@@ -184,6 +194,7 @@ func NewMailer(db *database.Store, smtpConfig SMTPConfig, sender Sender, opts ..
 		lease:      DefaultQueueLease,
 		sendBudget: SendBudget,
 		stop:       make(chan struct{}),
+		stopped:    make(chan struct{}),
 	}
 	m.deliver = m.sendEmail
 	for _, opt := range opts {
@@ -225,6 +236,7 @@ func (m *mailerImpl) start(ctx context.Context, slots, workers int) {
 	}()
 
 	if m.SenderPaused() {
+		m.closeWhenStopped()
 		return
 	}
 
@@ -243,7 +255,20 @@ func (m *mailerImpl) start(ctx context.Context, slots, workers int) {
 		defer m.dispatching.Done()
 		m.startDispatcher(ctx)
 	}()
+	m.closeWhenStopped()
 }
+
+// closeWhenStopped closes stopped once everything start began has returned.
+func (m *mailerImpl) closeWhenStopped() {
+	go func() {
+		m.dispatching.Wait()
+		m.sending.Wait()
+		m.reaping.Wait()
+		close(m.stopped)
+	}()
+}
+
+func (m *mailerImpl) Stopped() <-chan struct{} { return m.stopped }
 
 // stopping reports whether Stop was called.
 func (m *mailerImpl) stopping() bool {
@@ -767,25 +792,32 @@ func (m *mailerImpl) wake() {
 	}
 }
 
-func (m *mailerImpl) startWorker(ctx context.Context, id int) {
-	logger := m.logger.With().Str("component", "worker").Int("worker_id", id).Logger()
-
-	var authType mail.SMTPAuthType
-
+// newSMTPClient is a worker's SMTP client: STARTTLS required, each send
+// bounded by sendBudget from its dial.
+func (m *mailerImpl) newSMTPClient() (*mail.Client, error) {
+	authType := mail.SMTPAuthLogin
 	if m.smtpConfig.Plain {
 		authType = mail.SMTPAuthPlain
-	} else {
-		authType = mail.SMTPAuthLogin
 	}
-
-	client, err := mail.NewClient(m.smtpConfig.Host,
+	options := append([]mail.Option{
 		mail.WithDialContextFunc(dialWithin(m.sendBudget)),
 		mail.WithPort(m.smtpConfig.Port),
 		mail.WithSMTPAuth(authType),
 		mail.WithUsername(m.smtpConfig.User),
 		mail.WithPassword(m.smtpConfig.Password),
 		mail.WithTLSPolicy(mail.TLSMandatory),
-	)
+		// go-mail otherwise says NOOP before the mail and again after the
+		// relay took it (before RSET): one more round trip that can only
+		// fail a send that has gone through.
+		mail.WithoutNoop(),
+	}, m.clientOptions...)
+	return mail.NewClient(m.smtpConfig.Host, options...)
+}
+
+func (m *mailerImpl) startWorker(ctx context.Context, id int) {
+	logger := m.logger.With().Str("component", "worker").Int("worker_id", id).Logger()
+
+	client, err := m.newSMTPClient()
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to create SMTP client")
 		return
@@ -946,5 +978,28 @@ func (m *mailerImpl) sendEmail(ctx context.Context, client *mail.Client, job dat
 		msg.AddAlternativeString(mail.TypeTextHTML, *job.BodyHtml)
 	}
 
-	return client.DialAndSendWithContext(ctx, msg)
+	// The send's own context, ended when the send returns: the connection
+	// is closed when it ends (withSend), on ctx's cancellation as on any
+	// other way out, a failed dial included.
+	send, done := context.WithCancel(ctx)
+	defer done()
+	smtpClient, err := client.DialToSMTPClientWithContext(withSend(send))
+	if err != nil {
+		return fmt.Errorf("dial failed: %w", err)
+	}
+	defer func() { _ = client.CloseWithSMTPClient(smtpClient) }()
+	if err := client.SendWithSMTPClient(smtpClient, msg); err != nil {
+		if !msg.IsDelivered() {
+			return fmt.Errorf("send failed: %w", err)
+		}
+		// The relay took the mail with the 250 after DATA; what failed is
+		// the RSET go-mail says after it (the relay hung up, or the
+		// shutdown cut the connection). Retrying would mail the person
+		// twice.
+		m.logger.Warn().Err(err).Str("job_id", job.ID.String()).
+			Msg("The relay took the mail; the SMTP exchange after it failed: counted as sent")
+	}
+	// Nor is a QUIT that fails or is cut off a failed send (go-mail's
+	// DialAndSend reports it as one).
+	return nil
 }

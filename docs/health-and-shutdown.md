@@ -115,24 +115,51 @@ On SIGTERM (Docker's stop; SIGINT too, a second one kills at once) SkyMail:
 3. stops taking connections, closes idle keep-alive connections, answers each
    request in flight with `Connection: close`, and waits up to **20 s** for
    them; a request still open then is cut off;
-4. once the mailer has stopped (or at **25 s**), cancels the background work:
+4. once the mailer has stopped (or at **22 s**), cancels the background work:
    the mail approval expiry sweep (its transaction rolls back and the next
-   sweep takes it up) and a send still in progress, which is cut off;
+   sweep takes it up) and the sends still in progress, whose relay
+   connections are closed at once, wherever the SMTP conversation is; then
+   waits for both until **25 s**;
 5. closes the access gate's Redis client and the database pools, still within
    the 25 s, and exits.
 
-Swarm takes a task out of its load balancer (and waits about two seconds)
-before it sends SIGTERM, so step 3 turns away no new connection. Whatever has
-not stopped or closed at 25 s is named in the log and left behind (a pool's
-close waits for every connection in use), and the process exits at once,
-before Docker's SIGKILL at 30 s.
+Whatever has not stopped or closed at 25 s is named in the log and left
+behind (a pool's close waits for every connection in use), and the process
+exits at once, before Docker's SIGKILL at 30 s.
+
+Swarm takes the task out of the service's virtual IP and waits two seconds
+before it sends SIGTERM: moby's `controller.Shutdown` deactivates the service
+binding and sleeps `defaultGossipConvergeDelay` (2 s) before stopping the
+container (`daemon/cluster/executor/container/controller.go`, Docker 28.x).
+That covers the callers that reach SkyMail by the service name (Keycloak,
+core, Forms on the Docker network). A proxy that tracks the tasks itself
+(Traefik's Swarm provider sends to task addresses, refreshed on its own
+interval, unless told to use the virtual IP) may still open a connection
+after step 3 closed the port; it is refused, and the proxy answers that
+request with a 502. The keep-alive connections it already holds are told
+`Connection: close`.
 
 A send is bounded by `SendBudget` (1 minute from dial to QUIT), so a send can
-outlast the 25 s on a stalled relay. Cut off at step 4, it counts no failed
-attempt: the row keeps its claim and goes back to `pending` when its lease
-runs out, as after a crash. A send that did finish writes its outcome even if
-the cut came at that moment (5 s of its own), so a mail the relay took is not
-sent again after the lease.
+outlast the mailer's 22 s on a stalled relay. go-mail watches its context
+only while dialling; SkyMail closes the connection itself when the send's
+context ends (`withSend` in `internal/mailer/lease.go`), so the cut at step 4
+ends the conversation then and there:
+
+- cut before the relay answered `250` to the end of DATA, the relay has not
+  taken the mail. The send counts no failed attempt: the row keeps its claim
+  and goes back to `pending` when its lease runs out (10 minutes), as after a
+  crash, and is sent then, once;
+- cut between the end of DATA and the relay's `250`, the relay may or may not
+  have taken it; the row goes again after the lease, so the person may get it
+  twice, as after a crash. That window is a round trip;
+- once the relay has answered `250`, the mail is sent, whatever happens to
+  what go-mail says after it (`RSET`, then `QUIT`; SkyMail's client sends no
+  `NOOP`, `mail.WithoutNoop`): one of them failing, stalling or being cut
+  off, or the relay hanging up, is no failed send (go-mail marks the message
+  delivered at the `250`, `Msg.IsDelivered`; a warning is logged). The worker writes `sent` with a context of its own (5 s, not the
+  cancelled one) within the 3 s left before 25 s, normally in milliseconds.
+  If even that does not land (the database is gone too), the row goes again
+  after the lease.
 
 Mail queued during the drain (a request in flight) is in the database; the
 other task's dispatcher takes it at its next tick (10 s), or the next task to
