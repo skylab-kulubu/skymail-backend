@@ -13,6 +13,46 @@ Boş bir veritabanında uygulama tüm migration'ları sırayla uygular. Daha ön
 çalıştırıcı tarafından sürümlendirilmiş bir veritabanında yalnızca bekleyen
 migration'lar uygulanır. Migration başarısız veya kirli kalırsa servis başlamaz.
 
+## Aynı anda açılan görevler
+
+Bir görev, sürümü okumadan önceden işi bitene dek oturum düzeyinde bir advisory
+lock tutar: `pg_try_advisory_lock(hashtextextended('skymail-backend migrations', 0))`
+(`migrations.LockName`). Aynı anda açılan öbür görevler (ölçekleme, iki kopya,
+start-first deploy'un yeni görevi) kilidi 500 ms'de bir yeniden ister, en çok
+5 dakika (`migrations.LockWait`) bekler, sonra sürümü temiz bulup yapacak iş
+bulmaz. Eskiden göç sürerken açılan görev golang-migrate'in uygulama boyunca
+koyduğu `dirty` işaretini ya da öbürünün doldurduğu boş veritabanını görüp
+`log.Fatal` ile çıkıyordu (yeniden başlama döngüsü). Gerçekten yarıda kalmış
+bir migration (süreci ölmüş, sürüm hâlâ `dirty`) eskisi gibi servisi durdurur:
+aşağıdaki "Kirli (dirty) sürüm" bölümü. Bekleme sırasında gelen durdurma
+sinyali beklemeyi bitirir; kilidi almış bir görevin migration'ı sinyalle
+yarıda kesilmez. 5 dakikayı aşan bir migration'da bekleyen görev başarısız
+olur ve yeniden başlar; böyle bir yayında Swarm health check'inin
+`StartPeriod`'u da büyütülmelidir (`docs/health-and-shutdown.md`).
+
+Alternatif (gerekirse): migration'ı deploy'dan önce tek seferlik bir işte
+koşmak (`DATABASE_MIGRATIONS_MODE=apply` ile tek bir konteyner, servis
+`DATABASE_MIGRATIONS_MODE=off`). Kilit bunu bugün gereksiz kılıyor.
+
+## Expand, sonra contract
+
+Dokploy start-first deploy eder: eski görev, yeni görev migrate edip açılırken
+yeni şemayla çalışmaya devam eder. Bu yüzden her migration bir önceki sürümü
+çalışır bırakmalıdır:
+
+- **expand** (bu sürüm): tablo, nullable sütun, varsayılanlı sütun, indeks
+  (büyük tabloda `CONCURRENTLY`; çok ifadeli bir dosya tek örtük işlemde
+  koştuğu için kendi dosyasında tek ifade olarak), yeni kısıt önce
+  `NOT VALID`;
+- **contract** (sonraki bir sürüm, çalışan hiçbir kod okumadığında): sütun ya
+  da tablo düşürme veya yeniden adlandırma, `NOT NULL` yapma, kısıtı
+  doğrulama (`VALIDATE CONSTRAINT`).
+
+Yeniden adlandırma bir expand (yeni sütunu ekle, ikisine de yaz) ve sonraki
+bir contract'tır (eskisini düşür). Bu kurala uyamayan bir sürüm bir kez
+stop-first, kesinti duyurularak yayınlanır. sqlc sorgulardaki `*`'ı üretirken
+sütun listesine açar, bu yüzden eski imaj yeni sütunları yok sayar.
+
 ## Mevcut sürümlendirilmemiş veritabanını devralma
 
 Eski kurulumlarda tablolar bulunmasına rağmen `schema_migrations` kaydı yoktur.
