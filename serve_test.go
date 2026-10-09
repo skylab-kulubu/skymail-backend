@@ -459,3 +459,64 @@ func TestServeGivesUpOnTheMailerAtTheDeadline(t *testing.T) {
 		t.Fatalf("the mailer's late stop is not logged: %q", log.text)
 	}
 }
+
+// The mailer's stop ends SendCutGrace before Total: then the sends still in
+// progress are cut, and serve waits the rest of Total for their workers (a
+// send that finished as the cut came writes its outcome) before it closes the
+// pools.
+func TestServeLeavesTheCutSendsTheEndOfTheBudget(t *testing.T) {
+	t.Parallel()
+	ln := listen(t)
+	signal, stop := context.WithCancel(context.Background())
+	workers, stopWorkers := context.WithCancel(context.Background())
+	// A worker cut off by the workers' context takes a moment to return.
+	sendsStopped := worker(workers, 100*time.Millisecond)
+	var mailerDeadline time.Time
+	var signalled time.Time
+	var closedAfterTheSends bool
+	served := make(chan error, 1)
+	go func() {
+		served <- serve(signal, fiber.New(), ln, shutdownPlan{
+			HTTPDrain: time.Second, Total: 2 * time.Second, SendCutGrace: time.Second,
+			StopMailer: func(ctx context.Context) error {
+				mailerDeadline, _ = ctx.Deadline()
+				<-ctx.Done()
+				return ctx.Err()
+			},
+			StopWorkers: stopWorkers,
+			Wait:        []stopping{{"the mailer's sends", sendsStopped}},
+			Close: []closing{{name: "pool", close: func() {
+				select {
+				case <-sendsStopped:
+					closedAfterTheSends = true
+				default:
+				}
+			}}},
+			Logf: func(string, ...any) {},
+		})
+	}()
+	waitFor(t, "the port to answer", func() bool {
+		conn, err := net.DialTimeout("tcp4", ln.Addr().String(), 200*time.Millisecond)
+		if err != nil {
+			return false
+		}
+		conn.Close()
+		return true
+	})
+	signalled = time.Now()
+	stop()
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not return")
+	}
+	if left := signalled.Add(2 * time.Second).Sub(mailerDeadline); left < 800*time.Millisecond || left > 1200*time.Millisecond {
+		t.Fatalf("the mailer's stop ended %s before Total, want the 1s grace", left)
+	}
+	if !closedAfterTheSends {
+		t.Fatal("the pools closed before the cut sends had returned")
+	}
+}

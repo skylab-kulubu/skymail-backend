@@ -82,9 +82,22 @@ func newClaimant() string {
 	return host + "-" + hex.EncodeToString(suffix)
 }
 
+// sendContextKey carries a send's own context into the dial (withSend).
+type sendContextKey struct{}
+
+// withSend marks send as the context of one send: the connection dialWithin
+// dials under it is closed when send ends. go-mail passes the dial a context
+// of its own, derived from send but cancelled once the dial is through, and
+// watches no context after it; without this, cancelling a send would stop
+// only its dial and the conversation would run on to the budget.
+func withSend(send context.Context) context.Context {
+	return context.WithValue(send, sendContextKey{}, send)
+}
+
 // dialWithin dials the relay with a deadline budget from now that no later
 // deadline can move: go-mail sets its own deadlines during the send, and each
-// is held to this one.
+// is held to this one. When the dial carries a send's context (withSend), the
+// connection is closed as that context ends, wherever the conversation is.
 func dialWithin(budget time.Duration) func(ctx context.Context, network, address string) (net.Conn, error) {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		end := time.Now().Add(budget)
@@ -92,6 +105,12 @@ func dialWithin(budget time.Duration) func(ctx context.Context, network, address
 		conn, err := dialer.DialContext(ctx, network, address)
 		if err != nil {
 			return nil, err
+		}
+		if send, ok := ctx.Value(sendContextKey{}).(context.Context); ok {
+			// Closing a connection go-mail has closed already is harmless;
+			// the send's context ends when the send returns, which also
+			// releases this.
+			context.AfterFunc(send, func() { _ = conn.Close() })
 		}
 		budgeted := &budgetConn{Conn: conn, end: end}
 		if err := budgeted.SetDeadline(time.Time{}); err != nil {

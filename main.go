@@ -251,14 +251,18 @@ func main() {
 		closing{name: "the database pool", close: conn.Close},
 	)
 	err = serve(stop, app, ln, shutdownPlan{
-		Readiness:   readiness,
-		HTTPDrain:   httpDrainTimeout,
-		Total:       shutdownTimeout,
-		StopMailer:  mailerService.Stop,
-		StopWorkers: stopWorkers,
-		Wait:        []stopping{{name: "the mail approval expiry sweep", done: approvalsStopped}},
-		Close:       closers,
-		Logf:        func(format string, args ...any) { log.Info().Msgf(format, args...) },
+		Readiness:    readiness,
+		HTTPDrain:    httpDrainTimeout,
+		Total:        shutdownTimeout,
+		StopMailer:   mailerService.Stop,
+		SendCutGrace: sendCutGrace,
+		StopWorkers:  stopWorkers,
+		Wait: []stopping{
+			{name: "the mail approval expiry sweep", done: approvalsStopped},
+			{name: "the mailer's sends", done: mailerService.Stopped()},
+		},
+		Close: closers,
+		Logf:  func(format string, args ...any) { log.Info().Msgf(format, args...) },
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("error starting server")
