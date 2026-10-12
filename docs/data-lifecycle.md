@@ -193,19 +193,22 @@ takes the person out of them:
 
 - `recipients.full_name` and `email`, and their `mailing_list_recipients` —
   the people on internal mailing lists.
-- `mail_queue.recipient_full_name`, `recipient_email`, and the mail rendered
-  for them: `subject`, `body`, `body_html`, and `error`, which can quote the
-  address.
+- `mail_queue.recipient_full_name`, `recipient_email`, and `error`, which can
+  quote the address. The mail rendered for them — `subject`, `body`,
+  `body_html` — is kept only for a while: see
+  [Sent mail content](#sent-mail-content).
 - `mail_tasks.sent_by` — who sent: the Keycloak subject of the token that
   queued the send — for an approved Mail onayı request, its submitter's — or
   `skymail` for the mail SkyMail sends of its own accord, the notice that a
   request expired.
 - `mail_tasks.body_variables` — the values of the send, which may name or
   address people; for Keycloak's mails, the person's reset or verification
-  link.
+  link. Kept as the rendered mail is (below).
 - `archived_by` on templates and mailing lists — who archived.
 - `template_versions.author_sub` with `author_name` — who wrote a version, and
   the name their token carried then.
+- `template_content_sensitive_events.actor_sub` with `actor_name` — who changed
+  whether a template's sends show their content.
 - `mail_approvals.submitter_sub`, `submitter_name` and `submitter_email` — who
   submitted a request, and the name and verified address their token carried
   (`submitter_email_unverified` says the token carried an address Keycloak
@@ -218,6 +221,91 @@ takes the person out of them:
 - `mail_approval_events.actor_sub` and `actor_name` — who did each thing to a
   request — `note`, and `changes`, each variable's value, and who a request
   went to, before and after an edit or a resubmission.
+
+## Sent mail content
+
+Every queue row holds its recipient's mail as it was rendered and sent:
+`subject`, `body` (plain text) and `body_html`. A send's page shows it,
+recipient by recipient, through
+`GET /v1/mail_tasks/{id}/queue/{itemId}/content` (Yusuf, 2026-10-12: shown,
+the sensitive ones hidden).
+
+**Sensitive mail is never shown.** `templates.content_sensitive` says it:
+`true` for mail that carries a code or a one-time link (Keycloak's
+verification, reset and personal e-mail mails, the account center's mails,
+core's contact consent confirmation, an event ticket's code), `false` for
+mail that may be shown, and
+`null`, the default, leaves it to the kind of send: a single mail
+(`POST /mail_tasks/single`: what a service sends one person, a code among it)
+is hidden, a send to a list, a Keycloak group or an approved Mail onayı
+request is shown. `mail_task_bulk()` and `mail_task_content_sensitive()` are
+the one definition. A new template is therefore hidden on the single path
+until its seed or an operator says `false`. The Template seed sets the flag
+(`content_sensitive` in `PUT /v1/templates/by-key/{key}`; left out, it stays),
+and the panel sets it either way (`PUT /v1/templates/{id}/content-sensitive`,
+`skymail:templates:write`). The migration marked the credential-carrying
+templates `true` and the ones the seed shows (`free.basic`, `core.welcome`,
+`core.certificate`, `club.team-membership`, `event.updated`,
+`event.cancelled`, `mail.approval-*`, `ops.send-failed`) `false`, so the
+first sweep does not empty their single mails before the next seed.
+
+**Locked sensitive.** `keycloak.*`, `account.*`,
+`core.contact-consent-confirm`, `event.ticket-created` and `event.reminder`
+carry a credential: a login or verification code, a reset or account link, a
+ticket's code. So does any key under `auth.`, `login.` or `otp.`, or with a
+word such as `login`, `code`, `otp`, `reset`, `verify`, `confirm`, `token`,
+`magic`, `invite`, `ticket` or `link` between its dots and dashes (two words
+joined count too: `sign-in`, `log-in`), for the sign-in flows that may move to
+SkyMail (YıldızPlace mails its login link over its own SMTP today). The key of
+a locked template cannot be changed or removed (`PATCH` answers
+`409 template.sensitive_key_immutable`), as a system template's cannot: the
+lock goes with the key, and renaming would open its past sends. The lock is
+read from the template's key when content is asked for, not fixed on the send
+(a follow-up ticket fixes it at send time). Whoever reads system mail would otherwise read everyone's.
+They are sensitive whatever their row says; the panel's `false` is refused
+with `409 template.content_sensitive_locked`, the seed's is written as `true`,
+and a create or edit that gives a template such a key marks it `true`. The
+list is `internal/handlers/content_sensitivity.go`.
+
+**Who changed it.** Every change of `content_sensitive`, by the panel or the
+seed, is a row of `template_content_sensitive_events`: `actor_kind`,
+`actor_sub`, `actor_name`, `old_value`, `new_value`, `created_at`
+(`GET /v1/templates/{id}/content-sensitive/events`). The migration's own
+marks are not rows there. The rows are never rewritten but by Account
+erasure, which replaces the actor with Silinmiş kullanıcı.
+
+**Who sees what is not sensitive.** The route takes `skymail:mails:read`;
+the handler then shows the content to the send's sender, for a send to many
+to holders of `skymail:mails:write`, and to holders of
+`skymail:system-mails:read`, the administrator's role. Anyone else gets
+`access: restricted`. A send's `body_variables` in the send list and on its
+page follow the same rule (`content_access`).
+
+**How long.** A sweep runs at startup and every five minutes, in every
+replica (`FOR UPDATE SKIP LOCKED`, 20 sends a statement). It takes the sends
+none of whose rows is still pending or processing and that are at least five
+minutes old, and empties a sensitive one at once, any other
+`MAIL_CONTENT_RETENTION_DAYS` after it was created (unset: 3650, the most it
+may be): its rows' `subject` and `body` become
+`''` and `body_html` `NULL`, as Account erasure leaves a row, its
+`body_variables` `{}`, and `mail_tasks.content_cleared_at` says when. Status,
+recipient, error and the counts stay. Past the period the API answers
+`expired` even before the sweep has run. A sweep runs while the sender is
+paused too: it never touches mail still to go out. The first run after the
+release empties every sensitive send there is.
+
+The period is Yusuf's decision (2026-10-12: the longest allowed). KVKK's
+storage limitation principle (Law 6698, art. 4(2)(d): kept only as long as
+needed for its purpose) asks that it be reviewed: the content names and
+addresses people, and a shorter period is set with the variable alone.
+
+The sweep covers what a send keeps, not a Mail onayı request:
+`mail_approvals.body_variables` stays as the request was (see Mail approvals)
+until Account erasure.
+
+**Account erasure** empties the person's rows and the rows that name them
+(below); the content route then answers `unavailable` for them. A restore
+brings content back with the dump; the sweep empties it again on its next run.
 
 ## Account erasure
 
@@ -269,6 +357,7 @@ person is cleared whole, never masked.
 | `mail_approval_events.note` | actor S, or names E or N | NULL; `[silindi]` on a `rejected` event, whose reason cannot be empty |
 | `mail_approval_events.changes` | names E or N — either shape, `{recipient_email, recipient_full_name}` from before requests went to several people or `{recipients: […]}` | NULL |
 | `template_versions` | `author_sub` = S | `author_sub` and `author_name` Silinmiş kullanıcı |
+| `template_content_sensitive_events` | `actor_sub` = S | `actor_sub` and `actor_name` Silinmiş kullanıcı |
 | `templates`, `mailing_lists` | `archived_by` = S | Silinmiş kullanıcı |
 
 Silinmiş kullanıcı is the subject `00000000-0000-4000-8000-000000000000`

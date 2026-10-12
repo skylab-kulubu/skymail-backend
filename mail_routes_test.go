@@ -68,7 +68,11 @@ func mailRoutesApp(t *testing.T, roles ...string) *fiber.App {
 }
 
 func TestSendSummaryAndStatusFilterRequireMailsRead(t *testing.T) {
-	paths := []string{"/v1/mail_tasks/summary", "/v1/mail_tasks?status=failed"}
+	paths := []string{
+		"/v1/mail_tasks/summary",
+		"/v1/mail_tasks?status=failed",
+		"/v1/mail_tasks/40000000-0000-4000-8000-000000000001/queue/40000000-0000-4000-8000-000000000002/content",
+	}
 
 	for _, roles := range [][]string{
 		{"skymail:access"},
@@ -91,6 +95,21 @@ func TestSendSummaryAndStatusFilterRequireMailsRead(t *testing.T) {
 				t.Errorf("roles %v: GET %s = %d %+v, want 403 server.forbidden", roles, path, response.StatusCode, body)
 			}
 		}
+	}
+}
+
+// The content route reaches its handler with skymail:mails:read, which then
+// decides what the caller sees; a row that is not there is 404.
+func TestSentMailContentIsServedWithMailsRead(t *testing.T) {
+	app := mailRoutesApp(t, "skymail:access", "skymail:mails:read")
+	response, err := app.Test(httptest.NewRequest(fiber.MethodGet,
+		"/v1/mail_tasks/40000000-0000-4000-8000-000000000001/queue/40000000-0000-4000-8000-000000000002/content", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != fiber.StatusNotFound {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("content of a row that is not there = %d %s, want 404", response.StatusCode, body)
 	}
 }
 
