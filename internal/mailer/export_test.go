@@ -84,3 +84,13 @@ func Turn(ctx context.Context, m Transactional) []database.MailQueue {
 		}
 	}
 }
+
+// BulkRoom is the room budget leaves the bulk lane at at, given the windows
+// counted.
+func BulkRoom(budget RateBudget, at time.Time, counted []database.MailSendWindow) int {
+	return budget.bulkRoom(at, counted)
+}
+
+// PruneSendWindows drops the send windows m's budget reads no more, as the
+// reaper does.
+func PruneSendWindows(ctx context.Context, m Transactional) { m.(*mailerImpl).pruneSendWindows(ctx) }

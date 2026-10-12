@@ -1,7 +1,7 @@
 -- The send budget's counters (SKYMAIL_RATE_PER_MINUTE,
 -- SKYMAIL_DAILY_RECIPIENT_BUDGET): how many queue rows the dispatchers of all
--- processes took in a window of span_seconds (60, a minute; 86400, a day)
--- starting at starts_at, by lane (mail_queue.priority > 0: 1 the system lane,
+-- processes took in a window of span_seconds (60, a minute; 3600, an hour,
+-- 24 of which make the day's budget) starting at starts_at, by lane (mail_queue.priority > 0: 1 the system lane,
 -- 0 the bulk lane). Every process counts here, so the budget holds across
 -- replicas. A process takes a bulk row only under the advisory lock
 -- 'skymail-backend send budget' and only while the windows leave room; a

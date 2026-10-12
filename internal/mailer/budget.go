@@ -77,18 +77,19 @@ func WithRateBudget(budget RateBudget) Option {
 	return func(m *mailerImpl) { m.budget = budget }
 }
 
-// The budget's two windows, as mail_send_windows.span_seconds and the
-// queries in query.sql have them.
+// The budget's windows, as mail_send_windows.span_seconds and the queries in
+// query.sql have them. The minute is counted in minutes, the day in hours.
 const (
 	minuteSpan = time.Minute
+	hourSpan   = time.Hour
 	daySpan    = 24 * time.Hour
-	// keepWindows is how far back a window still counts: the current one
-	// and the one before it, of the longest span.
+	// keepWindows is how far back the windows are kept: well past the last
+	// 24 hours the day's budget reads.
 	keepWindows = 2 * daySpan
 )
 
 // windowStart is the start of the window of span at holds: windows are
-// aligned to the Unix epoch, a day's to UTC midnight.
+// aligned to the Unix epoch.
 func windowStart(at time.Time, span time.Duration) time.Time {
 	seconds := int64(span / time.Second)
 	unix := at.Unix()
@@ -97,50 +98,78 @@ func windowStart(at time.Time, span time.Duration) time.Time {
 
 // bulkRoom is how many bulk rows the windows leave room for at the instant
 // at: the least room of the minute's and the day's.
+//
+// The minute is the relay's message rate: Exchange Online holds a message
+// past it over to the next minutes. Its count is the sliding window estimate
+// (windowRoom), so a list does not send its share at the end of one minute
+// and again at the start of the next.
+//
+// The day is the relay's recipient rate over a sliding 24 hours: past it the
+// account sends nothing, single mail included, until the 24 hours have
+// room again. So the day is not estimated: it is the sum of every hour that
+// lies within the last 24 hours, the hour 24 hours ago reaches into
+// included (dayFrom). That counts at most an hour more than the 24 hours
+// hold, never less.
 func (b RateBudget) bulkRoom(at time.Time, counted []database.MailSendWindow) int {
 	room := math.MaxInt
-	for _, window := range []struct {
-		span  time.Duration
-		limit int
-	}{{minuteSpan, b.PerMinute}, {daySpan, b.PerDay}} {
-		if window.limit <= 0 {
-			continue
-		}
-		current := windowStart(at, window.span)
-		previous := current.Add(-window.span)
+	if b.PerMinute > 0 {
+		current := windowStart(at, minuteSpan)
+		previous := current.Add(-minuteSpan)
 		var cur, prev [2]int // taken by lane: [0] bulk, [1] system
 		for _, row := range counted {
-			if time.Duration(row.SpanSeconds)*time.Second != window.span {
+			if time.Duration(row.SpanSeconds)*time.Second != minuteSpan {
 				continue
-			}
-			lane := 0
-			if row.Lane > 0 {
-				lane = 1
 			}
 			switch {
 			case row.StartsAt.Equal(current):
-				cur[lane] += row.Taken
+				cur[laneIndex(row)] += row.Taken
 			case row.StartsAt.Equal(previous):
-				prev[lane] += row.Taken
+				prev[laneIndex(row)] += row.Taken
 			}
 		}
-		elapsed := float64(at.Sub(current)) / float64(window.span)
-		room = min(room, windowRoom(window.limit, elapsed, cur[0], cur[1], prev[0], prev[1]))
+		elapsed := float64(at.Sub(current)) / float64(minuteSpan)
+		room = min(room, windowRoom(b.PerMinute, elapsed, cur[0], cur[1], prev[0], prev[1]))
+	}
+	if b.PerDay > 0 {
+		from := dayFrom(at)
+		var day [2]int
+		for _, row := range counted {
+			if time.Duration(row.SpanSeconds)*time.Second == hourSpan && !row.StartsAt.Before(from) {
+				day[laneIndex(row)] += row.Taken
+			}
+		}
+		room = min(room, limitRoom(b.PerDay, float64(day[0]), float64(day[0]+day[1])))
 	}
 	return room
 }
 
+// dayFrom is the start of the first hour the day's budget counts at at: the
+// hour that holds the instant 24 hours before.
+func dayFrom(at time.Time) time.Time { return windowStart(at.Add(-daySpan), hourSpan) }
+
+func laneIndex(row database.MailSendWindow) int {
+	if row.Lane > 0 {
+		return 1
+	}
+	return 0
+}
+
 // windowRoom is the room one window of limit leaves the bulk lane, elapsed
-// (0 to 1) of the way through it: the bulk lane's share less what it took,
-// and the whole limit less what both lanes took. What the previous window took
-// counts as much of it as still lies within a span of now (the sliding window
+// (0 to 1) of the way through it. What the previous window took counts as
+// much of it as still lies within a span of now (the sliding window
 // estimate): the lanes are held to a limit over any span, not only within
-// each aligned window, so a list never sends its share at the end of one
-// minute and again at the start of the next.
+// each aligned window.
 func windowRoom(limit int, elapsed float64, curBulk, curSystem, prevBulk, prevSystem int) int {
 	weight := 1 - elapsed
 	bulk := float64(prevBulk)*weight + float64(curBulk)
 	total := float64(prevBulk+prevSystem)*weight + float64(curBulk+curSystem)
+	return limitRoom(limit, bulk, total)
+}
+
+// limitRoom is the room a limit leaves the bulk lane when the bulk lane took
+// bulk and both lanes total: the bulk lane's share less what it took, and the
+// whole limit less what both took.
+func limitRoom(limit int, bulk, total float64) int {
 	room := min(float64(bulkShare(limit))-bulk, float64(limit)-total)
 	if room <= 0 {
 		return 0
@@ -161,7 +190,8 @@ func (m *mailerImpl) budgetNow(ctx context.Context, q *database.Queries) (time.T
 // claimBulk takes up to maxRows due bulk rows within the send budget. Under
 // the budget's lock it reads the windows, takes no more rows than they leave
 // room for and counts what it took, all in one transaction: another process
-// takes its bulk rows only after, against this count. A failure takes
+// takes its bulk rows only after, against this count. When another process
+// holds the lock it takes nothing and does not wait. A failure takes
 // nothing.
 func (m *mailerImpl) claimBulk(ctx context.Context, logger *zerolog.Logger, maxRows int) []database.MailQueue {
 	if m.budget.Off() {
@@ -169,8 +199,16 @@ func (m *mailerImpl) claimBulk(ctx context.Context, logger *zerolog.Logger, maxR
 	}
 	var taken []database.MailQueue
 	err := m.db.InTx(ctx, func(q *database.Queries) error {
-		if err := q.LockSendBudget(ctx); err != nil {
+		locked, err := q.LockSendBudget(ctx)
+		if err != nil {
 			return err
+		}
+		if !locked {
+			// Another process is taking bulk rows now, or is stuck holding
+			// the lock: never wait for it. This turn takes no bulk rows; the
+			// next turn (a worker's wake-up, the tick) tries again.
+			logger.Debug().Msg("Send budget locked by another process: the bulk lane skips this turn")
+			return nil
 		}
 		at, err := m.budgetNow(ctx, q)
 		if err != nil {
@@ -178,7 +216,7 @@ func (m *mailerImpl) claimBulk(ctx context.Context, logger *zerolog.Logger, maxR
 		}
 		counted, err := q.SendWindowCounts(ctx, database.SendWindowCountsParams{
 			MinuteSince: windowStart(at, minuteSpan).Add(-minuteSpan),
-			DaySince:    windowStart(at, daySpan).Add(-daySpan),
+			HourSince:   dayFrom(at),
 		})
 		if err != nil {
 			return err
@@ -229,7 +267,7 @@ func (m *mailerImpl) countSystem(ctx context.Context, logger *zerolog.Logger, n 
 func countSends(ctx context.Context, q *database.Queries, at time.Time, lane Priority, n int) error {
 	return q.CountSends(ctx, database.CountSendsParams{
 		MinuteStart: windowStart(at, minuteSpan),
-		DayStart:    windowStart(at, daySpan),
+		HourStart:   windowStart(at, hourSpan),
 		Lane:        int16(lane),
 		Taken:       n,
 	})

@@ -18,8 +18,7 @@ const (
 
 // Up makes the windows and builds the lane indexes concurrently, which
 // golang-migrate can do only outside a transaction; an image from before them
-// queues as it did. Each lane's take reads its own index. Down drops them all
-// and leaves the queue.
+// queues as it did. Down drops them all and leaves the queue.
 func TestSendBudgetMigrationsGoUpAndDown(t *testing.T) {
 	database := testpostgres.StartDatabase(t)
 	ctx := context.Background()
@@ -76,41 +75,8 @@ func TestSendBudgetMigrationsGoUpAndDown(t *testing.T) {
 		t.Fatalf("counting in a window: %v", err)
 	}
 
-	// Each take's inner select, as query.sql has it. Sequential scans off: on
-	// a table this small the planner would read it whole; what matters is
-	// which index it picks when it uses one.
-	conn, err := database.Pool.Acquire(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Release()
-	if _, err := conn.Exec(ctx, `ANALYZE mail_queue; SET enable_seqscan = off`); err != nil {
-		t.Fatal(err)
-	}
-	for lane, index := range map[string]string{"priority > 0": "idx_mail_queue_pending_system", "priority <= 0": "idx_mail_queue_pending_bulk"} {
-		var plan strings.Builder
-		rows, err := conn.Query(ctx, `
-			EXPLAIN SELECT id FROM mail_queue
-			WHERE status = 'pending' AND `+lane+` AND next_attempt_at <= NOW()
-			ORDER BY next_attempt_at, created_at LIMIT $1::int FOR UPDATE SKIP LOCKED`, 3)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for rows.Next() {
-			var line string
-			if err := rows.Scan(&line); err != nil {
-				t.Fatal(err)
-			}
-			plan.WriteString(line + "\n")
-		}
-		rows.Close()
-		if !strings.Contains(plan.String(), "Index Scan using "+index) || strings.Contains(plan.String(), "Sort") {
-			t.Errorf("the %s lane's take does not read %s in order:\n%s", lane, index, plan.String())
-		}
-	}
-	if _, err := conn.Exec(ctx, `RESET enable_seqscan`); err != nil {
-		t.Fatal(err)
-	}
+	// That each lane's take reads its index is tested on the queries sqlc
+	// generated (internal/database, TestEachLaneTakeReadsItsOwnIndex).
 
 	if err := runner.Migrate(mailQueuePriority); err != nil {
 		t.Fatalf("down: %v", err)

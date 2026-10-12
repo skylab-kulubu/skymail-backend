@@ -197,8 +197,8 @@ günde 10.000 alıcı. Varsayılanlar bunların altında kalır.
 
 - Değer tam sayıdır. `0` o sınırı kapatır, ikisi de `0` ise bütçe yoktur
   (bütçeden önceki davranış). Başka bir değer açılışı durdurur.
-- Sayaçlar Postgres'te (`mail_send_windows`): dakika ve gün pencereleri, şerit
-  başına alınan satır sayısı. Bütün replikalar aynı satırları okur ve yazar,
+- Sayaçlar Postgres'te (`mail_send_windows`): dakika ve saat pencereleri,
+  şerit başına alınan satır sayısı. Bütün replikalar aynı satırları okur ve yazar,
   zaman olarak veritabanının saatini kullanır.
 - Toplu şerit her sınırın en çok %70'ini alır (25'te 17, 9.000'de 6.300). Bir
   süreç toplu satırı yalnız `skymail-backend send budget` advisory lock'u
@@ -207,9 +207,17 @@ günde 10.000 alıcı. Varsayılanlar bunların altında kalır.
 - Sistem şeridi (`/mail_tasks/single`) bütçe yüzünden hiçbir zaman beklemez ve
   düşmez: satırları her zaman alınır, işçiye verildikten sonra sayılır. Payını
   aşarsa toplu şerit o kadar geri çekilir.
-- Önceki pencere, şimdiye bir pencere boyu içinde kalan kısmı kadar sayılır
+- Dakika: önceki dakika, şimdiye bir dakika içinde kalan kısmı kadar sayılır
   (kayan pencere tahmini). Böylece bir liste payını bir dakikanın sonunda ve
-  bir sonrakinin başında iki kez göndermez, dakikaya yayılır.
+  bir sonrakinin başında iki kez göndermez, dakikaya yayılır. Exchange
+  dakikalık aşımı yalnız geciktirir.
+- Gün: saat saat sayılır ve tahmin edilmez: son 24 saate giren her saatin
+  toplamı (24 saat önceki anı içeren saat dahil, en çok bir saat fazla sayar,
+  hiç eksik saymaz). Exchange'in alıcı sınırı kayan 24 saattir ve aşılınca
+  hesap, giriş kodları dahil, hiçbir şey gönderemez.
+- Bir süreç bütçe kilidini tutarken öteki süreçler onu beklemez
+  (`pg_try_advisory_xact_lock`): toplu şerit o turu atlar, sistem şeridi
+  hiç etkilenmez.
 - Bütçe dolunca toplu satırlar `pending` kalır, dağıtıcının 10 saniyelik
   turunda yer açıldıkça gider. 190 kişilik bir duyuru dakikada 17 ile yaklaşık
   11 dakika sürer.

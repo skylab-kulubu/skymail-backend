@@ -3,6 +3,7 @@ package mailer_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -291,5 +292,145 @@ func TestSingleMailGoesWhileTheBulkBudgetIsSpent(t *testing.T) {
 	}
 	if !logged {
 		t.Fatal("startup does not log the send budget")
+	}
+}
+
+// Another process holds the budget's lock and does not let go (stuck, or
+// idle in its transaction): this process's turn does not wait for it. The
+// single mail goes; the bulk lane skips the turn.
+func TestSingleMailGoesWhileAnotherProcessHoldsTheBudgetLock(t *testing.T) {
+	captureMailerLogs(t)
+	db := laneQueue(t, 10)
+	m := budgeted(t, db, mailer.RateBudget{PerMinute: 25, PerDay: 9000}, newTestClock(), 3)
+	enqueueList(t, m)
+	enqueueSingle(t, m, "kod@example.com")
+	ctx := context.Background()
+
+	holder, err := db.Conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = holder.Rollback(context.Background()) })
+	if _, err := holder.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('skymail-backend send budget', 0))`); err != nil {
+		t.Fatal(err)
+	}
+
+	turn := make(chan []database.MailQueue, 1)
+	go func() { turn <- mailer.Turn(ctx, m) }()
+	select {
+	case taken := <-turn:
+		if system, bulk := byLane(taken); system != 1 || bulk != 0 {
+			t.Fatalf("with the budget's lock held elsewhere a turn took %d single mails and %d bulk rows, want 1 and none", system, bulk)
+		}
+	case <-time.After(3 * time.Second):
+		_ = holder.Rollback(context.Background())
+		<-turn
+		t.Fatal("the turn waited for another process's budget lock; the single mail waited with it")
+	}
+
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, bulk := byLane(mailer.Turn(ctx, m)); bulk != 2 {
+		t.Fatalf("with the lock free the bulk lane took %d rows, want 2 (its workers)", bulk)
+	}
+}
+
+// The day is the relay's sliding 24 hours, counted hour by hour, not
+// estimated: a day's bulk share sent in the last six hours of yesterday still
+// counts in full until 24 hours have passed over each hour of it. (Weighed
+// by how much of yesterday is left, the bulk lane would get ~4,700 more at
+// 17:48 today, ~11,000 recipients in 24 hours, and Exchange would stop the
+// account, login codes included.)
+func TestDayCountsEveryHourOfTheLast24(t *testing.T) {
+	budget := mailer.RateBudget{PerDay: 9000}
+	today := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
+	var yesterdayEvening []database.MailSendWindow
+	for hour := 18; hour < 24; hour++ {
+		yesterdayEvening = append(yesterdayEvening, database.MailSendWindow{
+			SpanSeconds: 3600, StartsAt: today.Add(time.Duration(hour-24) * time.Hour), Lane: 0, Taken: 1050,
+		})
+	}
+	// A minute window of yesterday and a day-span row (spans the budget no
+	// longer reads) count for nothing.
+	stray := append(yesterdayEvening,
+		database.MailSendWindow{SpanSeconds: 60, StartsAt: today.Add(-time.Hour), Lane: 0, Taken: 500},
+		database.MailSendWindow{SpanSeconds: 86400, StartsAt: today.Add(-24 * time.Hour), Lane: 0, Taken: 500},
+	)
+	for _, c := range []struct {
+		at   time.Duration // into today
+		want int
+	}{
+		{17*time.Hour + 48*time.Minute, 0},    // all six hours within the 24
+		{18*time.Hour + 30*time.Minute, 0},    // 18:00 yesterday still reaches in
+		{19*time.Hour + 30*time.Minute, 1050}, // 18:00 yesterday out
+		{23*time.Hour + 59*time.Minute, 5250}, // only 23:00 yesterday in
+		{24*time.Hour + time.Minute, 6300},    // all out
+	} {
+		if got := mailer.BulkRoom(budget, today.Add(c.at), stray); got != c.want {
+			t.Errorf("at %s today the bulk lane has room for %d, want %d", c.at, got, c.want)
+		}
+	}
+	// System mail counts toward the whole limit: 9000 less 6300 less 2000.
+	withSystem := append(yesterdayEvening, database.MailSendWindow{
+		SpanSeconds: 3600, StartsAt: today.Add(10 * time.Hour), Lane: 1, Taken: 2000,
+	})
+	if got := mailer.BulkRoom(budget, today.Add(17*time.Hour), withSystem); got != 0 {
+		t.Errorf("room %d with the bulk share taken, want 0", got)
+	}
+	if got := mailer.BulkRoom(mailer.RateBudget{PerDay: 9000}, today.Add(30*time.Hour), withSystem); got != 6300 {
+		t.Errorf("room %d once only system mail is in the 24 hours, want 6300 (9000 - 2000 = 7000 leaves the bulk share)", got)
+	}
+}
+
+// The reaper drops windows two days old and keeps the rest.
+func TestPruneDropsWindowsTwoDaysOld(t *testing.T) {
+	captureMailerLogs(t)
+	db := laneQueue(t, 1)
+	clock := newTestClock()
+	m := budgeted(t, db, mailer.RateBudget{PerMinute: 25, PerDay: 9000}, clock, 3)
+	ctx := context.Background()
+	at := clock.now()
+	for _, startsAt := range []time.Time{at.Add(-49 * time.Hour), at.Add(-47 * time.Hour), at} {
+		if _, err := db.Conn.Exec(ctx, `INSERT INTO mail_send_windows VALUES (3600, $1, 0, 1)`, startsAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mailer.PruneSendWindows(ctx, m)
+	var left int
+	if err := db.Conn.QueryRow(ctx, `SELECT count(*) FROM mail_send_windows WHERE starts_at >= $1`, at.Add(-48*time.Hour)).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	var all int
+	if err := db.Conn.QueryRow(ctx, `SELECT count(*) FROM mail_send_windows`).Scan(&all); err != nil {
+		t.Fatal(err)
+	}
+	if all != 2 || left != 2 {
+		t.Fatalf("after pruning %d windows left (%d within two days), want the 2 within two days", all, left)
+	}
+}
+
+// Counting a single mail fails (the windows cannot be written): the mail goes
+// all the same, and the failure is logged.
+func TestSingleMailGoesWhenItCannotBeCounted(t *testing.T) {
+	logs := captureMailerLogs(t)
+	db := laneQueue(t, 1)
+	m := budgeted(t, db, mailer.RateBudget{PerMinute: 25, PerDay: 9000}, newTestClock(), 3)
+	ctx := context.Background()
+	enqueueSingle(t, m, "kod@example.com")
+	if _, err := db.Conn.Exec(ctx, `ALTER TABLE mail_send_windows RENAME TO mail_send_windows_gone`); err != nil {
+		t.Fatal(err)
+	}
+	if system, _ := byLane(mailer.Turn(ctx, m)); system != 1 {
+		t.Fatalf("a turn took %d single mails when counting fails, want 1", system)
+	}
+	warned := false
+	for _, line := range logs.lines(t) {
+		if msg, _ := line["message"].(string); strings.Contains(msg, "without counting it in the send budget") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatal("no warning that the single mail went uncounted")
 	}
 }

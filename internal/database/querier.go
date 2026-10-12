@@ -60,7 +60,7 @@ type Querier interface {
 	// queued since, which is never touched. Counts and times only.
 	CountRestoredQueueItems(ctx context.Context, before time.Time) (CountRestoredQueueItemsRow, error)
 	// Counts taken rows of one lane in the minute starting at minute_start and
-	// the day starting at day_start.
+	// the hour starting at hour_start.
 	CountSends(ctx context.Context, arg CountSendsParams) error
 	CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error)
 	CountTemplates(ctx context.Context) (int64, error)
@@ -83,7 +83,9 @@ type Querier interface {
 	CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error)
 	CreateTemplate(ctx context.Context, arg CreateTemplateParams) (Template, error)
 	// The database's clock: the one clock every process's send budget reads, so
-	// replicas whose clocks differ still count in the same windows.
+	// replicas whose clocks differ still count in the same windows. The
+	// statement's time, not the transaction's (NOW()), so a budget read later in
+	// a transaction reads the instant it counts at.
 	DatabaseNow(ctx context.Context) (time.Time, error)
 	// Discards a draft: it stays in the history, but it is nobody's draft in
 	// progress any more and it is never published. A draft discarded already
@@ -179,8 +181,10 @@ type Querier interface {
 	// Serialises the bulk lane's take across processes: under it a process reads
 	// the send windows, takes as many bulk rows as they leave room for and counts
 	// them, and the next process reads its count. Held to the end of the
-	// transaction. The system lane never takes it.
-	LockSendBudget(ctx context.Context) error
+	// transaction. Never waited for: false when another process holds it, and
+	// the bulk lane skips that turn, so a process stuck holding it never holds up
+	// another's dispatcher (nor its single mail). The system lane never takes it.
+	LockSendBudget(ctx context.Context) (bool, error)
 	// Takes a template row's lock for a write that does not change the row first —
 	// saving a draft, restoring a version, publishing, discarding. A version is
 	// numbered after the lock is taken, and the old panel's and the seed's writes
@@ -205,7 +209,7 @@ type Querier interface {
 	// index (idx_mail_queue_pending_system) whatever plan it keeps.
 	ProcessSystemQueueItems(ctx context.Context, arg ProcessSystemQueueItemsParams) ([]MailQueue, error)
 	// Drops send windows no budget reads any more: those that started before
-	// before (two days back, past the day before the current one).
+	// before (two days back, well past the last 24 hours).
 	PruneSendWindows(ctx context.Context, before time.Time) (int64, error)
 	// Publishes a draft: marks it published and copies it onto the template row,
 	// which the send path reads — its name, subject and render. react_email_content,
@@ -287,8 +291,8 @@ type Querier interface {
 	// AddMailApprovalRecipients).
 	ResubmitMailApproval(ctx context.Context, arg ResubmitMailApprovalParams) (MailApproval, error)
 	// The send windows a budget reads at one instant: the minutes starting at or
-	// after minute_since and the days starting at or after day_since (the
-	// current window of each and the one before it).
+	// after minute_since (the current minute and the one before it) and the
+	// hours starting at or after hour_since (every hour of the last 24).
 	SendWindowCounts(ctx context.Context, arg SendWindowCountsParams) ([]MailSendWindow, error)
 	// A NULL deadline leaves the request's deadline as it is.
 	SetMailApprovalState(ctx context.Context, arg SetMailApprovalStateParams) (MailApproval, error)

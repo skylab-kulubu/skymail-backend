@@ -549,7 +549,7 @@ func (q *Queries) CountRestoredQueueItems(ctx context.Context, before time.Time)
 const countSends = `-- name: CountSends :exec
 INSERT INTO mail_send_windows (span_seconds, starts_at, lane, taken)
 VALUES (60, $1::timestamptz, $2::smallint, $3::int),
-       (86400, $4::timestamptz, $2::smallint, $3::int)
+       (3600, $4::timestamptz, $2::smallint, $3::int)
 ON CONFLICT (span_seconds, starts_at, lane) DO UPDATE
     SET taken = mail_send_windows.taken + EXCLUDED.taken
 `
@@ -558,17 +558,17 @@ type CountSendsParams struct {
 	MinuteStart time.Time `json:"minute_start"`
 	Lane        int16     `json:"lane"`
 	Taken       int       `json:"taken"`
-	DayStart    time.Time `json:"day_start"`
+	HourStart   time.Time `json:"hour_start"`
 }
 
 // Counts taken rows of one lane in the minute starting at minute_start and
-// the day starting at day_start.
+// the hour starting at hour_start.
 func (q *Queries) CountSends(ctx context.Context, arg CountSendsParams) error {
 	_, err := q.db.Exec(ctx, countSends,
 		arg.MinuteStart,
 		arg.Lane,
 		arg.Taken,
-		arg.DayStart,
+		arg.HourStart,
 	)
 	return err
 }
@@ -925,11 +925,13 @@ func (q *Queries) CreateTemplate(ctx context.Context, arg CreateTemplateParams) 
 }
 
 const databaseNow = `-- name: DatabaseNow :one
-SELECT NOW()::timestamptz AS now
+SELECT statement_timestamp()::timestamptz AS now
 `
 
 // The database's clock: the one clock every process's send budget reads, so
-// replicas whose clocks differ still count in the same windows.
+// replicas whose clocks differ still count in the same windows. The
+// statement's time, not the transaction's (NOW()), so a budget read later in
+// a transaction reads the instant it counts at.
 func (q *Queries) DatabaseNow(ctx context.Context) (time.Time, error) {
 	row := q.db.QueryRow(ctx, databaseNow)
 	var now time.Time
@@ -2481,17 +2483,21 @@ func (q *Queries) LockMailApproval(ctx context.Context, id uuid.UUID) (MailAppro
 	return i, err
 }
 
-const lockSendBudget = `-- name: LockSendBudget :exec
-SELECT pg_advisory_xact_lock(hashtextextended('skymail-backend send budget', 0))
+const lockSendBudget = `-- name: LockSendBudget :one
+SELECT pg_try_advisory_xact_lock(hashtextextended('skymail-backend send budget', 0)) AS locked
 `
 
 // Serialises the bulk lane's take across processes: under it a process reads
 // the send windows, takes as many bulk rows as they leave room for and counts
 // them, and the next process reads its count. Held to the end of the
-// transaction. The system lane never takes it.
-func (q *Queries) LockSendBudget(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, lockSendBudget)
-	return err
+// transaction. Never waited for: false when another process holds it, and
+// the bulk lane skips that turn, so a process stuck holding it never holds up
+// another's dispatcher (nor its single mail). The system lane never takes it.
+func (q *Queries) LockSendBudget(ctx context.Context) (bool, error) {
+	row := q.db.QueryRow(ctx, lockSendBudget)
+	var locked bool
+	err := row.Scan(&locked)
+	return locked, err
 }
 
 const lockTemplate = `-- name: LockTemplate :one
@@ -2699,7 +2705,7 @@ WHERE starts_at < $1::timestamptz
 `
 
 // Drops send windows no budget reads any more: those that started before
-// before (two days back, past the day before the current one).
+// before (two days back, well past the last 24 hours).
 func (q *Queries) PruneSendWindows(ctx context.Context, before time.Time) (int64, error) {
 	result, err := q.db.Exec(ctx, pruneSendWindows, before)
 	if err != nil {
@@ -3324,19 +3330,19 @@ const sendWindowCounts = `-- name: SendWindowCounts :many
 SELECT span_seconds, starts_at, lane, taken
 FROM mail_send_windows
 WHERE (span_seconds = 60 AND starts_at >= $1::timestamptz)
-   OR (span_seconds = 86400 AND starts_at >= $2::timestamptz)
+   OR (span_seconds = 3600 AND starts_at >= $2::timestamptz)
 `
 
 type SendWindowCountsParams struct {
 	MinuteSince time.Time `json:"minute_since"`
-	DaySince    time.Time `json:"day_since"`
+	HourSince   time.Time `json:"hour_since"`
 }
 
 // The send windows a budget reads at one instant: the minutes starting at or
-// after minute_since and the days starting at or after day_since (the
-// current window of each and the one before it).
+// after minute_since (the current minute and the one before it) and the
+// hours starting at or after hour_since (every hour of the last 24).
 func (q *Queries) SendWindowCounts(ctx context.Context, arg SendWindowCountsParams) ([]MailSendWindow, error) {
-	rows, err := q.db.Query(ctx, sendWindowCounts, arg.MinuteSince, arg.DaySince)
+	rows, err := q.db.Query(ctx, sendWindowCounts, arg.MinuteSince, arg.HourSince)
 	if err != nil {
 		return nil, err
 	}
