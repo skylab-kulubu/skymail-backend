@@ -20,9 +20,34 @@ import (
 // everyone's codes and links. Their content is never shown, whatever their
 // row says; the panel and the seed cannot make them shown, and a write that
 // gives a template such a key marks it sensitive. This is the one list.
+//
+// What sends to SkyMail today (origin/main of every repo, 2026-10-12):
+//   - e-skylab-keycloak SPI: keycloak.verify-email, keycloak.reset-password,
+//     keycloak.update-email, keycloak.idp-link, keycloak.personal-email-confirm
+//     (a 6-digit code) and keycloak.generic (any other Keycloak mail, an
+//     e-mail login code or link among them);
+//   - account center (skymail-frontend emails/): account.security-alert,
+//     account.primary-email-changed, account.deletion-requested (cancel
+//     link), account.deletion-completed;
+//   - core-backend: core.contact-consent-confirm (confirmation link), and the
+//     event mails the repo holds for it: event.ticket-created and
+//     event.reminder (ticket code, QR link).
+//
+// Shown, and so not here: core.welcome, core.certificate (its VerifyURL is
+// public), club.team-membership, forms.* (form ids, no token), mail.approval-*
+// (links need a sign-in), ops.send-failed, event.updated, event.cancelled,
+// free.basic. YıldızPlace mails its login link over its own SMTP, not SkyMail;
+// auth., login. and otp. are reserved for such flows when they move here.
 var (
-	lockedSensitiveKeyPrefixes = []string{"keycloak.", "account."}
+	lockedSensitiveKeyPrefixes = []string{"keycloak.", "account.", "auth.", "login.", "otp."}
 	lockedSensitiveKeys        = []string{"core.contact-consent-confirm", "event.ticket-created", "event.reminder"}
+	// A key that names one of these as a word (between dots and dashes) is
+	// taken for a credential mail too, whoever sends it: place.login-link,
+	// forms.guest-verify-email, core.magic-link.
+	lockedSensitiveKeyWords = []string{
+		"login", "signin", "code", "otp", "passcode", "password", "reset", "verify", "verification",
+		"confirm", "confirmation", "token", "magic", "invite", "activation", "activate", "2fa", "mfa",
+	}
 )
 
 // ContentSensitiveLocked reports whether a template of this key is locked
@@ -39,6 +64,13 @@ func ContentSensitiveLocked(key *string) bool {
 	for _, locked := range lockedSensitiveKeys {
 		if *key == locked {
 			return true
+		}
+	}
+	for _, word := range strings.FieldsFunc(*key, func(r rune) bool { return r == '.' || r == '-' }) {
+		for _, locked := range lockedSensitiveKeyWords {
+			if word == locked {
+				return true
+			}
 		}
 	}
 	return false

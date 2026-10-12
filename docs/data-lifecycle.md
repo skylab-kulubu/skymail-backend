@@ -252,7 +252,11 @@ first sweep does not empty their single mails before the next seed.
 **Locked sensitive.** `keycloak.*`, `account.*`,
 `core.contact-consent-confirm`, `event.ticket-created` and `event.reminder`
 carry a credential: a login or verification code, a reset or account link, a
-ticket's code. Whoever reads system mail would otherwise read everyone's.
+ticket's code. So does any key under `auth.`, `login.` or `otp.`, or with a
+word such as `login`, `code`, `otp`, `reset`, `verify`, `confirm`, `token`,
+`magic` or `invite` between its dots and dashes, for the sign-in flows that
+may move to SkyMail (YıldızPlace mails its login link over its own SMTP
+today). Whoever reads system mail would otherwise read everyone's.
 They are sensitive whatever their row says; the panel's `false` is refused
 with `409 template.content_sensitive_locked`, the seed's is written as `true`,
 and a create or edit that gives a template such a key marks it `true`. The

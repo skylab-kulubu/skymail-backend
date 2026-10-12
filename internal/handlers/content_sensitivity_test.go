@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"testing"
 	"time"
 
@@ -96,13 +97,28 @@ func TestCredentialTemplatesAreLockedSensitive(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	app := templateVersionsApp(t, db)
 
-	for _, key := range []string{"keycloak.reset-password", "account.security-alert", "core.contact-consent-confirm", "event.ticket-created", "event.reminder"} {
+	for _, key := range []string{
+		// Every credential mail that sends to SkyMail today.
+		"keycloak.verify-email", "keycloak.reset-password", "keycloak.update-email", "keycloak.idp-link",
+		"keycloak.personal-email-confirm", "keycloak.generic",
+		"account.security-alert", "account.primary-email-changed", "account.deletion-requested", "account.deletion-completed",
+		"core.contact-consent-confirm", "event.ticket-created", "event.reminder",
+		// Flows that may move here: a mail-and-code sign-in, a login link, a reset.
+		"auth.email-code", "login.link", "otp.mail", "place.login-link", "core.login-code", "forms.guest-verify-email",
+		"core.magic-link", "core.password-reset", "club.invite", "forms.email-otp",
+	} {
 		k := key
 		if !ContentSensitiveLocked(&k) {
 			t.Errorf("%s is not locked", key)
 		}
 	}
-	for _, key := range []string{"core.welcome", "free.basic", "keycloak", "accounts.x", "event.updated", "forms.form-copy"} {
+	for _, key := range []string{
+		// Shown: what sends to SkyMail today without a credential.
+		"free.basic", "core.welcome", "core.certificate", "club.team-membership", "event.updated", "event.cancelled",
+		"mail.approval-requested", "mail.approval-resolved", "ops.send-failed",
+		"forms.form-copy", "forms.status-changed", "forms.pending-reminder", "forms.attempt-update",
+		"keycloak", "accounts.x", "core.codex-news", "club.resetting",
+	} {
 		k := key
 		if ContentSensitiveLocked(&k) {
 			t.Errorf("%s is locked", key)
@@ -187,5 +203,32 @@ func TestLockedTemplateContentIsHiddenWhateverItsRowSays(t *testing.T) {
 	}
 	if err := json.Unmarshal(body, &send); status != fiber.StatusOK || err != nil || send.ContentAccess != "sensitive" {
 		t.Errorf("send = %d %s, want content_access sensitive", status, body)
+	}
+}
+
+// A new single-mail template nobody has said anything about, whose subject or
+// body carries a code, a one-time password, a token, a link or a URL, is
+// hidden: content_sensitive NULL leaves a single mail to its kind of send.
+func TestANewSingleTemplateCarryingACodeOrALinkIsHiddenByDefault(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
+	app := contentApp(t, db, now)
+	system := []string{"skymail:access", "skymail:mails:read", "skymail:mails:write", SystemMailsReadRole}
+	for i, variable := range []string{"code", "otp", "token", "link", "url"} {
+		task, row := seedContentSend(t, db, contentSend{sentBy: contentSender, createdAt: now.Add(-time.Hour)})
+		if _, err := db.Conn.Exec(context.Background(), `
+			UPDATE templates SET key = 'core.new-mail-' || $3, subject = 'Kodun: {{.'||$2||'}}',
+			       html_content = '<p>{{.'||$2||'}}</p>', plain_text_content = '{{.'||$2||'}}'
+			WHERE id = (SELECT template_id FROM mail_tasks WHERE id = $1)`, task, variable, strconv.Itoa(i)); err != nil {
+			t.Fatal(err)
+		}
+		// Not locked by its key: hidden because nobody said it may be shown.
+		key := "core.new-mail-" + strconv.Itoa(i)
+		if ContentSensitiveLocked(&key) {
+			t.Fatalf("%s is locked; the test needs a key that is not", key)
+		}
+		if answer := contentAs(t, app, task, row, contentSender, system...); answer.Access != "sensitive" || answer.Subject != nil {
+			t.Errorf("%s: content = %+v, want sensitive", variable, answer)
+		}
 	}
 }
