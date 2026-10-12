@@ -546,6 +546,33 @@ func (q *Queries) CountRestoredQueueItems(ctx context.Context, before time.Time)
 	return i, err
 }
 
+const countSends = `-- name: CountSends :exec
+INSERT INTO mail_send_windows (span_seconds, starts_at, lane, taken)
+VALUES (60, $1::timestamptz, $2::smallint, $3::int),
+       (3600, $4::timestamptz, $2::smallint, $3::int)
+ON CONFLICT (span_seconds, starts_at, lane) DO UPDATE
+    SET taken = mail_send_windows.taken + EXCLUDED.taken
+`
+
+type CountSendsParams struct {
+	MinuteStart time.Time `json:"minute_start"`
+	Lane        int16     `json:"lane"`
+	Taken       int       `json:"taken"`
+	HourStart   time.Time `json:"hour_start"`
+}
+
+// Counts taken rows of one lane in the minute starting at minute_start and
+// the hour starting at hour_start.
+func (q *Queries) CountSends(ctx context.Context, arg CountSendsParams) error {
+	_, err := q.db.Exec(ctx, countSends,
+		arg.MinuteStart,
+		arg.Lane,
+		arg.Taken,
+		arg.HourStart,
+	)
+	return err
+}
+
 const countTemplateVersions = `-- name: CountTemplateVersions :one
 SELECT count(*)
 FROM template_versions
@@ -576,6 +603,39 @@ func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const createFailedMailQueueItem = `-- name: CreateFailedMailQueueItem :exec
+INSERT INTO mail_queue (
+    task_id, recipient_full_name, recipient_email,
+    subject, body, priority, status, error
+) VALUES (
+    $1, $2, $3,
+    '', '', $4, 'failed', $5::text
+)
+`
+
+type CreateFailedMailQueueItemParams struct {
+	TaskID            uuid.UUID `json:"task_id"`
+	RecipientFullName string    `json:"recipient_full_name"`
+	RecipientEmail    string    `json:"recipient_email"`
+	Priority          int16     `json:"priority"`
+	Error             string    `json:"error"`
+}
+
+// A recipient whose mail did not render, say a template that slices an empty
+// full name, is written failed, with the render error the send's page shows:
+// the send's other recipients are queued and mail_task_status reports the
+// send failed. Nothing was tried, so attempts stays 0.
+func (q *Queries) CreateFailedMailQueueItem(ctx context.Context, arg CreateFailedMailQueueItemParams) error {
+	_, err := q.db.Exec(ctx, createFailedMailQueueItem,
+		arg.TaskID,
+		arg.RecipientFullName,
+		arg.RecipientEmail,
+		arg.Priority,
+		arg.Error,
+	)
+	return err
 }
 
 const createMailApproval = `-- name: CreateMailApproval :one
@@ -649,6 +709,7 @@ type CreateMailQueueItemsParams struct {
 	Subject           string    `json:"subject"`
 	Body              string    `json:"body"`
 	BodyHtml          *string   `json:"body_html"`
+	Priority          int16     `json:"priority"`
 }
 
 const createMailTask = `-- name: CreateMailTask :many
@@ -861,6 +922,21 @@ func (q *Queries) CreateTemplate(ctx context.Context, arg CreateTemplateParams) 
 		&i.SeedRefusedPayloadSha256,
 	)
 	return i, err
+}
+
+const databaseNow = `-- name: DatabaseNow :one
+SELECT statement_timestamp()::timestamptz AS now
+`
+
+// The database's clock: the one clock every process's send budget reads, so
+// replicas whose clocks differ still count in the same windows. The
+// statement's time, not the transaction's (NOW()), so a budget read later in
+// a transaction reads the instant it counts at.
+func (q *Queries) DatabaseNow(ctx context.Context) (time.Time, error) {
+	row := q.db.QueryRow(ctx, databaseNow)
+	var now time.Time
+	err := row.Scan(&now)
+	return now, err
 }
 
 const discardTemplateDraft = `-- name: DiscardTemplateDraft :exec
@@ -2407,6 +2483,23 @@ func (q *Queries) LockMailApproval(ctx context.Context, id uuid.UUID) (MailAppro
 	return i, err
 }
 
+const lockSendBudget = `-- name: LockSendBudget :one
+SELECT pg_try_advisory_xact_lock(hashtextextended('skymail-backend send budget', 0)) AS locked
+`
+
+// Serialises the bulk lane's take across processes: under it a process reads
+// the send windows, takes as many bulk rows as they leave room for and counts
+// them, and the next process reads its count. Held to the end of the
+// transaction. Never waited for: false when another process holds it, and
+// the bulk lane skips that turn, so a process stuck holding it never holds up
+// another's dispatcher (nor its single mail). The system lane never takes it.
+func (q *Queries) LockSendBudget(ctx context.Context) (bool, error) {
+	row := q.db.QueryRow(ctx, lockSendBudget)
+	var locked bool
+	err := row.Scan(&locked)
+	return locked, err
+}
+
 const lockTemplate = `-- name: LockTemplate :one
 SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256
 FROM templates
@@ -2483,7 +2576,7 @@ func (q *Queries) LockTemplateByKey(ctx context.Context, key *string) (Template,
 	return i, err
 }
 
-const processQueueItems = `-- name: ProcessQueueItems :many
+const processBulkQueueItems = `-- name: ProcessBulkQueueItems :many
 UPDATE mail_queue
 SET status     = 'processing',
     claimed_at = NOW(),
@@ -2491,22 +2584,23 @@ SET status     = 'processing',
 WHERE id IN (SELECT id
              FROM mail_queue
              WHERE status = 'pending'
+               AND priority <= 0
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority
 `
 
-type ProcessQueueItemsParams struct {
+type ProcessBulkQueueItemsParams struct {
 	ClaimedBy string `json:"claimed_by"`
 	MaxRows   int    `json:"max_rows"`
 }
 
-// Takes up to max_rows due rows for one process, leased to it: claimed_by
-// names the process, claimed_at starts the lease. The process asks for as many
-// rows as it has idle workers, so no row waits taken in a process's memory.
-func (q *Queries) ProcessQueueItems(ctx context.Context, arg ProcessQueueItemsParams) ([]MailQueue, error) {
-	rows, err := q.db.Query(ctx, processQueueItems, arg.ClaimedBy, arg.MaxRows)
+// The same for the bulk lane (lists, groups, approved sends), which reads
+// idx_mail_queue_pending_bulk. The process asks for no more rows than the
+// send budget leaves room for (SendWindowCounts), under LockSendBudget.
+func (q *Queries) ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueueItemsParams) ([]MailQueue, error) {
+	rows, err := q.db.Query(ctx, processBulkQueueItems, arg.ClaimedBy, arg.MaxRows)
 	if err != nil {
 		return nil, err
 	}
@@ -2529,6 +2623,7 @@ func (q *Queries) ProcessQueueItems(ctx context.Context, arg ProcessQueueItemsPa
 			&i.NextAttemptAt,
 			&i.ClaimedAt,
 			&i.ClaimedBy,
+			&i.Priority,
 		); err != nil {
 			return nil, err
 		}
@@ -2538,6 +2633,85 @@ func (q *Queries) ProcessQueueItems(ctx context.Context, arg ProcessQueueItemsPa
 		return nil, err
 	}
 	return items, nil
+}
+
+const processSystemQueueItems = `-- name: ProcessSystemQueueItems :many
+UPDATE mail_queue
+SET status     = 'processing',
+    claimed_at = NOW(),
+    claimed_by = $1::text
+WHERE id IN (SELECT id
+             FROM mail_queue
+             WHERE status = 'pending'
+               AND priority > 0
+               AND next_attempt_at <= NOW()
+             ORDER BY next_attempt_at, created_at
+             LIMIT $2::int FOR UPDATE SKIP LOCKED)
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority
+`
+
+type ProcessSystemQueueItemsParams struct {
+	ClaimedBy string `json:"claimed_by"`
+	MaxRows   int    `json:"max_rows"`
+}
+
+// Takes up to max_rows due rows of the system lane (priority above 0: single
+// mail a person is waiting for) for one process, leased to it: claimed_by
+// names the process, claimed_at starts the lease. The process asks for as
+// many rows as it has idle workers, the system lane first, so no row waits
+// taken in a process's memory and no system row waits behind a bulk one. The
+// lane is written out, not a parameter, so the planner reads the lane's own
+// index (idx_mail_queue_pending_system) whatever plan it keeps.
+func (q *Queries) ProcessSystemQueueItems(ctx context.Context, arg ProcessSystemQueueItemsParams) ([]MailQueue, error) {
+	rows, err := q.db.Query(ctx, processSystemQueueItems, arg.ClaimedBy, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MailQueue
+	for rows.Next() {
+		var i MailQueue
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.RecipientFullName,
+			&i.RecipientEmail,
+			&i.Subject,
+			&i.Body,
+			&i.BodyHtml,
+			&i.Status,
+			&i.Error,
+			&i.CreatedAt,
+			&i.Attempts,
+			&i.NextAttemptAt,
+			&i.ClaimedAt,
+			&i.ClaimedBy,
+			&i.Priority,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pruneSendWindows = `-- name: PruneSendWindows :execrows
+DELETE
+FROM mail_send_windows
+WHERE starts_at < $1::timestamptz
+`
+
+// Drops send windows no budget reads any more: those that started before
+// before (two days back, well past the last 24 hours).
+func (q *Queries) PruneSendWindows(ctx context.Context, before time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneSendWindows, before)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const publishTemplateDraft = `-- name: PublishTemplateDraft :one
@@ -3150,6 +3324,46 @@ func (q *Queries) ResubmitMailApproval(ctx context.Context, arg ResubmitMailAppr
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const sendWindowCounts = `-- name: SendWindowCounts :many
+SELECT span_seconds, starts_at, lane, taken
+FROM mail_send_windows
+WHERE (span_seconds = 60 AND starts_at >= $1::timestamptz)
+   OR (span_seconds = 3600 AND starts_at >= $2::timestamptz)
+`
+
+type SendWindowCountsParams struct {
+	MinuteSince time.Time `json:"minute_since"`
+	HourSince   time.Time `json:"hour_since"`
+}
+
+// The send windows a budget reads at one instant: the minutes starting at or
+// after minute_since (the current minute and the one before it) and the
+// hours starting at or after hour_since (every hour of the last 24).
+func (q *Queries) SendWindowCounts(ctx context.Context, arg SendWindowCountsParams) ([]MailSendWindow, error) {
+	rows, err := q.db.Query(ctx, sendWindowCounts, arg.MinuteSince, arg.HourSince)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MailSendWindow
+	for rows.Next() {
+		var i MailSendWindow
+		if err := rows.Scan(
+			&i.SpanSeconds,
+			&i.StartsAt,
+			&i.Lane,
+			&i.Taken,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const setMailApprovalState = `-- name: SetMailApprovalState :one

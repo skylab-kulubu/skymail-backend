@@ -23,6 +23,9 @@ func Claimant(m Transactional) string { return m.(*mailerImpl).claimant }
 // before Start.
 func SetSendBudget(m Transactional, budget time.Duration) { m.(*mailerImpl).sendBudget = budget }
 
+// BulkSlotsFor is how many of a process's workers the bulk lane may hold.
+var BulkSlotsFor = bulkSlotsFor
+
 // DialWithin is the dialler the workers give go-mail.
 var DialWithin = dialWithin
 
@@ -48,3 +51,46 @@ func SendOnce(ctx context.Context, m Transactional, job database.MailQueue) erro
 	}
 	return impl.sendEmail(ctx, client, job)
 }
+
+// WindowRoom is the room one send window leaves the bulk lane.
+var WindowRoom = windowRoom
+
+// SetClock makes m's send budget read now instead of the database's clock.
+// Call it before Start.
+func SetClock(m Transactional, now func() time.Time) { m.(*mailerImpl).clock = now }
+
+// PrepareTurns readies m to take rows a turn at a time (Turn) for slots
+// workers, none of them running.
+func PrepareTurns(m Transactional, slots int) {
+	impl := m.(*mailerImpl)
+	impl.workers = slots
+	impl.bulkSlots = bulkSlotsFor(slots)
+	impl.jobs = make(chan database.MailQueue, slots)
+}
+
+// Turn runs one turn of m's dispatcher and returns the rows it took, which
+// then count as sent: the next turn has every worker idle again.
+func Turn(ctx context.Context, m Transactional) []database.MailQueue {
+	impl := m.(*mailerImpl)
+	impl.drainQueue(ctx, impl.logger)
+	var taken []database.MailQueue
+	for {
+		select {
+		case job := <-impl.jobs:
+			taken = append(taken, job)
+			impl.untake(job)
+		default:
+			return taken
+		}
+	}
+}
+
+// BulkRoom is the room budget leaves the bulk lane at at, given the windows
+// counted.
+func BulkRoom(budget RateBudget, at time.Time, counted []database.MailSendWindow) int {
+	return budget.bulkRoom(at, counted)
+}
+
+// PruneSendWindows drops the send windows m's budget reads no more, as the
+// reaper does.
+func PruneSendWindows(ctx context.Context, m Transactional) { m.(*mailerImpl).pruneSendWindows(ctx) }

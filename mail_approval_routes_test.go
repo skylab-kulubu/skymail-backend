@@ -155,8 +155,8 @@ func (m *recordingMailer) EnqueueWithRecipients(ctx context.Context, params mail
 	return recordingQueue{m: m, queue: m.Transactional}.EnqueueWithRecipients(ctx, params)
 }
 
-func (m *recordingMailer) Queue(q *database.Queries) mailer.Queue {
-	return recordingQueue{m: m, queue: m.Transactional.Queue(q), inTx: true}
+func (m *recordingMailer) Queue(q *database.Queries, priority mailer.Priority) mailer.Queue {
+	return recordingQueue{m: m, queue: m.Transactional.Queue(q, priority), inTx: true}
 }
 
 // recordingQueue records each send it queues through queue. inTx: it is an
@@ -728,7 +728,7 @@ func TestSubmissionStandsWhenNoApproverCanBeTold(t *testing.T) {
 func (w *approvalWorld) queuedRows(taskID uuid.UUID) map[string]database.MailQueue {
 	w.t.Helper()
 	rows, err := w.store.Conn.Query(context.Background(), `
-		SELECT recipient_email, subject, body, body_html FROM mail_queue WHERE task_id = $1`, taskID)
+		SELECT recipient_email, subject, body, body_html, priority FROM mail_queue WHERE task_id = $1`, taskID)
 	if err != nil {
 		w.t.Fatal(err)
 	}
@@ -736,7 +736,7 @@ func (w *approvalWorld) queuedRows(taskID uuid.UUID) map[string]database.MailQue
 	out := map[string]database.MailQueue{}
 	for rows.Next() {
 		var row database.MailQueue
-		if err := rows.Scan(&row.RecipientEmail, &row.Subject, &row.Body, &row.BodyHtml); err != nil {
+		if err := rows.Scan(&row.RecipientEmail, &row.Subject, &row.Body, &row.BodyHtml, &row.Priority); err != nil {
 			w.t.Fatal(err)
 		}
 		out[row.RecipientEmail] = row
@@ -823,6 +823,16 @@ func TestApprovingSendsExactlyWhatWasSubmittedOnce(t *testing.T) {
 	if approved.Notification == nil || approved.Notification.TemplateKey != "mail.approval-resolved" || approved.Notification.Notified != 1 {
 		t.Errorf("notification = %+v", approved.Notification)
 	}
+	// The approved send is an operator's mail, in the bulk lane; the notice is
+	// a system mail, in the system lane, never behind it.
+	for email, row := range rows {
+		if row.Priority != int16(mailer.PriorityBulk) {
+			t.Errorf("approved list send to %s queued with priority %d, want the bulk lane", email, row.Priority)
+		}
+	}
+	if row := w.queuedRows(notices[0].taskID)[elif.email]; row.Priority != int16(mailer.PrioritySystem) {
+		t.Errorf("approval-resolved notice queued with priority %d, want the system lane", row.Priority)
+	}
 
 	// Approving it again sends nothing; with an edit it is refused.
 	status, again, _ := w.act("yusuf", submitted.ID, "approve", nil)
@@ -866,8 +876,9 @@ func TestApprovingSendsToAGroupOrOneRecipient(t *testing.T) {
 	if len(sent) != 2 || sent[1].kind != "single" || sent[1].recipients[0] != "konusmaci@example.com" {
 		t.Fatalf("single send = %+v", sent)
 	}
-	if rows := w.queuedRows(sent[1].taskID); !strings.Contains(*rows["konusmaci@example.com"].BodyHtml, "<p>Konuşmacı</p>") {
-		t.Errorf("queued single = %+v", rows)
+	if rows := w.queuedRows(sent[1].taskID); !strings.Contains(*rows["konusmaci@example.com"].BodyHtml, "<p>Konuşmacı</p>") ||
+		rows["konusmaci@example.com"].Priority != int16(mailer.PriorityBulk) {
+		t.Errorf("queued single = %+v, want it in the bulk lane", rows)
 	}
 }
 

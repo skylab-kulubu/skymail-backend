@@ -66,6 +66,42 @@ func retryDelay(attempts int) time.Duration {
 	return delay
 }
 
+// Priority is a queue row's lane (mail_queue.priority). The dispatcher takes
+// the system lane first and gives the bulk lane at most BulkSharePercent of
+// its workers and of the send budget (RateBudget), so a send to a list or a
+// group never holds back a mail a person is waiting for. A row queued without
+// one (an image from before the lanes) is in the system lane.
+type Priority int16
+
+const (
+	// PriorityBulk is a send to a mailing list or a Keycloak group, and an
+	// approved send: an operator's mail, which can wait a moment.
+	PriorityBulk Priority = 0
+	// PrioritySystem is a single mail (POST /mail_tasks/single): a login
+	// code, a certificate, a Forms confirmation, a notification.
+	PrioritySystem Priority = 1
+)
+
+// BulkSharePercent is the most of a process's workers the bulk lane may hold
+// at once, and the most of each send budget limit it may take; the rest is
+// kept for the system lane. With three workers bulk sends hold two and a
+// single mail always finds the third free; of 25 mails a minute bulk sends
+// take 17.
+const BulkSharePercent = 70
+
+// bulkShare is the bulk lane's share of n workers or of a limit of n:
+// BulkSharePercent of it, rounded down, and at least one, or a lone worker
+// or a limit of one would never send a list.
+func bulkShare(n int) int {
+	if share := n * BulkSharePercent / 100; share > 0 {
+		return share
+	}
+	return 1
+}
+
+// bulkSlotsFor is how many of workers the bulk lane may hold.
+func bulkSlotsFor(workers int) int { return bulkShare(workers) }
+
 type RecipientInfo struct {
 	FullName string
 	Email    string
@@ -92,10 +128,15 @@ type Mailer interface {
 	EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error)
 }
 
+// Mailer's three ways to queue a send pick the lane: Enqueue (a list) and
+// EnqueueWithRecipients (a group) the bulk lane, EnqueueSingle the system
+// lane.
+
 // Queue is the send path inside a caller's transaction: the same three ways
 // to queue a send as Mailer's, written through that transaction, so the send
 // and its queue rows exist only if it commits, and nothing is dispatched
-// before it has. The caller wakes the dispatcher once it has committed.
+// before it has. All three queue in the lane the caller chose. The caller
+// wakes the dispatcher once it has committed.
 type Queue interface {
 	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error)
 	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
@@ -107,8 +148,9 @@ type Queue interface {
 // statement, and wake the dispatcher, as they always have.
 type Transactional interface {
 	Mailer
-	// Queue writes sends through q, a transaction's queries.
-	Queue(q *database.Queries) Queue
+	// Queue writes sends through q, a transaction's queries, in the lane
+	// priority.
+	Queue(q *database.Queries, priority Priority) Queue
 	// Wake asks the dispatcher to look at the queue now. Call it after the
 	// transaction a Queue wrote in commits; the dispatcher's tick finds the
 	// rows anyway, only later.
@@ -145,8 +187,17 @@ type mailerImpl struct {
 	// only workers - taken rows, so no taken row waits in this process.
 	workers int
 	taken   atomic.Int32
+	// bulkSlots is how many rows of the bulk lane this process holds at most
+	// (bulkSlotsFor), and takenBulk how many of taken are bulk rows.
+	bulkSlots int
+	takenBulk atomic.Int32
 	// sendBudget bounds one SMTP send from dial to QUIT (SendBudget).
 	sendBudget time.Duration
+	// budget is the send budget all processes share (RateBudget); clock,
+	// when a test sets it, is the instant the budget reads instead of the
+	// database's clock.
+	budget RateBudget
+	clock  func() time.Time
 	// deliver sends one row; tests replace it.
 	deliver func(ctx context.Context, client *mail.Client, job database.MailQueue) error
 	// clientOptions are added to the workers' SMTP client options; tests
@@ -217,8 +268,10 @@ func (m *mailerImpl) start(ctx context.Context, slots, workers int) {
 		m.logger.Warn().Str("sender", string(m.sender)).Str("claimant", m.claimant).
 			Msg("Mail sender paused by MAIL_SENDER=paused: mail is queued but nothing will be sent until MAIL_SENDER is removed and the service redeployed")
 	} else {
-		m.logger.Info().Int("workers", workerCount).Str("sender", string(m.sender)).
-			Str("claimant", m.claimant).Dur("lease", m.lease).Msg("Starting up")
+		m.logger.Info().Int("workers", workerCount).Int("bulk_slots", bulkSlotsFor(workerCount)).
+			Str("sender", string(m.sender)).Str("claimant", m.claimant).Dur("lease", m.lease).
+			Int("rate_per_minute", m.budget.PerMinute).Int("daily_recipient_budget", m.budget.PerDay).
+			Msg("Starting up")
 	}
 
 	// A row still processing past its lease was taken by a process that is
@@ -241,6 +294,7 @@ func (m *mailerImpl) start(ctx context.Context, slots, workers int) {
 	}
 
 	m.workers = workerCount
+	m.bulkSlots = bulkSlotsFor(workerCount)
 	m.jobs = make(chan database.MailQueue, workerCount)
 	for i := 0; i < workers; i++ {
 		m.sending.Add(1)
@@ -342,7 +396,7 @@ func (m *mailerImpl) releaseWaiting(ctx context.Context) int {
 // release gives back a row this process took and has not begun to send: it
 // is pending again, unclaimed, with no attempt counted.
 func (m *mailerImpl) release(ctx context.Context, logger *zerolog.Logger, job database.MailQueue) bool {
-	defer m.taken.Add(-1)
+	defer m.untake(job)
 	n, err := m.db.ReleaseMailQueueItem(ctx, database.ReleaseMailQueueItemParams{
 		ID:        job.ID,
 		ClaimedBy: m.claimant,
@@ -380,6 +434,7 @@ func (m *mailerImpl) startReaper(ctx context.Context) {
 			return
 		case <-ticker.C:
 			m.reclaimExpired(ctx)
+			m.pruneSendWindows(ctx)
 		}
 	}
 }
@@ -418,40 +473,55 @@ type commonMailRow struct {
 	RecipientEmail    string
 }
 
-// queue writes sends through q: the pool's queries, or a transaction's.
+// queue writes sends through q: the pool's queries, or a transaction's, in
+// the lane priority.
 type queue struct {
-	q      *database.Queries
-	logger *zerolog.Logger
+	q        *database.Queries
+	logger   *zerolog.Logger
+	priority Priority
 }
 
-func (m *mailerImpl) Queue(q *database.Queries) Queue {
-	return &queue{q: q, logger: m.logger}
+func (m *mailerImpl) Queue(q *database.Queries, priority Priority) Queue {
+	return &queue{q: q, logger: m.logger, priority: priority}
 }
 
 func (m *mailerImpl) Wake() { m.wake() }
 
-// pooled is a send written in a transaction of its own, which wakes the
-// dispatcher once rows are queued.
-func (m *mailerImpl) pooled() *queue {
-	return &queue{q: m.db.Queries, logger: m.logger}
+// pooled writes a send in the lane priority in a transaction of its own, so
+// the send and its queue rows exist together or not at all: a send that fails
+// to queue leaves no send without rows behind. It wakes the dispatcher once
+// rows are queued.
+func (m *mailerImpl) pooled(ctx context.Context, priority Priority, write func(*queue) (uuid.UUID, bool, error)) (uuid.UUID, error) {
+	var id uuid.UUID
+	var queued bool
+	err := m.db.InTx(ctx, func(q *database.Queries) error {
+		var err error
+		id, queued, err = write(&queue{q: q, logger: m.logger, priority: priority})
+		return err
+	})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	m.wakeIf(queued)
+	return id, nil
 }
 
 func (m *mailerImpl) Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error) {
-	id, queued, err := m.pooled().enqueue(ctx, arg)
-	m.wakeIf(queued)
-	return id, err
+	return m.pooled(ctx, PriorityBulk, func(q *queue) (uuid.UUID, bool, error) {
+		return q.enqueue(ctx, arg)
+	})
 }
 
 func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
-	id, queued, err := m.pooled().enqueueSingle(ctx, arg)
-	m.wakeIf(queued)
-	return id, err
+	return m.pooled(ctx, PrioritySystem, func(q *queue) (uuid.UUID, bool, error) {
+		return q.enqueueSingle(ctx, arg)
+	})
 }
 
 func (m *mailerImpl) EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error) {
-	id, queued, err := m.pooled().enqueueWithRecipients(ctx, params)
-	m.wakeIf(queued)
-	return id, err
+	return m.pooled(ctx, PriorityBulk, func(q *queue) (uuid.UUID, bool, error) {
+		return q.enqueueWithRecipients(ctx, params)
+	})
 }
 
 func (m *mailerImpl) wakeIf(queued bool) {
@@ -503,7 +573,7 @@ func (q *queue) enqueue(ctx context.Context, arg database.CreateMailTaskParams) 
 		}
 	}
 
-	queued, err := q.renderAndQueue(ctx, commonRows)
+	queued, err := q.renderAndQueue(ctx, commonRows, false)
 	return rows[0].TaskID, queued, err
 }
 
@@ -526,7 +596,10 @@ func (q *queue) enqueueSingle(ctx context.Context, arg database.CreateSingleMail
 		},
 	}
 
-	queued, err := q.renderAndQueue(ctx, commonRows)
+	// A single mail has one recipient, and its caller (a login code, a Forms
+	// confirmation) is waiting for it: a mail that does not render is the
+	// send failing, and the caller is told.
+	queued, err := q.renderAndQueue(ctx, commonRows, true)
 	return row.TaskID, queued, err
 }
 
@@ -559,7 +632,7 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 		})
 	}
 
-	queued, err := q.renderAndQueue(ctx, rows)
+	queued, err := q.renderAndQueue(ctx, rows, false)
 	return task.ID, queued, err
 }
 
@@ -667,8 +740,12 @@ func (t mailTemplates) render(vars map[string]interface{}, recipient RecipientIn
 }
 
 // renderAndQueue renders each row's mail and writes the queue rows, saying
-// whether it wrote any.
-func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow) (bool, error) {
+// whether any is pending. A recipient whose mail does not render (a template
+// that slices an empty name) is written failed with the render error, and the
+// others are queued: one recipient never holds back a send to the rest. With
+// strict, a mail that does not render is returned as the error and nothing is
+// written.
+func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict bool) (bool, error) {
 	if len(rows) == 0 {
 		return false, nil
 	}
@@ -683,30 +760,50 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow) (bool,
 		return false, err
 	}
 
-	queueItems := make([]database.CreateMailQueueItemsParams, len(rows))
-	for i, row := range rows {
+	queueItems := make([]database.CreateMailQueueItemsParams, 0, len(rows))
+	var failed []database.CreateFailedMailQueueItemParams
+	for _, row := range rows {
 		rendered, err := parsed.render(taskVars, RecipientInfo{FullName: row.RecipientFullName, Email: row.RecipientEmail})
 		if err != nil {
-			q.logger.Err(err).Msg("Failed to render template")
+			if strict {
+				return false, err
+			}
+			q.logger.Err(err).Str("task_id", row.TaskID.String()).
+				Msg("A recipient's mail did not render: written failed, the others are queued")
+			failed = append(failed, database.CreateFailedMailQueueItemParams{
+				TaskID:            row.TaskID,
+				RecipientFullName: row.RecipientFullName,
+				RecipientEmail:    row.RecipientEmail,
+				Priority:          int16(q.priority),
+				Error:             err.Error(),
+			})
 			continue
 		}
 
 		htmlRes := rendered.HTML
 
-		queueItems[i] = database.CreateMailQueueItemsParams{
+		queueItems = append(queueItems, database.CreateMailQueueItemsParams{
 			TaskID:            row.TaskID,
 			RecipientFullName: row.RecipientFullName,
 			RecipientEmail:    row.RecipientEmail,
 			Subject:           rendered.Subject,
 			Body:              rendered.PlainText,
 			BodyHtml:          &htmlRes,
-		}
+			Priority:          int16(q.priority),
+		})
 	}
 
-	if _, err = q.q.CreateMailQueueItems(ctx, queueItems); err != nil {
-		return false, err
+	if len(queueItems) > 0 {
+		if _, err = q.q.CreateMailQueueItems(ctx, queueItems); err != nil {
+			return false, err
+		}
 	}
-	return true, nil
+	for _, item := range failed {
+		if err := q.q.CreateFailedMailQueueItem(ctx, item); err != nil {
+			return false, err
+		}
+	}
+	return len(queueItems) > 0, nil
 }
 
 func (m *mailerImpl) startDispatcher(ctx context.Context) {
@@ -742,8 +839,11 @@ func (m *mailerImpl) startDispatcher(ctx context.Context) {
 	}
 }
 
-// drainQueue takes as many due rows as this process has idle workers. A
-// worker that finishes a row wakes the dispatcher, which takes the next.
+// drainQueue takes as many due rows as this process has idle workers: the
+// system lane's first, then bulk rows while the bulk lane holds fewer than
+// bulkSlots and the send budget leaves room. A worker that finishes a row
+// wakes the dispatcher, which takes the next. A bulk lane at its budget waits
+// for the tick: room opens as the windows slide.
 func (m *mailerImpl) drainQueue(ctx context.Context, logger *zerolog.Logger) bool {
 	// The tick or a nudge may win the select over a stop already made.
 	if m.stopping() {
@@ -754,12 +854,13 @@ func (m *mailerImpl) drainQueue(ctx context.Context, logger *zerolog.Logger) boo
 		return true
 	}
 
-	items, err := m.db.ProcessQueueItems(ctx, database.ProcessQueueItemsParams{
-		ClaimedBy: m.claimant,
-		MaxRows:   idle,
-	})
-	if err != nil {
-		logger.Err(err).Msg("Failed to process queue items")
+	items := m.claim(ctx, logger, true, idle)
+	system := len(items)
+	bulkRoom := min(idle-len(items), m.bulkSlots-int(m.takenBulk.Load()))
+	if bulkRoom > 0 {
+		bulk := m.claimBulk(ctx, logger, bulkRoom)
+		m.takenBulk.Add(int32(len(bulk)))
+		items = append(items, bulk...)
 	}
 
 	if len(items) > 0 {
@@ -779,8 +880,43 @@ func (m *mailerImpl) drainQueue(ctx context.Context, logger *zerolog.Logger) boo
 			return false
 		}
 	}
+	// Counted once they are with the workers: the budget never holds a
+	// system row back.
+	m.countSystem(ctx, logger, system)
 
 	return true
+}
+
+// claim takes up to maxRows due rows of one lane for this process, outside
+// the send budget: the system lane always, the bulk lane when there is no
+// budget (claimBulk).
+func (m *mailerImpl) claim(ctx context.Context, logger *zerolog.Logger, systemLane bool, maxRows int) []database.MailQueue {
+	var items []database.MailQueue
+	var err error
+	if systemLane {
+		items, err = m.db.ProcessSystemQueueItems(ctx, database.ProcessSystemQueueItemsParams{
+			ClaimedBy: m.claimant,
+			MaxRows:   maxRows,
+		})
+	} else {
+		items, err = m.db.ProcessBulkQueueItems(ctx, database.ProcessBulkQueueItemsParams{
+			ClaimedBy: m.claimant,
+			MaxRows:   maxRows,
+		})
+	}
+	if err != nil {
+		logger.Err(err).Bool("system_lane", systemLane).Msg("Failed to process queue items")
+	}
+	return items
+}
+
+// untake counts job, which this process took, as no longer held: sent,
+// failed, put back for a retry or given back.
+func (m *mailerImpl) untake(job database.MailQueue) {
+	if Priority(job.Priority) <= PriorityBulk {
+		m.takenBulk.Add(-1)
+	}
+	m.taken.Add(-1)
 }
 
 // wake asks the dispatcher to look at the queue now. It never blocks: a nudge
@@ -844,7 +980,7 @@ func (m *mailerImpl) startWorker(ctx context.Context, id int) {
 			m.send(ctx, client, &logger, job)
 
 			// This worker is idle again: the dispatcher may take a row for it.
-			m.taken.Add(-1)
+			m.untake(job)
 			m.wake()
 		}
 	}
