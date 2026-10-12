@@ -643,7 +643,9 @@ func (h *mailApprovalHandlerImpl) queue(ctx context.Context, q *database.Queries
 		})
 	}
 
-	sends := h.mailer.Queue(q)
+	// An approved send is an operator's mail, to a list or to up to 100
+	// people: the bulk lane, so it never holds back a login code.
+	sends := h.mailer.Queue(q, mailer.PriorityBulk)
 	if a.MailListID == nil {
 		return queueToPeople(ctx, q, sends, a)
 	}
