@@ -121,6 +121,37 @@ UPDATE schema_migrations SET version = 20260925200000, dirty = false;
 Değer, başarısız migration'dan bir önceki sürümdür; `db/migrations`'daki
 sıraya bakın.
 
+`CREATE INDEX CONCURRENTLY` taşıyan bir migration yarıda kalırsa geride
+`INVALID` bir indeks kalabilir. Dosyada `IF NOT EXISTS` yoktur. **Yalnız yarıda
+kalan migration'ın indeksine** bakın; öncekinin indeksi geçerli ve uygulanmıştır,
+ona dokunmayın (düşerse sürüm geri çekildiği için bir daha kurulmaz).
+
+| Kirli sürüm | İndeks | Sürümü şuna çekin |
+|---|---|---|
+| `20261012130100` | `idx_mail_queue_pending_system` | `20261012130000` |
+| `20261012130200` | `idx_mail_queue_pending_bulk` | `20261012130100` |
+
+Önce indeksin durumuna bakın (salt okunur):
+
+```sql
+SELECT indexrelid::regclass, indisvalid FROM pg_index WHERE indexrelid::regclass::text LIKE 'idx_mail_queue_pending_%';
+```
+
+- İndeks yoksa: yalnız sürümü yukarıdaki değere çekin.
+- `indisvalid = false` ise: o indeksi düşürün (işlem dışında, tek başına),
+  sonra sürümü yukarıdaki değere çekin. Örnek, `20261012130200` için:
+
+  ```sql
+  DROP INDEX CONCURRENTLY IF EXISTS idx_mail_queue_pending_bulk;
+  ```
+
+- `indisvalid = true` ise: süreç ölmüş olsa da Postgres indeksi bitirmiştir.
+  Düşürmeyin; sürümü kirli migration'ın kendisine temiz olarak yazın:
+  `UPDATE schema_migrations SET version = 20261012130200, dirty = false;`
+
+Böyle bir migration kilit beklemez ama kendisinden önce başlamış işlemlerin bitmesini bekler; gece
+yedeğinin `pg_dump`'ı sürerken deploy etmeyin.
+
 Sürüm kirli kaldıkça **eski imaj da `apply` modunda açılmaz** (o da kirli
 sürümü görüp durur); eski imaja dönmek tek başına kurtarmaz. Kurtarma bitene
 kadar her deploy ve yeniden başlama, gece sır rotasyonunun yeniden deploy'ları

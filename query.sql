@@ -614,13 +614,14 @@ FROM mailing_list_recipients
 WHERE mail_list_id = $1
   AND recipient_id = $2;
 
--- Takes up to max_rows due rows of one lane for one process, leased to it:
--- claimed_by names the process, claimed_at starts the lease. system_lane picks
--- the system lane (priority above 0: single mail a person is waiting for) or
--- the bulk lane (lists, groups, approved sends). The process asks for as many
--- rows as it has idle workers, the system lane first, so no row waits taken
--- in a process's memory and no system row waits behind a bulk one.
--- name: ProcessQueueItems :many
+-- Takes up to max_rows due rows of the system lane (priority above 0: single
+-- mail a person is waiting for) for one process, leased to it: claimed_by
+-- names the process, claimed_at starts the lease. The process asks for as
+-- many rows as it has idle workers, the system lane first, so no row waits
+-- taken in a process's memory and no system row waits behind a bulk one. The
+-- lane is written out, not a parameter, so the planner reads the lane's own
+-- index (idx_mail_queue_pending_system) whatever plan it keeps.
+-- name: ProcessSystemQueueItems :many
 UPDATE mail_queue
 SET status     = 'processing',
     claimed_at = NOW(),
@@ -628,11 +629,69 @@ SET status     = 'processing',
 WHERE id IN (SELECT id
              FROM mail_queue
              WHERE status = 'pending'
+               AND priority > 0
                AND next_attempt_at <= NOW()
-               AND (priority > 0) = sqlc.arg(system_lane)::boolean
              ORDER BY next_attempt_at, created_at
              LIMIT sqlc.arg(max_rows)::int FOR UPDATE SKIP LOCKED)
 RETURNING *;
+
+-- The same for the bulk lane (lists, groups, approved sends), which reads
+-- idx_mail_queue_pending_bulk. The process asks for no more rows than the
+-- send budget leaves room for (SendWindowCounts), under LockSendBudget.
+-- name: ProcessBulkQueueItems :many
+UPDATE mail_queue
+SET status     = 'processing',
+    claimed_at = NOW(),
+    claimed_by = sqlc.arg(claimed_by)::text
+WHERE id IN (SELECT id
+             FROM mail_queue
+             WHERE status = 'pending'
+               AND priority <= 0
+               AND next_attempt_at <= NOW()
+             ORDER BY next_attempt_at, created_at
+             LIMIT sqlc.arg(max_rows)::int FOR UPDATE SKIP LOCKED)
+RETURNING *;
+
+-- The database's clock: the one clock every process's send budget reads, so
+-- replicas whose clocks differ still count in the same windows. The
+-- statement's time, not the transaction's (NOW()), so a budget read later in
+-- a transaction reads the instant it counts at.
+-- name: DatabaseNow :one
+SELECT statement_timestamp()::timestamptz AS now;
+
+-- Serialises the bulk lane's take across processes: under it a process reads
+-- the send windows, takes as many bulk rows as they leave room for and counts
+-- them, and the next process reads its count. Held to the end of the
+-- transaction. Never waited for: false when another process holds it, and
+-- the bulk lane skips that turn, so a process stuck holding it never holds up
+-- another's dispatcher (nor its single mail). The system lane never takes it.
+-- name: LockSendBudget :one
+SELECT pg_try_advisory_xact_lock(hashtextextended('skymail-backend send budget', 0)) AS locked;
+
+-- The send windows a budget reads at one instant: the minutes starting at or
+-- after minute_since (the current minute and the one before it) and the
+-- hours starting at or after hour_since (every hour of the last 24).
+-- name: SendWindowCounts :many
+SELECT span_seconds, starts_at, lane, taken
+FROM mail_send_windows
+WHERE (span_seconds = 60 AND starts_at >= sqlc.arg(minute_since)::timestamptz)
+   OR (span_seconds = 3600 AND starts_at >= sqlc.arg(hour_since)::timestamptz);
+
+-- Counts taken rows of one lane in the minute starting at minute_start and
+-- the hour starting at hour_start.
+-- name: CountSends :exec
+INSERT INTO mail_send_windows (span_seconds, starts_at, lane, taken)
+VALUES (60, sqlc.arg(minute_start)::timestamptz, sqlc.arg(lane)::smallint, sqlc.arg(taken)::int),
+       (3600, sqlc.arg(hour_start)::timestamptz, sqlc.arg(lane)::smallint, sqlc.arg(taken)::int)
+ON CONFLICT (span_seconds, starts_at, lane) DO UPDATE
+    SET taken = mail_send_windows.taken + EXCLUDED.taken;
+
+-- Drops send windows no budget reads any more: those that started before
+-- before (two days back, well past the last 24 hours).
+-- name: PruneSendWindows :execrows
+DELETE
+FROM mail_send_windows
+WHERE starts_at < sqlc.arg(before)::timestamptz;
 
 -- A processing row without claimed_at was taken by an image from before the
 -- lease, or comes from a dump made before it. Its lease starts now, the first

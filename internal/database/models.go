@@ -303,6 +303,13 @@ type MailQueue struct {
 	Priority          int16               `json:"priority"`
 }
 
+type MailSendWindow struct {
+	SpanSeconds int       `json:"span_seconds"`
+	StartsAt    time.Time `json:"starts_at"`
+	Lane        int16     `json:"lane"`
+	Taken       int       `json:"taken"`
+}
+
 type MailTask struct {
 	ID            uuid.UUID  `json:"id"`
 	SentBy        string     `json:"sent_by"`
