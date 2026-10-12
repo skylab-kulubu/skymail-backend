@@ -28,6 +28,14 @@ type Querier interface {
 	AddRecipientToMailingList(ctx context.Context, arg AddRecipientToMailingListParams) (AddRecipientToMailingListRow, error)
 	ArchiveMailingList(ctx context.Context, arg ArchiveMailingListParams) (MailingList, error)
 	ArchiveTemplate(ctx context.Context, arg ArchiveTemplateParams) (Template, error)
+	// Empties the content of up to batch_size sends none of whose rows is still to
+	// go out (pending or processing): a sensitive one five minutes after it was
+	// created, any other once it is older than retention_days. Their rows' subject and body become '' and
+	// body_html NULL, as Account erasure leaves a row; the send's body_variables
+	// become {}; content_cleared_at says when. Status, recipient, error and counts
+	// stay. SKIP LOCKED lets a second replica's sweep take other sends. Returns
+	// the sends emptied.
+	ClearDueMailContent(ctx context.Context, arg ClearDueMailContentParams) ([]ClearDueMailContentRow, error)
 	// The people a request goes to, in the order submitted, replacing whoever it
 	// went to before; none for a request to a list. emails and full_names pair up
 	// by index.
@@ -112,6 +120,10 @@ type Querier interface {
 	// internal one (a Keycloak group's is Keycloak's to give), the people it goes
 	// to and the sends it queued, each in order.
 	GetMailApproval(ctx context.Context, id uuid.UUID) (GetMailApprovalRow, error)
+	// One recipient's mail as it was rendered and sent, with what decides who may
+	// see it: the send's sender, whether it is bulk, whether its content is
+	// sensitive and whether the sweep has emptied it.
+	GetMailQueueItemContent(ctx context.Context, arg GetMailQueueItemContentParams) (GetMailQueueItemContentRow, error)
 	// A send's recipients, newest first. A list send's rows come from one insert
 	// and share a created_at, so the id breaks the tie: pages neither repeat nor
 	// skip a recipient. A NULL status lists every recipient.
@@ -129,7 +141,7 @@ type Querier interface {
 	// found here.
 	GetTemplateVersion(ctx context.Context, arg GetTemplateVersionParams) (GetTemplateVersionRow, error)
 	GetTemplateVersionSummary(ctx context.Context, arg GetTemplateVersionSummaryParams) (TemplateVersionSummary, error)
-	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (MailTask, error)
+	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (InsertMailTaskRow, error)
 	// Whether text is a JSX source by the rule the migration and the old panel's
 	// writes read react_email_content with: something other than whitespace and
 	// comments is left in it.

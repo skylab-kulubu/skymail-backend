@@ -182,7 +182,7 @@ func storedVersions(t *testing.T, db *database.Store, templateID uuid.UUID) ([]s
 // Required variable sets, which the editor's panel shows, and seed_refusal, a
 // Template seed refused because an operator changed the template.
 var templateFields = []string{
-	"archived_at", "archived_by", "contract_required_variables", "created_at", "drafts", "html_content", "id", "key",
+	"archived_at", "archived_by", "content_sensitive", "contract_required_variables", "created_at", "drafts", "html_content", "id", "key",
 	"main_mode", "name", "operator_required_variables", "plain_text_content", "published_version_id",
 	"react_email_content", "seed_refusal", "subject", "system", "updated_at",
 }

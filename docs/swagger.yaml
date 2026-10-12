@@ -118,6 +118,31 @@ components:
             versions were kept.'
           type: string
       type: object
+    handlers.ContentAccess:
+      description: Whether the caller may open the send's content (GET /mail_tasks/{id}/queue/{itemId}/content),
+        and if not why.
+      enum:
+      - available
+      - sensitive
+      - restricted
+      - expired
+      - unavailable
+      - available
+      - sensitive
+      - restricted
+      - expired
+      - available
+      - sensitive
+      - restricted
+      - expired
+      - unavailable
+      type: string
+      x-enum-varnames:
+      - ContentAvailable
+      - ContentSensitive
+      - ContentRestricted
+      - ContentExpired
+      - ContentUnavailable
     handlers.DailySent:
       properties:
         date:
@@ -414,6 +439,12 @@ components:
             type: integer
           type: array
           uniqueItems: false
+        content_access:
+          $ref: '#/components/schemas/handlers.ContentAccess'
+        content_expires_at:
+          description: When the content sweep empties the send's content; null unless
+            content_access is available.
+          type: string
         created_at:
           type: string
         id:
@@ -516,6 +547,12 @@ components:
           type: string
         archived_by:
           type: string
+        content_sensitive:
+          description: 'Whether the content of a send of this template is never shown:
+            true for mail carrying a code or a one-time link, false for mail that
+            may be shown, null to leave it to the kind of send (a single mail hidden,
+            a send to many shown). Set by the Template seed.'
+          type: boolean
         contract_required_variables:
           description: Required variables from the sending service's contract, sorted
             by name, each with why the mail needs it. Written only by the Template
@@ -645,12 +682,41 @@ components:
           example: Europe/Istanbul
           type: string
       type: object
+    handlers.SentMailContent:
+      properties:
+        access:
+          $ref: '#/components/schemas/handlers.ContentAccess'
+        expires_at:
+          description: When the content sweep empties it; null when it is not shown.
+          type: string
+        html:
+          description: |-
+            The HTML part, as sent: show it only in a sandboxed frame, with remote
+            content blocked unless the operator asks for it.
+          type: string
+        id:
+          type: string
+        plain_text:
+          description: The plain-text part.
+          type: string
+        subject:
+          description: The subject as the recipient's inbox shows it.
+          type: string
+        task_id:
+          type: string
+      type: object
     handlers.Template:
       properties:
         archived_at:
           type: string
         archived_by:
           type: string
+        content_sensitive:
+          description: 'Whether the content of a send of this template is never shown:
+            true for mail carrying a code or a one-time link, false for mail that
+            may be shown, null to leave it to the kind of send (a single mail hidden,
+            a send to many shown). Set by the Template seed.'
+          type: boolean
         contract_required_variables:
           description: Required variables from the sending service's contract, sorted
             by name, each with why the mail needs it. Written only by the Template
@@ -1090,6 +1156,13 @@ components:
       type: object
     requests.UpsertTemplateByKey:
       properties:
+        content_sensitive:
+          description: 'Whether the content of this template''s sends is never shown
+            in SkyMail: true for mail that carries a code or a one-time link, false
+            for mail whose content may be shown. Leave it out (or null) to keep what
+            the template has; a template that never said leaves it to the kind of
+            send, a single mail hidden and a send to many shown.'
+          type: boolean
         contract_required_variables:
           description: The Required variables the sending service's contract declares,
             which the body must keep referencing, each with why the mail needs it.
@@ -1922,6 +1995,66 @@ paths:
                 $ref: '#/components/schemas/apperrors.AppError'
           description: Internal Server Error
       summary: Get mail queue items for a task
+      tags:
+      - Mail
+  /mail_tasks/{id}/queue/{itemId}/content:
+    get:
+      description: 'The subject, plain text and HTML a recipient of the send was sent,
+        rendered for them. access says whether they are shown: sensitive — the template
+        carries a code or a one-time link, or it is a single mail whose template does
+        not say it may be shown — is never shown to anyone; restricted is shown to
+        the send''s sender, for a send to a list, a group or an approved request to
+        holders of skymail:mails:write, and to holders of skymail:system-mails:read;
+        expired is past MAIL_CONTENT_RETENTION_DAYS (90 by default) and no longer
+        kept; unavailable holds nothing (Account erasure emptied it, or it never rendered).
+        The fields are null unless access is available. The HTML may reach the network
+        (images, a tracking pixel): show it sandboxed, with remote content blocked
+        by default.'
+      parameters:
+      - description: Task ID
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      - description: Queue row ID
+        in: path
+        name: itemId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.SentMailContent'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Internal Server Error
+      summary: Get one recipient's mail as sent
       tags:
       - Mail
   /mail_tasks/single:

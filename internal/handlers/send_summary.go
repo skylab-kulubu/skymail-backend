@@ -234,29 +234,42 @@ func (h *mailHandlerImpl) GetSummary(c fiber.Ctx) error {
 			Sent:    sendCounts.Sent,
 		},
 		DailySent:   dailySent,
-		RecentSends: h.mailTaskItems(c.Context(), sends),
+		RecentSends: h.mailTaskItems(c.Context(), contentCallerOf(c), sends),
 	})
 }
 
 // mailTaskItems shapes sends the one way every screen shows them, naming the
 // Keycloak groups among them in one bounded lookup.
-func (h *mailHandlerImpl) mailTaskItems(ctx context.Context, sends []database.ListMailTaskSendsRow) []MailTaskItem {
+func (h *mailHandlerImpl) mailTaskItems(ctx context.Context, caller contentCaller, sends []database.ListMailTaskSendsRow) []MailTaskItem {
 	groupNames := h.keycloakGroupNames(ctx, sends)
 	items := make([]MailTaskItem, len(sends))
 	for i, send := range sends {
+		access, expires := h.contentAccess(caller, sendContent{
+			sentBy:    send.SentBy,
+			bulk:      send.Bulk,
+			sensitive: send.ContentSensitive,
+			createdAt: send.CreatedAt,
+			clearedAt: send.ContentClearedAt,
+		})
+		var variables []byte
+		if access == ContentAvailable {
+			variables = send.BodyVariables
+		}
 		items[i] = MailTaskItem{
-			ID:              send.ID,
-			SentBy:          send.SentBy,
-			TemplateID:      send.TemplateID,
-			MailListID:      send.MailListID,
-			BodyVariables:   send.BodyVariables,
-			CreatedAt:       send.CreatedAt,
-			TemplateName:    send.TemplateName,
-			MailListName:    send.MailListName,
-			TemplateKey:     send.TemplateKey,
-			Status:          SendStatus(send.Status),
-			RecipientCounts: recipientCounts(send),
-			Audience:        sendAudience(send, groupNames),
+			ID:               send.ID,
+			SentBy:           send.SentBy,
+			TemplateID:       send.TemplateID,
+			MailListID:       send.MailListID,
+			BodyVariables:    variables,
+			ContentAccess:    access,
+			ContentExpiresAt: expires,
+			CreatedAt:        send.CreatedAt,
+			TemplateName:     send.TemplateName,
+			MailListName:     send.MailListName,
+			TemplateKey:      send.TemplateKey,
+			Status:           SendStatus(send.Status),
+			RecipientCounts:  recipientCounts(send),
+			Audience:         sendAudience(send, groupNames),
 		}
 	}
 	return items

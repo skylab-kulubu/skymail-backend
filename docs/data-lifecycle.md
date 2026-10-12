@@ -193,16 +193,17 @@ takes the person out of them:
 
 - `recipients.full_name` and `email`, and their `mailing_list_recipients` —
   the people on internal mailing lists.
-- `mail_queue.recipient_full_name`, `recipient_email`, and the mail rendered
-  for them: `subject`, `body`, `body_html`, and `error`, which can quote the
-  address.
+- `mail_queue.recipient_full_name`, `recipient_email`, and `error`, which can
+  quote the address. The mail rendered for them — `subject`, `body`,
+  `body_html` — is kept only for a while: see
+  [Sent mail content](#sent-mail-content).
 - `mail_tasks.sent_by` — who sent: the Keycloak subject of the token that
   queued the send — for an approved Mail onayı request, its submitter's — or
   `skymail` for the mail SkyMail sends of its own accord, the notice that a
   request expired.
 - `mail_tasks.body_variables` — the values of the send, which may name or
   address people; for Keycloak's mails, the person's reset or verification
-  link.
+  link. Kept as the rendered mail is (below).
 - `archived_by` on templates and mailing lists — who archived.
 - `template_versions.author_sub` with `author_name` — who wrote a version, and
   the name their token carried then.
@@ -218,6 +219,54 @@ takes the person out of them:
 - `mail_approval_events.actor_sub` and `actor_name` — who did each thing to a
   request — `note`, and `changes`, each variable's value, and who a request
   went to, before and after an edit or a resubmission.
+
+## Sent mail content
+
+Every queue row holds its recipient's mail as it was rendered and sent:
+`subject`, `body` (plain text) and `body_html`. A send's page shows it,
+recipient by recipient, through
+`GET /v1/mail_tasks/{id}/queue/{itemId}/content` (Yusuf, 2026-10-12: shown,
+the sensitive ones hidden).
+
+**Sensitive mail is never shown.** `templates.content_sensitive` says it:
+`true` for mail that carries a code or a one-time link (Keycloak's
+verification, reset and personal e-mail mails, the account center's mails,
+core's contact consent confirmation, an event ticket's code), `false` for
+mail that may be shown, and
+`null`, the default, leaves it to the kind of send: a single mail
+(`POST /mail_tasks/single`: what a service sends one person, a code among it)
+is hidden, a send to a list, a Keycloak group or an approved Mail onayı
+request is shown. `mail_task_bulk()` and `mail_task_content_sensitive()` are
+the one definition. A new template is therefore hidden on the single path
+until its seed says `false`. The Template seed sets the flag
+(`content_sensitive` in `PUT /v1/templates/by-key/{key}`; left out, it stays);
+the migration marked `keycloak.*`, `account.*`,
+`core.contact-consent-confirm`, `event.ticket-created` and `event.reminder`
+sensitive.
+
+**Who sees what is not sensitive.** The route takes `skymail:mails:read`;
+the handler then shows the content to the send's sender, for a send to many
+to holders of `skymail:mails:write`, and to holders of
+`skymail:system-mails:read`, the administrator's role. Anyone else gets
+`access: restricted`. A send's `body_variables` in the send list and on its
+page follow the same rule (`content_access`).
+
+**How long.** A sweep runs at startup and every five minutes, in every
+replica (`FOR UPDATE SKIP LOCKED`). It takes the sends none of whose rows is
+still pending or processing and that are at least five minutes old, and
+empties a sensitive one at once, any other `MAIL_CONTENT_RETENTION_DAYS`
+(90 by default) after it was created: its rows' `subject` and `body` become
+`''` and `body_html` `NULL`, as Account erasure leaves a row, its
+`body_variables` `{}`, and `mail_tasks.content_cleared_at` says when. Status,
+recipient, error and the counts stay. Past the period the API answers
+`expired` even before the sweep has run. A sweep runs while the sender is
+paused too: it never touches mail still to go out. The first run after the
+release empties every send older than the period and every sensitive send
+there is.
+
+**Account erasure** empties the person's rows and the rows that name them
+(below); the content route then answers `unavailable` for them. A restore
+brings content back with the dump; the sweep empties it again on its next run.
 
 ## Account erasure
 

@@ -25,6 +25,7 @@ type MailHandler interface {
 	GetTasks(c fiber.Ctx) error
 	GetTask(c fiber.Ctx) error
 	GetTaskQueueItems(c fiber.Ctx) error
+	GetQueueItemContent(c fiber.Ctx) error
 	GetSummary(c fiber.Ctx) error
 }
 
@@ -33,10 +34,16 @@ type mailHandlerImpl struct {
 	mailer mailer.Mailer
 	kc     keycloak.Client
 	now    func() time.Time
+	// How many days a send's content is shown; 0 is DefaultContentRetentionDays.
+	contentRetentionDays int
 }
 
-func NewMailHandler(db *database.Store, mailer mailer.Mailer, kc keycloak.Client) MailHandler {
-	return &mailHandlerImpl{db: db, mailer: mailer, kc: kc, now: time.Now}
+func NewMailHandler(db *database.Store, mailer mailer.Mailer, kc keycloak.Client, opts ...MailHandlerOption) MailHandler {
+	h := &mailHandlerImpl{db: db, mailer: mailer, kc: kc, now: time.Now}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 var errTemplateTargetMissing = apperrors.New(
@@ -203,7 +210,9 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 // MailTaskItem is a send as the send list, a send's own page and the home
 // screen's recent sends all return it, so a send reads the same on every
 // screen. The fields up to mail_list_name are the ones the list and the detail
-// have always returned; the rest were added beside them.
+// have always returned; the rest were added beside them. body_variables is
+// null unless content_access is available: the values are the send's content
+// too, a code or a link for Keycloak's mails.
 type MailTaskItem struct {
 	ID              uuid.UUID    `json:"id"`
 	SentBy          string       `json:"sent_by"`
@@ -217,6 +226,10 @@ type MailTaskItem struct {
 	Status          SendStatus   `json:"status"`
 	RecipientCounts QueueCounts  `json:"recipient_counts"`
 	Audience        SendAudience `json:"audience"`
+	// Whether the caller may open the send's content (GET /mail_tasks/{id}/queue/{itemId}/content), and if not why.
+	ContentAccess ContentAccess `json:"content_access" enums:"available,sensitive,restricted,expired"`
+	// When the content sweep empties the send's content; null unless content_access is available.
+	ContentExpiresAt *time.Time `json:"content_expires_at"`
 }
 
 // GetTasks godoc
@@ -257,7 +270,7 @@ func (h *mailHandlerImpl) GetTasks(c fiber.Ctx) error {
 	}
 
 	c.Response().Header.Set("X-Total-Count", strconv.FormatInt(count, 10))
-	return c.JSON(h.mailTaskItems(c.Context(), sends))
+	return c.JSON(h.mailTaskItems(c.Context(), contentCallerOf(c), sends))
 }
 
 // GetTask godoc
@@ -290,7 +303,7 @@ func (h *mailHandlerImpl) GetTask(c fiber.Ctx) error {
 		return pgx.ErrNoRows
 	}
 
-	return c.JSON(h.mailTaskItems(c.Context(), sends)[0])
+	return c.JSON(h.mailTaskItems(c.Context(), contentCallerOf(c), sends)[0])
 }
 
 // GetTaskQueueItems godoc

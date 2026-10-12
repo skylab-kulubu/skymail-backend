@@ -311,12 +311,13 @@ type MailSendWindow struct {
 }
 
 type MailTask struct {
-	ID            uuid.UUID  `json:"id"`
-	SentBy        string     `json:"sent_by"`
-	TemplateID    *uuid.UUID `json:"template_id"`
-	MailListID    *uuid.UUID `json:"mail_list_id"`
-	BodyVariables []byte     `json:"body_variables"`
-	CreatedAt     time.Time  `json:"created_at"`
+	ID               uuid.UUID  `json:"id"`
+	SentBy           string     `json:"sent_by"`
+	TemplateID       *uuid.UUID `json:"template_id"`
+	MailListID       *uuid.UUID `json:"mail_list_id"`
+	BodyVariables    []byte     `json:"body_variables"`
+	CreatedAt        time.Time  `json:"created_at"`
+	ContentClearedAt *time.Time `json:"content_cleared_at"`
 }
 
 type MailingList struct {
@@ -363,6 +364,8 @@ type Template struct {
 	SeedRefusedAt             *time.Time `json:"-"`
 	SeedRefusedRules          []string   `json:"-"`
 	SeedRefusedPayloadSha256  *string    `json:"-"`
+	// Whether the content of a send of this template is never shown: true for mail carrying a code or a one-time link, false for mail that may be shown, null to leave it to the kind of send (a single mail hidden, a send to many shown). Set by the Template seed.
+	ContentSensitive *bool `json:"content_sensitive"`
 }
 
 type TemplateVersion struct {

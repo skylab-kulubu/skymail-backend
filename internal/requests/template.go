@@ -34,6 +34,8 @@ type UpsertTemplateByKey struct {
 	// The template's JSX source: its .tsx file in the repo as it is, of which html_content and plain_text_content are the render. It becomes the version's JSX Main source, which the panel's JSX mode opens. Text with nothing but comments in it — the pointer comment the seed sent before it sent the source — is no source: html_content is then the HTML Main source.
 	ReactEmailContent string `json:"react_email_content" validate:"required"`
 	System            bool   `json:"system"`
+	// Whether the content of this template's sends is never shown in SkyMail: true for mail that carries a code or a one-time link, false for mail whose content may be shown. Leave it out (or null) to keep what the template has; a template that never said leaves it to the kind of send, a single mail hidden and a send to many shown.
+	ContentSensitive *bool `json:"content_sensitive"`
 	// The Required variables the sending service's contract declares, which the body must keep referencing, each with why the mail needs it. An entry may also be the name alone, as a string; its reason is then null. They replace the template's contract set; a name among them leaves the operators' set. Leave the field out (or null) to keep the set the template has; send [] to clear it.
 	ContractRequiredVariables *[]ContractVariable `json:"contract_required_variables" validate:"omitempty,max=50,dive"`
 }

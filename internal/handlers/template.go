@@ -536,6 +536,7 @@ func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 			ReactEmailContent:         params.ReactEmailContent,
 			System:                    params.System,
 			ContractRequiredVariables: contract,
+			ContentSensitive:          params.ContentSensitive,
 		})
 	}))
 	if err != nil {
