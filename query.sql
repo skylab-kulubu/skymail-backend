@@ -790,6 +790,19 @@ INSERT INTO mail_queue (
     subject, body, body_html, priority
 ) VALUES ($1, $2, $3, $4, $5, $6, $7);
 
+-- A recipient whose mail did not render, say a template that slices an empty
+-- full name, is written failed, with the render error the send's page shows:
+-- the send's other recipients are queued and mail_task_status reports the
+-- send failed. Nothing was tried, so attempts stays 0.
+-- name: CreateFailedMailQueueItem :exec
+INSERT INTO mail_queue (
+    task_id, recipient_full_name, recipient_email,
+    subject, body, priority, status, error
+) VALUES (
+    sqlc.arg(task_id), sqlc.arg(recipient_full_name), sqlc.arg(recipient_email),
+    '', '', sqlc.arg(priority), 'failed', sqlc.arg(error)::text
+);
+
 -- name: GetMailTaskById :one
 SELECT mt.*,
        t.name  AS template_name,

@@ -61,6 +61,11 @@ type Querier interface {
 	CountRestoredQueueItems(ctx context.Context, before time.Time) (CountRestoredQueueItemsRow, error)
 	CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error)
 	CountTemplates(ctx context.Context) (int64, error)
+	// A recipient whose mail did not render, say a template that slices an empty
+	// full name, is written failed, with the render error the send's page shows:
+	// the send's other recipients are queued and mail_task_status reports the
+	// send failed. Nothing was tried, so attempts stays 0.
+	CreateFailedMailQueueItem(ctx context.Context, arg CreateFailedMailQueueItemParams) error
 	// A new Mail onayı request, pending until its deadline. Every later write of
 	// a request runs in a transaction that first takes its row lock
 	// (LockMailApproval), so its checks, its state change and its events happen
