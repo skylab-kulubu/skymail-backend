@@ -176,9 +176,45 @@ az 1) tutar: 3 işçide 2. Böylece 300 kişilik bir duyuru giderken gelen giri�
 kodu boş kalan işçiyle, kuyruğa girdiği andaki uyandırmada gider; hiçbir toplu
 gönderimin bitmesini beklemez. Şerit belirtmeden yazılan satır (göçten önceki
 satırlar, eski imajın yazdıkları) sistem şeridindedir: bugünkü sıradan daha
-geride kalamaz. Çoklu replikada her süreç kendi işçilerini ayrı ayırır. Hız
-sınırı, kısma ve duraklatma henüz yok (duyuru-haber bilet 05, sonraki
-adımlar).
+geride kalamaz. Çoklu replikada her süreç kendi işçilerini ayrı ayırır.
+Kısma ve duraklatma henüz yok (duyuru-haber bilet 05, sonraki adımlar).
+
+Her şeridin bekleyen satırlarının kendi kısmi indeksi var
+(`idx_mail_queue_pending_system`, `idx_mail_queue_pending_bulk`): bir tur
+yalnız alacağı satırları okur, binlerce toplu satır sistem şeridinin turunu
+yavaşlatmaz.
+
+## Gönderim bütçesi (`SKYMAIL_RATE_PER_MINUTE`, `SKYMAIL_DAILY_RECIPIENT_BUDGET`)
+
+Röle sınırları tüm süreçler için birlikte tutulur. Production rölesi
+`smtp.office365.com`: Exchange Online'ın genel sınırları dakikada 30 mesaj ve
+günde 10.000 alıcı. Varsayılanlar bunların altında kalır.
+
+| Değişken | Varsayılan | Anlamı |
+|---|---|---|
+| `SKYMAIL_RATE_PER_MINUTE` | `25` | Dakikada en çok bu kadar posta (iki şerit birlikte) |
+| `SKYMAIL_DAILY_RECIPIENT_BUDGET` | `9000` | Günde en çok bu kadar alıcı (iki şerit birlikte) |
+
+- Değer tam sayıdır. `0` o sınırı kapatır, ikisi de `0` ise bütçe yoktur
+  (bütçeden önceki davranış). Başka bir değer açılışı durdurur.
+- Sayaçlar Postgres'te (`mail_send_windows`): dakika ve gün pencereleri, şerit
+  başına alınan satır sayısı. Bütün replikalar aynı satırları okur ve yazar,
+  zaman olarak veritabanının saatini kullanır.
+- Toplu şerit her sınırın en çok %70'ini alır (25'te 17, 9.000'de 6.300). Bir
+  süreç toplu satırı yalnız `skymail-backend send budget` advisory lock'u
+  altında alır: pencereleri okur, kalan yer kadar satır alır, sayar, commit
+  eder. Sonraki süreç bu sayıyı görür.
+- Sistem şeridi (`/mail_tasks/single`) bütçe yüzünden hiçbir zaman beklemez ve
+  düşmez: satırları her zaman alınır, işçiye verildikten sonra sayılır. Payını
+  aşarsa toplu şerit o kadar geri çekilir.
+- Önceki pencere, şimdiye bir pencere boyu içinde kalan kısmı kadar sayılır
+  (kayan pencere tahmini). Böylece bir liste payını bir dakikanın sonunda ve
+  bir sonrakinin başında iki kez göndermez, dakikaya yayılır.
+- Bütçe dolunca toplu satırlar `pending` kalır, dağıtıcının 10 saniyelik
+  turunda yer açıldıkça gider. 190 kişilik bir duyuru dakikada 17 ile yaklaşık
+  11 dakika sürer.
+- Bir satır alındığında sayılır. Yeniden deneme yeniden sayılır. Kapanışta
+  geri verilen satırın sayısı düşülmez. İki günden eski pencereler silinir.
 
 ## Veritabanı migration'ları
 

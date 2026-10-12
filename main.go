@@ -100,6 +100,11 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid mail queue lease configuration")
 	}
+	// The relay's limits, shared by every process (README, send budget).
+	rateBudget, err := mailer.RateBudgetFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid mail send budget configuration")
+	}
 	keycloakAdminURL, err := keycloak.ParseAdminURL(cfg.KeycloakAdminURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid Keycloak configuration")
@@ -148,7 +153,7 @@ func main() {
 		Password:  cfg.SMTPPass,
 		FQDN:      cfg.SMTPFQDN,
 		Plain:     cfg.SMTPPlain,
-	}, mailSender, mailer.WithQueueLease(queueLease))
+	}, mailSender, mailer.WithQueueLease(queueLease), mailer.WithRateBudget(rateBudget))
 
 	log.Info().Str("mode", string(audienceMode)).Str("audience", cfg.KeycloakClientID).Msg("v1 token audience check (V1_TOKEN_AUDIENCE_MODE)")
 	authMiddleware := middlewares.NewAuthMiddleware(cfg.KeycloakClientID, cfg.KeycloakRealmURL, audienceMode)

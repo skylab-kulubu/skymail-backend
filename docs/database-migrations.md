@@ -121,6 +121,20 @@ UPDATE schema_migrations SET version = 20260925200000, dirty = false;
 Değer, başarısız migration'dan bir önceki sürümdür; `db/migrations`'daki
 sıraya bakın.
 
+`CREATE INDEX CONCURRENTLY` taşıyan bir migration (ör. `20261012130100`,
+`20261012130200`) yarıda kalırsa geride `INVALID` bir indeks kalır. Dosyada
+`IF NOT EXISTS` yoktur, bu yüzden sürümü geri çekmeden önce o indeksi düşürün,
+yoksa yeniden deneme "already exists" ile düşer:
+
+```sql
+DROP INDEX CONCURRENTLY IF EXISTS idx_mail_queue_pending_system;
+DROP INDEX CONCURRENTLY IF EXISTS idx_mail_queue_pending_bulk;
+```
+
+Bu iki satırı ayrı ayrı koşun (işlem dışında). Böyle bir migration kilit
+beklemez ama kendisinden önce başlamış işlemlerin bitmesini bekler; gece
+yedeğinin `pg_dump`'ı sürerken deploy etmeyin.
+
 Sürüm kirli kaldıkça **eski imaj da `apply` modunda açılmaz** (o da kirli
 sürümü görüp durur); eski imaja dönmek tek başına kurtarmaz. Kurtarma bitene
 kadar her deploy ve yeniden başlama, gece sır rotasyonunun yeniden deploy'ları

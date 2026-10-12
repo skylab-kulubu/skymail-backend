@@ -68,9 +68,9 @@ func retryDelay(attempts int) time.Duration {
 
 // Priority is a queue row's lane (mail_queue.priority). The dispatcher takes
 // the system lane first and gives the bulk lane at most BulkSharePercent of
-// its workers, so a send to a list or a group never holds back a mail a person
-// is waiting for. A row queued without one (an image from before the lanes)
-// is in the system lane.
+// its workers and of the send budget (RateBudget), so a send to a list or a
+// group never holds back a mail a person is waiting for. A row queued without
+// one (an image from before the lanes) is in the system lane.
 type Priority int16
 
 const (
@@ -83,19 +83,24 @@ const (
 )
 
 // BulkSharePercent is the most of a process's workers the bulk lane may hold
-// at once; the rest are kept for the system lane. With three workers bulk
-// sends hold two and a single mail always finds the third free.
+// at once, and the most of each send budget limit it may take; the rest is
+// kept for the system lane. With three workers bulk sends hold two and a
+// single mail always finds the third free; of 25 mails a minute bulk sends
+// take 17.
 const BulkSharePercent = 70
 
-// bulkSlotsFor is how many of workers the bulk lane may hold: BulkSharePercent
-// of them, rounded down, and at least one, or a lone worker would never send
-// a list.
-func bulkSlotsFor(workers int) int {
-	if slots := workers * BulkSharePercent / 100; slots > 0 {
-		return slots
+// bulkShare is the bulk lane's share of n workers or of a limit of n:
+// BulkSharePercent of it, rounded down, and at least one, or a lone worker
+// or a limit of one would never send a list.
+func bulkShare(n int) int {
+	if share := n * BulkSharePercent / 100; share > 0 {
+		return share
 	}
 	return 1
 }
+
+// bulkSlotsFor is how many of workers the bulk lane may hold.
+func bulkSlotsFor(workers int) int { return bulkShare(workers) }
 
 type RecipientInfo struct {
 	FullName string
@@ -188,6 +193,11 @@ type mailerImpl struct {
 	takenBulk atomic.Int32
 	// sendBudget bounds one SMTP send from dial to QUIT (SendBudget).
 	sendBudget time.Duration
+	// budget is the send budget all processes share (RateBudget); clock,
+	// when a test sets it, is the instant the budget reads instead of the
+	// database's clock.
+	budget RateBudget
+	clock  func() time.Time
 	// deliver sends one row; tests replace it.
 	deliver func(ctx context.Context, client *mail.Client, job database.MailQueue) error
 	// clientOptions are added to the workers' SMTP client options; tests
@@ -259,7 +269,9 @@ func (m *mailerImpl) start(ctx context.Context, slots, workers int) {
 			Msg("Mail sender paused by MAIL_SENDER=paused: mail is queued but nothing will be sent until MAIL_SENDER is removed and the service redeployed")
 	} else {
 		m.logger.Info().Int("workers", workerCount).Int("bulk_slots", bulkSlotsFor(workerCount)).
-			Str("sender", string(m.sender)).Str("claimant", m.claimant).Dur("lease", m.lease).Msg("Starting up")
+			Str("sender", string(m.sender)).Str("claimant", m.claimant).Dur("lease", m.lease).
+			Int("rate_per_minute", m.budget.PerMinute).Int("daily_recipient_budget", m.budget.PerDay).
+			Msg("Starting up")
 	}
 
 	// A row still processing past its lease was taken by a process that is
@@ -422,6 +434,7 @@ func (m *mailerImpl) startReaper(ctx context.Context) {
 			return
 		case <-ticker.C:
 			m.reclaimExpired(ctx)
+			m.pruneSendWindows(ctx)
 		}
 	}
 }
@@ -828,8 +841,9 @@ func (m *mailerImpl) startDispatcher(ctx context.Context) {
 
 // drainQueue takes as many due rows as this process has idle workers: the
 // system lane's first, then bulk rows while the bulk lane holds fewer than
-// bulkSlots. A worker that finishes a row wakes the dispatcher, which takes
-// the next.
+// bulkSlots and the send budget leaves room. A worker that finishes a row
+// wakes the dispatcher, which takes the next. A bulk lane at its budget waits
+// for the tick: room opens as the windows slide.
 func (m *mailerImpl) drainQueue(ctx context.Context, logger *zerolog.Logger) bool {
 	// The tick or a nudge may win the select over a stop already made.
 	if m.stopping() {
@@ -841,9 +855,10 @@ func (m *mailerImpl) drainQueue(ctx context.Context, logger *zerolog.Logger) boo
 	}
 
 	items := m.claim(ctx, logger, true, idle)
+	system := len(items)
 	bulkRoom := min(idle-len(items), m.bulkSlots-int(m.takenBulk.Load()))
 	if bulkRoom > 0 {
-		bulk := m.claim(ctx, logger, false, bulkRoom)
+		bulk := m.claimBulk(ctx, logger, bulkRoom)
 		m.takenBulk.Add(int32(len(bulk)))
 		items = append(items, bulk...)
 	}
@@ -865,17 +880,30 @@ func (m *mailerImpl) drainQueue(ctx context.Context, logger *zerolog.Logger) boo
 			return false
 		}
 	}
+	// Counted once they are with the workers: the budget never holds a
+	// system row back.
+	m.countSystem(ctx, logger, system)
 
 	return true
 }
 
-// claim takes up to maxRows due rows of one lane for this process.
+// claim takes up to maxRows due rows of one lane for this process, outside
+// the send budget: the system lane always, the bulk lane when there is no
+// budget (claimBulk).
 func (m *mailerImpl) claim(ctx context.Context, logger *zerolog.Logger, systemLane bool, maxRows int) []database.MailQueue {
-	items, err := m.db.ProcessQueueItems(ctx, database.ProcessQueueItemsParams{
-		ClaimedBy:  m.claimant,
-		MaxRows:    maxRows,
-		SystemLane: systemLane,
-	})
+	var items []database.MailQueue
+	var err error
+	if systemLane {
+		items, err = m.db.ProcessSystemQueueItems(ctx, database.ProcessSystemQueueItemsParams{
+			ClaimedBy: m.claimant,
+			MaxRows:   maxRows,
+		})
+	} else {
+		items, err = m.db.ProcessBulkQueueItems(ctx, database.ProcessBulkQueueItemsParams{
+			ClaimedBy: m.claimant,
+			MaxRows:   maxRows,
+		})
+	}
 	if err != nil {
 		logger.Err(err).Bool("system_lane", systemLane).Msg("Failed to process queue items")
 	}

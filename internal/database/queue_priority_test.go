@@ -20,7 +20,7 @@ func TestClaimTakesOnlyTheLaneItAsksFor(t *testing.T) {
 	}
 	system := queueOf(t, db, 1)[0]
 
-	taken, err := db.ProcessQueueItems(ctx, ProcessQueueItemsParams{ClaimedBy: "skymail-a-1", MaxRows: 10, SystemLane: true})
+	taken, err := db.ProcessSystemQueueItems(ctx, ProcessSystemQueueItemsParams{ClaimedBy: "skymail-a-1", MaxRows: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestClaimTakesOnlyTheLaneItAsksFor(t *testing.T) {
 		t.Fatalf("system lane took %v, want only the system row %s", ids(taken), system)
 	}
 
-	taken, err = db.ProcessQueueItems(ctx, ProcessQueueItemsParams{ClaimedBy: "skymail-a-1", MaxRows: 2, SystemLane: false})
+	taken, err = db.ProcessBulkQueueItems(ctx, ProcessBulkQueueItemsParams{ClaimedBy: "skymail-a-1", MaxRows: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
