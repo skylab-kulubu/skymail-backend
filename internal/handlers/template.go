@@ -255,6 +255,7 @@ func (h *templateHandlerImpl) GetTemplate(c fiber.Ctx) error {
 //	@Success		200			{object}	handlers.Template
 //	@Failure		400			{object}	apperrors.AppError	"Bad Request"
 //	@Failure		404			{object}	apperrors.AppError	"Not Found"
+//	@Failure		409			{object}	apperrors.AppError	"template.system_key_immutable or template.sensitive_key_immutable: the key of a system template, or of one whose mail carries a credential, cannot be changed or removed"
 //	@Failure		422			{object}	apperrors.AppError	"The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
 //	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/templates/{id} [patch]
@@ -282,6 +283,11 @@ func (h *templateHandlerImpl) UpdateTemplate(c fiber.Ctx) error {
 			return errSystemTemplateKey
 		}
 		key = existing.Key
+	}
+	if ContentSensitiveLocked(existing.Key) && !ptr.Equal(key, existing.Key) {
+		// The key is what keeps a credential mail's content hidden: renaming
+		// it, or sending none, would open its past sends.
+		return errSensitiveTemplateKey.WithParams(map[string]interface{}{"key": *existing.Key})
 	}
 
 	// The old panel has no drafts: its edit is an operator's version, published

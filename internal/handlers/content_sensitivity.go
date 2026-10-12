@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -41,12 +42,14 @@ import (
 var (
 	lockedSensitiveKeyPrefixes = []string{"keycloak.", "account.", "auth.", "login.", "otp."}
 	lockedSensitiveKeys        = []string{"core.contact-consent-confirm", "event.ticket-created", "event.reminder"}
-	// A key that names one of these as a word (between dots and dashes) is
-	// taken for a credential mail too, whoever sends it: place.login-link,
-	// forms.guest-verify-email, core.magic-link.
+	// A key that names one of these as a word (between dots and dashes), or as
+	// two words written with a dash (sign-in, log-in, 2-fa), is taken for a
+	// credential mail too, whoever sends it: place.login-link,
+	// place.sign-in-link, forms.guest-verify-email, event.ticket-issued.
 	lockedSensitiveKeyWords = []string{
 		"login", "signin", "code", "otp", "passcode", "password", "reset", "verify", "verification",
 		"confirm", "confirmation", "token", "magic", "invite", "activation", "activate", "2fa", "mfa",
+		"ticket", "link",
 	}
 )
 
@@ -66,15 +69,23 @@ func ContentSensitiveLocked(key *string) bool {
 			return true
 		}
 	}
-	for _, word := range strings.FieldsFunc(*key, func(r rune) bool { return r == '.' || r == '-' }) {
-		for _, locked := range lockedSensitiveKeyWords {
-			if word == locked {
-				return true
-			}
+	words := strings.FieldsFunc(*key, func(r rune) bool { return r == '.' || r == '-' })
+	for i, word := range words {
+		if slices.Contains(lockedSensitiveKeyWords, word) {
+			return true
+		}
+		if i+1 < len(words) && slices.Contains(lockedSensitiveKeyWords, word+words[i+1]) {
+			return true
 		}
 	}
 	return false
 }
+
+var errSensitiveTemplateKey = apperrors.New(
+	"template.sensitive_key_immutable",
+	"This template's mail carries a code or a one-time link: its key, which keeps its content hidden, cannot be changed or removed.",
+	fiber.StatusConflict,
+)
 
 var errContentSensitiveLocked = apperrors.New(
 	"template.content_sensitive_locked",

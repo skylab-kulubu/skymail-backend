@@ -106,6 +106,9 @@ func TestCredentialTemplatesAreLockedSensitive(t *testing.T) {
 		// Flows that may move here: a mail-and-code sign-in, a login link, a reset.
 		"auth.email-code", "login.link", "otp.mail", "place.login-link", "core.login-code", "forms.guest-verify-email",
 		"core.magic-link", "core.password-reset", "club.invite", "forms.email-otp",
+		// D2: a ticket or a link, and sign-in / log-in written with a dash.
+		"event.ticket-issued", "core.email-change-link", "place.sign-in-link", "core.log-in", "forms.sign-in",
+		"place.one-time-link", "core.signin-code",
 	} {
 		k := key
 		if !ContentSensitiveLocked(&k) {
@@ -117,7 +120,7 @@ func TestCredentialTemplatesAreLockedSensitive(t *testing.T) {
 		"free.basic", "core.welcome", "core.certificate", "club.team-membership", "event.updated", "event.cancelled",
 		"mail.approval-requested", "mail.approval-resolved", "ops.send-failed",
 		"forms.form-copy", "forms.status-changed", "forms.pending-reminder", "forms.attempt-update",
-		"keycloak", "accounts.x", "core.codex-news", "club.resetting",
+		"keycloak", "accounts.x", "core.codex-news", "club.resetting", "core.signal",
 	} {
 		k := key
 		if ContentSensitiveLocked(&k) {
@@ -230,5 +233,45 @@ func TestANewSingleTemplateCarryingACodeOrALinkIsHiddenByDefault(t *testing.T) {
 		if answer := contentAs(t, app, task, row, contentSender, system...); answer.Access != "sensitive" || answer.Subject != nil {
 			t.Errorf("%s: content = %+v, want sensitive", variable, answer)
 		}
+	}
+}
+
+// A locked template that is not a system one keeps its key: renaming it, or
+// sending no key, would take the lock off and open its past sends.
+func TestALockedTemplatesKeyCannotBeChangedOrDropped(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	payload := welcomeSeed("<p>{{.TicketCode}}</p>")
+	payload["system"] = false
+	response, seeded, body := seedAs(t, app, "event.ticket-created", payload, false)
+	if response.StatusCode != fiber.StatusOK || seeded.System {
+		t.Fatalf("seed = %d %s", response.StatusCode, body)
+	}
+	edit := func(key any) (int, []byte) {
+		fields := map[string]any{
+			"name": "Bilet", "subject": "Bilet", "html_content": "<p>{{.TicketCode}}</p>", "plain_text_content": "x", "react_email_content": "{}",
+		}
+		if key != nil {
+			fields["key"] = key
+		}
+		response, body := sendJSON(t, app, fiber.MethodPatch, "/templates/"+seeded.ID.String(), fields)
+		return response.StatusCode, body
+	}
+	for name, key := range map[string]any{"renamed": "event.ticket-x", "dropped": nil} {
+		status, body := edit(key)
+		var refusal struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal(body, &refusal)
+		if status != fiber.StatusConflict || refusal.Code != "template.sensitive_key_immutable" {
+			t.Errorf("%s: PATCH = %d %s, want 409 template.sensitive_key_immutable", name, status, body)
+		}
+	}
+	if served := getTemplate(t, app, "/templates/"+seeded.ID.String()); served.Key == nil || *served.Key != "event.ticket-created" {
+		t.Fatalf("key = %v, want it kept", served.Key)
+	}
+	// The same key: an edit like any other.
+	if status, body := edit("event.ticket-created"); status != fiber.StatusOK {
+		t.Errorf("PATCH with the same key = %d %s, want 200", status, body)
 	}
 }

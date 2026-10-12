@@ -2747,6 +2747,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/apperrors.AppError'
           description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'template.system_key_immutable or template.sensitive_key_immutable:
+            the key of a system template, or of one whose mail carries a credential,
+            cannot be changed or removed'
         "422":
           content:
             application/json:

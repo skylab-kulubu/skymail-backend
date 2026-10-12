@@ -250,8 +250,10 @@ zaten tutar. `GET /v1/mail_tasks/{id}/queue/{itemId}/content` bunu gösterir;
 - **Kilitli gizli:** `keycloak.*`, `account.*`, `auth.*`, `login.*`, `otp.*`,
   `core.contact-consent-confirm`, `event.ticket-created`, `event.reminder` ve
   anahtarında `login`, `code`, `otp`, `reset`, `verify`, `confirm`, `token`,
-  `magic`, `invite` gibi bir sözcük geçen her şablon (giriş/doğrulama kodu,
-  sıfırlama ya da hesap bağlantısı, bilet kodu). Panel de seed de bunları görünür yapamaz
+  `magic`, `invite`, `ticket`, `link` gibi bir sözcük (ya da `sign-in`, `log-in`
+  gibi tireli yazımı) geçen her şablon (giriş/doğrulama kodu, sıfırlama ya da
+  hesap bağlantısı, bilet kodu). Böyle bir şablonun anahtarı PATCH ile
+  değiştirilemez ya da boşaltılamaz (`409 template.sensitive_key_immutable`). Panel de seed de bunları görünür yapamaz
   (`409 template.content_sensitive_locked`); okuma anında da gizli sayılırlar.
   Liste tek yerde: `internal/handlers/content_sensitivity.go`.
 - `skymail:system-mails:read` SkyMail istemcisinin rolüdür (yönetici: YK, DK,
