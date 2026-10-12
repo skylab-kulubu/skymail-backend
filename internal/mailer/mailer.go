@@ -474,28 +474,41 @@ func (m *mailerImpl) Queue(q *database.Queries, priority Priority) Queue {
 
 func (m *mailerImpl) Wake() { m.wake() }
 
-// pooled is a send in the lane priority written in a transaction of its own,
-// which wakes the dispatcher once rows are queued.
-func (m *mailerImpl) pooled(priority Priority) *queue {
-	return &queue{q: m.db.Queries, logger: m.logger, priority: priority}
+// pooled writes a send in the lane priority in a transaction of its own, so
+// the send and its queue rows exist together or not at all: a send that fails
+// to queue leaves no send without rows behind. It wakes the dispatcher once
+// rows are queued.
+func (m *mailerImpl) pooled(ctx context.Context, priority Priority, write func(*queue) (uuid.UUID, bool, error)) (uuid.UUID, error) {
+	var id uuid.UUID
+	var queued bool
+	err := m.db.InTx(ctx, func(q *database.Queries) error {
+		var err error
+		id, queued, err = write(&queue{q: q, logger: m.logger, priority: priority})
+		return err
+	})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	m.wakeIf(queued)
+	return id, nil
 }
 
 func (m *mailerImpl) Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error) {
-	id, queued, err := m.pooled(PriorityBulk).enqueue(ctx, arg)
-	m.wakeIf(queued)
-	return id, err
+	return m.pooled(ctx, PriorityBulk, func(q *queue) (uuid.UUID, bool, error) {
+		return q.enqueue(ctx, arg)
+	})
 }
 
 func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
-	id, queued, err := m.pooled(PrioritySystem).enqueueSingle(ctx, arg)
-	m.wakeIf(queued)
-	return id, err
+	return m.pooled(ctx, PrioritySystem, func(q *queue) (uuid.UUID, bool, error) {
+		return q.enqueueSingle(ctx, arg)
+	})
 }
 
 func (m *mailerImpl) EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error) {
-	id, queued, err := m.pooled(PriorityBulk).enqueueWithRecipients(ctx, params)
-	m.wakeIf(queued)
-	return id, err
+	return m.pooled(ctx, PriorityBulk, func(q *queue) (uuid.UUID, bool, error) {
+		return q.enqueueWithRecipients(ctx, params)
+	})
 }
 
 func (m *mailerImpl) wakeIf(queued bool) {
@@ -547,7 +560,7 @@ func (q *queue) enqueue(ctx context.Context, arg database.CreateMailTaskParams) 
 		}
 	}
 
-	queued, err := q.renderAndQueue(ctx, commonRows)
+	queued, err := q.renderAndQueue(ctx, commonRows, false)
 	return rows[0].TaskID, queued, err
 }
 
@@ -570,7 +583,10 @@ func (q *queue) enqueueSingle(ctx context.Context, arg database.CreateSingleMail
 		},
 	}
 
-	queued, err := q.renderAndQueue(ctx, commonRows)
+	// A single mail has one recipient, and its caller (a login code, a Forms
+	// confirmation) is waiting for it: a mail that does not render is the
+	// send failing, and the caller is told.
+	queued, err := q.renderAndQueue(ctx, commonRows, true)
 	return row.TaskID, queued, err
 }
 
@@ -603,7 +619,7 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 		})
 	}
 
-	queued, err := q.renderAndQueue(ctx, rows)
+	queued, err := q.renderAndQueue(ctx, rows, false)
 	return task.ID, queued, err
 }
 
@@ -711,8 +727,12 @@ func (t mailTemplates) render(vars map[string]interface{}, recipient RecipientIn
 }
 
 // renderAndQueue renders each row's mail and writes the queue rows, saying
-// whether it wrote any.
-func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow) (bool, error) {
+// whether any is pending. A recipient whose mail does not render (a template
+// that slices an empty name) is written failed with the render error, and the
+// others are queued: one recipient never holds back a send to the rest. With
+// strict, a mail that does not render is returned as the error and nothing is
+// written.
+func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict bool) (bool, error) {
 	if len(rows) == 0 {
 		return false, nil
 	}
@@ -727,17 +747,29 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow) (bool,
 		return false, err
 	}
 
-	queueItems := make([]database.CreateMailQueueItemsParams, len(rows))
-	for i, row := range rows {
+	queueItems := make([]database.CreateMailQueueItemsParams, 0, len(rows))
+	var failed []database.CreateFailedMailQueueItemParams
+	for _, row := range rows {
 		rendered, err := parsed.render(taskVars, RecipientInfo{FullName: row.RecipientFullName, Email: row.RecipientEmail})
 		if err != nil {
-			q.logger.Err(err).Msg("Failed to render template")
+			if strict {
+				return false, err
+			}
+			q.logger.Err(err).Str("task_id", row.TaskID.String()).
+				Msg("A recipient's mail did not render: written failed, the others are queued")
+			failed = append(failed, database.CreateFailedMailQueueItemParams{
+				TaskID:            row.TaskID,
+				RecipientFullName: row.RecipientFullName,
+				RecipientEmail:    row.RecipientEmail,
+				Priority:          int16(q.priority),
+				Error:             err.Error(),
+			})
 			continue
 		}
 
 		htmlRes := rendered.HTML
 
-		queueItems[i] = database.CreateMailQueueItemsParams{
+		queueItems = append(queueItems, database.CreateMailQueueItemsParams{
 			TaskID:            row.TaskID,
 			RecipientFullName: row.RecipientFullName,
 			RecipientEmail:    row.RecipientEmail,
@@ -745,13 +777,20 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow) (bool,
 			Body:              rendered.PlainText,
 			BodyHtml:          &htmlRes,
 			Priority:          int16(q.priority),
-		}
+		})
 	}
 
-	if _, err = q.q.CreateMailQueueItems(ctx, queueItems); err != nil {
-		return false, err
+	if len(queueItems) > 0 {
+		if _, err = q.q.CreateMailQueueItems(ctx, queueItems); err != nil {
+			return false, err
+		}
 	}
-	return true, nil
+	for _, item := range failed {
+		if err := q.q.CreateFailedMailQueueItem(ctx, item); err != nil {
+			return false, err
+		}
+	}
+	return len(queueItems) > 0, nil
 }
 
 func (m *mailerImpl) startDispatcher(ctx context.Context) {

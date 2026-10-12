@@ -578,6 +578,39 @@ func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const createFailedMailQueueItem = `-- name: CreateFailedMailQueueItem :exec
+INSERT INTO mail_queue (
+    task_id, recipient_full_name, recipient_email,
+    subject, body, priority, status, error
+) VALUES (
+    $1, $2, $3,
+    '', '', $4, 'failed', $5::text
+)
+`
+
+type CreateFailedMailQueueItemParams struct {
+	TaskID            uuid.UUID `json:"task_id"`
+	RecipientFullName string    `json:"recipient_full_name"`
+	RecipientEmail    string    `json:"recipient_email"`
+	Priority          int16     `json:"priority"`
+	Error             string    `json:"error"`
+}
+
+// A recipient whose mail did not render, say a template that slices an empty
+// full name, is written failed, with the render error the send's page shows:
+// the send's other recipients are queued and mail_task_status reports the
+// send failed. Nothing was tried, so attempts stays 0.
+func (q *Queries) CreateFailedMailQueueItem(ctx context.Context, arg CreateFailedMailQueueItemParams) error {
+	_, err := q.db.Exec(ctx, createFailedMailQueueItem,
+		arg.TaskID,
+		arg.RecipientFullName,
+		arg.RecipientEmail,
+		arg.Priority,
+		arg.Error,
+	)
+	return err
+}
+
 const createMailApproval = `-- name: CreateMailApproval :one
 INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, submitter_email_unverified, template_id,
                             template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at,
