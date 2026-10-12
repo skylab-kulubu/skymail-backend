@@ -614,9 +614,12 @@ FROM mailing_list_recipients
 WHERE mail_list_id = $1
   AND recipient_id = $2;
 
--- Takes up to max_rows due rows for one process, leased to it: claimed_by
--- names the process, claimed_at starts the lease. The process asks for as many
--- rows as it has idle workers, so no row waits taken in a process's memory.
+-- Takes up to max_rows due rows of one lane for one process, leased to it:
+-- claimed_by names the process, claimed_at starts the lease. system_lane picks
+-- the system lane (priority above 0: single mail a person is waiting for) or
+-- the bulk lane (lists, groups, approved sends). The process asks for as many
+-- rows as it has idle workers, the system lane first, so no row waits taken
+-- in a process's memory and no system row waits behind a bulk one.
 -- name: ProcessQueueItems :many
 UPDATE mail_queue
 SET status     = 'processing',
@@ -626,6 +629,7 @@ WHERE id IN (SELECT id
              FROM mail_queue
              WHERE status = 'pending'
                AND next_attempt_at <= NOW()
+               AND (priority > 0) = sqlc.arg(system_lane)::boolean
              ORDER BY next_attempt_at, created_at
              LIMIT sqlc.arg(max_rows)::int FOR UPDATE SKIP LOCKED)
 RETURNING *;
@@ -783,8 +787,8 @@ FROM inserted_task it
 -- name: CreateMailQueueItems :copyfrom
 INSERT INTO mail_queue (
     task_id, recipient_full_name, recipient_email,
-    subject, body, body_html
-) VALUES ($1, $2, $3, $4, $5, $6);
+    subject, body, body_html, priority
+) VALUES ($1, $2, $3, $4, $5, $6, $7);
 
 -- name: GetMailTaskById :one
 SELECT mt.*,

@@ -71,7 +71,7 @@ func TestClaimTakesAtMostMaxRowsAndLeasesThemToTheProcess(t *testing.T) {
 	ctx := context.Background()
 	ids := queueOf(t, db, 5)
 
-	taken, err := db.ProcessQueueItems(ctx, ProcessQueueItemsParams{ClaimedBy: "skymail-a-1", MaxRows: 2})
+	taken, err := db.ProcessQueueItems(ctx, ProcessQueueItemsParams{ClaimedBy: "skymail-a-1", MaxRows: 2, SystemLane: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestClaimTakesAtMostMaxRowsAndLeasesThemToTheProcess(t *testing.T) {
 	}
 
 	// Another process skips what the first holds and takes the rest.
-	rest, err := db.ProcessQueueItems(ctx, ProcessQueueItemsParams{ClaimedBy: "skymail-b-2", MaxRows: 10})
+	rest, err := db.ProcessQueueItems(ctx, ProcessQueueItemsParams{ClaimedBy: "skymail-b-2", MaxRows: 10, SystemLane: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestResetDeadJobsPutsBackOnlyRowsWhoseLeaseRanOut(t *testing.T) {
 	db := lifecycleStore(t)
 	ctx := context.Background()
 	ids := queueOf(t, db, 3)
-	if _, err := db.ProcessQueueItems(ctx, ProcessQueueItemsParams{ClaimedBy: "skymail-old-1", MaxRows: 3}); err != nil {
+	if _, err := db.ProcessQueueItems(ctx, ProcessQueueItemsParams{ClaimedBy: "skymail-old-1", MaxRows: 3, SystemLane: true}); err != nil {
 		t.Fatal(err)
 	}
 	fresh, almost, stale := ids[0], ids[1], ids[2]
@@ -143,7 +143,7 @@ func TestResetDeadJobsPutsBackOnlyRowsWhoseLeaseRanOut(t *testing.T) {
 	}
 
 	// The stale row is the next process's to take.
-	taken, err := db.ProcessQueueItems(ctx, ProcessQueueItemsParams{ClaimedBy: "skymail-new-2", MaxRows: 10})
+	taken, err := db.ProcessQueueItems(ctx, ProcessQueueItemsParams{ClaimedBy: "skymail-new-2", MaxRows: 10, SystemLane: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestUnclaimedProcessingRowGetsALeaseBeforeItCanBeReset(t *testing.T) {
 // takeOne claims the one due row for claimant and returns the claim.
 func takeOne(t *testing.T, db *Store, claimant string) MailQueue {
 	t.Helper()
-	taken, err := db.ProcessQueueItems(context.Background(), ProcessQueueItemsParams{ClaimedBy: claimant, MaxRows: 1})
+	taken, err := db.ProcessQueueItems(context.Background(), ProcessQueueItemsParams{ClaimedBy: claimant, MaxRows: 1, SystemLane: true})
 	if err != nil {
 		t.Fatal(err)
 	}

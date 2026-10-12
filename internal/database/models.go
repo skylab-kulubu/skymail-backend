@@ -300,6 +300,7 @@ type MailQueue struct {
 	NextAttemptAt     time.Time           `json:"next_attempt_at"`
 	ClaimedAt         *time.Time          `json:"claimed_at"`
 	ClaimedBy         *string             `json:"claimed_by"`
+	Priority          int16               `json:"priority"`
 }
 
 type MailTask struct {

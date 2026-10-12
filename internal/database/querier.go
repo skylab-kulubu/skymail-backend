@@ -176,9 +176,12 @@ type Querier interface {
 	// the seed's upsert can judge the template before it writes: every other
 	// writer of the template waits until it has. No row: the key is new.
 	LockTemplateByKey(ctx context.Context, key *string) (Template, error)
-	// Takes up to max_rows due rows for one process, leased to it: claimed_by
-	// names the process, claimed_at starts the lease. The process asks for as many
-	// rows as it has idle workers, so no row waits taken in a process's memory.
+	// Takes up to max_rows due rows of one lane for one process, leased to it:
+	// claimed_by names the process, claimed_at starts the lease. system_lane picks
+	// the system lane (priority above 0: single mail a person is waiting for) or
+	// the bulk lane (lists, groups, approved sends). The process asks for as many
+	// rows as it has idle workers, the system lane first, so no row waits taken
+	// in a process's memory and no system row waits behind a bulk one.
 	ProcessQueueItems(ctx context.Context, arg ProcessQueueItemsParams) ([]MailQueue, error)
 	// Publishes a draft: marks it published and copies it onto the template row,
 	// which the send path reads — its name, subject and render. react_email_content,
