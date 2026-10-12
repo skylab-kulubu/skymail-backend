@@ -649,6 +649,7 @@ type CreateMailQueueItemsParams struct {
 	Subject           string    `json:"subject"`
 	Body              string    `json:"body"`
 	BodyHtml          *string   `json:"body_html"`
+	Priority          int16     `json:"priority"`
 }
 
 const createMailTask = `-- name: CreateMailTask :many
@@ -2492,21 +2493,26 @@ WHERE id IN (SELECT id
              FROM mail_queue
              WHERE status = 'pending'
                AND next_attempt_at <= NOW()
+               AND (priority > 0) = $2::boolean
              ORDER BY next_attempt_at, created_at
-             LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by
+             LIMIT $3::int FOR UPDATE SKIP LOCKED)
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority
 `
 
 type ProcessQueueItemsParams struct {
-	ClaimedBy string `json:"claimed_by"`
-	MaxRows   int    `json:"max_rows"`
+	ClaimedBy  string `json:"claimed_by"`
+	SystemLane bool   `json:"system_lane"`
+	MaxRows    int    `json:"max_rows"`
 }
 
-// Takes up to max_rows due rows for one process, leased to it: claimed_by
-// names the process, claimed_at starts the lease. The process asks for as many
-// rows as it has idle workers, so no row waits taken in a process's memory.
+// Takes up to max_rows due rows of one lane for one process, leased to it:
+// claimed_by names the process, claimed_at starts the lease. system_lane picks
+// the system lane (priority above 0: single mail a person is waiting for) or
+// the bulk lane (lists, groups, approved sends). The process asks for as many
+// rows as it has idle workers, the system lane first, so no row waits taken
+// in a process's memory and no system row waits behind a bulk one.
 func (q *Queries) ProcessQueueItems(ctx context.Context, arg ProcessQueueItemsParams) ([]MailQueue, error) {
-	rows, err := q.db.Query(ctx, processQueueItems, arg.ClaimedBy, arg.MaxRows)
+	rows, err := q.db.Query(ctx, processQueueItems, arg.ClaimedBy, arg.SystemLane, arg.MaxRows)
 	if err != nil {
 		return nil, err
 	}
@@ -2529,6 +2535,7 @@ func (q *Queries) ProcessQueueItems(ctx context.Context, arg ProcessQueueItemsPa
 			&i.NextAttemptAt,
 			&i.ClaimedAt,
 			&i.ClaimedBy,
+			&i.Priority,
 		); err != nil {
 			return nil, err
 		}

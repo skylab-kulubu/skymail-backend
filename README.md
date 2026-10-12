@@ -165,6 +165,21 @@ süreç satırı ancak bir işçi göndermeye hazırken alır. Sonuç yazımı
 `claimed_by` ile birlikte `claimed_at`'e de bakar: aynı süreç satırı kirası
 dolduktan sonra yeniden almışsa eski talebin sonucu da yazılmaz.
 
+## Öncelik şeritleri (`mail_queue.priority`)
+
+Her kuyruk satırı bir şerittedir. `1` sistem şeridi: `POST /mail_tasks/single`
+ile gelen tekil postalar (giriş kodu, sertifika, Forms, Mail onayı
+bildirimleri). `0` toplu şerit: listeye ve Keycloak grubuna gönderim, onaylı
+gönderimler (listeye de kişilere de). Dağıtıcı her turda önce sistem şeridinden
+alır. Toplu şerit bir sürecin işçilerinin en çok %70'ini (aşağı yuvarlanır, en
+az 1) tutar: 3 işçide 2. Böylece 300 kişilik bir duyuru giderken gelen giriş
+kodu boş kalan işçiyle, kuyruğa girdiği andaki uyandırmada gider; hiçbir toplu
+gönderimin bitmesini beklemez. Şerit belirtmeden yazılan satır (göçten önceki
+satırlar, eski imajın yazdıkları) sistem şeridindedir: bugünkü sıradan daha
+geride kalamaz. Çoklu replikada her süreç kendi işçilerini ayrı ayırır. Hız
+sınırı, kısma ve duraklatma henüz yok (duyuru-haber bilet 05, sonraki
+adımlar).
+
 ## Veritabanı migration'ları
 
 Uygulama bekleyen migration'ları servis trafiğe açılmadan önce çalıştırabilir.

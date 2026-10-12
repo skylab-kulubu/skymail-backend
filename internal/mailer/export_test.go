@@ -23,6 +23,9 @@ func Claimant(m Transactional) string { return m.(*mailerImpl).claimant }
 // before Start.
 func SetSendBudget(m Transactional, budget time.Duration) { m.(*mailerImpl).sendBudget = budget }
 
+// BulkSlotsFor is how many of a process's workers the bulk lane may hold.
+var BulkSlotsFor = bulkSlotsFor
+
 // DialWithin is the dialler the workers give go-mail.
 var DialWithin = dialWithin
 
