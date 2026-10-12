@@ -3,12 +3,14 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/ptr"
@@ -67,6 +69,8 @@ type Template struct {
 	Drafts []TemplateVersionSummary `json:"drafts"`
 	// The Template seed refused since the last seed that went through, because an operator changed the template (ADR-0047): a repo change waiting on a decision. Null when no seed is refused.
 	SeedRefusal *SeedRefusal `json:"seed_refusal"`
+	// The template's mail carries a credential (a code, a one-time or account link, a ticket's code): its content stays hidden, and content_sensitive cannot be set to false.
+	ContentSensitiveLocked bool `json:"content_sensitive_locked"`
 }
 
 type TemplateHandler interface {
@@ -86,6 +90,8 @@ type TemplateHandler interface {
 	PublishTemplateVersion(c fiber.Ctx) error
 	RestoreTemplateVersion(c fiber.Ctx) error
 	DiscardTemplateVersion(c fiber.Ctx) error
+	SetContentSensitive(c fiber.Ctx) error
+	ListContentSensitiveEvents(c fiber.Ctx) error
 }
 
 type templateHandlerImpl struct {
@@ -135,8 +141,9 @@ func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
 		return err
 	}
 
-	template, err := h.db.PublishTemplateWrite(c.Context(), versionAuthor(c, database.TemplateAuthorKindOperator), checkedWrite(func(q *database.Queries) (database.Template, error) {
-		return q.CreateTemplate(c.Context(), database.CreateTemplateParams{
+	author := versionAuthor(c, database.TemplateAuthorKindOperator)
+	template, err := h.db.PublishTemplateWrite(c.Context(), author, checkedWrite(func(q *database.Queries) (database.Template, error) {
+		created, err := q.CreateTemplate(c.Context(), database.CreateTemplateParams{
 			Name:              params.Name,
 			Subject:           params.Subject,
 			HtmlContent:       params.HTMLContent,
@@ -144,6 +151,10 @@ func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
 			ReactEmailContent: params.ReactEmailContent,
 			Key:               params.Key,
 		})
+		if err != nil {
+			return created, err
+		}
+		return lockSensitive(c.Context(), q, created, author)
 	}))
 	if err != nil {
 		return err
@@ -275,8 +286,9 @@ func (h *templateHandlerImpl) UpdateTemplate(c fiber.Ctx) error {
 
 	// The old panel has no drafts: its edit is an operator's version, published
 	// at once, as its saves always went straight to live mail.
-	template, err := h.db.PublishTemplateWrite(c.Context(), versionAuthor(c, database.TemplateAuthorKindOperator), checkedWrite(func(q *database.Queries) (database.Template, error) {
-		return q.UpdateTemplate(c.Context(), database.UpdateTemplateParams{
+	author := versionAuthor(c, database.TemplateAuthorKindOperator)
+	template, err := h.db.PublishTemplateWrite(c.Context(), author, checkedWrite(func(q *database.Queries) (database.Template, error) {
+		updated, err := q.UpdateTemplate(c.Context(), database.UpdateTemplateParams{
 			ID:                id,
 			Name:              params.Name,
 			Subject:           params.Subject,
@@ -285,6 +297,10 @@ func (h *templateHandlerImpl) UpdateTemplate(c fiber.Ctx) error {
 			ReactEmailContent: params.ReactEmailContent,
 			Key:               key,
 		})
+		if err != nil {
+			return updated, err
+		}
+		return lockSensitive(c.Context(), q, updated, author)
 	}))
 	if err != nil {
 		return err
@@ -377,7 +393,7 @@ func (h *templateHandlerImpl) served(ctx context.Context, rows []database.Templa
 	}
 	served := make([]Template, 0, len(rows))
 	for _, row := range rows {
-		template := Template{Template: row, Drafts: inProgress[row.ID], SeedRefusal: seedRefusal(row)}
+		template := Template{Template: row, Drafts: inProgress[row.ID], SeedRefusal: seedRefusal(row), ContentSensitiveLocked: ContentSensitiveLocked(row.Key)}
 		if mode, ok := mainModes[row.ID]; ok {
 			template.MainMode = &mode
 		}
@@ -518,16 +534,30 @@ func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 		return err
 	}
 
+	// A locked template stays sensitive whatever the seed says.
+	sensitive := params.ContentSensitive
+	if ContentSensitiveLocked(&key) {
+		locked := true
+		sensitive = &locked
+	}
+
 	// A Template seed's version is published at once, unless an operator's
 	// change is in its way and it is not forced.
+	author := versionAuthor(c, database.TemplateAuthorKindTemplateSeed)
 	template, overrode, err := h.db.SeedTemplate(c.Context(), database.TemplateSeed{
 		Key:           key,
-		Author:        versionAuthor(c, database.TemplateAuthorKindTemplateSeed),
+		Author:        author,
 		Subject:       params.Subject,
 		Force:         force,
 		PayloadSHA256: payloadSHA256,
 	}, checkedWrite(func(q *database.Queries) (database.Template, error) {
-		return q.UpsertTemplateByKey(c.Context(), database.UpsertTemplateByKeyParams{
+		var before *bool
+		if existing, err := q.LockTemplateByKey(c.Context(), &key); err == nil {
+			before = existing.ContentSensitive
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return database.Template{}, err
+		}
+		written, err := q.UpsertTemplateByKey(c.Context(), database.UpsertTemplateByKeyParams{
 			Key:                       key,
 			Name:                      params.Name,
 			Subject:                   params.Subject,
@@ -536,8 +566,12 @@ func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 			ReactEmailContent:         params.ReactEmailContent,
 			System:                    params.System,
 			ContractRequiredVariables: contract,
-			ContentSensitive:          params.ContentSensitive,
+			ContentSensitive:          sensitive,
 		})
+		if err != nil {
+			return written, err
+		}
+		return written, recordContentSensitiveChange(c.Context(), q, written.ID, author, before, written.ContentSensitive)
 	}))
 	if err != nil {
 		return seedError(err)

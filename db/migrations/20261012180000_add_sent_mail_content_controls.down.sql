@@ -2,6 +2,7 @@
 -- stays empty: it is not kept anywhere else.
 SET lock_timeout = '5s';
 
+DROP TABLE IF EXISTS template_content_sensitive_events;
 DROP FUNCTION IF EXISTS mail_task_content_sensitive(UUID);
 DROP FUNCTION IF EXISTS mail_task_bulk(UUID);
 

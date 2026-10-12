@@ -237,25 +237,36 @@ zaten tutar. `GET /v1/mail_tasks/{id}/queue/{itemId}/content` bunu gösterir;
 | Tekil posta (`/single`), şablonu görünür diyorsa | görür | `restricted` | görür | `restricted` |
 
 - Hassaslık şablonun `content_sensitive` alanıdır: `true` hiç gösterilmez,
-  `false` gösterilir, `null` (varsayılan) gönderim türüne bırakır: tekil posta
-  gizli, toplu gönderim görünür. Template seed yazar
-  (`PUT /v1/templates/by-key/{key}`, `content_sensitive`); migration
-  `keycloak.*`, `account.*`, `core.contact-consent-confirm`, `event.ticket-created` ve `event.reminder`'ı `true` yapar.
-- `skymail:system-mails:read` SkyMail istemcisinin yeni rolüdür (yönetici);
-  Keycloak'ta oluşturulup verilene kadar tekil postaların içeriğini yalnız
-  gönderen görür.
+  `false` gösterilir, `null` gönderim türüne bırakır: tekil posta gizli, toplu
+  gönderim görünür. Template seed yazar (`PUT /v1/templates/by-key/{key}`,
+  `content_sensitive`), panel iki yönde değiştirir
+  (`PUT /v1/templates/{id}/content-sensitive`, `skymail:templates:write`). Her
+  değişiklik kim, ne zaman, eski→yeni olarak kaydedilir
+  (`GET /v1/templates/{id}/content-sensitive/events`). Migration bilinen
+  şablonları işaretler: kimlik bilgisi taşıyanlar `true`, seed'in görünür
+  dediği tekiller (`core.welcome`, `core.certificate`, `club.team-membership`,
+  `mail.approval-*`, `ops.send-failed`, …) `false`; böylece seed'den önceki ilk
+  süpürme onları boşaltmaz.
+- **Kilitli gizli:** `keycloak.*`, `account.*`, `core.contact-consent-confirm`,
+  `event.ticket-created`, `event.reminder` (giriş/doğrulama kodu, sıfırlama ya
+  da hesap bağlantısı, bilet kodu). Panel de seed de bunları görünür yapamaz
+  (`409 template.content_sensitive_locked`); okuma anında da gizli sayılırlar.
+  Liste tek yerde: `internal/handlers/content_sensitivity.go`.
+- `skymail:system-mails:read` SkyMail istemcisinin rolüdür (yönetici: YK, DK,
+  ADMIN). Keycloak'ta verilene kadar tekil postaların içeriğini yalnız gönderen
+  görür.
 - Bir gönderimin `body_variables`'ı da içeriktir: gönderim listesi ve gönderim
   sayfası onu yalnız `content_access: available` iken verir.
-- İçerik süreli tutulur. Süpürücü beş dakikada bir, gönderilecek satırı
-  kalmamış gönderimlerin içeriğini boşaltır: hassas olanı hemen (oluşturulduktan
-  beş dakika sonra), ötekini `MAIL_CONTENT_RETENTION_DAYS` gün sonra (varsayılan
-  `90`, 1–3650 arası tam sayı; başka değer açılışı durdurur). Satırın konusu ve
-  gövdesi `''`, HTML'i `NULL`, gönderimin `body_variables`'ı `{}` olur,
-  `mail_tasks.content_cleared_at` zamanı yazar. Durum, alıcı, hata ve sayılar
-  kalır. Ayrıntı: [`docs/data-lifecycle.md`](docs/data-lifecycle.md#sent-mail-content).
-- **İlk yayında** süpürücü, yayından 90 günden eski bütün gönderimlerin ve
-  bütün hassas gönderimlerin içeriğini bir kez boşaltır. Geri alınamaz (yalnız
-  yedekte kalır). Daha uzun tutmak için yayından önce değişkeni verin.
+- Süpürücü beş dakikada bir, gönderilecek satırı kalmamış gönderimlerin
+  içeriğini boşaltır (20'lik partiler): hassas olanı hemen (oluşturulduktan beş
+  dakika sonra), ötekini `MAIL_CONTENT_RETENTION_DAYS` gün sonra (varsayılan
+  izin verilen en çok değer `3650`; 1–3650 arası tam sayı, başka değer açılışı
+  durdurur). Satırın konusu ve gövdesi `''`, HTML'i `NULL`, gönderimin
+  `body_variables`'ı `{}` olur, `mail_tasks.content_cleared_at` zamanı yazar.
+  Durum, alıcı, hata ve sayılar kalır. Ayrıntı ve KVKK notu:
+  [`docs/data-lifecycle.md`](docs/data-lifecycle.md#sent-mail-content).
+- **İlk yayında** süpürücü bütün hassas gönderimlerin içeriğini bir kez
+  boşaltır. Geri alınamaz (yalnız yedekte kalır).
 
 ## Veritabanı migration'ları
 

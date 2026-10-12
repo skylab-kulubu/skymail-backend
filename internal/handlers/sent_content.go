@@ -20,8 +20,10 @@ const SystemMailsReadRole = "skymail:system-mails:read"
 const mailsWriteRole = "skymail:mails:write"
 
 // DefaultContentRetentionDays is how long a send's content is kept when
-// MAIL_CONTENT_RETENTION_DAYS does not say.
-const DefaultContentRetentionDays = 90
+// MAIL_CONTENT_RETENTION_DAYS does not say: the longest it may say (Yusuf,
+// 2026-10-12: "en çok neyse o olsun"). Sensitive content is emptied at once
+// whatever it says.
+const DefaultContentRetentionDays = MaxContentRetentionDays
 
 // ContentAccess is whether a caller may open a send's content, and if not,
 // why. A sensitive send's content is never shown, to anyone; a restricted one
@@ -79,11 +81,13 @@ func (c contentCaller) has(role string) bool {
 
 // sendContent is what decides who may open a send's content.
 type sendContent struct {
-	sentBy    string
-	bulk      bool
-	sensitive bool
-	createdAt time.Time
-	clearedAt *time.Time
+	// The template's key: a locked one is sensitive whatever its row says.
+	templateKey *string
+	sentBy      string
+	bulk        bool
+	sensitive   bool
+	createdAt   time.Time
+	clearedAt   *time.Time
 }
 
 // mayRead is the rule (Yusuf, 2026-10-12): a send's own sender; for a send to
@@ -103,7 +107,7 @@ func (c contentCaller) mayRead(send sendContent) bool {
 // contentAccess decides in this order: sensitive content is shown to no one,
 // so who asks does not matter; then who asks; then whether it is still kept.
 func (h *mailHandlerImpl) contentAccess(caller contentCaller, send sendContent) (ContentAccess, *time.Time) {
-	if send.sensitive {
+	if send.sensitive || ContentSensitiveLocked(send.templateKey) {
 		return ContentSensitive, nil
 	}
 	if !caller.mayRead(send) {
@@ -136,7 +140,7 @@ type SentMailContent struct {
 // GetQueueItemContent godoc
 //
 //	@Summary		Get one recipient's mail as sent
-//	@Description	The subject, plain text and HTML a recipient of the send was sent, rendered for them. access says whether they are shown: sensitive — the template carries a code or a one-time link, or it is a single mail whose template does not say it may be shown — is never shown to anyone; restricted is shown to the send's sender, for a send to a list, a group or an approved request to holders of skymail:mails:write, and to holders of skymail:system-mails:read; expired is past MAIL_CONTENT_RETENTION_DAYS (90 by default) and no longer kept; unavailable holds nothing (Account erasure emptied it, or it never rendered). The fields are null unless access is available. The HTML may reach the network (images, a tracking pixel): show it sandboxed, with remote content blocked by default.
+//	@Description	The subject, plain text and HTML a recipient of the send was sent, rendered for them. access says whether they are shown: sensitive — the template carries a code or a one-time link, or it is a single mail whose template does not say it may be shown — is never shown to anyone; restricted is shown to the send's sender, for a send to a list, a group or an approved request to holders of skymail:mails:write, and to holders of skymail:system-mails:read; expired is past MAIL_CONTENT_RETENTION_DAYS (3650 by default) and no longer kept; unavailable holds nothing (Account erasure emptied it, or it never rendered). The fields are null unless access is available. The HTML may reach the network (images, a tracking pixel): show it sandboxed, with remote content blocked by default.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id		path		string	true	"Task ID"
@@ -163,11 +167,12 @@ func (h *mailHandlerImpl) GetQueueItemContent(c fiber.Ctx) error {
 	}
 
 	access, expires := h.contentAccess(contentCallerOf(c), sendContent{
-		sentBy:    row.SentBy,
-		bulk:      row.Bulk,
-		sensitive: row.ContentSensitive,
-		createdAt: row.TaskCreatedAt,
-		clearedAt: row.ContentClearedAt,
+		templateKey: row.TemplateKey,
+		sentBy:      row.SentBy,
+		bulk:        row.Bulk,
+		sensitive:   row.ContentSensitive,
+		createdAt:   row.TaskCreatedAt,
+		clearedAt:   row.ContentClearedAt,
 	})
 	answer := SentMailContent{ID: row.ID, TaskID: row.TaskID, Access: access}
 	if access != ContentAvailable {

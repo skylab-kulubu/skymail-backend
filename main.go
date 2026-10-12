@@ -314,6 +314,8 @@ func registerTemplateRoutes(api fiber.Router, auth middlewares.AuthMiddleware, t
 	templates.Post("/:id/versions/:versionId/publish", auth.RequireAnyPermission("skymail:templates:write"), template.PublishTemplateVersion)
 	templates.Post("/:id/versions/:versionId/restore", auth.RequireAnyPermission("skymail:templates:write"), template.RestoreTemplateVersion)
 	templates.Post("/:id/versions/:versionId/discard", auth.RequireAnyPermission("skymail:templates:write"), template.DiscardTemplateVersion)
+	templates.Put("/:id/content-sensitive", auth.RequireAnyPermission("skymail:templates:write"), template.SetContentSensitive)
+	templates.Get("/:id/content-sensitive/events", auth.RequireAnyPermission("skymail:templates:read"), template.ListContentSensitiveEvents)
 }
 
 func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, mail handlers.MailHandler) {
@@ -334,8 +336,11 @@ func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, m
 // send's content is gone within it of its last row going out.
 const contentSweepInterval = 5 * time.Minute
 
-// contentSweepBatch is how many sends one statement of the sweep empties.
-const contentSweepBatch = 200
+// contentSweepBatch is how many sends one statement of the sweep empties. A
+// list send can hold thousands of rows with their HTML, so the batch is kept
+// small: the first run, which empties every sensitive send there is, is many
+// short transactions rather than a few long ones.
+const contentSweepBatch = 20
 
 // clearMailContent empties the content of the sends due — a sensitive one
 // once none of its rows is still to go out, any other past retentionDays — at

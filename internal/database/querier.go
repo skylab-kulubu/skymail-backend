@@ -16,14 +16,6 @@ type Querier interface {
 	// The sends an approval queued, in order: a list's one send, or one per
 	// person, each at that person's position.
 	AddMailApprovalTasks(ctx context.Context, arg AddMailApprovalTasksParams) error
-	// Required variable sets are sorted byte by byte (COLLATE "C"), the order the
-	// handler sorts a contract set in and a missing list comes in, whatever the
-	// database's collation.
-	//
-	// Marks a variable of a template in use as required by operators. A name
-	// already in either set changes nothing: one the contract declares is required
-	// already, and stays the contract's. Takes the row's lock, so the caller can
-	// check the body against the sets it returns before committing.
 	AddOperatorRequiredVariable(ctx context.Context, arg AddOperatorRequiredVariableParams) (Template, error)
 	AddRecipientToMailingList(ctx context.Context, arg AddRecipientToMailingListParams) (AddRecipientToMailingListRow, error)
 	ArchiveMailingList(ctx context.Context, arg ArchiveMailingListParams) (MailingList, error)
@@ -70,6 +62,7 @@ type Querier interface {
 	// Counts taken rows of one lane in the minute starting at minute_start and
 	// the hour starting at hour_start.
 	CountSends(ctx context.Context, arg CountSendsParams) error
+	CountTemplateContentSensitiveEvents(ctx context.Context, templateID uuid.UUID) (int64, error)
 	CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error)
 	CountTemplates(ctx context.Context) (int64, error)
 	// A recipient whose mail did not render, say a template that slices an empty
@@ -171,6 +164,8 @@ type Querier interface {
 	// The Authoring mode of each template's Main source as it is sent: its
 	// published version's.
 	ListPublishedMainModes(ctx context.Context, templateIds []uuid.UUID) ([]ListPublishedMainModesRow, error)
+	// A template's content_sensitive changes, newest first.
+	ListTemplateContentSensitiveEvents(ctx context.Context, arg ListTemplateContentSensitiveEventsParams) ([]TemplateContentSensitiveEvent, error)
 	// Each operator's draft in progress on the given templates, newest first: the
 	// newest version an operator wrote of a template, when it is neither published
 	// nor discarded. An operator's later version supersedes their earlier drafts,
@@ -241,6 +236,7 @@ type Querier interface {
 	// content refused last time again keeps when it was first refused; other
 	// content starts over. Nothing that is sent changes, so updated_at stays.
 	RecordSeedRefusal(ctx context.Context, arg RecordSeedRefusalParams) error
+	RecordTemplateContentSensitiveEvent(ctx context.Context, arg RecordTemplateContentSensitiveEventParams) error
 	// Writes an operator's draft, numbered after the template's last version,
 	// unless the version it continues holds exactly this content already —
 	// name, subject, every source, Main source and render, a Visual document compared
@@ -317,6 +313,18 @@ type Querier interface {
 	// then); zero rows says so. A sent or failed row keeps its claim: the process
 	// that finished it.
 	SetMailQueueItemSent(ctx context.Context, arg SetMailQueueItemSentParams) (int64, error)
+	// Required variable sets are sorted byte by byte (COLLATE "C"), the order the
+	// handler sorts a contract set in and a missing list comes in, whatever the
+	// database's collation.
+	//
+	// Marks a variable of a template in use as required by operators. A name
+	// already in either set changes nothing: one the contract declares is required
+	// already, and stays the contract's. Takes the row's lock, so the caller can
+	// check the body against the sets it returns before committing.
+	// Sets whether the content of the template's sends is shown, as the panel
+	// does; like a Required variable, a setting of the row: no version, and
+	// updated_at stays. An archived template is not found.
+	SetTemplateContentSensitive(ctx context.Context, arg SetTemplateContentSensitiveParams) (Template, error)
 	// Keeps an internal list from being archived while a send to it is checked
 	// and queued. No row: the id is not an internal list's.
 	ShareLockMailingList(ctx context.Context, id uuid.UUID) (MailingList, error)

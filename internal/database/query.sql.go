@@ -66,14 +66,6 @@ type AddOperatorRequiredVariableParams struct {
 	ID   uuid.UUID `json:"id"`
 }
 
-// Required variable sets are sorted byte by byte (COLLATE "C"), the order the
-// handler sorts a contract set in and a missing list comes in, whatever the
-// database's collation.
-//
-// Marks a variable of a template in use as required by operators. A name
-// already in either set changes nothing: one the contract declares is required
-// already, and stays the contract's. Takes the row's lock, so the caller can
-// check the body against the sets it returns before committing.
 func (q *Queries) AddOperatorRequiredVariable(ctx context.Context, arg AddOperatorRequiredVariableParams) (Template, error) {
 	row := q.db.QueryRow(ctx, addOperatorRequiredVariable, arg.Name, arg.ID)
 	var i Template
@@ -643,6 +635,19 @@ func (q *Queries) CountSends(ctx context.Context, arg CountSendsParams) error {
 		arg.HourStart,
 	)
 	return err
+}
+
+const countTemplateContentSensitiveEvents = `-- name: CountTemplateContentSensitiveEvents :one
+SELECT count(*)
+FROM template_content_sensitive_events
+WHERE template_id = $1
+`
+
+func (q *Queries) CountTemplateContentSensitiveEvents(ctx context.Context, templateID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countTemplateContentSensitiveEvents, templateID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const countTemplateVersions = `-- name: CountTemplateVersions :one
@@ -1453,9 +1458,11 @@ SELECT q.id,
        mt.created_at                               AS task_created_at,
        mt.content_cleared_at,
        mail_task_bulk(mt.id)::boolean              AS bulk,
-       mail_task_content_sensitive(mt.id)::boolean AS content_sensitive
+       mail_task_content_sensitive(mt.id)::boolean AS content_sensitive,
+       t.key                                       AS template_key
 FROM mail_queue q
          JOIN mail_tasks mt ON mt.id = q.task_id
+         LEFT JOIN templates t ON t.id = mt.template_id
 WHERE q.task_id = $1
   AND q.id = $2
 `
@@ -1478,6 +1485,7 @@ type GetMailQueueItemContentRow struct {
 	ContentClearedAt *time.Time          `json:"content_cleared_at"`
 	Bulk             bool                `json:"bulk"`
 	ContentSensitive bool                `json:"content_sensitive"`
+	TemplateKey      *string             `json:"template_key"`
 }
 
 // One recipient's mail as it was rendered and sent, with what decides who may
@@ -1499,6 +1507,7 @@ func (q *Queries) GetMailQueueItemContent(ctx context.Context, arg GetMailQueueI
 		&i.ContentClearedAt,
 		&i.Bulk,
 		&i.ContentSensitive,
+		&i.TemplateKey,
 	)
 	return i, err
 }
@@ -2463,6 +2472,50 @@ func (q *Queries) ListPublishedMainModes(ctx context.Context, templateIds []uuid
 	return items, nil
 }
 
+const listTemplateContentSensitiveEvents = `-- name: ListTemplateContentSensitiveEvents :many
+SELECT id, template_id, actor_kind, actor_sub, actor_name, old_value, new_value, created_at
+FROM template_content_sensitive_events
+WHERE template_id = $1
+ORDER BY created_at DESC, id DESC
+LIMIT $3 OFFSET $2
+`
+
+type ListTemplateContentSensitiveEventsParams struct {
+	TemplateID uuid.UUID `json:"template_id"`
+	RowOffset  int32     `json:"row_offset"`
+	RowLimit   int32     `json:"row_limit"`
+}
+
+// A template's content_sensitive changes, newest first.
+func (q *Queries) ListTemplateContentSensitiveEvents(ctx context.Context, arg ListTemplateContentSensitiveEventsParams) ([]TemplateContentSensitiveEvent, error) {
+	rows, err := q.db.Query(ctx, listTemplateContentSensitiveEvents, arg.TemplateID, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TemplateContentSensitiveEvent
+	for rows.Next() {
+		var i TemplateContentSensitiveEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.TemplateID,
+			&i.ActorKind,
+			&i.ActorSub,
+			&i.ActorName,
+			&i.OldValue,
+			&i.NewValue,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTemplateDrafts = `-- name: ListTemplateDrafts :many
 SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at, name
 FROM template_version_summaries s
@@ -3020,6 +3073,33 @@ type RecordSeedRefusalParams struct {
 // content starts over. Nothing that is sent changes, so updated_at stays.
 func (q *Queries) RecordSeedRefusal(ctx context.Context, arg RecordSeedRefusalParams) error {
 	_, err := q.db.Exec(ctx, recordSeedRefusal, arg.PayloadSha256, arg.Rules, arg.ID)
+	return err
+}
+
+const recordTemplateContentSensitiveEvent = `-- name: RecordTemplateContentSensitiveEvent :exec
+INSERT INTO template_content_sensitive_events (template_id, actor_kind, actor_sub, actor_name, old_value, new_value)
+VALUES ($1, $2, $3, $4,
+        $5, $6)
+`
+
+type RecordTemplateContentSensitiveEventParams struct {
+	TemplateID uuid.UUID          `json:"template_id"`
+	ActorKind  TemplateAuthorKind `json:"actor_kind"`
+	ActorSub   *string            `json:"actor_sub"`
+	ActorName  *string            `json:"actor_name"`
+	OldValue   *bool              `json:"old_value"`
+	NewValue   *bool              `json:"new_value"`
+}
+
+func (q *Queries) RecordTemplateContentSensitiveEvent(ctx context.Context, arg RecordTemplateContentSensitiveEventParams) error {
+	_, err := q.db.Exec(ctx, recordTemplateContentSensitiveEvent,
+		arg.TemplateID,
+		arg.ActorKind,
+		arg.ActorSub,
+		arg.ActorName,
+		arg.OldValue,
+		arg.NewValue,
+	)
 	return err
 }
 
@@ -3671,6 +3751,57 @@ func (q *Queries) SetMailQueueItemSent(ctx context.Context, arg SetMailQueueItem
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setTemplateContentSensitive = `-- name: SetTemplateContentSensitive :one
+UPDATE templates
+SET content_sensitive = $1::boolean
+WHERE id = $2
+  AND archived_at IS NULL
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive
+`
+
+type SetTemplateContentSensitiveParams struct {
+	ContentSensitive bool      `json:"content_sensitive"`
+	ID               uuid.UUID `json:"id"`
+}
+
+// Required variable sets are sorted byte by byte (COLLATE "C"), the order the
+// handler sorts a contract set in and a missing list comes in, whatever the
+// database's collation.
+//
+// Marks a variable of a template in use as required by operators. A name
+// already in either set changes nothing: one the contract declares is required
+// already, and stays the contract's. Takes the row's lock, so the caller can
+// check the body against the sets it returns before committing.
+// Sets whether the content of the template's sends is shown, as the panel
+// does; like a Required variable, a setting of the row: no version, and
+// updated_at stays. An archived template is not found.
+func (q *Queries) SetTemplateContentSensitive(ctx context.Context, arg SetTemplateContentSensitiveParams) (Template, error) {
+	row := q.db.QueryRow(ctx, setTemplateContentSensitive, arg.ContentSensitive, arg.ID)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HtmlContent,
+		&i.PlainTextContent,
+		&i.ReactEmailContent,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Subject,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.Key,
+		&i.System,
+		&i.PublishedVersionID,
+		&i.ContractRequiredVariables,
+		&i.OperatorRequiredVariables,
+		&i.SeedRefusedAt,
+		&i.SeedRefusedRules,
+		&i.SeedRefusedPayloadSha256,
+		&i.ContentSensitive,
+	)
+	return i, err
 }
 
 const shareLockMailingList = `-- name: ShareLockMailingList :one

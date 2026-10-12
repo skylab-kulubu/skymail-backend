@@ -219,7 +219,9 @@ func newEraser(ctx context.Context, tx pgx.Tx, erasure AccountErasure) (*eraser,
 		              UNION ALL
 		              SELECT actor_name FROM mail_approval_events WHERE actor_sub = @subject
 		              UNION ALL
-		              SELECT author_name FROM template_versions WHERE author_sub = @subject),
+		              SELECT author_name FROM template_versions WHERE author_sub = @subject
+		              UNION ALL
+		              SELECT actor_name FROM template_content_sensitive_events WHERE actor_sub = @subject),
 		     full_names AS (SELECT DISTINCT lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) AS name
 		                    FROM held
 		                    WHERE name IS NOT NULL)
@@ -404,6 +406,13 @@ var dropNamesSteps = []erasureStep{
 		sql: `UPDATE template_versions
 		      SET author_sub = @deleted_sub, author_name = @deleted_name
 		      WHERE author_sub = @subject`,
+	},
+	{
+		name:  "template content_sensitive changes",
+		count: AccountErasureActorColumnsReplaced,
+		sql: `UPDATE template_content_sensitive_events
+		      SET actor_sub = @deleted_sub, actor_name = @deleted_name
+		      WHERE actor_sub = @subject`,
 	},
 }
 

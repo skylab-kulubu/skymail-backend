@@ -32,7 +32,9 @@ func TestSentMailContentMigrationsGoUpAndDown(t *testing.T) {
 		       ('core.contact-consent-confirm', 'Onay', 'Konu', '<p>x</p>', 'x', '', true),
 		       ('event.ticket-created', 'Bilet', 'Konu', '<p>x</p>', 'x', '', false),
 		       ('core.welcome', 'Hoş geldin', 'Konu', '<p>x</p>', 'x', '', true),
-		       ('free.basic', 'Serbest', 'Konu', '<p>x</p>', 'x', '', false);
+		       ('free.basic', 'Serbest', 'Konu', '<p>x</p>', 'x', '', false),
+		       ('mail.approval-resolved', 'Onay', 'Konu', '<p>x</p>', 'x', '', false),
+		       ('forms.form-copy', 'Form kopyası', 'Konu', '<p>x</p>', 'x', '', true);
 		INSERT INTO mail_tasks (id, sent_by, body_variables)
 		VALUES ('40000000-0000-4000-8000-000000000003', '31ef736f-72da-4a40-8791-d523199cf9f0', '{}');`); err != nil {
 		t.Fatal(err)
@@ -64,10 +66,15 @@ func TestSentMailContentMigrationsGoUpAndDown(t *testing.T) {
 			t.Errorf("%s content_sensitive = %v, want %v", key, got[key], want)
 		}
 	}
-	for _, key := range []string{"core.welcome", "free.basic"} {
-		if got[key] != nil {
-			t.Errorf("%s content_sensitive = %v, want NULL: left to the kind of send", key, *got[key])
+	// Shown by the seed, marked so before it runs: the first sweep must not
+	// take their single mails for sensitive.
+	for _, key := range []string{"core.welcome", "free.basic", "mail.approval-resolved"} {
+		if got[key] == nil || *got[key] {
+			t.Errorf("%s content_sensitive = %v, want false", key, got[key])
 		}
+	}
+	if got["forms.form-copy"] != nil {
+		t.Errorf("forms.form-copy content_sensitive = %v, want NULL: left to the kind of send", *got["forms.form-copy"])
 	}
 	var cleared, valid bool
 	if err := database.Pool.QueryRow(ctx, `
@@ -92,11 +99,12 @@ func TestSentMailContentMigrationsGoUpAndDown(t *testing.T) {
 	if err := database.Pool.QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM information_schema.columns
 		        WHERE (table_name, column_name) IN (('templates', 'content_sensitive'), ('mail_tasks', 'content_cleared_at'))),
-		       (SELECT count(*) FROM pg_proc WHERE proname IN ('mail_task_bulk', 'mail_task_content_sensitive')),
+		       (SELECT count(*) FROM pg_proc WHERE proname IN ('mail_task_bulk', 'mail_task_content_sensitive'))
+		           + (SELECT count(*) FROM pg_tables WHERE tablename = 'template_content_sensitive_events'),
 		       (SELECT count(*) FROM pg_indexes WHERE indexname = 'idx_mail_tasks_content_kept')`).Scan(&columns, &functions, &indexes); err != nil {
 		t.Fatal(err)
 	}
 	if columns != 0 || functions != 0 || indexes != 0 {
-		t.Fatalf("after down: %d columns, %d functions, %d indexes left; want none", columns, functions, indexes)
+		t.Fatalf("after down: %d columns, %d functions and tables, %d indexes left; want none", columns, functions, indexes)
 	}
 }

@@ -149,6 +149,34 @@ RETURNING *;
 -- already in either set changes nothing: one the contract declares is required
 -- already, and stays the contract's. Takes the row's lock, so the caller can
 -- check the body against the sets it returns before committing.
+-- Sets whether the content of the template's sends is shown, as the panel
+-- does; like a Required variable, a setting of the row: no version, and
+-- updated_at stays. An archived template is not found.
+-- name: SetTemplateContentSensitive :one
+UPDATE templates
+SET content_sensitive = sqlc.arg(content_sensitive)::boolean
+WHERE id = sqlc.arg(id)
+  AND archived_at IS NULL
+RETURNING *;
+
+-- name: RecordTemplateContentSensitiveEvent :exec
+INSERT INTO template_content_sensitive_events (template_id, actor_kind, actor_sub, actor_name, old_value, new_value)
+VALUES (sqlc.arg(template_id), sqlc.arg(actor_kind), sqlc.narg(actor_sub), sqlc.narg(actor_name),
+        sqlc.narg(old_value), sqlc.narg(new_value));
+
+-- A template's content_sensitive changes, newest first.
+-- name: ListTemplateContentSensitiveEvents :many
+SELECT id, template_id, actor_kind, actor_sub, actor_name, old_value, new_value, created_at
+FROM template_content_sensitive_events
+WHERE template_id = sqlc.arg(template_id)
+ORDER BY created_at DESC, id DESC
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
+
+-- name: CountTemplateContentSensitiveEvents :one
+SELECT count(*)
+FROM template_content_sensitive_events
+WHERE template_id = sqlc.arg(template_id);
+
 -- name: AddOperatorRequiredVariable :one
 UPDATE templates
 SET operator_required_variables = CASE
@@ -912,9 +940,11 @@ SELECT q.id,
        mt.created_at                               AS task_created_at,
        mt.content_cleared_at,
        mail_task_bulk(mt.id)::boolean              AS bulk,
-       mail_task_content_sensitive(mt.id)::boolean AS content_sensitive
+       mail_task_content_sensitive(mt.id)::boolean AS content_sensitive,
+       t.key                                       AS template_key
 FROM mail_queue q
          JOIN mail_tasks mt ON mt.id = q.task_id
+         LEFT JOIN templates t ON t.id = mt.template_id
 WHERE q.task_id = sqlc.arg(task_id)
   AND q.id = sqlc.arg(id);
 

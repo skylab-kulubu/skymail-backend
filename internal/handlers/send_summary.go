@@ -245,11 +245,12 @@ func (h *mailHandlerImpl) mailTaskItems(ctx context.Context, caller contentCalle
 	items := make([]MailTaskItem, len(sends))
 	for i, send := range sends {
 		access, expires := h.contentAccess(caller, sendContent{
-			sentBy:    send.SentBy,
-			bulk:      send.Bulk,
-			sensitive: send.ContentSensitive,
-			createdAt: send.CreatedAt,
-			clearedAt: send.ContentClearedAt,
+			templateKey: send.TemplateKey,
+			sentBy:      send.SentBy,
+			bulk:        send.Bulk,
+			sensitive:   send.ContentSensitive,
+			createdAt:   send.CreatedAt,
+			clearedAt:   send.ContentClearedAt,
 		})
 		var variables []byte
 		if access == ContentAvailable {

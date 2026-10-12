@@ -368,6 +368,17 @@ type Template struct {
 	ContentSensitive *bool `json:"content_sensitive"`
 }
 
+type TemplateContentSensitiveEvent struct {
+	ID         uuid.UUID          `json:"id"`
+	TemplateID uuid.UUID          `json:"template_id"`
+	ActorKind  TemplateAuthorKind `json:"actor_kind"`
+	ActorSub   *string            `json:"actor_sub"`
+	ActorName  *string            `json:"actor_name"`
+	OldValue   *bool              `json:"old_value"`
+	NewValue   *bool              `json:"new_value"`
+	CreatedAt  time.Time          `json:"created_at"`
+}
+
 type TemplateVersion struct {
 	ID               uuid.UUID          `json:"id"`
 	TemplateID       uuid.UUID          `json:"template_id"`

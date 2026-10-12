@@ -50,6 +50,37 @@ WHERE key LIKE 'keycloak.%'
    OR key LIKE 'account.%'
    OR key IN ('core.contact-consent-confirm', 'event.ticket-created', 'event.reminder');
 
+-- And those whose content may be shown, as the seed states them (skymail-
+-- frontend emails/): left NULL until the next seed, their single mails would
+-- count as sensitive and the first sweep would empty them for good. A value an
+-- operator or a seed already wrote is kept.
+UPDATE templates
+SET content_sensitive = false
+WHERE content_sensitive IS NULL
+  AND key IN ('free.basic', 'core.welcome', 'core.certificate', 'club.team-membership', 'event.updated',
+              'event.cancelled', 'mail.approval-requested', 'mail.approval-resolved', 'ops.send-failed');
+
+-- Every change of a template's content_sensitive, by the panel or the seed:
+-- who, when, the value before and after. Never rewritten but by Account
+-- erasure, which replaces the actor with Silinmiş kullanıcı.
+CREATE TABLE template_content_sensitive_events
+(
+    id          UUID PRIMARY KEY              DEFAULT gen_random_uuid(),
+    template_id UUID                 NOT NULL REFERENCES templates (id),
+    actor_kind  template_author_kind NOT NULL,
+    actor_sub   TEXT,
+    actor_name  TEXT,
+    old_value   BOOLEAN,
+    new_value   BOOLEAN,
+    created_at  TIMESTAMPTZ          NOT NULL DEFAULT now(),
+    CONSTRAINT template_content_sensitive_events_changed CHECK (old_value IS DISTINCT FROM new_value)
+);
+
+CREATE INDEX idx_template_content_sensitive_events_template
+    ON template_content_sensitive_events (template_id, created_at DESC, id DESC);
+CREATE INDEX idx_template_content_sensitive_events_actor
+    ON template_content_sensitive_events (actor_sub);
+
 -- A send to a list or a Keycloak group, or one an approved Mail onayı request
 -- queued: what the club writes to many. Anything else is a single mail. The
 -- one definition, read by mail_task_content_sensitive() and the API.

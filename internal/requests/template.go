@@ -103,3 +103,9 @@ type PublishOver struct {
 	// The published_version_id of the template.stale_base conflict: the version the operator saw and chose to replace. If another has been published since, the publish is refused again, naming it. The replaced version stays in the history.
 	OverVersionID uuid.UUID `json:"over_version_id" validate:"required"`
 }
+
+// SetContentSensitive is the panel's switch: whether the template's sends hide their content.
+type SetContentSensitive struct {
+	// true hides the content of the template's sends from everyone; false shows it to those who may read a send's content.
+	ContentSensitive *bool `json:"content_sensitive" validate:"required"`
+}

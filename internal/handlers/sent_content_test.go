@@ -26,7 +26,8 @@ const (
 // from the request, as the auth middleware leaves them.
 func contentApp(t *testing.T, db *database.Store, now time.Time) *fiber.App {
 	t.Helper()
-	handler := &mailHandlerImpl{db: db, mailer: &lifecycleMailerStub{}, kc: lifecycleKeycloakStub{}, now: func() time.Time { return now }}
+	handler := &mailHandlerImpl{db: db, mailer: &lifecycleMailerStub{}, kc: lifecycleKeycloakStub{}, now: func() time.Time { return now },
+		contentRetentionDays: 90}
 	app := fiber.New(fiber.Config{ErrorHandler: func(c fiber.Ctx, err error) error {
 		var appErr *apperrors.AppError
 		if errors.As(err, &appErr) {
