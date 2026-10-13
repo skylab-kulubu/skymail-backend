@@ -328,6 +328,10 @@ type MailTask struct {
 	ContentMaskDue bool `json:"content_mask_due"`
 	// How many times in a row masking the send failed; at 3 its content is emptied (not kept), so one send cannot hold the others back.
 	ContentMaskFailures int16 `json:"content_mask_failures"`
+	// When the content sweep tries masking the send again after a failure; null for a send that has not failed.
+	ContentMaskRetryAt *time.Time `json:"content_mask_retry_at"`
+	// Failed maskings not counted yet: counted into content_mask_failures once a run masks another send.
+	ContentMaskUnconfirmed int16 `json:"content_mask_unconfirmed"`
 }
 
 type MailingList struct {

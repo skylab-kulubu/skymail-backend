@@ -279,11 +279,15 @@ time, and its `body_variables` with their masked values
 rows are read `FOR UPDATE` and written only while they still hold a mail and
 the send is not masked or emptied: a row Account erasure empties meanwhile is
 never written back. A send whose masking fails (a panic
-included) is counted (`content_mask_failures`), tried once a run, and on its
-third failure emptied (`not_kept`, logged with the send's id, never its
-content), so it holds no other back and its raw mail is not kept. When five
-sends fail one after another the fault is SkyMail's: the run stops and counts
-none of its failures. A run masks at most 200 sensitive sends; sends found
+included) is put back: tried again after five minutes, doubled for each
+failure (a day at most, `content_mask_retry_at`), behind the sends that never
+failed, so broken sends at the head of the queue hold no other back. Its
+failure waits (`content_mask_unconfirmed`) and is counted
+(`content_mask_failures`) only when a run masks some other send — the fault
+was the send's; a run that masks none counts none, as the fault may be
+SkyMail's. On its third counted failure the send is emptied (`not_kept`,
+logged with the send's id, never its content), so its raw mail is not kept.
+A run stops after five sends fail one after another. A run masks at most 200 sensitive sends; sends found
 not sensitive do not count (at most 5000 a run). The migration left due only
 the kept sends that were sensitive then, so the first runs do not read the
 history first. A template's `content_sensitive` or key change makes its

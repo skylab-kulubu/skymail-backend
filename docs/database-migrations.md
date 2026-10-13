@@ -137,7 +137,7 @@ ona dokunmayın (düşerse sürüm geri çekildiği için bir daha kurulmaz).
 Önce indeksin durumuna bakın (salt okunur):
 
 ```sql
-SELECT indexrelid::regclass, indisvalid FROM pg_index WHERE indexrelid::regclass::text LIKE 'idx_mail_queue_pending_%' OR indexrelid::regclass::text = 'idx_mail_tasks_content_kept';
+SELECT indexrelid::regclass, indisvalid FROM pg_index WHERE indexrelid::regclass::text LIKE 'idx_mail_queue_pending_%' OR indexrelid::regclass::text IN ('idx_mail_tasks_content_kept', 'idx_mail_tasks_content_mask_due', 'idx_mail_tasks_template');
 ```
 
 - İndeks yoksa: yalnız sürümü yukarıdaki değere çekin.

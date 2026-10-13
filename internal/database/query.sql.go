@@ -374,6 +374,43 @@ func (q *Queries) CloseRestoredQueueItems(ctx context.Context, arg CloseRestored
 	return i, err
 }
 
+const confirmMaskFailures = `-- name: ConfirmMaskFailures :many
+UPDATE mail_tasks
+SET content_mask_failures    = content_mask_failures + content_mask_unconfirmed,
+    content_mask_unconfirmed = 0
+WHERE content_mask_unconfirmed > 0
+  AND content_masked_at IS NULL
+  AND content_cleared_at IS NULL
+RETURNING id, content_mask_failures
+`
+
+type ConfirmMaskFailuresRow struct {
+	ID                  uuid.UUID `json:"id"`
+	ContentMaskFailures int16     `json:"content_mask_failures"`
+}
+
+// Counts the failures not counted yet, once a run has masked some other send:
+// the fault was the send's. Returns each send and its count.
+func (q *Queries) ConfirmMaskFailures(ctx context.Context) ([]ConfirmMaskFailuresRow, error) {
+	rows, err := q.db.Query(ctx, confirmMaskFailures)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ConfirmMaskFailuresRow
+	for rows.Next() {
+		var i ConfirmMaskFailuresRow
+		if err := rows.Scan(&i.ID, &i.ContentMaskFailures); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countAllMailingListsIncludingArchived = `-- name: CountAllMailingListsIncludingArchived :one
 SELECT count(*)
 FROM mailing_lists
@@ -819,7 +856,7 @@ WITH active_source AS (
 ), inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send)
         SELECT $3, template_id, mail_list_id, $4, content_sensitive FROM active_source
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -917,7 +954,7 @@ WITH active_template AS (
 ), inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, body_variables, content_sensitive_at_send)
         SELECT $4, id, $5, content_sensitive FROM active_template
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1034,6 +1071,27 @@ func (q *Queries) DatabaseNow(ctx context.Context) (time.Time, error) {
 	var now time.Time
 	err := row.Scan(&now)
 	return now, err
+}
+
+const deferMaskFailure = `-- name: DeferMaskFailure :exec
+UPDATE mail_tasks
+SET content_mask_unconfirmed = content_mask_unconfirmed + 1,
+    content_mask_retry_at    = now() + LEAST($1::float8
+                                                 * power(2, content_mask_failures + content_mask_unconfirmed),
+                                             86400) * INTERVAL '1 second'
+WHERE id = $2
+`
+
+type DeferMaskFailureParams struct {
+	BaseSeconds float64   `json:"base_seconds"`
+	ID          uuid.UUID `json:"id"`
+}
+
+// Puts a send whose masking failed back: not counted yet, tried again after
+// base_seconds doubled for each failure it has had (a day at most).
+func (q *Queries) DeferMaskFailure(ctx context.Context, arg DeferMaskFailureParams) error {
+	_, err := q.db.Exec(ctx, deferMaskFailure, arg.BaseSeconds, arg.ID)
+	return err
 }
 
 const discardTemplateDraft = `-- name: DiscardTemplateDraft :exec
@@ -1606,7 +1664,7 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 }
 
 const getMailTaskById = `-- name: GetMailTaskById :one
-SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures,
+SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed,
        t.name  AS template_name,
        ml.name AS mail_list_name
 FROM mail_tasks mt
@@ -1629,6 +1687,8 @@ type GetMailTaskByIdRow struct {
 	ContentMaskedVariables []string   `json:"content_masked_variables"`
 	ContentMaskDue         bool       `json:"content_mask_due"`
 	ContentMaskFailures    int16      `json:"content_mask_failures"`
+	ContentMaskRetryAt     *time.Time `json:"content_mask_retry_at"`
+	ContentMaskUnconfirmed int16      `json:"content_mask_unconfirmed"`
 	TemplateName           *string    `json:"template_name"`
 	MailListName           *string    `json:"mail_list_name"`
 }
@@ -1650,6 +1710,8 @@ func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTas
 		&i.ContentMaskedVariables,
 		&i.ContentMaskDue,
 		&i.ContentMaskFailures,
+		&i.ContentMaskRetryAt,
+		&i.ContentMaskUnconfirmed,
 		&i.TemplateName,
 		&i.MailListName,
 	)
@@ -2948,6 +3010,8 @@ UPDATE mail_tasks
 SET body_variables           = $1,
     content_mask_due         = false,
     content_mask_failures    = 0,
+    content_mask_unconfirmed = 0,
+    content_mask_retry_at    = NULL,
     content_masked_at        = now(),
     content_masked_by        = $2,
     content_masked_variables = $3::text[]
@@ -3240,21 +3304,6 @@ func (q *Queries) RecordMailApprovalEvent(ctx context.Context, arg RecordMailApp
 		&i.CreatedAt,
 	)
 	return i, err
-}
-
-const recordMaskFailure = `-- name: RecordMaskFailure :one
-UPDATE mail_tasks
-SET content_mask_failures = content_mask_failures + 1
-WHERE id = $1
-RETURNING content_mask_failures
-`
-
-// Counts a failed masking of a send, in a transaction of its own.
-func (q *Queries) RecordMaskFailure(ctx context.Context, id uuid.UUID) (int16, error) {
-	row := q.db.QueryRow(ctx, recordMaskFailure, id)
-	var content_mask_failures int16
-	err := row.Scan(&content_mask_failures)
-	return content_mask_failures, err
 }
 
 const recordSeedRefusal = `-- name: RecordSeedRefusal :exec
@@ -4175,7 +4224,8 @@ WHERE mt.content_mask_due
                   WHERE q.task_id = mt.id
                     AND q.status IN ('pending', 'processing'))
   AND NOT (mt.id = ANY ($1::uuid[]))
-ORDER BY mt.created_at
+  AND (mt.content_mask_retry_at IS NULL OR mt.content_mask_retry_at <= now())
+ORDER BY mt.content_mask_retry_at NULLS FIRST, mt.created_at
 LIMIT 1 FOR UPDATE OF mt SKIP LOCKED
 `
 
@@ -4191,8 +4241,9 @@ type TakeSendToMaskRow struct {
 // The next send the content sweep has to decide on masking (content_mask_due,
 // idx_mail_tasks_content_mask_due): not masked or emptied, five minutes old,
 // none of whose rows is still to go out, not among those it already tried in
-// this run. sensitive says whether to mask it. SKIP LOCKED lets a second
-// replica's sweep take another.
+// this run, and, if its masking failed before, due to be tried again. The
+// sends that never failed go first. sensitive says whether to mask it. SKIP
+// LOCKED lets a second replica's sweep take another.
 func (q *Queries) TakeSendToMask(ctx context.Context, tried []uuid.UUID) ([]TakeSendToMaskRow, error) {
 	rows, err := q.db.Query(ctx, takeSendToMask, tried)
 	if err != nil {

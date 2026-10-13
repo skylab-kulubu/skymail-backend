@@ -955,8 +955,9 @@ WHERE q.task_id = sqlc.arg(task_id)
 -- The next send the content sweep has to decide on masking (content_mask_due,
 -- idx_mail_tasks_content_mask_due): not masked or emptied, five minutes old,
 -- none of whose rows is still to go out, not among those it already tried in
--- this run. sensitive says whether to mask it. SKIP LOCKED lets a second
--- replica's sweep take another.
+-- this run, and, if its masking failed before, due to be tried again. The
+-- sends that never failed go first. sensitive says whether to mask it. SKIP
+-- LOCKED lets a second replica's sweep take another.
 -- name: TakeSendToMask :many
 SELECT mt.id,
        mt.template_id,
@@ -974,7 +975,8 @@ WHERE mt.content_mask_due
                   WHERE q.task_id = mt.id
                     AND q.status IN ('pending', 'processing'))
   AND NOT (mt.id = ANY (sqlc.arg(tried)::uuid[]))
-ORDER BY mt.created_at
+  AND (mt.content_mask_retry_at IS NULL OR mt.content_mask_retry_at <= now())
+ORDER BY mt.content_mask_retry_at NULLS FIRST, mt.created_at
 LIMIT 1 FOR UPDATE OF mt SKIP LOCKED;
 
 -- A send found not sensitive: not looked at again until its template changes.
@@ -983,12 +985,26 @@ UPDATE mail_tasks
 SET content_mask_due = false
 WHERE id = sqlc.arg(id);
 
--- Counts a failed masking of a send, in a transaction of its own.
--- name: RecordMaskFailure :one
+-- Puts a send whose masking failed back: not counted yet, tried again after
+-- base_seconds doubled for each failure it has had (a day at most).
+-- name: DeferMaskFailure :exec
 UPDATE mail_tasks
-SET content_mask_failures = content_mask_failures + 1
-WHERE id = sqlc.arg(id)
-RETURNING content_mask_failures;
+SET content_mask_unconfirmed = content_mask_unconfirmed + 1,
+    content_mask_retry_at    = now() + LEAST(sqlc.arg(base_seconds)::float8
+                                                 * power(2, content_mask_failures + content_mask_unconfirmed),
+                                             86400) * INTERVAL '1 second'
+WHERE id = sqlc.arg(id);
+
+-- Counts the failures not counted yet, once a run has masked some other send:
+-- the fault was the send's. Returns each send and its count.
+-- name: ConfirmMaskFailures :many
+UPDATE mail_tasks
+SET content_mask_failures    = content_mask_failures + content_mask_unconfirmed,
+    content_mask_unconfirmed = 0
+WHERE content_mask_unconfirmed > 0
+  AND content_masked_at IS NULL
+  AND content_cleared_at IS NULL
+RETURNING id, content_mask_failures;
 
 -- A template's parts as they stood when a send was queued: the row, if it has
 -- not been written since, and the newest version published by then. Never a
@@ -1048,6 +1064,8 @@ UPDATE mail_tasks
 SET body_variables           = sqlc.arg(body_variables),
     content_mask_due         = false,
     content_mask_failures    = 0,
+    content_mask_unconfirmed = 0,
+    content_mask_retry_at    = NULL,
     content_masked_at        = now(),
     content_masked_by        = sqlc.arg(masked_by),
     content_masked_variables = sqlc.arg(masked_variables)::text[]

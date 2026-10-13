@@ -41,6 +41,9 @@ type Querier interface {
 	// reports their sends as failed. attempts is left as it was: nothing tried
 	// them. It counts what it closed by the status each row had.
 	CloseRestoredQueueItems(ctx context.Context, arg CloseRestoredQueueItemsParams) (CloseRestoredQueueItemsRow, error)
+	// Counts the failures not counted yet, once a run has masked some other send:
+	// the fault was the send's. Returns each send and its count.
+	ConfirmMaskFailures(ctx context.Context) ([]ConfirmMaskFailuresRow, error)
 	CountAllMailingListsIncludingArchived(ctx context.Context) (int64, error)
 	CountAllTemplatesIncludingArchived(ctx context.Context) (int64, error)
 	CountArchivedMailingLists(ctx context.Context) (int64, error)
@@ -92,6 +95,9 @@ type Querier interface {
 	// statement's time, not the transaction's (NOW()), so a budget read later in
 	// a transaction reads the instant it counts at.
 	DatabaseNow(ctx context.Context) (time.Time, error)
+	// Puts a send whose masking failed back: not counted yet, tried again after
+	// base_seconds doubled for each failure it has had (a day at most).
+	DeferMaskFailure(ctx context.Context, arg DeferMaskFailureParams) error
 	// Discards a draft: it stays in the history, but it is nobody's draft in
 	// progress any more and it is never published. A draft discarded already
 	// keeps the time it was. The caller holds the template row's lock and has
@@ -250,8 +256,6 @@ type Querier interface {
 	PublishTemplateDraft(ctx context.Context, arg PublishTemplateDraftParams) (Template, error)
 	// Numbered after the request's last event; the caller holds its row lock.
 	RecordMailApprovalEvent(ctx context.Context, arg RecordMailApprovalEventParams) (MailApprovalEvent, error)
-	// Counts a failed masking of a send, in a transaction of its own.
-	RecordMaskFailure(ctx context.Context, id uuid.UUID) (int16, error)
 	// Keeps on a template that a Template seed was refused, and why. Refusing the
 	// content refused last time again keeps when it was first refused; other
 	// content starts over. Nothing that is sent changes, so updated_at stays.
@@ -364,8 +368,9 @@ type Querier interface {
 	// The next send the content sweep has to decide on masking (content_mask_due,
 	// idx_mail_tasks_content_mask_due): not masked or emptied, five minutes old,
 	// none of whose rows is still to go out, not among those it already tried in
-	// this run. sensitive says whether to mask it. SKIP LOCKED lets a second
-	// replica's sweep take another.
+	// this run, and, if its masking failed before, due to be tried again. The
+	// sends that never failed go first. sensitive says whether to mask it. SKIP
+	// LOCKED lets a second replica's sweep take another.
 	TakeSendToMask(ctx context.Context, tried []uuid.UUID) ([]TakeSendToMaskRow, error)
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
 	UpdateRecipient(ctx context.Context, arg UpdateRecipientParams) (Recipient, error)

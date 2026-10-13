@@ -17,10 +17,10 @@ import (
 )
 
 // maskNow runs the content sweep's masking, as every replica does every few
-// minutes.
+// minutes; a send that fails is tried again a millisecond later.
 func maskNow(t *testing.T, db *database.Store) mailer.MaskResult {
 	t.Helper()
-	result, err := mailer.MaskSensitiveContent(context.Background(), db, mailer.MaskOptions{RowsPerChunk: 2})
+	result, err := mailer.MaskSensitiveContent(context.Background(), db, mailer.MaskOptions{RowsPerChunk: 2, RetryAfter: time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -497,8 +497,9 @@ func TestTheDatabaseLocksTheSameKeysAsGo(t *testing.T) {
 }
 
 // One send whose masking keeps failing holds no other back, is tried once a
-// run, and on its third failure is emptied (not kept); a send of many rows is
-// masked a chunk at a time (#63 re-review R2).
+// run, and on its third failure — counted because other sends were masked —
+// is emptied (not kept); a send of many rows is masked a chunk at a time (#63
+// re-review R2, Ek 3 Z1).
 func TestMaskingAFailingSendHoldsNoOtherBackAndIsEmptiedOnItsThirdFailure(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	now := time.Now().UTC().Truncate(time.Second)
@@ -532,17 +533,24 @@ func TestMaskingAFailingSendHoldsNoOtherBackAndIsEmptiedOnItsThirdFailure(t *tes
 	if answer := contentAs(t, app, failing, failingRow, contentSender, "skymail:access", "skymail:mails:read"); answer.Access != "pending" {
 		t.Errorf("failing send after one failure: %+v, want pending", answer)
 	}
-	if second := maskNow(t, db); second.Failed != 1 || second.NotKept != 0 {
-		t.Fatalf("second run = %+v, want one failure", second)
+	// Each later run has a new send to mask, which shows the fault is the
+	// failing send's.
+	time.Sleep(50 * time.Millisecond)
+	seedRenderedSend(t, db, keycloakLike("keycloak.later-1", contentSender, now.Add(-30*time.Minute)))
+	if second := maskNow(t, db); second.Sends != 1 || second.Failed != 1 || second.NotKept != 0 {
+		t.Fatalf("second run = %+v, want the new send masked and one failure", second)
 	}
+	time.Sleep(50 * time.Millisecond)
+	seedRenderedSend(t, db, keycloakLike("keycloak.later-2", contentSender, now.Add(-20*time.Minute)))
 	third := maskNow(t, db)
-	if third.Failed != 1 || third.NotKept != 1 {
-		t.Fatalf("third run = %+v, want the failing send emptied", third)
+	if third.Sends != 1 || third.Failed != 1 || third.NotKept != 1 {
+		t.Fatalf("third run = %+v, want the new send masked and the failing send emptied", third)
 	}
 	assertNoSecret(t, "the failing send", keptContent(t, db, failing), resetLink, loginCode, "Merhaba")
 	if answer := contentAs(t, app, failing, failingRow, contentSender, "skymail:access", "skymail:mails:read"); answer.Access != "not_kept" {
 		t.Errorf("failing send after three failures: %+v, want not_kept", answer)
 	}
+	time.Sleep(50 * time.Millisecond)
 	if fourth := maskNow(t, db); fourth != (mailer.MaskResult{}) {
 		t.Errorf("fourth run = %+v, want nothing to do", fourth)
 	}
