@@ -131,11 +131,13 @@ ona dokunmayın (düşerse sürüm geri çekildiği için bir daha kurulmaz).
 | `20261012130100` | `idx_mail_queue_pending_system` | `20261012130000` |
 | `20261012130200` | `idx_mail_queue_pending_bulk` | `20261012130100` |
 | `20261012180100` | `idx_mail_tasks_content_kept` | `20261012180000` |
+| `20261013140100` | `idx_mail_tasks_content_mask_due` | `20261013140000` |
+| `20261013140200` | `idx_mail_tasks_template` | `20261013140100` |
 
 Önce indeksin durumuna bakın (salt okunur):
 
 ```sql
-SELECT indexrelid::regclass, indisvalid FROM pg_index WHERE indexrelid::regclass::text LIKE 'idx_mail_queue_pending_%' OR indexrelid::regclass::text = 'idx_mail_tasks_content_kept';
+SELECT indexrelid::regclass, indisvalid FROM pg_index WHERE indexrelid::regclass::text LIKE 'idx_mail_queue_pending_%' OR indexrelid::regclass::text IN ('idx_mail_tasks_content_kept', 'idx_mail_tasks_content_mask_due', 'idx_mail_tasks_template');
 ```
 
 - İndeks yoksa: yalnız sürümü yukarıdaki değere çekin.
@@ -157,3 +159,13 @@ Sürüm kirli kaldıkça **eski imaj da `apply` modunda açılmaz** (o da kirli
 sürümü görüp durur); eski imaja dönmek tek başına kurtarmaz. Kurtarma bitene
 kadar her deploy ve yeniden başlama, gece sır rotasyonunun yeniden deploy'ları
 dahil, başarısız olur (start-first'te çalışan görev ayakta kalır).
+
+## Hassas içerik kilidi (`template_key_content_locked()`)
+
+Kilit listesine sözcük ya da önek ekleyen bir migration, o anahtarlara uyan
+şablonların maskelenmemiş gönderimlerini yeniden sıraya koymalıdır
+(`UPDATE mail_tasks SET content_mask_due = true WHERE template_id IN (…)
+AND content_masked_at IS NULL AND content_cleared_at IS NULL`). Koymazsa daha
+önce "hassas değil" diye bakılmış gönderimler maskelenmez: ham içerik kalır,
+panel sonsuza dek `pending` der. Şablonun `content_sensitive` ya da `key`
+değişikliği bunu `templates_mask_due` tetikleyicisiyle zaten yapar.

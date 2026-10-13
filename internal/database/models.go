@@ -318,6 +318,20 @@ type MailTask struct {
 	BodyVariables    []byte     `json:"body_variables"`
 	CreatedAt        time.Time  `json:"created_at"`
 	ContentClearedAt *time.Time `json:"content_cleared_at"`
+	// The template's content_sensitive when the send was queued: true, false or unset (NULL). A send is sensitive if this or its template now says so.
+	ContentSensitiveAtSend string `json:"content_sensitive_at_send"`
+	// When the content sweep replaced the send's content and body_variables with their masked copies; null while raw or never sensitive.
+	ContentMaskedAt        *time.Time `json:"content_masked_at"`
+	ContentMaskedBy        *string    `json:"content_masked_by"`
+	ContentMaskedVariables []string   `json:"content_masked_variables"`
+	// Whether the content sweep still has to decide on masking the send: true when queued and again when its template's content_sensitive or key changes; false once masked, emptied or found not sensitive.
+	ContentMaskDue bool `json:"content_mask_due"`
+	// How many times in a row masking the send failed; at 3 its content is emptied (not kept), so one send cannot hold the others back.
+	ContentMaskFailures int16 `json:"content_mask_failures"`
+	// When the content sweep tries masking the send again after a failure; null for a send that has not failed.
+	ContentMaskRetryAt *time.Time `json:"content_mask_retry_at"`
+	// Failed maskings not counted yet: counted into content_mask_failures once a run masks another send.
+	ContentMaskUnconfirmed int16 `json:"content_mask_unconfirmed"`
 }
 
 type MailingList struct {
@@ -341,6 +355,18 @@ type Recipient struct {
 	Email     string    `json:"email"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Each opening of a sensitive send's masked content: who, which send and queue row, when. Account erasure replaces the actor.
+type SentContentView struct {
+	ID              uuid.UUID `json:"id"`
+	TaskID          uuid.UUID `json:"task_id"`
+	QueueItemID     uuid.UUID `json:"queue_item_id"`
+	ActorSub        *string   `json:"actor_sub"`
+	ActorName       *string   `json:"actor_name"`
+	MaskedBy        string    `json:"masked_by"`
+	MaskedVariables []string  `json:"masked_variables"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 type Template struct {

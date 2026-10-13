@@ -184,9 +184,10 @@ func TestCredentialTemplatesAreLockedSensitive(t *testing.T) {
 	}
 }
 
-// A locked template's sends are sensitive even if its row says otherwise (a
-// hand edit, a restored dump): the list is read when content is asked for.
-func TestLockedTemplateContentIsHiddenWhateverItsRowSays(t *testing.T) {
+// A locked template's sends are sensitive, so masked, even if its row says
+// otherwise (a hand edit, a restored dump): the list is read when content is
+// asked for.
+func TestLockedTemplateContentIsMaskedWhateverItsRowSays(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
 	app := contentApp(t, db, now)
@@ -197,42 +198,56 @@ func TestLockedTemplateContentIsHiddenWhateverItsRowSays(t *testing.T) {
 		WHERE id = (SELECT template_id FROM mail_tasks WHERE id = $1)`, task); err != nil {
 		t.Fatal(err)
 	}
-	if answer := contentAs(t, app, task, row, contentOther, "skymail:access", "skymail:mails:read", SystemMailsReadRole); answer.Access != "sensitive" || answer.HTML != nil {
-		t.Errorf("content = %+v, want sensitive", answer)
+	maskNow(t, db)
+	if answer := contentAs(t, app, task, row, contentOther, "skymail:access", "skymail:mails:read", SystemMailsReadRole); answer.Access != "masked" || answer.MaskedBy == nil {
+		t.Errorf("content = %+v, want masked", answer)
 	}
 	status, body := getAs(t, app, "/mail_tasks/"+task.String(), contentSender, "skymail:access", "skymail:mails:read")
 	var send struct {
 		ContentAccess string `json:"content_access"`
 	}
-	if err := json.Unmarshal(body, &send); status != fiber.StatusOK || err != nil || send.ContentAccess != "sensitive" {
-		t.Errorf("send = %d %s, want content_access sensitive", status, body)
+	if err := json.Unmarshal(body, &send); status != fiber.StatusOK || err != nil || send.ContentAccess != "masked" {
+		t.Errorf("send = %d %s, want content_access masked", status, body)
 	}
 }
 
-// A new single-mail template nobody has said anything about, whose subject or
-// body carries a code, a one-time password, a token, a link or a URL, is
-// hidden: content_sensitive NULL leaves a single mail to its kind of send.
-func TestANewSingleTemplateCarryingACodeOrALinkIsHiddenByDefault(t *testing.T) {
+// A new single-mail template nobody has said anything about is sensitive:
+// content_sensitive NULL leaves a single mail to its kind of send. Its code,
+// one-time password, token, link or URL is masked, whatever the variable is
+// called among these, in the subject, the plain text and the HTML.
+func TestANewSingleTemplateCarryingACodeOrALinkIsMaskedByDefault(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
 	app := contentApp(t, db, now)
 	system := []string{"skymail:access", "skymail:mails:read", "skymail:mails:write", SystemMailsReadRole}
+	values := map[string]string{
+		"code":  "583014",
+		"otp":   "771290",
+		"token": "tok_9f8e7d6c5b4a39281706",
+		"link":  "https://e.yildizskylab.com/verify?key=Zm9vYmFyMTIzNDU2Nzg5",
+		"url":   "https://place.yildizskylab.com/magic?t=QmFyQmF6OTg3NjU0MzIx",
+	}
 	for i, variable := range []string{"code", "otp", "token", "link", "url"} {
-		task, row := seedContentSend(t, db, contentSend{sentBy: contentSender, createdAt: now.Add(-time.Hour)})
-		if _, err := db.Conn.Exec(context.Background(), `
-			UPDATE templates SET key = 'core.new-mail-' || $3, subject = 'Kodun: {{.'||$2||'}}',
-			       html_content = '<p>{{.'||$2||'}}</p>', plain_text_content = '{{.'||$2||'}}'
-			WHERE id = (SELECT template_id FROM mail_tasks WHERE id = $1)`, task, variable, strconv.Itoa(i)); err != nil {
-			t.Fatal(err)
-		}
-		// Not locked by its key: hidden because nobody said it may be shown.
 		key := "core.new-mail-" + strconv.Itoa(i)
 		if ContentSensitiveLocked(&key) {
 			t.Fatalf("%s is locked; the test needs a key that is not", key)
 		}
-		if answer := contentAs(t, app, task, row, contentSender, system...); answer.Access != "sensitive" || answer.Subject != nil {
-			t.Errorf("%s: content = %+v, want sensitive", variable, answer)
+		task, row := seedRenderedSend(t, db, renderedSend{
+			key:       key,
+			subject:   "Kodun: {{." + variable + "}}",
+			plainText: "{{." + variable + "}}",
+			html:      `<p><a href="{{.` + variable + `}}">{{.` + variable + `}}</a></p>`,
+			variables: map[string]any{variable: values[variable]},
+			sentBy:    contentSender,
+			createdAt: now.Add(-time.Hour),
+		})
+		maskNow(t, db)
+		answer := contentAs(t, app, task, row, contentSender, system...)
+		if answer.Access != "masked" || answer.Subject == nil || answer.HTML == nil || answer.PlainText == nil {
+			t.Errorf("%s: content = %+v, want masked content", variable, answer)
+			continue
 		}
+		assertNoSecret(t, variable, answer, values[variable])
 	}
 }
 

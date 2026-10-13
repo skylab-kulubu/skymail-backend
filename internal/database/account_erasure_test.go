@@ -102,6 +102,10 @@ INSERT INTO mail_queue (id, task_id, recipient_full_name, recipient_email, subje
     ('50000000-0000-4000-8000-0000000000f1', '40000000-0000-4000-8000-00000000000f', 'Deniz Yılmaz', '` + erasedPersonal + `', 'Yeni dönem', 'Merhaba Deniz Yılmaz', '<p>Merhaba Deniz Yılmaz</p>', 'pending', NULL),
     ('50000000-0000-4000-8000-0000000000f2', '40000000-0000-4000-8000-00000000000f', 'Ayşe Kaya', 'ayse@example.com', 'Yeni dönem', 'Merhaba Ayşe Kaya', '<p>Merhaba Ayşe Kaya</p>', 'pending', NULL),
     ('50000000-0000-4000-8000-000000000101', '40000000-0000-4000-8000-000000000010', 'Deniz Yılmaz', 'd.yilmaz@example.org', 'Selam', 'Merhaba Deniz Yılmaz', '<p>Merhaba Deniz Yılmaz</p>', 'sent', NULL);
+-- Deniz and Ayşe each opened Keycloak's reset mail, masked.
+INSERT INTO sent_content_views (id, task_id, queue_item_id, actor_sub, actor_name, masked_by, masked_variables) VALUES
+    ('13000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-00000000000b', '50000000-0000-4000-8000-0000000000b1', '` + erasedSub + `', 'Deniz Yılmaz', 'variables', '{link}'),
+    ('13000000-0000-4000-8000-000000000002', '40000000-0000-4000-8000-00000000000b', '50000000-0000-4000-8000-0000000000b1', '` + otherSub + `', 'Ayşe Kaya', 'variables', '{link}');
 
 INSERT INTO mail_approvals (id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state,
                             template_id, template_version_id, mail_list_id, body_variables, created_at,
@@ -175,6 +179,7 @@ var erasureTables = map[string]string{
 	"mailing_lists":                     "id::text",
 	"template_versions":                 "id::text",
 	"template_content_sensitive_events": "id::text",
+	"sent_content_views":                "id::text",
 	"mail_tasks":                        "id::text",
 	"mail_queue":                        "id::text",
 	"mail_approvals":                    "id::text",
@@ -293,7 +298,7 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 		AccountErasureQueueRowsCleared:          2 + 1,
 		AccountErasureBodiesCleared:             3,
 		AccountErasureVariablesCleared:          4 + 1,
-		AccountErasureActorColumnsReplaced:      10,
+		AccountErasureActorColumnsReplaced:      11,
 		AccountErasureNotesCleared:              3,
 		AccountErasureChangesCleared:            2,
 		AccountErasureApprovalRecipientsRemoved: 5,
@@ -314,6 +319,7 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 		"mailing_lists":                     {"20000000-0000-4000-8000-000000000003"},
 		"template_versions":                 {"11000000-0000-4000-8000-000000000001"},
 		"template_content_sensitive_events": {"12000000-0000-4000-8000-000000000001"},
+		"sent_content_views":                {"13000000-0000-4000-8000-000000000001"},
 		"mail_tasks": {
 			"40000000-0000-4000-8000-00000000000a", "40000000-0000-4000-8000-00000000000b",
 			"40000000-0000-4000-8000-0000000000b2", "40000000-0000-4000-8000-00000000000c",
@@ -361,6 +367,9 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 			{`SELECT author_name FROM template_versions WHERE id = '11000000-0000-4000-8000-000000000001'`, DeletedUserName},
 			{`SELECT actor_sub FROM template_content_sensitive_events WHERE id = '12000000-0000-4000-8000-000000000001'`, DeletedUserSubject},
 			{`SELECT actor_name FROM template_content_sensitive_events WHERE id = '12000000-0000-4000-8000-000000000001'`, DeletedUserName},
+			{`SELECT actor_sub FROM sent_content_views WHERE id = '13000000-0000-4000-8000-000000000001'`, DeletedUserSubject},
+			{`SELECT actor_name FROM sent_content_views WHERE id = '13000000-0000-4000-8000-000000000001'`, DeletedUserName},
+			{`SELECT actor_sub FROM sent_content_views WHERE id = '13000000-0000-4000-8000-000000000002'`, otherSub},
 			{`SELECT actor_sub FROM mail_approval_events WHERE id = '70000000-0000-4000-8000-000000000011'`, DeletedUserSubject},
 			{`SELECT actor_name FROM mail_approval_events WHERE id = '70000000-0000-4000-8000-000000000071'`, DeletedUserName},
 		} {
@@ -740,7 +749,7 @@ func TestEraseAccountWithoutAddressesStillReplacesTheSubject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if counts := receiptCounts(t, receipt); counts[AccountErasureActorColumnsReplaced] != 10 || counts[AccountErasureRecipientsDeleted] != 0 {
+	if counts := receiptCounts(t, receipt); counts[AccountErasureActorColumnsReplaced] != 11 || counts[AccountErasureRecipientsDeleted] != 0 {
 		t.Errorf("counts = %v", counts)
 	}
 	// The names the subject's own rows carry are still searched for.

@@ -18,9 +18,12 @@ import (
 // The templates whose sends carry a credential — a login or verification
 // code, a password reset or account link, a ticket's code — are locked
 // sensitive: whoever holds skymail:system-mails:read would otherwise read
-// everyone's codes and links. Their content is never shown, whatever their
-// row says; the panel and the seed cannot make them shown, and a write that
-// gives a template such a key marks it sensitive. This is the one list.
+// everyone's codes and links. Their content is kept and shown masked (every
+// code and one-time link replaced on the server), whatever their row says;
+// the panel and the seed cannot make them shown unmasked, and a write that
+// gives a template such a key marks it sensitive. This is the one list in Go;
+// the database holds the same in template_key_content_locked() (migration
+// 20261013140000), and a test keeps the two together.
 //
 // What sends to SkyMail today (origin/main of every repo, 2026-10-12):
 //   - e-skylab-keycloak SPI: keycloak.verify-email, keycloak.reset-password,
@@ -50,6 +53,9 @@ var (
 		"login", "signin", "code", "otp", "passcode", "password", "reset", "verify", "verification",
 		"confirm", "confirmation", "token", "magic", "invite", "activation", "activate", "2fa", "mfa",
 		"ticket", "link",
+		// Turkish, without its letters: giris, kod, dogrulama, sifre, parola,
+		// baglanti, davet, onay.
+		"giris", "kod", "kodu", "dogrulama", "sifre", "parola", "baglanti", "baglantisi", "davet", "onay",
 	}
 )
 
@@ -128,7 +134,7 @@ func recordContentSensitiveChange(ctx context.Context, q *database.Queries, temp
 // SetContentSensitive godoc
 //
 //	@Summary		Set whether a template's sends show their content
-//	@Description	Sets the template's content_sensitive, as the panel's switch does: true hides the content of its sends from everyone, false lets those who may read a send's content see it. A template whose mail carries a credential (keycloak.*, account.*, core.contact-consent-confirm, event.ticket-created, event.reminder) is locked sensitive and answers 409 template.content_sensitive_locked to false. Each change is recorded with who made it and the value before and after (GET /templates/{id}/content-sensitive/events); setting the value the template has records nothing. No version is written and updated_at stays. An archived template is 404.
+//	@Description	Sets the template's content_sensitive, as the panel's switch does: true keeps the content of its sends masked (every code and one-time link replaced on the server once a send is done, for good), false lets those who may read a send's content see it as sent — for sends from then on: a send sensitive when it was queued stays so. A template whose mail carries a credential (keycloak.*, account.*, core.contact-consent-confirm, event.ticket-created, event.reminder) is locked sensitive and answers 409 template.content_sensitive_locked to false. Each change is recorded with who made it and the value before and after (GET /templates/{id}/content-sensitive/events); setting the value the template has records nothing. No version is written and updated_at stays. An archived template is 404.
 //	@Tags			Templates
 //	@Accept			json
 //	@Produce		json
