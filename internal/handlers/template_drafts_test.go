@@ -959,9 +959,10 @@ func TestConcurrentSavesNumberVersionsInTurn(t *testing.T) {
 // servedTemplate is a template as the template routes serve it.
 type servedTemplate struct {
 	database.Template
-	MainMode    *string         `json:"main_mode"`
-	Drafts      []servedVersion `json:"drafts"`
-	SeedRefusal *servedRefusal  `json:"seed_refusal"`
+	ContentSensitiveLocked bool            `json:"content_sensitive_locked"`
+	MainMode               *string         `json:"main_mode"`
+	Drafts                 []servedVersion `json:"drafts"`
+	SeedRefusal            *servedRefusal  `json:"seed_refusal"`
 }
 
 // servedRefusal is a refused Template seed as a template is served with it.

@@ -16,18 +16,18 @@ type Querier interface {
 	// The sends an approval queued, in order: a list's one send, or one per
 	// person, each at that person's position.
 	AddMailApprovalTasks(ctx context.Context, arg AddMailApprovalTasksParams) error
-	// Required variable sets are sorted byte by byte (COLLATE "C"), the order the
-	// handler sorts a contract set in and a missing list comes in, whatever the
-	// database's collation.
-	//
-	// Marks a variable of a template in use as required by operators. A name
-	// already in either set changes nothing: one the contract declares is required
-	// already, and stays the contract's. Takes the row's lock, so the caller can
-	// check the body against the sets it returns before committing.
 	AddOperatorRequiredVariable(ctx context.Context, arg AddOperatorRequiredVariableParams) (Template, error)
 	AddRecipientToMailingList(ctx context.Context, arg AddRecipientToMailingListParams) (AddRecipientToMailingListRow, error)
 	ArchiveMailingList(ctx context.Context, arg ArchiveMailingListParams) (MailingList, error)
 	ArchiveTemplate(ctx context.Context, arg ArchiveTemplateParams) (Template, error)
+	// Empties the content of up to batch_size sends none of whose rows is still to
+	// go out (pending or processing): a sensitive one five minutes after it was
+	// created, any other once it is older than retention_days. Their rows' subject and body become '' and
+	// body_html NULL, as Account erasure leaves a row; the send's body_variables
+	// become {}; content_cleared_at says when. Status, recipient, error and counts
+	// stay. SKIP LOCKED lets a second replica's sweep take other sends. Returns
+	// the sends emptied.
+	ClearDueMailContent(ctx context.Context, arg ClearDueMailContentParams) ([]ClearDueMailContentRow, error)
 	// The people a request goes to, in the order submitted, replacing whoever it
 	// went to before; none for a request to a list. emails and full_names pair up
 	// by index.
@@ -62,6 +62,7 @@ type Querier interface {
 	// Counts taken rows of one lane in the minute starting at minute_start and
 	// the hour starting at hour_start.
 	CountSends(ctx context.Context, arg CountSendsParams) error
+	CountTemplateContentSensitiveEvents(ctx context.Context, templateID uuid.UUID) (int64, error)
 	CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error)
 	CountTemplates(ctx context.Context) (int64, error)
 	// A recipient whose mail did not render, say a template that slices an empty
@@ -112,6 +113,10 @@ type Querier interface {
 	// internal one (a Keycloak group's is Keycloak's to give), the people it goes
 	// to and the sends it queued, each in order.
 	GetMailApproval(ctx context.Context, id uuid.UUID) (GetMailApprovalRow, error)
+	// One recipient's mail as it was rendered and sent, with what decides who may
+	// see it: the send's sender, whether it is bulk, whether its content is
+	// sensitive and whether the sweep has emptied it.
+	GetMailQueueItemContent(ctx context.Context, arg GetMailQueueItemContentParams) (GetMailQueueItemContentRow, error)
 	// A send's recipients, newest first. A list send's rows come from one insert
 	// and share a created_at, so the id breaks the tie: pages neither repeat nor
 	// skip a recipient. A NULL status lists every recipient.
@@ -129,7 +134,7 @@ type Querier interface {
 	// found here.
 	GetTemplateVersion(ctx context.Context, arg GetTemplateVersionParams) (GetTemplateVersionRow, error)
 	GetTemplateVersionSummary(ctx context.Context, arg GetTemplateVersionSummaryParams) (TemplateVersionSummary, error)
-	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (MailTask, error)
+	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (InsertMailTaskRow, error)
 	// Whether text is a JSX source by the rule the migration and the old panel's
 	// writes read react_email_content with: something other than whitespace and
 	// comments is left in it.
@@ -159,6 +164,8 @@ type Querier interface {
 	// The Authoring mode of each template's Main source as it is sent: its
 	// published version's.
 	ListPublishedMainModes(ctx context.Context, templateIds []uuid.UUID) ([]ListPublishedMainModesRow, error)
+	// A template's content_sensitive changes, newest first.
+	ListTemplateContentSensitiveEvents(ctx context.Context, arg ListTemplateContentSensitiveEventsParams) ([]TemplateContentSensitiveEvent, error)
 	// Each operator's draft in progress on the given templates, newest first: the
 	// newest version an operator wrote of a template, when it is neither published
 	// nor discarded. An operator's later version supersedes their earlier drafts,
@@ -229,6 +236,7 @@ type Querier interface {
 	// content refused last time again keeps when it was first refused; other
 	// content starts over. Nothing that is sent changes, so updated_at stays.
 	RecordSeedRefusal(ctx context.Context, arg RecordSeedRefusalParams) error
+	RecordTemplateContentSensitiveEvent(ctx context.Context, arg RecordTemplateContentSensitiveEventParams) error
 	// Writes an operator's draft, numbered after the template's last version,
 	// unless the version it continues holds exactly this content already —
 	// name, subject, every source, Main source and render, a Visual document compared
@@ -305,6 +313,18 @@ type Querier interface {
 	// then); zero rows says so. A sent or failed row keeps its claim: the process
 	// that finished it.
 	SetMailQueueItemSent(ctx context.Context, arg SetMailQueueItemSentParams) (int64, error)
+	// Required variable sets are sorted byte by byte (COLLATE "C"), the order the
+	// handler sorts a contract set in and a missing list comes in, whatever the
+	// database's collation.
+	//
+	// Marks a variable of a template in use as required by operators. A name
+	// already in either set changes nothing: one the contract declares is required
+	// already, and stays the contract's. Takes the row's lock, so the caller can
+	// check the body against the sets it returns before committing.
+	// Sets whether the content of the template's sends is shown, as the panel
+	// does; like a Required variable, a setting of the row: no version, and
+	// updated_at stays. An archived template is not found.
+	SetTemplateContentSensitive(ctx context.Context, arg SetTemplateContentSensitiveParams) (Template, error)
 	// Keeps an internal list from being archived while a send to it is checked
 	// and queued. No row: the id is not an internal list's.
 	ShareLockMailingList(ctx context.Context, id uuid.UUID) (MailingList, error)

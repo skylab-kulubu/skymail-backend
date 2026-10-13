@@ -130,11 +130,12 @@ ona dokunmayın (düşerse sürüm geri çekildiği için bir daha kurulmaz).
 |---|---|---|
 | `20261012130100` | `idx_mail_queue_pending_system` | `20261012130000` |
 | `20261012130200` | `idx_mail_queue_pending_bulk` | `20261012130100` |
+| `20261012180100` | `idx_mail_tasks_content_kept` | `20261012180000` |
 
 Önce indeksin durumuna bakın (salt okunur):
 
 ```sql
-SELECT indexrelid::regclass, indisvalid FROM pg_index WHERE indexrelid::regclass::text LIKE 'idx_mail_queue_pending_%';
+SELECT indexrelid::regclass, indisvalid FROM pg_index WHERE indexrelid::regclass::text LIKE 'idx_mail_queue_pending_%' OR indexrelid::regclass::text = 'idx_mail_tasks_content_kept';
 ```
 
 - İndeks yoksa: yalnız sürümü yukarıdaki değere çekin.

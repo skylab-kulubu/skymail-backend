@@ -441,3 +441,25 @@ func TestARefusedSeedAnswersInTheAPIsErrorShape(t *testing.T) {
 		t.Fatalf("forced seed = %d %s, want 200", status, body)
 	}
 }
+
+// The panel's content_sensitive switch takes skymail:templates:write; its
+// history, skymail:templates:read.
+func TestContentSensitiveRoutesFollowTheTemplateRoles(t *testing.T) {
+	for _, tc := range []struct {
+		roles       []string
+		write, read int
+	}{
+		{[]string{"skymail:access"}, fiber.StatusForbidden, fiber.StatusForbidden},
+		{[]string{"skymail:access", "skymail:templates:read", "skymail:mails:write", "skymail:system-mails:read"}, fiber.StatusForbidden, fiber.StatusOK},
+		{[]string{"skymail:access", "skymail:templates:write", "skymail:templates:read"}, fiber.StatusOK, fiber.StatusOK},
+	} {
+		app, template := templateRoutesApp(t, tc.roles...)
+		path := "/v1/templates/" + template.ID.String() + "/content-sensitive"
+		if status, body := sendJSON(t, app, fiber.MethodPut, path, map[string]any{"content_sensitive": true}); status != tc.write {
+			t.Errorf("roles %v: PUT = %d %s, want %d", tc.roles, status, body, tc.write)
+		}
+		if status, body := sendJSON(t, app, fiber.MethodGet, path+"/events", nil); status != tc.read {
+			t.Errorf("roles %v: GET events = %d %s, want %d", tc.roles, status, body, tc.read)
+		}
+	}
+}

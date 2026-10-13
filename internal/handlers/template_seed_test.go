@@ -822,3 +822,39 @@ func TestASeedIsRefusedForAKeyedTemplateMadeInThePanel(t *testing.T) {
 		t.Fatalf("a refused seed changed the panel's template: %+v", row)
 	}
 }
+
+// Whether a template's sends show their content is the seed's to say, like
+// system: a seed that says true or false sets it, one that does not leaves it.
+func TestSeedSetsWhetherSendsShowTheirContent(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	const key = "core.welcome"
+
+	payload := welcomeSeed("<p>Hoş geldin {{.FullName}}</p>")
+	response, template, body := seedAs(t, app, key, payload, false)
+	if response.StatusCode != fiber.StatusOK || template.ContentSensitive != nil {
+		t.Fatalf("first seed without it = %d %s, want content_sensitive null", response.StatusCode, body)
+	}
+	assertTemplateShape(t, body)
+
+	payload["content_sensitive"] = false
+	if response, template, body = seedAs(t, app, key, payload, false); response.StatusCode != fiber.StatusOK ||
+		template.ContentSensitive == nil || *template.ContentSensitive {
+		t.Fatalf("seed with false = %d %s, want content_sensitive false", response.StatusCode, body)
+	}
+
+	delete(payload, "content_sensitive")
+	if response, template, body = seedAs(t, app, key, payload, false); response.StatusCode != fiber.StatusOK ||
+		template.ContentSensitive == nil || *template.ContentSensitive {
+		t.Fatalf("seed that does not say = %d %s, want false kept", response.StatusCode, body)
+	}
+
+	payload["content_sensitive"] = true
+	if response, template, body = seedAs(t, app, key, payload, false); response.StatusCode != fiber.StatusOK ||
+		template.ContentSensitive == nil || !*template.ContentSensitive {
+		t.Fatalf("seed with true = %d %s, want content_sensitive true", response.StatusCode, body)
+	}
+	if served := getTemplate(t, app, "/templates/by-key/"+key); served.ContentSensitive == nil || !*served.ContentSensitive {
+		t.Fatalf("served template content_sensitive = %v, want true", served.ContentSensitive)
+	}
+}

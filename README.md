@@ -224,6 +224,54 @@ günde 10.000 alıcı. Varsayılanlar bunların altında kalır.
 - Bir satır alındığında sayılır. Yeniden deneme yeniden sayılır. Kapanışta
   geri verilen satırın sayısı düşülmez. İki günden eski pencereler silinir.
 
+## Gönderilen içerik (`MAIL_CONTENT_RETENTION_DAYS`)
+
+Her kuyruk satırı, alıcısına gönderildiği hâliyle konuyu, düz metni ve HTML'i
+zaten tutar. `GET /v1/mail_tasks/{id}/queue/{itemId}/content` bunu gösterir;
+`access` kimin neyi gördüğünü söyler, alanlar yalnız `available` iken doludur:
+
+| Gönderim | Gönderen | `skymail:mails:write` | `skymail:system-mails:read` | Diğer `skymail:mails:read` |
+|---|---|---|---|---|
+| Hassas şablon (kod, tek kullanımlık bağlantı) | `sensitive` | `sensitive` | `sensitive` | `sensitive` |
+| Liste, grup ya da onaylanmış istek (toplu) | görür | görür | görür | `restricted` |
+| Tekil posta (`/single`), şablonu görünür diyorsa | görür | `restricted` | görür | `restricted` |
+
+- Hassaslık şablonun `content_sensitive` alanıdır: `true` hiç gösterilmez,
+  `false` gösterilir, `null` gönderim türüne bırakır: tekil posta gizli, toplu
+  gönderim görünür. Template seed yazar (`PUT /v1/templates/by-key/{key}`,
+  `content_sensitive`), panel iki yönde değiştirir
+  (`PUT /v1/templates/{id}/content-sensitive`, `skymail:templates:write`). Her
+  değişiklik kim, ne zaman, eski→yeni olarak kaydedilir
+  (`GET /v1/templates/{id}/content-sensitive/events`). Migration bilinen
+  şablonları işaretler: kimlik bilgisi taşıyanlar `true`, seed'in görünür
+  dediği tekiller (`core.welcome`, `core.certificate`, `club.team-membership`,
+  `mail.approval-*`, `ops.send-failed`, …) `false`; böylece seed'den önceki ilk
+  süpürme onları boşaltmaz.
+- **Kilitli gizli:** `keycloak.*`, `account.*`, `auth.*`, `login.*`, `otp.*`,
+  `core.contact-consent-confirm`, `event.ticket-created`, `event.reminder` ve
+  anahtarında `login`, `code`, `otp`, `reset`, `verify`, `confirm`, `token`,
+  `magic`, `invite`, `ticket`, `link` gibi bir sözcük (ya da `sign-in`, `log-in`
+  gibi tireli yazımı) geçen her şablon (giriş/doğrulama kodu, sıfırlama ya da
+  hesap bağlantısı, bilet kodu). Böyle bir şablonun anahtarı PATCH ile
+  değiştirilemez ya da boşaltılamaz (`409 template.sensitive_key_immutable`). Panel de seed de bunları görünür yapamaz
+  (`409 template.content_sensitive_locked`); okuma anında da gizli sayılırlar.
+  Liste tek yerde: `internal/handlers/content_sensitivity.go`.
+- `skymail:system-mails:read` SkyMail istemcisinin rolüdür (yönetici: YK, DK,
+  ADMIN). Keycloak'ta verilene kadar tekil postaların içeriğini yalnız gönderen
+  görür.
+- Bir gönderimin `body_variables`'ı da içeriktir: gönderim listesi ve gönderim
+  sayfası onu yalnız `content_access: available` iken verir.
+- Süpürücü beş dakikada bir, gönderilecek satırı kalmamış gönderimlerin
+  içeriğini boşaltır (20'lik partiler): hassas olanı hemen (oluşturulduktan beş
+  dakika sonra), ötekini `MAIL_CONTENT_RETENTION_DAYS` gün sonra (varsayılan
+  izin verilen en çok değer `3650`; 1–3650 arası tam sayı, başka değer açılışı
+  durdurur). Satırın konusu ve gövdesi `''`, HTML'i `NULL`, gönderimin
+  `body_variables`'ı `{}` olur, `mail_tasks.content_cleared_at` zamanı yazar.
+  Durum, alıcı, hata ve sayılar kalır. Ayrıntı ve KVKK notu:
+  [`docs/data-lifecycle.md`](docs/data-lifecycle.md#sent-mail-content).
+- **İlk yayında** süpürücü bütün hassas gönderimlerin içeriğini bir kez
+  boşaltır. Geri alınamaz (yalnız yedekte kalır).
+
 ## Veritabanı migration'ları
 
 Uygulama bekleyen migration'ları servis trafiğe açılmadan önce çalıştırabilir.

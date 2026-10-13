@@ -27,3 +27,30 @@ func (s *Store) InTx(ctx context.Context, fn func(*Queries) error) error {
 		return fn(s.WithTx(tx))
 	})
 }
+
+// ClearMailContent runs ClearDueMailContent until a batch comes back short:
+// it empties the content of every send due (a sensitive one once none of its
+// rows is still to go out, any other past retentionDays), batchSize sends at a
+// time so no transaction holds many rows. It returns the sends and the queue
+// rows it emptied.
+func (s *Store) ClearMailContent(ctx context.Context, retentionDays, batchSize int) (sends int, rows int64, err error) {
+	for {
+		cleared, err := s.ClearDueMailContent(ctx, ClearDueMailContentParams{
+			RetentionDays: retentionDays,
+			BatchSize:     batchSize,
+		})
+		if err != nil {
+			return sends, rows, err
+		}
+		sends += len(cleared)
+		for _, send := range cleared {
+			rows += send.RowsCleared
+		}
+		if len(cleared) < batchSize {
+			return sends, rows, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return sends, rows, err
+		}
+	}
+}

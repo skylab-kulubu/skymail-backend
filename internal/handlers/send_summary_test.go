@@ -572,14 +572,18 @@ func TestSendListAndDetailKeepTheFieldsTheOldPanelReads(t *testing.T) {
 	id := seedSend(t, db, seededSend{createdAt: now.Add(-time.Hour), templateID: &template.ID, mailListID: &list.ID,
 		recipients: recipientsWith(database.MailQueueStatusSent, 1)})
 
-	app := sendSummaryApp(t, db, now, lifecycleKeycloakStub{})
+	// Asked by the send's sender, who may read its content and so its values.
+	app := contentApp(t, db, now)
+	status, body := getAs(t, app, "/mail_tasks", contentSender, "skymail:access", "skymail:mails:read")
 	var rows []map[string]any
-	response := getJSON(t, app, "/mail_tasks", &rows)
-	if response.Header.Get("X-Total-Count") != "1" || len(rows) != 1 {
-		t.Fatalf("list = %v total=%s", rows, response.Header.Get("X-Total-Count"))
+	if err := json.Unmarshal(body, &rows); status != fiber.StatusOK || err != nil || len(rows) != 1 {
+		t.Fatalf("list = %d %s", status, body)
 	}
+	status, body = getAs(t, app, "/mail_tasks/"+id.String(), contentSender, "skymail:access", "skymail:mails:read")
 	var detail map[string]any
-	getJSON(t, app, "/mail_tasks/"+id.String(), &detail)
+	if err := json.Unmarshal(body, &detail); status != fiber.StatusOK || err != nil {
+		t.Fatalf("detail = %d %s", status, body)
+	}
 
 	// The old panel's list and detail pages read these, exactly so.
 	want := map[string]any{
@@ -592,7 +596,8 @@ func TestSendListAndDetailKeepTheFieldsTheOldPanelReads(t *testing.T) {
 		"body_variables": "e30=", // the JSONB {} as bytes, exactly as it has always been encoded
 	}
 	// Only additions besides them: the old panel ignores what it does not know.
-	known := map[string]bool{"created_at": true, "status": true, "recipient_counts": true, "template_key": true, "audience": true}
+	known := map[string]bool{"created_at": true, "status": true, "recipient_counts": true, "template_key": true, "audience": true,
+		"content_access": true, "content_expires_at": true}
 	for field := range want {
 		known[field] = true
 	}
