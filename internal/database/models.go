@@ -343,6 +343,18 @@ type Recipient struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// Each opening of a sensitive send's masked content: who, which send and queue row, when, and what was masked. Account erasure replaces the actor.
+type SentContentView struct {
+	ID              uuid.UUID `json:"id"`
+	TaskID          uuid.UUID `json:"task_id"`
+	QueueItemID     uuid.UUID `json:"queue_item_id"`
+	ActorSub        *string   `json:"actor_sub"`
+	ActorName       *string   `json:"actor_name"`
+	MaskedBy        string    `json:"masked_by"`
+	MaskedVariables []string  `json:"masked_variables"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
 type Template struct {
 	ID                 uuid.UUID  `json:"id"`
 	Name               string     `json:"name"`

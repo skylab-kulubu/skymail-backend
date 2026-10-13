@@ -332,18 +332,18 @@ func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, m
 	tasks.Get("/:id/queue/:itemId/content", auth.RequireAnyPermission("skymail:mails:read"), mail.GetQueueItemContent)
 }
 
-// contentSweepInterval is how often the content sweep runs: a sensitive
-// send's content is gone within it of its last row going out.
+// contentSweepInterval is how often the content sweep runs: a send's content
+// is gone within it of its retention period ending.
 const contentSweepInterval = 5 * time.Minute
 
 // contentSweepBatch is how many sends one statement of the sweep empties. A
 // list send can hold thousands of rows with their HTML, so the batch is kept
-// small: the first run, which empties every sensitive send there is, is many
-// short transactions rather than a few long ones.
+// small: a run that finds many sends past retention is many short
+// transactions rather than a few long ones.
 const contentSweepBatch = 20
 
-// clearMailContent empties the content of the sends due — a sensitive one
-// once none of its rows is still to go out, any other past retentionDays — at
+// clearMailContent empties the content of the sends due — past retentionDays,
+// sensitive or not, once none of its rows is still to go out — at
 // startup and every interval after (docs/data-lifecycle.md, sent mail
 // content). It runs while the sender is paused too: it touches no row still
 // to go out. It logs counts only.
@@ -357,7 +357,7 @@ func clearMailContent(ctx context.Context, db *database.Store, retentionDays int
 			log.Error().Err(err).Msg("mail content sweep failed")
 		}
 		if sends > 0 {
-			log.Info().Int("sends", sends).Int64("rows", rows).Msg("emptied the content of sends past retention or sensitive")
+			log.Info().Int("sends", sends).Int64("rows", rows).Msg("emptied the content of sends past retention")
 		}
 		select {
 		case <-ctx.Done():

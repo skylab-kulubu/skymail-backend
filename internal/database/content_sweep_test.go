@@ -70,42 +70,45 @@ func sweptStateOf(t *testing.T, db *Store, task uuid.UUID) sweptState {
 	return state
 }
 
-func TestContentSweepEmptiesSensitiveSendsAtOnceAndOthersAfterRetention(t *testing.T) {
+// Every send is kept for the retention period, sensitive or not: a sensitive
+// send's content is shown masked (2026-10-13), no longer emptied at once.
+func TestContentSweepKeepsEverySendForTheRetentionPeriod(t *testing.T) {
 	db := lifecycleStore(t)
 	ctx := context.Background()
 	yes, no := true, false
 	hour, day := time.Hour, 24*time.Hour
 
-	// Sensitive, done: emptied at once (past the five minutes the rows have to be written).
+	// Sensitive, done, within retention: kept, as any other send.
 	singleDone := seedSweepSend(t, db, sweepSend{age: hour, statuses: []string{"sent"}})
 	markedDone := seedSweepSend(t, db, sweepSend{sensitive: &yes, list: true, age: hour, statuses: []string{"sent", "failed"}})
-	// Sensitive, but a row is still to go out, or the send is a minute old: kept for now.
 	singleRetrying := seedSweepSend(t, db, sweepSend{age: hour, statuses: []string{"pending"}})
-	singleProcessing := seedSweepSend(t, db, sweepSend{age: hour, statuses: []string{"sent", "processing"}})
 	singleJustNow := seedSweepSend(t, db, sweepSend{age: time.Minute, statuses: []string{"sent"}})
-	// Shown: kept for the retention period, emptied past it.
 	listRecent := seedSweepSend(t, db, sweepSend{list: true, age: 89 * day, statuses: []string{"sent"}})
-	listOld := seedSweepSend(t, db, sweepSend{list: true, age: 91 * day, statuses: []string{"sent", "failed"}})
 	shownSingleRecent := seedSweepSend(t, db, sweepSend{sensitive: &no, age: hour, statuses: []string{"sent"}})
+	// Past retention: emptied, sensitive or not, once nothing is left to go out.
+	singleOld := seedSweepSend(t, db, sweepSend{age: 91 * day, statuses: []string{"sent"}})
+	listOld := seedSweepSend(t, db, sweepSend{list: true, age: 91 * day, statuses: []string{"sent", "failed"}})
 	shownSingleOld := seedSweepSend(t, db, sweepSend{sensitive: &no, age: 91 * day, statuses: []string{"sent"}})
+	oldProcessing := seedSweepSend(t, db, sweepSend{age: 91 * day, statuses: []string{"sent", "processing"}})
 
 	sends, rows, err := db.ClearMailContent(ctx, 90, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sends != 4 || rows != 6 {
-		t.Fatalf("swept %d sends, %d rows; want 4 sends, 6 rows", sends, rows)
+	if sends != 3 || rows != 4 {
+		t.Fatalf("swept %d sends, %d rows; want 3 sends, 4 rows", sends, rows)
 	}
 	for name, task := range map[string]uuid.UUID{
-		"single done": singleDone, "marked sensitive": markedDone, "list past retention": listOld, "shown single past retention": shownSingleOld,
+		"sensitive single past retention": singleOld, "list past retention": listOld, "shown single past retention": shownSingleOld,
 	} {
 		if state := sweptStateOf(t, db, task); !state.cleared || state.variables != "{}" || state.content != 0 {
 			t.Errorf("%s: %+v, want emptied with its variables", name, state)
 		}
 	}
 	for name, task := range map[string]uuid.UUID{
-		"single retrying": singleRetrying, "single processing": singleProcessing, "single just now": singleJustNow,
-		"list within retention": listRecent, "shown single within retention": shownSingleRecent,
+		"sensitive single done": singleDone, "marked sensitive": markedDone, "single retrying": singleRetrying,
+		"single just now": singleJustNow, "list within retention": listRecent, "shown single within retention": shownSingleRecent,
+		"past retention, a row still going out": oldProcessing,
 	} {
 		if state := sweptStateOf(t, db, task); state.cleared || state.variables == "{}" || state.content == 0 {
 			t.Errorf("%s: %+v, want kept", name, state)

@@ -209,6 +209,8 @@ takes the person out of them:
   the name their token carried then.
 - `template_content_sensitive_events.actor_sub` with `actor_name` — who changed
   whether a template's sends show their content.
+- `sent_content_views.actor_sub` with `actor_name` — who opened a sensitive
+  send's masked content (see [Sent mail content](#sent-mail-content)).
 - `mail_approvals.submitter_sub`, `submitter_name` and `submitter_email` — who
   submitted a request, and the name and verified address their token carried
   (`submitter_email_unverified` says the token carried an address Keycloak
@@ -227,10 +229,11 @@ takes the person out of them:
 Every queue row holds its recipient's mail as it was rendered and sent:
 `subject`, `body` (plain text) and `body_html`. A send's page shows it,
 recipient by recipient, through
-`GET /v1/mail_tasks/{id}/queue/{itemId}/content` (Yusuf, 2026-10-12: shown,
-the sensitive ones hidden).
+`GET /v1/mail_tasks/{id}/queue/{itemId}/content` (Yusuf, 2026-10-12: shown;
+2026-10-13: the sensitive ones too, their codes and one-time links masked).
 
-**Sensitive mail is never shown.** `templates.content_sensitive` says it:
+**Sensitive mail is shown masked.** `templates.content_sensitive` says which
+mail is sensitive:
 `true` for mail that carries a code or a one-time link (Keycloak's
 verification, reset and personal e-mail mails, the account center's mails,
 core's contact consent confirmation, an event ticket's code), `false` for
@@ -239,7 +242,7 @@ mail that may be shown, and
 (`POST /mail_tasks/single`: what a service sends one person, a code among it)
 is hidden, a send to a list, a Keycloak group or an approved Mail onayı
 request is shown. `mail_task_bulk()` and `mail_task_content_sensitive()` are
-the one definition. A new template is therefore hidden on the single path
+the one definition. A new template is therefore masked on the single path
 until its seed or an operator says `false`. The Template seed sets the flag
 (`content_sensitive` in `PUT /v1/templates/by-key/{key}`; left out, it stays),
 and the panel sets it either way (`PUT /v1/templates/{id}/content-sensitive`,
@@ -267,6 +270,45 @@ with `409 template.content_sensitive_locked`, the seed's is written as `true`,
 and a create or edit that gives a template such a key marks it `true`. The
 list is `internal/handlers/content_sensitivity.go`.
 
+**How it is masked** (`internal/mailer/mask.go`; `access: masked`). The
+whole mail is shown, and every code and one-time link in it is replaced by
+`••••••` on the server: the unmasked value is never sent to a client. Two
+ways, the first when it can be proved:
+
+1. *Variables.* The send's variables that carry a code or a link — by name
+   (`link`, `code`, `CancelUrl`, `TicketCode`, `token`, `password`…, the last
+   word of the name: `linkExpirationMinutes` is not one) or by shape (an
+   address, 4 to 10 digits, a code of capitals and digits, a token of 20 or
+   more characters; an address inside text is masked on its own) — are
+   masked, and the mail is rendered again. Only a template that renders the
+   unmasked variables into exactly the stored mail is used: the template as
+   it is, or one of its last 50 published versions. So the masked mail is the
+   mail that was sent, and a value is masked wherever the template put it —
+   text, `href`, subject, plain text, cut up or escaped.
+2. *Patterns,* when no template renders the stored mail (the template
+   changed outside its versions, Account erasure emptied the variables). The
+   known values are replaced in the stored mail in every form the renderers
+   print them, then every address, every run of four or more digits (a date
+   or a time with separators stays) and every code- or token-shaped word is
+   masked in the subject, the plain text, and the HTML's text, comments and
+   attributes. It masks more than it must.
+
+Either way a last check looks for each credential the variables held (a code,
+a token, a link that carries a query or a long path segment, and each such
+query value) in every escaped form, letter case aside. One found, the answer
+is `access: sensitive` with nothing in it, and a warning is logged. In the
+HTML a masked value is `<mark data-skymail-masked="">••••••</mark>`.
+`masked_variables` and `masked_by` (`variables` or `patterns`) say what and
+how. A send's `body_variables` are listed only when its content is
+`available`, never masked.
+
+**Who opened it.** Every opening of a recipient's masked mail is a row of
+`sent_content_views`: `task_id`, `queue_item_id`, `actor_sub`, `actor_name`
+(from the token), `masked_by`, `masked_variables`, `created_at`. No content
+is shown unless the row is written. It names no recipient; Account erasure
+replaces the actor with Silinmiş kullanıcı. There is no API to read it yet:
+`SELECT … FROM sent_content_views WHERE task_id = …`.
+
 **Who changed it.** Every change of `content_sensitive`, by the panel or the
 seed, is a row of `template_content_sensitive_events`: `actor_kind`,
 `actor_sub`, `actor_name`, `old_value`, `new_value`, `created_at`
@@ -274,25 +316,32 @@ seed, is a row of `template_content_sensitive_events`: `actor_kind`,
 marks are not rows there. The rows are never rewritten but by Account
 erasure, which replaces the actor with Silinmiş kullanıcı.
 
-**Who sees what is not sensitive.** The route takes `skymail:mails:read`;
+**Who sees it.** The route takes `skymail:mails:read`;
 the handler then shows the content to the send's sender, for a send to many
 to holders of `skymail:mails:write`, and to holders of
 `skymail:system-mails:read`, the administrator's role. Anyone else gets
-`access: restricted`. A send's `body_variables` in the send list and on its
-page follow the same rule (`content_access`).
+`access: restricted`, sensitive or not. A send's `body_variables` in the send
+list and on its page follow the same rule (`content_access`).
 
 **How long.** A sweep runs at startup and every five minutes, in every
 replica (`FOR UPDATE SKIP LOCKED`, 20 sends a statement). It takes the sends
 none of whose rows is still pending or processing and that are at least five
-minutes old, and empties a sensitive one at once, any other
-`MAIL_CONTENT_RETENTION_DAYS` after it was created (unset: 3650, the most it
-may be): its rows' `subject` and `body` become
+minutes old, and empties each `MAIL_CONTENT_RETENTION_DAYS` after it was
+created, sensitive or not (unset: 3650, the most it may be): its rows'
+`subject` and `body` become
 `''` and `body_html` `NULL`, as Account erasure leaves a row, its
 `body_variables` `{}`, and `mail_tasks.content_cleared_at` says when. Status,
 recipient, error and the counts stay. Past the period the API answers
 `expired` even before the sweep has run. A sweep runs while the sender is
-paused too: it never touches mail still to go out. The first run after the
-release empties every sensitive send there is.
+paused too: it never touches mail still to go out.
+
+**Sensitive content emptied before 2026-10-13 does not come back.** From
+#61's release (2026-10-13 11:16) until sensitive content was kept, the sweep
+emptied every sensitive send five minutes after it went out: on its first run
+every one there was, the sends from before #61 among them (Keycloak's mails,
+Forms' single mails, core's consent confirmations). Only the nightly dump
+still holds them. The API answers `access: not_kept` for such a send (emptied
+within the retention period, and sensitive), not `sensitive` or `expired`.
 
 The period is Yusuf's decision (2026-10-12: the longest allowed). KVKK's
 storage limitation principle (Law 6698, art. 4(2)(d): kept only as long as

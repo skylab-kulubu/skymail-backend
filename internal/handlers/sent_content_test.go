@@ -40,6 +40,9 @@ func contentApp(t *testing.T, db *database.Store, now time.Time) *fiber.App {
 	}})
 	app.Use(func(c fiber.Ctx) error {
 		c.Locals("user_id", c.Get("X-Test-Sub"))
+		if name := c.Get("X-Test-Name"); name != "" {
+			c.Locals("user_name", name)
+		}
 		c.Locals("roles", strings.Split(c.Get("X-Test-Roles"), ","))
 		return c.Next()
 	})
@@ -102,13 +105,15 @@ func seedContentSend(t *testing.T, db *database.Store, send contentSend) (uuid.U
 }
 
 type contentAnswer struct {
-	ID        uuid.UUID  `json:"id"`
-	TaskID    uuid.UUID  `json:"task_id"`
-	Access    string     `json:"access"`
-	Subject   *string    `json:"subject"`
-	PlainText *string    `json:"plain_text"`
-	HTML      *string    `json:"html"`
-	ExpiresAt *time.Time `json:"expires_at"`
+	ID              uuid.UUID  `json:"id"`
+	TaskID          uuid.UUID  `json:"task_id"`
+	Access          string     `json:"access"`
+	Subject         *string    `json:"subject"`
+	PlainText       *string    `json:"plain_text"`
+	HTML            *string    `json:"html"`
+	ExpiresAt       *time.Time `json:"expires_at"`
+	MaskedVariables []string   `json:"masked_variables"`
+	MaskedBy        *string    `json:"masked_by"`
 }
 
 func getAs(t *testing.T, app *fiber.App, path, sub string, roles ...string) (int, []byte) {
@@ -140,10 +145,11 @@ func contentAs(t *testing.T, app *fiber.App, task, row uuid.UUID, sub string, ro
 	return answer
 }
 
-// Who sees what (Yusuf, 2026-10-12): nobody a sensitive mail's content; a
-// list send's content its sender, anyone who may send to lists, and whoever
-// reads system mail; a single mail's content only its sender and whoever reads
-// system mail.
+// Who sees what (Yusuf, 2026-10-12): a list send's content its sender, anyone
+// who may send to lists, and whoever reads system mail; a single mail's
+// content only its sender and whoever reads system mail. A sensitive mail's
+// content is shown to the same people masked (2026-10-13); this one holds no
+// code or link, so masked it reads as sent.
 func TestSentMailContentFollowsWhoMayReadIt(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
@@ -171,12 +177,16 @@ func TestSentMailContentFollowsWhoMayReadIt(t *testing.T) {
 		{"list send, its sender", listTask, listRow, contentSender, reader, "available"},
 		{"list send, list sender", listTask, listRow, contentOther, writer, "available"},
 		{"list send, system reader", listTask, listRow, contentOther, system, "available"},
-		{"single, sensitive by default, system reader", singleTask, singleRow, contentOther, system, "sensitive"},
-		{"single, sensitive by default, its sender", singleTask, singleRow, contentSender, writer, "sensitive"},
+		{"single, sensitive by default, system reader", singleTask, singleRow, contentOther, system, "masked"},
+		{"single, sensitive by default, its sender", singleTask, singleRow, contentSender, writer, "masked"},
+		{"single, sensitive by default, list sender", singleTask, singleRow, contentOther, writer, "restricted"},
+		{"single, sensitive by default, reader", singleTask, singleRow, contentOther, reader, "restricted"},
 		{"single shown, list sender", shownTask, shownRow, contentOther, writer, "restricted"},
 		{"single shown, its sender", shownTask, shownRow, contentSender, reader, "available"},
 		{"single shown, system reader", shownTask, shownRow, contentOther, system, "available"},
-		{"list send marked sensitive, system reader", markedTask, markedRow, contentOther, append(system, "skymail:mails:write"), "sensitive"},
+		{"list send marked sensitive, system reader", markedTask, markedRow, contentOther, append(system, "skymail:mails:write"), "masked"},
+		{"list send marked sensitive, list sender", markedTask, markedRow, contentOther, writer, "masked"},
+		{"list send marked sensitive, reader", markedTask, markedRow, contentOther, reader, "restricted"},
 	}
 	for _, tc := range cases {
 		answer := contentAs(t, app, tc.task, tc.row, tc.sub, tc.roles...)
@@ -188,7 +198,7 @@ func TestSentMailContentFollowsWhoMayReadIt(t *testing.T) {
 			t.Errorf("%s: answered for %s/%s", tc.name, answer.TaskID, answer.ID)
 		}
 		shown := answer.Subject != nil || answer.PlainText != nil || answer.HTML != nil
-		if tc.want == "available" {
+		if tc.want == "available" || tc.want == "masked" {
 			if !shown || *answer.Subject != "Duyuru" || *answer.PlainText != "Merhaba Ayşe" || *answer.HTML != "<p>Merhaba <b>Ayşe</b></p>" {
 				t.Errorf("%s: content %+v, want the mail as sent", tc.name, answer)
 			}
@@ -287,8 +297,18 @@ func TestSendCarriesContentAccessAndHidesValuesItCannotShow(t *testing.T) {
 		got.ContentExpiresAt == nil || !got.ContentExpiresAt.Equal(recent.Add(90*24*time.Hour)) {
 		t.Errorf("list send to a list sender: %+v, want available with its values and when it expires", got)
 	}
-	if got := list[singleTask]; got.ContentAccess != "sensitive" || string(got.BodyVariables) != "null" || got.ContentExpiresAt != nil {
-		t.Errorf("single mail: %+v, want sensitive, no values, no expiry", got)
+	if got := list[singleTask]; got.ContentAccess != "restricted" || string(got.BodyVariables) != "null" || got.ContentExpiresAt != nil {
+		t.Errorf("single mail to a list sender: %+v, want restricted, no values, no expiry", got)
+	}
+	// Its sender opens it masked: its values, which may hold its code or its
+	// link, are not listed.
+	status, body := getAs(t, app, "/mail_tasks/"+singleTask.String(), contentSender, reader...)
+	var own send
+	if err := json.Unmarshal(body, &own); status != fiber.StatusOK || err != nil {
+		t.Fatalf("GET own single mail = %d %s", status, body)
+	}
+	if own.ContentAccess != "masked" || string(own.BodyVariables) != "null" || own.ContentExpiresAt == nil {
+		t.Errorf("single mail to its sender: %+v, want masked, no values, an expiry", own)
 	}
 	if got := read("/mail_tasks/"+listTask.String(), reader)[listTask]; got.ContentAccess != "restricted" || string(got.BodyVariables) != "null" {
 		t.Errorf("list send to a reader: %+v, want restricted with no values", got)

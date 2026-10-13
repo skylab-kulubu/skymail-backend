@@ -252,6 +252,9 @@ func (h *mailHandlerImpl) mailTaskItems(ctx context.Context, caller contentCalle
 			createdAt:   send.CreatedAt,
 			clearedAt:   send.ContentClearedAt,
 		})
+		// A masked send's values hold its code or its link: they are not
+		// listed. Its content is opened one recipient at a time, masked and
+		// recorded (GetQueueItemContent).
 		var variables []byte
 		if access == ContentAvailable {
 			variables = send.BodyVariables

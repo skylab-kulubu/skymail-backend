@@ -227,8 +227,9 @@ type MailTaskItem struct {
 	RecipientCounts QueueCounts  `json:"recipient_counts"`
 	Audience        SendAudience `json:"audience"`
 	// Whether the caller may open the send's content (GET /mail_tasks/{id}/queue/{itemId}/content), and if not why.
-	ContentAccess ContentAccess `json:"content_access" enums:"available,sensitive,restricted,expired"`
-	// When the content sweep empties the send's content; null unless content_access is available.
+	// masked: a sensitive send, opened with its codes and one-time links masked; not_kept: a sensitive send emptied before sensitive content was kept.
+	ContentAccess ContentAccess `json:"content_access" enums:"available,masked,restricted,expired,not_kept"`
+	// When the content sweep empties the send's content; null unless content_access is available or masked.
 	ContentExpiresAt *time.Time `json:"content_expires_at"`
 }
 

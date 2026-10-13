@@ -174,29 +174,36 @@ const docTemplate = `{
                 "type": "object"
             },
             "handlers.ContentAccess": {
-                "description": "Whether the caller may open the send's content (GET /mail_tasks/{id}/queue/{itemId}/content), and if not why.",
+                "description": "Whether the caller may open the send's content (GET /mail_tasks/{id}/queue/{itemId}/content), and if not why.\nmasked: a sensitive send, opened with its codes and one-time links masked; not_kept: a sensitive send emptied before sensitive content was kept.",
                 "enum": [
                     "available",
+                    "masked",
                     "sensitive",
                     "restricted",
                     "expired",
+                    "not_kept",
                     "unavailable",
                     "available",
-                    "sensitive",
+                    "masked",
                     "restricted",
                     "expired",
+                    "not_kept",
                     "available",
+                    "masked",
                     "sensitive",
                     "restricted",
                     "expired",
+                    "not_kept",
                     "unavailable"
                 ],
                 "type": "string",
                 "x-enum-varnames": [
                     "ContentAvailable",
+                    "ContentMasked",
                     "ContentSensitive",
                     "ContentRestricted",
                     "ContentExpired",
+                    "ContentNotKept",
                     "ContentUnavailable"
                 ]
             },
@@ -585,7 +592,7 @@ const docTemplate = `{
                         "$ref": "#/components/schemas/handlers.ContentAccess"
                     },
                     "content_expires_at": {
-                        "description": "When the content sweep empties the send's content; null unless content_access is available.",
+                        "description": "When the content sweep empties the send's content; null unless content_access is available or masked.",
                         "type": "string"
                     },
                     "created_at": {
@@ -908,11 +915,26 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "html": {
-                        "description": "The HTML part, as sent: show it only in a sandboxed frame, with remote\ncontent blocked unless the operator asks for it.",
+                        "description": "The HTML part, as sent: show it only in a sandboxed frame, with remote\ncontent blocked unless the operator asks for it. Masked, each masked\nvalue is \u003cmark data-skymail-masked=\"\"\u003e••••••\u003c/mark\u003e in the text.",
                         "type": "string"
                     },
                     "id": {
                         "type": "string"
+                    },
+                    "masked_by": {
+                        "enum": [
+                            "variables",
+                            "patterns"
+                        ],
+                        "type": "string"
+                    },
+                    "masked_variables": {
+                        "description": "Masked content only: the send's variables masked, by their path (link,\ncode, answers[0].url), and how — variables (rendered again with them\nmasked) or patterns (every link, long number and code in the stored mail\nmasked). Null otherwise.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
                     },
                     "plain_text": {
                         "description": "The plain-text part.",
@@ -2882,7 +2904,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/queue/{itemId}/content": {
             "get": {
-                "description": "The subject, plain text and HTML a recipient of the send was sent, rendered for them. access says whether they are shown: sensitive — the template carries a code or a one-time link, or it is a single mail whose template does not say it may be shown — is never shown to anyone; restricted is shown to the send's sender, for a send to a list, a group or an approved request to holders of skymail:mails:write, and to holders of skymail:system-mails:read; expired is past MAIL_CONTENT_RETENTION_DAYS (3650 by default) and no longer kept; unavailable holds nothing (Account erasure emptied it, or it never rendered). The fields are null unless access is available. The HTML may reach the network (images, a tracking pixel): show it sandboxed, with remote content blocked by default.",
+                "description": "The subject, plain text and HTML a recipient of the send was sent, rendered for them. access says whether and how they are shown: available — as sent; masked — the send is sensitive (its template carries a code or a one-time link, or it is a single mail whose template does not say it may be shown), and every code and one-time link is replaced by •••••• on the server (masked_variables, masked_by), the opening recorded in sent_content_views; sensitive — it could not be masked for certain, so it is not shown; restricted — shown to the send's sender, for a send to a list, a group or an approved request to holders of skymail:mails:write, and to holders of skymail:system-mails:read; expired — past MAIL_CONTENT_RETENTION_DAYS (3650 by default) and no longer kept; not_kept — a sensitive send whose content was emptied minutes after it went out, before sensitive content was kept (2026-10-13), which does not come back; unavailable — holds nothing (Account erasure emptied it, or it never rendered). The fields are null unless access is available or masked. The HTML may reach the network (images, a tracking pixel): show it sandboxed, with remote content blocked by default.",
                 "parameters": [
                     {
                         "description": "Task ID",

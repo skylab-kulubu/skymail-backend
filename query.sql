@@ -927,7 +927,9 @@ WHERE task_id = $1
 
 -- One recipient's mail as it was rendered and sent, with what decides who may
 -- see it: the send's sender, whether it is bulk, whether its content is
--- sensitive and whether the sweep has emptied it.
+-- sensitive and whether the sweep has emptied it; and what masking a
+-- sensitive one needs: the send's variables, the recipient it was rendered
+-- for and the template as it is now.
 -- name: GetMailQueueItemContent :one
 SELECT q.id,
        q.task_id,
@@ -936,21 +938,45 @@ SELECT q.id,
        q.body,
        q.body_html,
        q.created_at,
+       q.recipient_full_name,
+       q.recipient_email,
        mt.sent_by,
+       mt.template_id,
+       mt.body_variables,
        mt.created_at                               AS task_created_at,
        mt.content_cleared_at,
        mail_task_bulk(mt.id)::boolean              AS bulk,
        mail_task_content_sensitive(mt.id)::boolean AS content_sensitive,
-       t.key                                       AS template_key
+       t.key                                       AS template_key,
+       t.subject                                   AS template_subject,
+       t.plain_text_content                        AS template_plain_text,
+       t.html_content                              AS template_html
 FROM mail_queue q
          JOIN mail_tasks mt ON mt.id = q.task_id
          LEFT JOIN templates t ON t.id = mt.template_id
 WHERE q.task_id = sqlc.arg(task_id)
   AND q.id = sqlc.arg(id);
 
+-- The parts of a template's published versions, newest first: the candidates
+-- for the version a send rendered when the template has changed since.
+-- name: ListPublishedTemplateVersionParts :many
+SELECT subject, plain_text_content, html_content
+FROM template_versions
+WHERE template_id = sqlc.arg(template_id)
+  AND published_at IS NOT NULL
+ORDER BY published_at DESC, seq DESC
+LIMIT sqlc.arg(row_limit);
+
+-- Records that someone opened one recipient's masked mail of a sensitive send.
+-- name: RecordSentContentView :exec
+INSERT INTO sent_content_views (task_id, queue_item_id, actor_sub, actor_name, masked_by, masked_variables)
+VALUES (sqlc.arg(task_id), sqlc.arg(queue_item_id), sqlc.narg(actor_sub), sqlc.narg(actor_name),
+        sqlc.arg(masked_by), sqlc.arg(masked_variables)::text[]);
+
 -- Empties the content of up to batch_size sends none of whose rows is still to
--- go out (pending or processing): a sensitive one five minutes after it was
--- created, any other once it is older than retention_days. Their rows' subject and body become '' and
+-- go out (pending or processing) once they are older than retention_days,
+-- sensitive or not: a sensitive send's content is kept as long as any other's
+-- and shown masked (2026-10-13). Their rows' subject and body become '' and
 -- body_html NULL, as Account erasure leaves a row; the send's body_variables
 -- become {}; content_cleared_at says when. Status, recipient, error and counts
 -- stay. SKIP LOCKED lets a second replica's sweep take other sends. Returns
@@ -964,8 +990,7 @@ WITH due AS (SELECT mt.id
                -- (#58) writes the task first, and a send emptied before its
                -- rows exist would keep them.
                AND mt.created_at < now() - INTERVAL '5 minutes'
-               AND (mt.created_at < now() - make_interval(days => sqlc.arg(retention_days)::int)
-                 OR mail_task_content_sensitive(mt.id))
+               AND mt.created_at < now() - make_interval(days => sqlc.arg(retention_days)::int)
                AND NOT EXISTS (SELECT 1
                                FROM mail_queue q
                                WHERE q.task_id = mt.id

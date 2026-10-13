@@ -21,8 +21,9 @@ type Querier interface {
 	ArchiveMailingList(ctx context.Context, arg ArchiveMailingListParams) (MailingList, error)
 	ArchiveTemplate(ctx context.Context, arg ArchiveTemplateParams) (Template, error)
 	// Empties the content of up to batch_size sends none of whose rows is still to
-	// go out (pending or processing): a sensitive one five minutes after it was
-	// created, any other once it is older than retention_days. Their rows' subject and body become '' and
+	// go out (pending or processing) once they are older than retention_days,
+	// sensitive or not: a sensitive send's content is kept as long as any other's
+	// and shown masked (2026-10-13). Their rows' subject and body become '' and
 	// body_html NULL, as Account erasure leaves a row; the send's body_variables
 	// become {}; content_cleared_at says when. Status, recipient, error and counts
 	// stay. SKIP LOCKED lets a second replica's sweep take other sends. Returns
@@ -115,7 +116,9 @@ type Querier interface {
 	GetMailApproval(ctx context.Context, id uuid.UUID) (GetMailApprovalRow, error)
 	// One recipient's mail as it was rendered and sent, with what decides who may
 	// see it: the send's sender, whether it is bulk, whether its content is
-	// sensitive and whether the sweep has emptied it.
+	// sensitive and whether the sweep has emptied it; and what masking a
+	// sensitive one needs: the send's variables, the recipient it was rendered
+	// for and the template as it is now.
 	GetMailQueueItemContent(ctx context.Context, arg GetMailQueueItemContentParams) (GetMailQueueItemContentRow, error)
 	// A send's recipients, newest first. A list send's rows come from one insert
 	// and share a created_at, so the id breaks the tie: pages neither repeat nor
@@ -164,6 +167,9 @@ type Querier interface {
 	// The Authoring mode of each template's Main source as it is sent: its
 	// published version's.
 	ListPublishedMainModes(ctx context.Context, templateIds []uuid.UUID) ([]ListPublishedMainModesRow, error)
+	// The parts of a template's published versions, newest first: the candidates
+	// for the version a send rendered when the template has changed since.
+	ListPublishedTemplateVersionParts(ctx context.Context, arg ListPublishedTemplateVersionPartsParams) ([]ListPublishedTemplateVersionPartsRow, error)
 	// A template's content_sensitive changes, newest first.
 	ListTemplateContentSensitiveEvents(ctx context.Context, arg ListTemplateContentSensitiveEventsParams) ([]TemplateContentSensitiveEvent, error)
 	// Each operator's draft in progress on the given templates, newest first: the
@@ -236,6 +242,8 @@ type Querier interface {
 	// content refused last time again keeps when it was first refused; other
 	// content starts over. Nothing that is sent changes, so updated_at stays.
 	RecordSeedRefusal(ctx context.Context, arg RecordSeedRefusalParams) error
+	// Records that someone opened one recipient's masked mail of a sensitive send.
+	RecordSentContentView(ctx context.Context, arg RecordSentContentViewParams) error
 	RecordTemplateContentSensitiveEvent(ctx context.Context, arg RecordTemplateContentSensitiveEventParams) error
 	// Writes an operator's draft, numbered after the template's last version,
 	// unless the version it continues holds exactly this content already —
