@@ -6,6 +6,7 @@ import (
 	"errors"
 	htmlt "html/template"
 	"io"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"sort"
@@ -178,20 +179,40 @@ func (m *maskedVariables) mask(name, path string, value any, names map[string]bo
 		if v == "" {
 			return v, v
 		}
-		if secretName(name) || secretShaped(strings.TrimSpace(v)) {
+		trimmed := strings.TrimSpace(v)
+		if secretName(name) || secretShaped(trimmed) || isIP(trimmed) {
 			names[path] = true
-			m.addValue(v)
+			m.addValue(v, true)
 			return Mask, htmlt.HTML(maskMark)
 		}
-		urls := urlInText.FindAllString(v, -1)
-		if len(urls) == 0 {
+		if personalName(name) {
+			// A place is masked but not looked for: the template may name the
+			// same city itself.
+			names[path] = true
+			m.addValue(v, false)
+			return Mask, htmlt.HTML(maskMark)
+		}
+		// Addresses and IP addresses inside text are masked on their own.
+		const cut = "\x00"
+		found := false
+		marked := urlInText.ReplaceAllStringFunc(v, func(u string) string {
+			found = true
+			m.addValue(u, true)
+			return cut
+		})
+		marked = ipCandidate.ReplaceAllStringFunc(marked, func(c string) string {
+			if !isIP(c) {
+				return c
+			}
+			found = true
+			m.addValue(c, true)
+			return cut
+		})
+		if !found {
 			return v, v
 		}
 		names[path] = true
-		for _, u := range urls {
-			m.addValue(u)
-		}
-		parts := urlInText.Split(v, -1)
+		parts := strings.Split(marked, cut)
 		var markup strings.Builder
 		for i, part := range parts {
 			markup.WriteString(htmlt.HTMLEscapeString(part))
@@ -204,7 +225,7 @@ func (m *maskedVariables) mask(name, path string, value any, names map[string]bo
 		digits := strconv.FormatFloat(v, 'f', -1, 64)
 		if secretName(name) || (v == float64(int64(v)) && digitRun.MatchString(digits) && len(digits) >= 6) {
 			names[path] = true
-			m.addValue(digits)
+			m.addValue(digits, true)
 			return Mask, htmlt.HTML(maskMark)
 		}
 		return v, v
@@ -213,9 +234,64 @@ func (m *maskedVariables) mask(name, path string, value any, names map[string]bo
 	}
 }
 
-func (m *maskedVariables) addValue(v string) {
+// addValue keeps a masked value to replace in a stored mail, and, when guard,
+// its credentials to look for in the masked one.
+func (m *maskedVariables) addValue(v string, guard bool) {
 	m.values = append(m.values, v)
-	m.credentials = append(m.credentials, credentialsIn(v)...)
+	if guard {
+		m.credentials = append(m.credentials, credentialsIn(v)...)
+	}
+}
+
+// A person's IP address and whereabouts are masked too (the club's rule: a
+// raw IP address is shown nowhere): a variable whose last word is one of
+// these, IpAddress, ClientIP, Location, Konum.
+var personalNameEnds = []string{"ip", "ipaddress", "ipaddr", "ipadresi", "location", "geolocation", "konum", "coordinates"}
+
+func personalName(name string) bool {
+	last := strings.ToLower(lastWord(name))
+	whole := strings.ToLower(strings.Map(func(r rune) rune {
+		if r == '_' || r == '-' || r == '.' || unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, name))
+	for _, end := range personalNameEnds {
+		if last == end || (len(end) > 2 && strings.HasSuffix(whole, end)) {
+			return true
+		}
+	}
+	return false
+}
+
+// lastWord is a name's last word: after its last _, -, . or space, or its
+// last capital that follows a small letter (ClientIP → IP, ipAddress →
+// Address, remoteIp → Ip).
+func lastWord(name string) string {
+	runes := []rune(name)
+	start := 0
+	for i, r := range runes {
+		switch {
+		case r == '_' || r == '-' || r == '.' || unicode.IsSpace(r):
+			start = i + 1
+		case i > 0 && unicode.IsUpper(r) && unicode.IsLower(runes[i-1]):
+			start = i
+		}
+	}
+	return string(runes[start:])
+}
+
+// ipCandidate is what may be an IP address in text, v4 or v6; isIP decides.
+var ipCandidate = regexp.MustCompile(`(?i)[0-9a-f:.]*:[0-9a-f:.]*|\b\d{1,3}(?:\.\d{1,3}){3}\b`)
+
+// isIP is an IPv4 or IPv6 address, written whole (a time like 14:20:05 is
+// not one).
+func isIP(v string) bool {
+	if !strings.ContainsAny(v, ".:") {
+		return false
+	}
+	_, err := netip.ParseAddr(strings.Trim(v, "[]"))
+	return err == nil
 }
 
 // secretNameEnds are the last word of a variable that carries a code or a
@@ -453,6 +529,12 @@ func maskText(s string) string {
 		return s
 	}
 	s = urlInText.ReplaceAllString(s, Mask)
+	s = ipCandidate.ReplaceAllStringFunc(s, func(c string) string {
+		if isIP(c) {
+			return Mask
+		}
+		return c
+	})
 	s = codeWord.ReplaceAllStringFunc(s, func(w string) string {
 		if tokenShaped(w) || codeShaped(w) {
 			return Mask

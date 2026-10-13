@@ -262,3 +262,64 @@ func TestSecretNameIsTheLastWordNotAnyWord(t *testing.T) {
 		}
 	}
 }
+
+// A raw IP address is shown nowhere (the club's rule), and a person's
+// whereabouts are masked with it: by name (IpAddress, ClientIP, Location), by
+// value (an IPv4 or IPv6 address), inside text, and by the patterns too.
+func TestMaskSentMasksIPAddressesAndLocations(t *testing.T) {
+	tmpl := TemplateParts{
+		Subject:   "Hesabında yeni giriş",
+		PlainText: "{{.EventTitle}}: {{.EventDetail}}\nCihaz: {{.DeviceLabel}}\nIP: {{.IpAddress}} ({{.Location}})\nİstemci: {{.ClientIP}}\nSaat: {{.OccurredAt}}",
+		HTML:      `<p>{{.EventTitle}}: {{.EventDetail}}</p><p>Cihaz: {{.DeviceLabel}}</p><p title="{{.IpAddress}}">IP: {{.IpAddress}} ({{.Location}})</p><p>{{.ClientIP}}</p><p>{{.OccurredAt}}</p>`,
+	}
+	vars := map[string]any{
+		"EventTitle":  "Yeni giriş",
+		"EventDetail": "2001:db8::42 adresinden, ardından 198.51.100.7 adresinden giriş yapıldı",
+		"DeviceLabel": "Firefox · macOS",
+		"IpAddress":   "203.0.113.42",
+		"Location":    "Kadıköy, İstanbul",
+		"ClientIP":    "fe80::1",
+		"OccurredAt":  "13.10.2026 14:20:05",
+	}
+	sent, raw := sendOf(t, tmpl, vars)
+	masked, err := MaskSent(sent, raw, ayse, []TemplateParts{tmpl})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if masked.Method != MaskedByVariables {
+		t.Errorf("method = %s, want %s", masked.Method, MaskedByVariables)
+	}
+	assertNoneOf(t, masked.Rendered, "203.0.113.42", "2001:db8::42", "198.51.100.7", "fe80::1", "Kadıköy")
+	for _, open := range []string{"Firefox · macOS", "13.10.2026 14:20:05", "adresinden giriş yapıldı"} {
+		if !strings.Contains(masked.PlainText, open) {
+			t.Errorf("plain text lost %q: %s", open, masked.PlainText)
+		}
+	}
+	want := []string{"ClientIP", "EventDetail", "IpAddress", "Location"}
+	if !reflect.DeepEqual(masked.Variables, want) {
+		t.Errorf("variables = %v, want %v", masked.Variables, want)
+	}
+
+	// No template renders it, no variables: the patterns mask the addresses
+	// and keep the time.
+	byPatterns, err := MaskSent(sent, []byte(`{}`), ayse, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoneOf(t, byPatterns.Rendered, "203.0.113.42", "2001:db8::42", "198.51.100.7", "fe80::1")
+	if !strings.Contains(byPatterns.PlainText, "14:20:05") {
+		t.Errorf("the time was masked: %s", byPatterns.PlainText)
+	}
+}
+
+func TestPersonalNameIsAnIPOrAPlace(t *testing.T) {
+	for name, want := range map[string]bool{
+		"IpAddress": true, "ip": true, "ClientIP": true, "remoteIp": true, "ip_address": true, "Location": true,
+		"Konum": true, "LoginLocation": true,
+		"Membership": false, "Trip": false, "Description": false, "Relationship": false, "OccurredAt": false,
+	} {
+		if got := personalName(name); got != want {
+			t.Errorf("personalName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}

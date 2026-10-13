@@ -243,7 +243,9 @@ zaten tutar. `GET /v1/mail_tasks/{id}/queue/{itemId}/content` bunu gösterir;
   kullanımlık bağlantılar sunucuda `••••••` olur; maskesiz değer istemciye hiç
   gitmez. Önce gönderimin kod/bağlantı değişkenleri (`link`, `code`,
   `CancelUrl`, `TicketCode`, `token`… ya da adres, 4–10 hane, kod/belirteç
-  biçimli değer) maskelenip posta yeniden render edilir; yalnız maskesiz
+  biçimli değer) ve kişinin IP adresi ile konumu (`IpAddress`, `ClientIP`,
+  `Location`, metin içindeki her IPv4/IPv6 adresi: ham IP hiçbir yerde
+  gösterilmez) maskelenip posta yeniden render edilir; yalnız maskesiz
   değişkenlerle saklanan postayı birebir veren şablon (şu anki ya da son 50
   yayımlanmış sürümden biri) kullanılır. Bulunamazsa saklanan postada bilinen
   değerler ve her adres, 4+ haneli sayı ve kod/belirteç biçimli sözcük

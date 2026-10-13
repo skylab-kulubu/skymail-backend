@@ -279,7 +279,10 @@ ways, the first when it can be proved:
    (`link`, `code`, `CancelUrl`, `TicketCode`, `token`, `password`…, the last
    word of the name: `linkExpirationMinutes` is not one) or by shape (an
    address, 4 to 10 digits, a code of capitals and digits, a token of 20 or
-   more characters; an address inside text is masked on its own) — are
+   more characters; an address inside text is masked on its own), and a
+   person's IP address and whereabouts (`IpAddress`, `ClientIP`, `Location`,
+   any IPv4 or IPv6 address, also inside text: a raw IP address is shown
+   nowhere) — are
    masked, and the mail is rendered again. Only a template that renders the
    unmasked variables into exactly the stored mail is used: the template as
    it is, or one of its last 50 published versions. So the masked mail is the
@@ -288,7 +291,7 @@ ways, the first when it can be proved:
 2. *Patterns,* when no template renders the stored mail (the template
    changed outside its versions, Account erasure emptied the variables). The
    known values are replaced in the stored mail in every form the renderers
-   print them, then every address, every run of four or more digits (a date
+   print them, then every address, every IP address, every run of four or more digits (a date
    or a time with separators stays) and every code- or token-shaped word is
    masked in the subject, the plain text, and the HTML's text, comments and
    attributes. It masks more than it must.
