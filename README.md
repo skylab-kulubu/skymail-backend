@@ -226,10 +226,10 @@ günde 10.000 alıcı. Varsayılanlar bunların altında kalır.
 
 ## Gönderilen içerik (`MAIL_CONTENT_RETENTION_DAYS`)
 
-Her kuyruk satırı, alıcısına gönderildiği hâliyle konuyu, düz metni ve HTML'i
-zaten tutar. `GET /v1/mail_tasks/{id}/queue/{itemId}/content` bunu gösterir;
-`access` kimin neyi gördüğünü söyler, alanlar yalnız `available` ya da
-`masked` iken doludur:
+Her kuyruk satırı alıcısının postasını (konu, düz metin, HTML) tutar.
+`GET /v1/mail_tasks/{id}/queue/{itemId}/content` bunu gösterir
+(`Cache-Control: no-store`); `access` kimin neyi gördüğünü söyler, alanlar
+yalnız `available` ya da `masked` iken doludur:
 
 | Gönderim | Gönderen | `skymail:mails:write` | `skymail:system-mails:read` | Diğer `skymail:mails:read` |
 |---|---|---|---|---|
@@ -238,63 +238,47 @@ zaten tutar. `GET /v1/mail_tasks/{id}/queue/{itemId}/content` bunu gösterir;
 | Liste, grup ya da onaylanmış istek (toplu) | görür | görür | görür | `restricted` |
 | Tekil posta (`/single`), şablonu görünür diyorsa | görür | `restricted` | görür | `restricted` |
 
-- **Maskeli (`masked`, Yusuf 2026-10-13: "kod/bağlantı maskeli, gerisi
-  açık"):** hassas postanın tamamı görünür, ama giriş/doğrulama kodu ve tek
-  kullanımlık bağlantılar sunucuda `••••••` olur; maskesiz değer istemciye hiç
-  gitmez. Önce gönderimin kod/bağlantı değişkenleri (`link`, `code`,
-  `CancelUrl`, `TicketCode`, `token`… ya da adres, 4–10 hane, kod/belirteç
-  biçimli değer) ve kişinin IP adresi ile konumu (`IpAddress`, `ClientIP`,
-  `Location`, metin içindeki her IPv4/IPv6 adresi: ham IP hiçbir yerde
-  gösterilmez) maskelenip posta yeniden render edilir; yalnız maskesiz
-  değişkenlerle saklanan postayı birebir veren şablon (şu anki ya da son 50
-  yayımlanmış sürümden biri) kullanılır. Bulunamazsa saklanan postada bilinen
-  değerler ve her adres, 4+ haneli sayı ve kod/belirteç biçimli sözcük
-  maskelenir (`masked_by: patterns`). Son denetim değişkenlerdeki kimlik
-  bilgisini her kaçışlı biçimiyle arar; bulursa `access: sensitive`, içerik
-  yok. HTML'de maske `<mark data-skymail-masked="">••••••</mark>`. Her açılış
-  `sent_content_views`'a yazılır (kim, hangi gönderim/satır, ne zaman, ne
-  maskelendi); yazılamazsa içerik gösterilmez. Ayrıntı:
+- **Yazarken maskeleme (Yusuf 2026-10-13 "kod/bağlantı maskeli, gerisi
+  açık"; #63 incelemesinden sonra orkestratör kararı):** hassas gönderim
+  bitince (satırı kalmayınca, ≥5 dk) süpürücü her satırın postasını maskeli
+  kopyasıyla, gönderimin `body_variables`'ını maskeli değerlerle
+  **değiştirir**; ham kod/bağlantı saklanmaz, okurken maskeleme yoktur. Kod,
+  tek kullanımlık bağlantı, IP adresi ve konum `••••••` olur (HTML'de
+  `<mark data-skymail-masked="">`). Önce değişkenler (ad, biçim, metin
+  içinde) maskelenip posta **gönderim anında yürürlükteki** şablonla (o
+  zamandan beri yazılmamış satır ya da o ana kadar yayımlanmış en yeni sürüm)
+  yeniden render edilir; birebir tutmazsa desen yedeği. Son denetimde bir
+  kimlik bilgisi kalırsa içerik saklanmaz (`not_kept`). Maskelenene kadar
+  `pending` (gösterilmez). Her maskeli açılış `sent_content_views`'a yazılır;
+  yazılamazsa içerik dönmez. Ayrıntı:
   [`docs/data-lifecycle.md`](docs/data-lifecycle.md#sent-mail-content).
-- `not_kept`: hassas gönderimin içeriği, saklanmadığı dönemde (2026-10-13
-  11:16'dan bu değişikliğe kadar; #61 öncesi gönderimler dahil) gönderimden
-  beş dakika sonra boşaltılmış. Geri gelmez (yalnız gece yedeğinde).
-- Hassaslık şablonun `content_sensitive` alanıdır: `true` maskeli gösterilir,
-  `false` olduğu gibi gösterilir, `null` gönderim türüne bırakır: tekil posta
-  maskeli, toplu gönderim olduğu gibi. Template seed yazar (`PUT /v1/templates/by-key/{key}`,
-  `content_sensitive`), panel iki yönde değiştirir
-  (`PUT /v1/templates/{id}/content-sensitive`, `skymail:templates:write`). Her
-  değişiklik kim, ne zaman, eski→yeni olarak kaydedilir
-  (`GET /v1/templates/{id}/content-sensitive/events`). Migration bilinen
-  şablonları işaretler: kimlik bilgisi taşıyanlar `true`, seed'in görünür
-  dediği tekiller (`core.welcome`, `core.certificate`, `club.team-membership`,
-  `mail.approval-*`, `ops.send-failed`, …) `false`; böylece seed'den önceki ilk
-  süpürme onları boşaltmaz.
-- **Kilitli gizli:** `keycloak.*`, `account.*`, `auth.*`, `login.*`, `otp.*`,
-  `core.contact-consent-confirm`, `event.ticket-created`, `event.reminder` ve
-  anahtarında `login`, `code`, `otp`, `reset`, `verify`, `confirm`, `token`,
-  `magic`, `invite`, `ticket`, `link` gibi bir sözcük (ya da `sign-in`, `log-in`
-  gibi tireli yazımı) geçen her şablon (giriş/doğrulama kodu, sıfırlama ya da
-  hesap bağlantısı, bilet kodu). Böyle bir şablonun anahtarı PATCH ile
-  değiştirilemez ya da boşaltılamaz (`409 template.sensitive_key_immutable`). Panel de seed de bunları görünür yapamaz
-  (`409 template.content_sensitive_locked`); okuma anında da hassas (maskeli) sayılırlar.
-  Liste tek yerde: `internal/handlers/content_sensitivity.go`.
+- Hassaslık gönderim anında `mail_tasks.content_sensitive_at_send`'e
+  kopyalanır; gönderim, bu kopya **ya da** şablonun şimdiki değeri ya da
+  kilitli anahtar hassas diyorsa hassastır. Şablonu sonradan `false` yapmak
+  eski gönderimi açmaz.
+- **Kilitli hassas:** `keycloak.*`, `account.*`, `auth.*`, `login.*`,
+  `otp.*`, `core.contact-consent-confirm`, `event.ticket-created`,
+  `event.reminder` ve anahtarında `login`, `code`, `otp`, `reset`, `verify`,
+  `confirm`, `token`, `magic`, `invite`, `ticket`, `link`, `giris`, `kod`,
+  `dogrulama`, `sifre`, `parola`, `baglanti`, `davet`, `onay` gibi bir sözcük
+  geçen her şablon. Go listesi `internal/handlers/content_sensitivity.go`,
+  veritabanınınki `template_key_content_locked()`; bir test ikisini eşit
+  tutar.
+- **Yeni tekil entegrasyonlar için sözleşme:** kimlik bilgisi taşıyan
+  değişkenin adı `link`, `url`, `code`, `token`, `otp`, `pin`, `password`,
+  `secret`, `key`, `invite` ya da `verifier` ile bitsin; şablon anahtarı
+  kilitli bir sözcük taşısın.
+- `not_kept`: hassas gönderimin içeriği boşaltılmış (2026-10-13 11:16'dan
+  yazarken maskelemeye kadar; #61 öncesi gönderimler dahil; ya da güvenle
+  maskelenemedi). Geri gelmez.
 - `skymail:system-mails:read` SkyMail istemcisinin rolüdür (yönetici: YK, DK,
-  ADMIN). Keycloak'ta verilene kadar tekil postaların içeriğini yalnız gönderen
-  görür.
-- Bir gönderimin `body_variables`'ı da içeriktir: gönderim listesi ve gönderim
-  sayfası onu yalnız `content_access: available` iken verir (maskeli gönderimde
-  hiç).
-- Süpürücü beş dakikada bir, gönderilecek satırı kalmamış gönderimlerin
-  içeriğini boşaltır (20'lik partiler): hassas olsun olmasın
-  `MAIL_CONTENT_RETENTION_DAYS` gün sonra (varsayılan
-  izin verilen en çok değer `3650`; 1–3650 arası tam sayı, başka değer açılışı
-  durdurur). Satırın konusu ve gövdesi `''`, HTML'i `NULL`, gönderimin
-  `body_variables`'ı `{}` olur, `mail_tasks.content_cleared_at` zamanı yazar.
-  Durum, alıcı, hata ve sayılar kalır. Ayrıntı ve KVKK notu:
-  [`docs/data-lifecycle.md`](docs/data-lifecycle.md#sent-mail-content).
-- #61'in ilk yayını (2026-10-13) bütün hassas gönderimlerin içeriğini
-  boşalttı; o andan hassas içerik saklanana kadar giden hassas postalar da
-  beş dakika sonra boşaltıldı. Bunlar geri gelmez (`not_kept`).
+  ADMIN).
+- Süpürücü beş dakikada bir önce hassasları maskeler, sonra
+  `MAIL_CONTENT_RETENTION_DAYS` (varsayılan `3650`, 1–3650) dolmuş
+  gönderimlerin içeriğini boşaltır.
+- **Geri dönüş:** #61 imajına dönmek ilk süpürmede bütün hassas içeriği
+  boşaltır (güvenli, geri gelmez). `20261013140000` down migration'ı
+  koşturulmaz (açılış kaydını siler).
 
 ## Veritabanı migration'ları
 

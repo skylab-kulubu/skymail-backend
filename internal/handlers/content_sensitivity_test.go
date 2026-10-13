@@ -198,6 +198,7 @@ func TestLockedTemplateContentIsMaskedWhateverItsRowSays(t *testing.T) {
 		WHERE id = (SELECT template_id FROM mail_tasks WHERE id = $1)`, task); err != nil {
 		t.Fatal(err)
 	}
+	maskNow(t, db)
 	if answer := contentAs(t, app, task, row, contentOther, "skymail:access", "skymail:mails:read", SystemMailsReadRole); answer.Access != "masked" || answer.MaskedBy == nil {
 		t.Errorf("content = %+v, want masked", answer)
 	}
@@ -240,6 +241,7 @@ func TestANewSingleTemplateCarryingACodeOrALinkIsMaskedByDefault(t *testing.T) {
 			sentBy:    contentSender,
 			createdAt: now.Add(-time.Hour),
 		})
+		maskNow(t, db)
 		answer := contentAs(t, app, task, row, contentSender, system...)
 		if answer.Access != "masked" || answer.Subject == nil || answer.HTML == nil || answer.PlainText == nil {
 			t.Errorf("%s: content = %+v, want masked content", variable, answer)

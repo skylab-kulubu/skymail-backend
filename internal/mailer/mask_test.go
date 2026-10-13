@@ -72,8 +72,8 @@ func TestMaskSentRendersAgainWithTheLinkMasked(t *testing.T) {
 	if masked.Method != MaskedByVariables {
 		t.Errorf("method = %s, want %s", masked.Method, MaskedByVariables)
 	}
-	if !reflect.DeepEqual(masked.Variables, []string{"link"}) {
-		t.Errorf("variables = %v, want [link]", masked.Variables)
+	if !reflect.DeepEqual(NewMasker(raw).Variables(), []string{"link"}) {
+		t.Errorf("variables = %v, want [link]", NewMasker(raw).Variables())
 	}
 	assertNoneOf(t, masked.Rendered, actionLink, "action-token", "eyJhbGciOiJIUzI1NiJ9", "AbC123xYz", "c2lnbmF0dXJlMTIz")
 	for name, part := range map[string]string{"plain text": masked.PlainText, "html": masked.HTML} {
@@ -202,8 +202,9 @@ func TestMaskSentMasksByPatternsWhenTheVariablesAreGone(t *testing.T) {
 	}
 }
 
-// A credential the masking cannot hide — here the same token, unnamed and
-// in another case, in a second variable — is ErrCannotMask: nothing shown.
+// A credential the masking cannot hide — here the link's key again, in
+// another case and in no shape of a code, in a second variable — is
+// ErrCannotMask: nothing kept.
 func TestMaskSentRefusesAMailStillHoldingACredential(t *testing.T) {
 	tmpl := TemplateParts{
 		Subject:   "Bağlantın",
@@ -211,8 +212,8 @@ func TestMaskSentRefusesAMailStillHoldingACredential(t *testing.T) {
 		HTML:      `<a href="{{.link}}">aç</a> {{.Note}}`,
 	}
 	vars := map[string]any{
-		"link": "https://x.example/y?key=SecretValue42",
-		"Note": "referans secretvalue42",
+		"link": "https://x.example/y?key=abcdefgh",
+		"Note": "referans ABCDEFGH",
 	}
 	sent, raw := sendOf(t, tmpl, vars)
 	if _, err := MaskSent(sent, raw, ayse, []TemplateParts{tmpl}); !errors.Is(err, ErrCannotMask) {
@@ -245,8 +246,8 @@ func TestMaskSentMasksNestedValuesNumbersAndLinksInText(t *testing.T) {
 		t.Errorf("plain text = %q", masked.PlainText)
 	}
 	want := []string{"TicketCode", "answers[1].value", "pin"}
-	if !reflect.DeepEqual(masked.Variables, want) {
-		t.Errorf("variables = %v, want %v", masked.Variables, want)
+	if !reflect.DeepEqual(NewMasker(raw).Variables(), want) {
+		t.Errorf("variables = %v, want %v", NewMasker(raw).Variables(), want)
 	}
 }
 
@@ -296,8 +297,8 @@ func TestMaskSentMasksIPAddressesAndLocations(t *testing.T) {
 		}
 	}
 	want := []string{"ClientIP", "EventDetail", "IpAddress", "Location"}
-	if !reflect.DeepEqual(masked.Variables, want) {
-		t.Errorf("variables = %v, want %v", masked.Variables, want)
+	if !reflect.DeepEqual(NewMasker(raw).Variables(), want) {
+		t.Errorf("variables = %v, want %v", NewMasker(raw).Variables(), want)
 	}
 
 	// No template renders it, no variables: the patterns mask the addresses
@@ -320,6 +321,131 @@ func TestPersonalNameIsAnIPOrAPlace(t *testing.T) {
 	} {
 		if got := personalName(name); got != want {
 			t.Errorf("personalName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// The #63 review's attacks (notes/inceleme-arsivi-2026-10-09/
+// skymail-pr63-frontend-pr92-masked-content-review.md, S4–S6): each value
+// must be gone from the masked mail, by the variables or by the patterns.
+func TestMaskSentHidesWhatTheReviewLeaked(t *testing.T) {
+	cases := []struct {
+		name    string
+		tmpl    TemplateParts
+		vars    map[string]any
+		secrets []string
+	}{
+		{"a token named verifier in a link the template builds",
+			TemplateParts{Subject: "Giriş", PlainText: "https://x.example/v?k={{.verifier}}",
+				HTML: `<a href="https://x.example/v?k={{.verifier}}">aç</a> {{.verifier}}`},
+			map[string]any{"verifier": "k2j4h6g8f0d1"}, []string{"k2j4h6g8f0d1"}},
+		{"the same token under a name that says nothing",
+			TemplateParts{Subject: "Giriş", PlainText: "{{.ref}}", HTML: `<a href="/v/{{.ref}}">aç</a> {{.ref}}`},
+			map[string]any{"ref": "k2j4h6g8f0d1"}, []string{"k2j4h6g8f0d1"}},
+		{"a JSON number of four digits",
+			TemplateParts{Subject: "Kod {{.dogrulama}}", PlainText: "{{.dogrulama}}", HTML: `<p>{{.dogrulama}}</p>`},
+			map[string]any{"dogrulama": 4829}, []string{"4829"}},
+		{"a code in prose",
+			TemplateParts{Subject: "{{.Message}}", PlainText: "{{.Message}}", HTML: `<p>{{.Message}}</p>`},
+			map[string]any{"Message": "Giriş kodun 483920, 10 dakika geçerli"}, []string{"483920"}},
+		{"a link with no scheme",
+			TemplateParts{Subject: "Bağlantı", PlainText: "{{.Note}}", HTML: `<p>{{.Note}}</p>`},
+			map[string]any{"Note": "Aç: skyl.app/r/x7Gk2pQ9aa?k=Zz12"}, []string{"skyl.app/r/x7Gk2pQ9aa", "x7Gk2pQ9aa", "Zz12"}},
+		{"a short mixed-case invite code",
+			TemplateParts{Subject: "Davet", PlainText: "{{.invite}} / {{.Ref}}", HTML: `<p>{{.invite}} {{.Ref}}</p>`},
+			map[string]any{"invite": "x7Gk2pQ9", "Ref": "p3Q9z7Lm"}, []string{"x7Gk2pQ9", "p3Q9z7Lm"}},
+		{"a token with a + that html/template prints as &#43;",
+			TemplateParts{Subject: "Bağlantı", PlainText: "{{.link}} {{.Note}}", HTML: `<a href="{{.link}}">aç</a> {{.Note}}`},
+			map[string]any{"link": "https://x.example/y?t=ab+cd12", "Note": "referans ab+cd12"}, []string{"ab+cd12"}},
+		{"an IP address with a port, after IP:, before a colon",
+			TemplateParts{Subject: "Giriş", PlainText: "{{.EventDetail}}", HTML: `<p>{{.EventDetail}}</p>`},
+			map[string]any{"EventDetail": "85.105.12.34:51234 · IP:85.105.12.40 · 85.105.12.41: yeni cihaz · IP:2001:db8::1"},
+			[]string{"85.105.12.34", "85.105.12.40", "85.105.12.41", "2001:db8::1"}},
+	}
+	for _, tc := range cases {
+		sent, raw := sendOf(t, tc.tmpl, tc.vars)
+		for mode, candidates := range map[string][]TemplateParts{"variables": {tc.tmpl}, "patterns": nil} {
+			masked, err := MaskSent(sent, raw, ayse, candidates)
+			if err != nil {
+				// Not kept is safe too; but each of these can be masked.
+				t.Errorf("%s (%s): %v", tc.name, mode, err)
+				continue
+			}
+			assertNoneOf(t, masked.Rendered, tc.secrets...)
+		}
+	}
+}
+
+// The patterns mask a code wherever the stored mail holds it: in a data-
+// attribute, cut by a space or a no-break space, in a style sheet, in a
+// relative link; with the variables gone or known.
+func TestMaskSentPatternsReachAttributesStylesAndCutCodes(t *testing.T) {
+	sent := Rendered{
+		Subject:   "Kodun 483 920",
+		PlainText: "Kodun 483 920 — 13.10.2026 14:20",
+		HTML: `<html><head><style>.c::after{content:"483920"} .a{color:#FF0000;width:1200px}</style></head><body>` +
+			`<p data-code="483920">Kod</p><p>483&nbsp;920</p><a href="/login?token=abcdef">aç</a>` +
+			`<p style="color:#123456">13.10.2026 14:20</p></body></html>`,
+	}
+	for name, vars := range map[string][]byte{"no variables": []byte(`{}`), "variables known": []byte(`{"code":"483920"}`)} {
+		masked, err := MaskSent(sent, vars, ayse, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		assertNoneOf(t, masked.Rendered, "483920", "abcdef")
+		for part, text := range map[string]string{"subject": masked.Subject, "plain text": masked.PlainText, "html": masked.HTML} {
+			if strings.Contains(joinDigits(text), "483920") {
+				t.Errorf("%s: %s holds the code cut apart: %s", name, part, text)
+			}
+		}
+		if !strings.Contains(masked.PlainText, "13.10.2026 14:20") || !strings.Contains(masked.HTML, "13.10.2026 14:20") {
+			t.Errorf("%s: the date was masked: %+v", name, masked.Rendered)
+		}
+		if !strings.Contains(masked.HTML, "#FF0000") || !strings.Contains(masked.HTML, "1200px") {
+			t.Errorf("%s: the style sheet's colour or size changed: %s", name, masked.HTML)
+		}
+	}
+}
+
+// A value only the known values catch — lowercase, no digit, no shape — is
+// replaced in the stored mail.
+func TestMaskSentReplacesTheKnownValuesInTheStoredMail(t *testing.T) {
+	tmpl := TemplateParts{Subject: "Kod", PlainText: "Kodun {{.code}}", HTML: `<p title="{{.code}}">Kodun <b>{{.code}}</b></p>`}
+	sent, raw := sendOf(t, tmpl, map[string]any{"code": "qwerty"})
+	masked, err := MaskSent(sent, raw, ayse, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if masked.Method != MaskedByPatterns {
+		t.Fatalf("method = %s", masked.Method)
+	}
+	assertNoneOf(t, masked.Rendered, "qwerty")
+}
+
+func TestPrintedFormsHoldWhatHTMLTemplatePrints(t *testing.T) {
+	v := "https://x.example/a b?k=ç&t=ab+cd"
+	if got, want := urlAttrForm(v), "https://x.example/a%20b?k=%c3%a7&amp;t=ab&#43;cd"; got != want {
+		t.Errorf("urlAttrForm = %q, want %q", got, want)
+	}
+	forms := printedForms("ab+cd&<")
+	for _, want := range []string{"ab+cd&<", "ab&#43;cd&amp;&lt;"} {
+		found := false
+		for _, form := range forms {
+			found = found || form == want
+		}
+		if !found {
+			t.Errorf("printedForms lacks %q: %q", want, forms)
+		}
+	}
+}
+
+func TestIsIPTakesAPortAndNotATime(t *testing.T) {
+	for v, want := range map[string]bool{
+		"85.105.12.34": true, "85.105.12.34:51234": true, "[2001:db8::1]:443": true, "2001:db8::1": true,
+		"14:20:05": false, "13.10.2026": false, "1.2.3": false,
+	} {
+		if got := isIP(v); got != want {
+			t.Errorf("isIP(%q) = %v, want %v", v, got, want)
 		}
 	}
 }

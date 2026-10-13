@@ -318,6 +318,12 @@ type MailTask struct {
 	BodyVariables    []byte     `json:"body_variables"`
 	CreatedAt        time.Time  `json:"created_at"`
 	ContentClearedAt *time.Time `json:"content_cleared_at"`
+	// The template's content_sensitive when the send was queued: true, false or unset (NULL). A send is sensitive if this or its template now says so.
+	ContentSensitiveAtSend string `json:"content_sensitive_at_send"`
+	// When the content sweep replaced the send's content and body_variables with their masked copies; null while raw or never sensitive.
+	ContentMaskedAt        *time.Time `json:"content_masked_at"`
+	ContentMaskedBy        *string    `json:"content_masked_by"`
+	ContentMaskedVariables []string   `json:"content_masked_variables"`
 }
 
 type MailingList struct {
@@ -343,7 +349,7 @@ type Recipient struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// Each opening of a sensitive send's masked content: who, which send and queue row, when, and what was masked. Account erasure replaces the actor.
+// Each opening of a sensitive send's masked content: who, which send and queue row, when. Account erasure replaces the actor.
 type SentContentView struct {
 	ID              uuid.UUID `json:"id"`
 	TaskID          uuid.UUID `json:"task_id"`

@@ -245,16 +245,16 @@ func (h *mailHandlerImpl) mailTaskItems(ctx context.Context, caller contentCalle
 	items := make([]MailTaskItem, len(sends))
 	for i, send := range sends {
 		access, expires := h.contentAccess(caller, sendContent{
-			templateKey: send.TemplateKey,
-			sentBy:      send.SentBy,
-			bulk:        send.Bulk,
-			sensitive:   send.ContentSensitive,
-			createdAt:   send.CreatedAt,
-			clearedAt:   send.ContentClearedAt,
+			sentBy:    send.SentBy,
+			bulk:      send.Bulk,
+			sensitive: send.ContentSensitive,
+			createdAt: send.CreatedAt,
+			clearedAt: send.ContentClearedAt,
+			maskedAt:  send.ContentMaskedAt,
 		})
-		// A masked send's values hold its code or its link: they are not
-		// listed. Its content is opened one recipient at a time, masked and
-		// recorded (GetQueueItemContent).
+		// A masked send's values are masked too, but they are listed only as
+		// sent: its content is opened one recipient at a time, and recorded
+		// (GetQueueItemContent).
 		var variables []byte
 		if access == ContentAvailable {
 			variables = send.BodyVariables

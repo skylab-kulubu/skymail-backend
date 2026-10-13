@@ -300,6 +300,23 @@ func (q *Queries) ClearMailApprovalRecipients(ctx context.Context, approvalID uu
 	return err
 }
 
+const clearSendContent = `-- name: ClearSendContent :exec
+WITH emptied AS (UPDATE mail_queue
+    SET subject = '', body = '', body_html = NULL
+    WHERE mail_queue.task_id = $1
+    RETURNING mail_queue.id)
+UPDATE mail_tasks
+SET body_variables     = '{}',
+    content_cleared_at = now()
+WHERE mail_tasks.id = $1
+`
+
+// Empties a send the sweep could not mask for certain: it is not kept.
+func (q *Queries) ClearSendContent(ctx context.Context, taskID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearSendContent, taskID)
+	return err
+}
+
 const closeRestoredQueueItems = `-- name: CloseRestoredQueueItems :one
 WITH closing AS (SELECT id, status AS was
                  FROM mail_queue
@@ -791,16 +808,16 @@ type CreateMailQueueItemsParams struct {
 
 const createMailTask = `-- name: CreateMailTask :many
 WITH active_source AS (
-    SELECT t.id AS template_id, ml.id AS mail_list_id
+    SELECT t.id AS template_id, ml.id AS mail_list_id, COALESCE(t.content_sensitive::text, 'unset') AS content_sensitive
     FROM templates t
              JOIN mailing_lists ml ON ml.id = $1::uuid
     WHERE t.id = $2::uuid
       AND t.archived_at IS NULL
       AND ml.archived_at IS NULL
 ), inserted_task AS (
-    INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables)
-        SELECT $3, template_id, mail_list_id, $4 FROM active_source
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at
+    INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send)
+        SELECT $3, template_id, mail_list_id, $4, content_sensitive FROM active_source
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -891,14 +908,14 @@ func (q *Queries) CreateMailingList(ctx context.Context, name string) (MailingLi
 
 const createSingleMailTask = `-- name: CreateSingleMailTask :one
 WITH active_template AS (
-    SELECT templates.id
+    SELECT templates.id, COALESCE(templates.content_sensitive::text, 'unset') AS content_sensitive
     FROM templates
     WHERE templates.id = $3::uuid
       AND archived_at IS NULL
 ), inserted_task AS (
-    INSERT INTO mail_tasks (sent_by, template_id, body_variables)
-        SELECT $4, id, $5 FROM active_template
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at
+    INSERT INTO mail_tasks (sent_by, template_id, body_variables, content_sensitive_at_send)
+        SELECT $4, id, $5, content_sensitive FROM active_template
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1454,19 +1471,15 @@ SELECT q.id,
        q.body,
        q.body_html,
        q.created_at,
-       q.recipient_full_name,
-       q.recipient_email,
        mt.sent_by,
-       mt.template_id,
-       mt.body_variables,
        mt.created_at                               AS task_created_at,
        mt.content_cleared_at,
+       mt.content_masked_at,
+       mt.content_masked_by,
+       mt.content_masked_variables,
        mail_task_bulk(mt.id)::boolean              AS bulk,
        mail_task_content_sensitive(mt.id)::boolean AS content_sensitive,
-       t.key                                       AS template_key,
-       t.subject                                   AS template_subject,
-       t.plain_text_content                        AS template_plain_text,
-       t.html_content                              AS template_html
+       t.key                                       AS template_key
 FROM mail_queue q
          JOIN mail_tasks mt ON mt.id = q.task_id
          LEFT JOIN templates t ON t.id = mt.template_id
@@ -1480,33 +1493,28 @@ type GetMailQueueItemContentParams struct {
 }
 
 type GetMailQueueItemContentRow struct {
-	ID                uuid.UUID           `json:"id"`
-	TaskID            uuid.UUID           `json:"task_id"`
-	Status            NullMailQueueStatus `json:"status"`
-	Subject           string              `json:"subject"`
-	Body              string              `json:"body"`
-	BodyHtml          *string             `json:"body_html"`
-	CreatedAt         *time.Time          `json:"created_at"`
-	RecipientFullName string              `json:"recipient_full_name"`
-	RecipientEmail    string              `json:"recipient_email"`
-	SentBy            string              `json:"sent_by"`
-	TemplateID        *uuid.UUID          `json:"template_id"`
-	BodyVariables     []byte              `json:"body_variables"`
-	TaskCreatedAt     time.Time           `json:"task_created_at"`
-	ContentClearedAt  *time.Time          `json:"content_cleared_at"`
-	Bulk              bool                `json:"bulk"`
-	ContentSensitive  bool                `json:"content_sensitive"`
-	TemplateKey       *string             `json:"template_key"`
-	TemplateSubject   *string             `json:"template_subject"`
-	TemplatePlainText *string             `json:"template_plain_text"`
-	TemplateHtml      *string             `json:"template_html"`
+	ID                     uuid.UUID           `json:"id"`
+	TaskID                 uuid.UUID           `json:"task_id"`
+	Status                 NullMailQueueStatus `json:"status"`
+	Subject                string              `json:"subject"`
+	Body                   string              `json:"body"`
+	BodyHtml               *string             `json:"body_html"`
+	CreatedAt              *time.Time          `json:"created_at"`
+	SentBy                 string              `json:"sent_by"`
+	TaskCreatedAt          time.Time           `json:"task_created_at"`
+	ContentClearedAt       *time.Time          `json:"content_cleared_at"`
+	ContentMaskedAt        *time.Time          `json:"content_masked_at"`
+	ContentMaskedBy        *string             `json:"content_masked_by"`
+	ContentMaskedVariables []string            `json:"content_masked_variables"`
+	Bulk                   bool                `json:"bulk"`
+	ContentSensitive       bool                `json:"content_sensitive"`
+	TemplateKey            *string             `json:"template_key"`
 }
 
-// One recipient's mail as it was rendered and sent, with what decides who may
-// see it: the send's sender, whether it is bulk, whether its content is
-// sensitive and whether the sweep has emptied it; and what masking a
-// sensitive one needs: the send's variables, the recipient it was rendered
-// for and the template as it is now.
+// One recipient's mail as it is kept — as sent, or masked by the content
+// sweep — with what decides who may see it: the send's sender, whether it is
+// bulk, whether its content is sensitive, whether the sweep has masked or
+// emptied it.
 func (q *Queries) GetMailQueueItemContent(ctx context.Context, arg GetMailQueueItemContentParams) (GetMailQueueItemContentRow, error) {
 	row := q.db.QueryRow(ctx, getMailQueueItemContent, arg.TaskID, arg.ID)
 	var i GetMailQueueItemContentRow
@@ -1518,19 +1526,15 @@ func (q *Queries) GetMailQueueItemContent(ctx context.Context, arg GetMailQueueI
 		&i.Body,
 		&i.BodyHtml,
 		&i.CreatedAt,
-		&i.RecipientFullName,
-		&i.RecipientEmail,
 		&i.SentBy,
-		&i.TemplateID,
-		&i.BodyVariables,
 		&i.TaskCreatedAt,
 		&i.ContentClearedAt,
+		&i.ContentMaskedAt,
+		&i.ContentMaskedBy,
+		&i.ContentMaskedVariables,
 		&i.Bulk,
 		&i.ContentSensitive,
 		&i.TemplateKey,
-		&i.TemplateSubject,
-		&i.TemplatePlainText,
-		&i.TemplateHtml,
 	)
 	return i, err
 }
@@ -1600,7 +1604,7 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 }
 
 const getMailTaskById = `-- name: GetMailTaskById :one
-SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at,
+SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables,
        t.name  AS template_name,
        ml.name AS mail_list_name
 FROM mail_tasks mt
@@ -1610,15 +1614,19 @@ WHERE mt.id = $1
 `
 
 type GetMailTaskByIdRow struct {
-	ID               uuid.UUID  `json:"id"`
-	SentBy           string     `json:"sent_by"`
-	TemplateID       *uuid.UUID `json:"template_id"`
-	MailListID       *uuid.UUID `json:"mail_list_id"`
-	BodyVariables    []byte     `json:"body_variables"`
-	CreatedAt        time.Time  `json:"created_at"`
-	ContentClearedAt *time.Time `json:"content_cleared_at"`
-	TemplateName     *string    `json:"template_name"`
-	MailListName     *string    `json:"mail_list_name"`
+	ID                     uuid.UUID  `json:"id"`
+	SentBy                 string     `json:"sent_by"`
+	TemplateID             *uuid.UUID `json:"template_id"`
+	MailListID             *uuid.UUID `json:"mail_list_id"`
+	BodyVariables          []byte     `json:"body_variables"`
+	CreatedAt              time.Time  `json:"created_at"`
+	ContentClearedAt       *time.Time `json:"content_cleared_at"`
+	ContentSensitiveAtSend string     `json:"content_sensitive_at_send"`
+	ContentMaskedAt        *time.Time `json:"content_masked_at"`
+	ContentMaskedBy        *string    `json:"content_masked_by"`
+	ContentMaskedVariables []string   `json:"content_masked_variables"`
+	TemplateName           *string    `json:"template_name"`
+	MailListName           *string    `json:"mail_list_name"`
 }
 
 func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTaskByIdRow, error) {
@@ -1632,6 +1640,10 @@ func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTas
 		&i.BodyVariables,
 		&i.CreatedAt,
 		&i.ContentClearedAt,
+		&i.ContentSensitiveAtSend,
+		&i.ContentMaskedAt,
+		&i.ContentMaskedBy,
+		&i.ContentMaskedVariables,
 		&i.TemplateName,
 		&i.MailListName,
 	)
@@ -1975,8 +1987,9 @@ func (q *Queries) GetTemplateVersionSummary(ctx context.Context, arg GetTemplate
 }
 
 const insertMailTask = `-- name: InsertMailTask :one
-INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables)
-SELECT $1, $2, $3, $4
+INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send)
+SELECT $1, $2, $3, $4,
+       COALESCE(templates.content_sensitive::text, 'unset')
 FROM templates
 WHERE templates.id = $2
   AND archived_at IS NULL
@@ -2305,7 +2318,8 @@ SELECT mt.id,
        single.recipient_email       AS single_recipient_email,
        mail_task_bulk(mt.id)::boolean              AS bulk,
        mail_task_content_sensitive(mt.id)::boolean AS content_sensitive,
-       mt.content_cleared_at
+       mt.content_cleared_at,
+       mt.content_masked_at
 FROM page
          JOIN mail_tasks mt ON mt.id = page.id
          LEFT JOIN templates t ON mt.template_id = t.id
@@ -2354,6 +2368,7 @@ type ListMailTaskSendsRow struct {
 	Bulk                    bool       `json:"bulk"`
 	ContentSensitive        bool       `json:"content_sensitive"`
 	ContentClearedAt        *time.Time `json:"content_cleared_at"`
+	ContentMaskedAt         *time.Time `json:"content_masked_at"`
 }
 
 // A send as every screen shows it — the home screen, the send list and a
@@ -2396,6 +2411,7 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 			&i.Bulk,
 			&i.ContentSensitive,
 			&i.ContentClearedAt,
+			&i.ContentMaskedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -2495,38 +2511,91 @@ func (q *Queries) ListPublishedMainModes(ctx context.Context, templateIds []uuid
 	return items, nil
 }
 
-const listPublishedTemplateVersionParts = `-- name: ListPublishedTemplateVersionParts :many
-SELECT subject, plain_text_content, html_content
-FROM template_versions
-WHERE template_id = $1
-  AND published_at IS NOT NULL
-ORDER BY published_at DESC, seq DESC
-LIMIT $2
+const listQueueRowsToMask = `-- name: ListQueueRowsToMask :many
+SELECT id, recipient_full_name, recipient_email, subject, body, body_html
+FROM mail_queue
+WHERE task_id = $1
+  AND (subject <> '' OR body <> '' OR body_html IS NOT NULL)
+ORDER BY id
 `
 
-type ListPublishedTemplateVersionPartsParams struct {
-	TemplateID uuid.UUID `json:"template_id"`
-	RowLimit   int32     `json:"row_limit"`
+type ListQueueRowsToMaskRow struct {
+	ID                uuid.UUID `json:"id"`
+	RecipientFullName string    `json:"recipient_full_name"`
+	RecipientEmail    string    `json:"recipient_email"`
+	Subject           string    `json:"subject"`
+	Body              string    `json:"body"`
+	BodyHtml          *string   `json:"body_html"`
 }
 
-type ListPublishedTemplateVersionPartsRow struct {
-	Subject          string `json:"subject"`
-	PlainTextContent string `json:"plain_text_content"`
-	HtmlContent      string `json:"html_content"`
-}
-
-// The parts of a template's published versions, newest first: the candidates
-// for the version a send rendered when the template has changed since.
-func (q *Queries) ListPublishedTemplateVersionParts(ctx context.Context, arg ListPublishedTemplateVersionPartsParams) ([]ListPublishedTemplateVersionPartsRow, error) {
-	rows, err := q.db.Query(ctx, listPublishedTemplateVersionParts, arg.TemplateID, arg.RowLimit)
+// The rows of a send that still hold a mail, for the sweep to mask.
+func (q *Queries) ListQueueRowsToMask(ctx context.Context, taskID uuid.UUID) ([]ListQueueRowsToMaskRow, error) {
+	rows, err := q.db.Query(ctx, listQueueRowsToMask, taskID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListPublishedTemplateVersionPartsRow
+	var items []ListQueueRowsToMaskRow
 	for rows.Next() {
-		var i ListPublishedTemplateVersionPartsRow
-		if err := rows.Scan(&i.Subject, &i.PlainTextContent, &i.HtmlContent); err != nil {
+		var i ListQueueRowsToMaskRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RecipientFullName,
+			&i.RecipientEmail,
+			&i.Subject,
+			&i.Body,
+			&i.BodyHtml,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSendsToMask = `-- name: ListSendsToMask :many
+SELECT mt.id, mt.template_id, mt.body_variables, mt.created_at
+FROM mail_tasks mt
+WHERE mt.content_masked_at IS NULL
+  AND mt.content_cleared_at IS NULL
+  AND mt.created_at < now() - INTERVAL '5 minutes'
+  AND NOT EXISTS (SELECT 1
+                  FROM mail_queue q
+                  WHERE q.task_id = mt.id
+                    AND q.status IN ('pending', 'processing'))
+  AND mail_task_content_sensitive(mt.id)
+ORDER BY mt.created_at
+LIMIT $1::int FOR UPDATE OF mt SKIP LOCKED
+`
+
+type ListSendsToMaskRow struct {
+	ID            uuid.UUID  `json:"id"`
+	TemplateID    *uuid.UUID `json:"template_id"`
+	BodyVariables []byte     `json:"body_variables"`
+	CreatedAt     time.Time  `json:"created_at"`
+}
+
+// The sensitive sends the content sweep masks: not masked or emptied yet,
+// five minutes old, none of whose rows is still to go out. SKIP LOCKED lets a
+// second replica's sweep take others.
+func (q *Queries) ListSendsToMask(ctx context.Context, batchSize int) ([]ListSendsToMaskRow, error) {
+	rows, err := q.db.Query(ctx, listSendsToMask, batchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSendsToMaskRow
+	for rows.Next() {
+		var i ListSendsToMaskRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TemplateID,
+			&i.BodyVariables,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2626,6 +2695,56 @@ func (q *Queries) ListTemplateDrafts(ctx context.Context, templateIds []uuid.UUI
 			&i.DiscardedAt,
 			&i.Name,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTemplatePartsInForceAt = `-- name: ListTemplatePartsInForceAt :many
+SELECT parts.subject, parts.plain_text_content, parts.html_content
+FROM (SELECT t.subject, t.plain_text_content, t.html_content, 0 AS rank
+      FROM templates t
+      WHERE t.id = $1
+        AND t.updated_at <= $2
+      UNION ALL
+      (SELECT v.subject, v.plain_text_content, v.html_content, 1 AS rank
+       FROM template_versions v
+       WHERE v.template_id = $1
+         AND v.published_at <= $2
+       ORDER BY v.published_at DESC, v.seq DESC
+       LIMIT 1)) parts
+ORDER BY parts.rank
+`
+
+type ListTemplatePartsInForceAtParams struct {
+	TemplateID uuid.UUID `json:"template_id"`
+	SentAt     time.Time `json:"sent_at"`
+}
+
+type ListTemplatePartsInForceAtRow struct {
+	Subject          string `json:"subject"`
+	PlainTextContent string `json:"plain_text_content"`
+	HtmlContent      string `json:"html_content"`
+}
+
+// A template's parts as they stood when a send was queued: the row, if it has
+// not been written since, and the newest version published by then. Never a
+// version written after: its render could depend on the hidden value.
+func (q *Queries) ListTemplatePartsInForceAt(ctx context.Context, arg ListTemplatePartsInForceAtParams) ([]ListTemplatePartsInForceAtRow, error) {
+	rows, err := q.db.Query(ctx, listTemplatePartsInForceAt, arg.TemplateID, arg.SentAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTemplatePartsInForceAtRow
+	for rows.Next() {
+		var i ListTemplatePartsInForceAtRow
+		if err := rows.Scan(&i.Subject, &i.PlainTextContent, &i.HtmlContent); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2855,6 +2974,33 @@ func (q *Queries) LockTemplateByKey(ctx context.Context, key *string) (Template,
 		&i.ContentSensitive,
 	)
 	return i, err
+}
+
+const markSendMasked = `-- name: MarkSendMasked :exec
+UPDATE mail_tasks
+SET body_variables           = $1,
+    content_masked_at        = now(),
+    content_masked_by        = $2,
+    content_masked_variables = $3::text[]
+WHERE id = $4
+`
+
+type MarkSendMaskedParams struct {
+	BodyVariables   []byte    `json:"body_variables"`
+	MaskedBy        *string   `json:"masked_by"`
+	MaskedVariables []string  `json:"masked_variables"`
+	ID              uuid.UUID `json:"id"`
+}
+
+// Marks a send masked and puts its masked variables in place of its own.
+func (q *Queries) MarkSendMasked(ctx context.Context, arg MarkSendMaskedParams) error {
+	_, err := q.db.Exec(ctx, markSendMasked,
+		arg.BodyVariables,
+		arg.MaskedBy,
+		arg.MaskedVariables,
+		arg.ID,
+	)
+	return err
 }
 
 const processBulkQueueItems = `-- name: ProcessBulkQueueItems :many
@@ -3844,6 +3990,37 @@ func (q *Queries) SetMailQueueItemSent(ctx context.Context, arg SetMailQueueItem
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setMaskedQueueContent = `-- name: SetMaskedQueueContent :exec
+UPDATE mail_queue q
+SET subject   = u.subject,
+    body      = u.body,
+    body_html = NULLIF(u.body_html, '')
+FROM (SELECT unnest($1::uuid[])      AS id,
+             unnest($2::text[]) AS subject,
+             unnest($3::text[])   AS body,
+             unnest($4::text[])    AS body_html) u
+WHERE q.id = u.id
+`
+
+type SetMaskedQueueContentParams struct {
+	Ids      []uuid.UUID `json:"ids"`
+	Subjects []string    `json:"subjects"`
+	Bodies   []string    `json:"bodies"`
+	Htmls    []string    `json:"htmls"`
+}
+
+// Puts each row's masked mail in place of what was sent; an empty HTML is
+// none.
+func (q *Queries) SetMaskedQueueContent(ctx context.Context, arg SetMaskedQueueContentParams) error {
+	_, err := q.db.Exec(ctx, setMaskedQueueContent,
+		arg.Ids,
+		arg.Subjects,
+		arg.Bodies,
+		arg.Htmls,
+	)
+	return err
 }
 
 const setTemplateContentSensitive = `-- name: SetTemplateContentSensitive :one

@@ -851,15 +851,15 @@ RETURNING attempts;
 
 -- name: CreateMailTask :many
 WITH active_source AS (
-    SELECT t.id AS template_id, ml.id AS mail_list_id
+    SELECT t.id AS template_id, ml.id AS mail_list_id, COALESCE(t.content_sensitive::text, 'unset') AS content_sensitive
     FROM templates t
              JOIN mailing_lists ml ON ml.id = sqlc.narg(mail_list_id)::uuid
     WHERE t.id = sqlc.narg(template_id)::uuid
       AND t.archived_at IS NULL
       AND ml.archived_at IS NULL
 ), inserted_task AS (
-    INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables)
-        SELECT sqlc.arg(sent_by), template_id, mail_list_id, sqlc.arg(body_variables) FROM active_source
+    INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send)
+        SELECT sqlc.arg(sent_by), template_id, mail_list_id, sqlc.arg(body_variables), content_sensitive FROM active_source
         RETURNING *
 )
 SELECT it.id               AS task_id,
@@ -925,11 +925,10 @@ WHERE task_id = $1
   AND (sqlc.narg(status)::mail_queue_status IS NULL OR status = sqlc.narg(status)::mail_queue_status);
 
 
--- One recipient's mail as it was rendered and sent, with what decides who may
--- see it: the send's sender, whether it is bulk, whether its content is
--- sensitive and whether the sweep has emptied it; and what masking a
--- sensitive one needs: the send's variables, the recipient it was rendered
--- for and the template as it is now.
+-- One recipient's mail as it is kept — as sent, or masked by the content
+-- sweep — with what decides who may see it: the send's sender, whether it is
+-- bulk, whether its content is sensitive, whether the sweep has masked or
+-- emptied it.
 -- name: GetMailQueueItemContent :one
 SELECT q.id,
        q.task_id,
@@ -938,34 +937,96 @@ SELECT q.id,
        q.body,
        q.body_html,
        q.created_at,
-       q.recipient_full_name,
-       q.recipient_email,
        mt.sent_by,
-       mt.template_id,
-       mt.body_variables,
        mt.created_at                               AS task_created_at,
        mt.content_cleared_at,
+       mt.content_masked_at,
+       mt.content_masked_by,
+       mt.content_masked_variables,
        mail_task_bulk(mt.id)::boolean              AS bulk,
        mail_task_content_sensitive(mt.id)::boolean AS content_sensitive,
-       t.key                                       AS template_key,
-       t.subject                                   AS template_subject,
-       t.plain_text_content                        AS template_plain_text,
-       t.html_content                              AS template_html
+       t.key                                       AS template_key
 FROM mail_queue q
          JOIN mail_tasks mt ON mt.id = q.task_id
          LEFT JOIN templates t ON t.id = mt.template_id
 WHERE q.task_id = sqlc.arg(task_id)
   AND q.id = sqlc.arg(id);
 
--- The parts of a template's published versions, newest first: the candidates
--- for the version a send rendered when the template has changed since.
--- name: ListPublishedTemplateVersionParts :many
-SELECT subject, plain_text_content, html_content
-FROM template_versions
-WHERE template_id = sqlc.arg(template_id)
-  AND published_at IS NOT NULL
-ORDER BY published_at DESC, seq DESC
-LIMIT sqlc.arg(row_limit);
+-- The sensitive sends the content sweep masks: not masked or emptied yet,
+-- five minutes old, none of whose rows is still to go out. SKIP LOCKED lets a
+-- second replica's sweep take others.
+-- name: ListSendsToMask :many
+SELECT mt.id, mt.template_id, mt.body_variables, mt.created_at
+FROM mail_tasks mt
+WHERE mt.content_masked_at IS NULL
+  AND mt.content_cleared_at IS NULL
+  AND mt.created_at < now() - INTERVAL '5 minutes'
+  AND NOT EXISTS (SELECT 1
+                  FROM mail_queue q
+                  WHERE q.task_id = mt.id
+                    AND q.status IN ('pending', 'processing'))
+  AND mail_task_content_sensitive(mt.id)
+ORDER BY mt.created_at
+LIMIT sqlc.arg(batch_size)::int FOR UPDATE OF mt SKIP LOCKED;
+
+-- A template's parts as they stood when a send was queued: the row, if it has
+-- not been written since, and the newest version published by then. Never a
+-- version written after: its render could depend on the hidden value.
+-- name: ListTemplatePartsInForceAt :many
+SELECT parts.subject, parts.plain_text_content, parts.html_content
+FROM (SELECT t.subject, t.plain_text_content, t.html_content, 0 AS rank
+      FROM templates t
+      WHERE t.id = sqlc.arg(template_id)
+        AND t.updated_at <= sqlc.arg(sent_at)
+      UNION ALL
+      (SELECT v.subject, v.plain_text_content, v.html_content, 1 AS rank
+       FROM template_versions v
+       WHERE v.template_id = sqlc.arg(template_id)
+         AND v.published_at <= sqlc.arg(sent_at)
+       ORDER BY v.published_at DESC, v.seq DESC
+       LIMIT 1)) parts
+ORDER BY parts.rank;
+
+-- The rows of a send that still hold a mail, for the sweep to mask.
+-- name: ListQueueRowsToMask :many
+SELECT id, recipient_full_name, recipient_email, subject, body, body_html
+FROM mail_queue
+WHERE task_id = sqlc.arg(task_id)
+  AND (subject <> '' OR body <> '' OR body_html IS NOT NULL)
+ORDER BY id;
+
+-- Puts each row's masked mail in place of what was sent; an empty HTML is
+-- none.
+-- name: SetMaskedQueueContent :exec
+UPDATE mail_queue q
+SET subject   = u.subject,
+    body      = u.body,
+    body_html = NULLIF(u.body_html, '')
+FROM (SELECT unnest(sqlc.arg(ids)::uuid[])      AS id,
+             unnest(sqlc.arg(subjects)::text[]) AS subject,
+             unnest(sqlc.arg(bodies)::text[])   AS body,
+             unnest(sqlc.arg(htmls)::text[])    AS body_html) u
+WHERE q.id = u.id;
+
+-- Marks a send masked and puts its masked variables in place of its own.
+-- name: MarkSendMasked :exec
+UPDATE mail_tasks
+SET body_variables           = sqlc.arg(body_variables),
+    content_masked_at        = now(),
+    content_masked_by        = sqlc.arg(masked_by),
+    content_masked_variables = sqlc.arg(masked_variables)::text[]
+WHERE id = sqlc.arg(id);
+
+-- Empties a send the sweep could not mask for certain: it is not kept.
+-- name: ClearSendContent :exec
+WITH emptied AS (UPDATE mail_queue
+    SET subject = '', body = '', body_html = NULL
+    WHERE mail_queue.task_id = sqlc.arg(task_id)
+    RETURNING mail_queue.id)
+UPDATE mail_tasks
+SET body_variables     = '{}',
+    content_cleared_at = now()
+WHERE mail_tasks.id = sqlc.arg(task_id);
 
 -- Records that someone opened one recipient's masked mail of a sensitive send.
 -- name: RecordSentContentView :exec
@@ -1013,8 +1074,9 @@ WHERE mt.id = due.id
 RETURNING mt.id, (SELECT count(*) FROM rows WHERE rows.task_id = mt.id) AS rows_cleared;
 
 -- name: InsertMailTask :one
-INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables)
-SELECT sqlc.arg(sent_by), sqlc.arg(template_id), sqlc.narg(mail_list_id), sqlc.arg(body_variables)
+INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send)
+SELECT sqlc.arg(sent_by), sqlc.arg(template_id), sqlc.narg(mail_list_id), sqlc.arg(body_variables),
+       COALESCE(templates.content_sensitive::text, 'unset')
 FROM templates
 WHERE templates.id = sqlc.arg(template_id)
   AND archived_at IS NULL
@@ -1022,13 +1084,13 @@ RETURNING mail_tasks.id, sent_by, template_id, mail_list_id, body_variables, cre
 
 -- name: CreateSingleMailTask :one
 WITH active_template AS (
-    SELECT templates.id
+    SELECT templates.id, COALESCE(templates.content_sensitive::text, 'unset') AS content_sensitive
     FROM templates
     WHERE templates.id = sqlc.narg(template_id)::uuid
       AND archived_at IS NULL
 ), inserted_task AS (
-    INSERT INTO mail_tasks (sent_by, template_id, body_variables)
-        SELECT sqlc.arg(sent_by), id, sqlc.arg(body_variables) FROM active_template
+    INSERT INTO mail_tasks (sent_by, template_id, body_variables, content_sensitive_at_send)
+        SELECT sqlc.arg(sent_by), id, sqlc.arg(body_variables), content_sensitive FROM active_template
         RETURNING *
 )
 SELECT it.id               AS task_id,
@@ -1102,7 +1164,8 @@ SELECT mt.id,
        single.recipient_email       AS single_recipient_email,
        mail_task_bulk(mt.id)::boolean              AS bulk,
        mail_task_content_sensitive(mt.id)::boolean AS content_sensitive,
-       mt.content_cleared_at
+       mt.content_cleared_at,
+       mt.content_masked_at
 FROM page
          JOIN mail_tasks mt ON mt.id = page.id
          LEFT JOIN templates t ON mt.template_id = t.id

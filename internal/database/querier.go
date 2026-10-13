@@ -33,6 +33,8 @@ type Querier interface {
 	// went to before; none for a request to a list. emails and full_names pair up
 	// by index.
 	ClearMailApprovalRecipients(ctx context.Context, approvalID uuid.UUID) error
+	// Empties a send the sweep could not mask for certain: it is not kept.
+	ClearSendContent(ctx context.Context, taskID uuid.UUID) error
 	// Closes the rows CountRestoredQueueItems counts as restored without sending
 	// them: failed, with the error the send's page shows. mail_task_status then
 	// reports their sends as failed. attempts is left as it was: nothing tried
@@ -114,11 +116,10 @@ type Querier interface {
 	// internal one (a Keycloak group's is Keycloak's to give), the people it goes
 	// to and the sends it queued, each in order.
 	GetMailApproval(ctx context.Context, id uuid.UUID) (GetMailApprovalRow, error)
-	// One recipient's mail as it was rendered and sent, with what decides who may
-	// see it: the send's sender, whether it is bulk, whether its content is
-	// sensitive and whether the sweep has emptied it; and what masking a
-	// sensitive one needs: the send's variables, the recipient it was rendered
-	// for and the template as it is now.
+	// One recipient's mail as it is kept — as sent, or masked by the content
+	// sweep — with what decides who may see it: the send's sender, whether it is
+	// bulk, whether its content is sensitive, whether the sweep has masked or
+	// emptied it.
 	GetMailQueueItemContent(ctx context.Context, arg GetMailQueueItemContentParams) (GetMailQueueItemContentRow, error)
 	// A send's recipients, newest first. A list send's rows come from one insert
 	// and share a created_at, so the id breaks the tie: pages neither repeat nor
@@ -167,9 +168,12 @@ type Querier interface {
 	// The Authoring mode of each template's Main source as it is sent: its
 	// published version's.
 	ListPublishedMainModes(ctx context.Context, templateIds []uuid.UUID) ([]ListPublishedMainModesRow, error)
-	// The parts of a template's published versions, newest first: the candidates
-	// for the version a send rendered when the template has changed since.
-	ListPublishedTemplateVersionParts(ctx context.Context, arg ListPublishedTemplateVersionPartsParams) ([]ListPublishedTemplateVersionPartsRow, error)
+	// The rows of a send that still hold a mail, for the sweep to mask.
+	ListQueueRowsToMask(ctx context.Context, taskID uuid.UUID) ([]ListQueueRowsToMaskRow, error)
+	// The sensitive sends the content sweep masks: not masked or emptied yet,
+	// five minutes old, none of whose rows is still to go out. SKIP LOCKED lets a
+	// second replica's sweep take others.
+	ListSendsToMask(ctx context.Context, batchSize int) ([]ListSendsToMaskRow, error)
 	// A template's content_sensitive changes, newest first.
 	ListTemplateContentSensitiveEvents(ctx context.Context, arg ListTemplateContentSensitiveEventsParams) ([]TemplateContentSensitiveEvent, error)
 	// Each operator's draft in progress on the given templates, newest first: the
@@ -179,6 +183,10 @@ type Querier interface {
 	// draft that someone else's publish made stale still is listed, until its
 	// author writes again or discards it.
 	ListTemplateDrafts(ctx context.Context, templateIds []uuid.UUID) ([]TemplateVersionSummary, error)
+	// A template's parts as they stood when a send was queued: the row, if it has
+	// not been written since, and the newest version published by then. Never a
+	// version written after: its render could depend on the hidden value.
+	ListTemplatePartsInForceAt(ctx context.Context, arg ListTemplatePartsInForceAtParams) ([]ListTemplatePartsInForceAtRow, error)
 	// A template's Mail template versions, newest first, without their sources or
 	// render. A NULL published lists every version; true only published ones,
 	// false only drafts, discarded ones included.
@@ -209,6 +217,8 @@ type Querier interface {
 	// the seed's upsert can judge the template before it writes: every other
 	// writer of the template waits until it has. No row: the key is new.
 	LockTemplateByKey(ctx context.Context, key *string) (Template, error)
+	// Marks a send masked and puts its masked variables in place of its own.
+	MarkSendMasked(ctx context.Context, arg MarkSendMaskedParams) error
 	// The same for the bulk lane (lists, groups, approved sends), which reads
 	// idx_mail_queue_pending_bulk. The process asks for no more rows than the
 	// send budget leaves room for (SendWindowCounts), under LockSendBudget.
@@ -321,6 +331,9 @@ type Querier interface {
 	// then); zero rows says so. A sent or failed row keeps its claim: the process
 	// that finished it.
 	SetMailQueueItemSent(ctx context.Context, arg SetMailQueueItemSentParams) (int64, error)
+	// Puts each row's masked mail in place of what was sent; an empty HTML is
+	// none.
+	SetMaskedQueueContent(ctx context.Context, arg SetMaskedQueueContentParams) error
 	// Required variable sets are sorted byte by byte (COLLATE "C"), the order the
 	// handler sorts a contract set in and a missing list comes in, whatever the
 	// database's collation.

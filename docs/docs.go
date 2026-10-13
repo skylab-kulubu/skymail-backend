@@ -178,6 +178,7 @@ const docTemplate = `{
                 "enum": [
                     "available",
                     "masked",
+                    "pending",
                     "sensitive",
                     "restricted",
                     "expired",
@@ -190,7 +191,7 @@ const docTemplate = `{
                     "not_kept",
                     "available",
                     "masked",
-                    "sensitive",
+                    "pending",
                     "restricted",
                     "expired",
                     "not_kept",
@@ -200,6 +201,7 @@ const docTemplate = `{
                 "x-enum-varnames": [
                     "ContentAvailable",
                     "ContentMasked",
+                    "ContentPending",
                     "ContentSensitive",
                     "ContentRestricted",
                     "ContentExpired",
@@ -915,7 +917,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "html": {
-                        "description": "The HTML part, as sent: show it only in a sandboxed frame, with remote\ncontent blocked unless the operator asks for it. Masked, each masked\nvalue is \u003cmark data-skymail-masked=\"\"\u003e••••••\u003c/mark\u003e in the text.",
+                        "description": "The HTML part: show it only in a sandboxed frame, with remote content\nblocked unless the operator asks for it. Masked, each masked value in its\ntext is \u003cmark data-skymail-masked=\"\"\u003e••••••\u003c/mark\u003e.",
                         "type": "string"
                     },
                     "id": {
@@ -929,7 +931,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "masked_variables": {
-                        "description": "Masked content only: the send's variables masked, by their path (link,\ncode, answers[0].url), and how — variables (rendered again with them\nmasked) or patterns (every link, long number and code in the stored mail\nmasked). Null otherwise.",
+                        "description": "Masked content only: the send's variables masked, by their path (link,\ncode, answers[0].url), and how — variables (rendered again with them\nmasked) or patterns (every link, IP address, long number and code in the\nstored mail masked). Null otherwise.",
                         "items": {
                             "type": "string"
                         },
@@ -2904,7 +2906,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/queue/{itemId}/content": {
             "get": {
-                "description": "The subject, plain text and HTML a recipient of the send was sent, rendered for them. access says whether and how they are shown: available — as sent; masked — the send is sensitive (its template carries a code or a one-time link, or it is a single mail whose template does not say it may be shown), and every code and one-time link is replaced by •••••• on the server (masked_variables, masked_by), the opening recorded in sent_content_views; sensitive — it could not be masked for certain, so it is not shown; restricted — shown to the send's sender, for a send to a list, a group or an approved request to holders of skymail:mails:write, and to holders of skymail:system-mails:read; expired — past MAIL_CONTENT_RETENTION_DAYS (3650 by default) and no longer kept; not_kept — a sensitive send whose content was emptied minutes after it went out, before sensitive content was kept (2026-10-13), which does not come back; unavailable — holds nothing (Account erasure emptied it, or it never rendered). The fields are null unless access is available or masked. The HTML may reach the network (images, a tracking pixel): show it sandboxed, with remote content blocked by default.",
+                "description": "The subject, plain text and HTML a recipient of the send was sent, as SkyMail keeps it. access says whether and how they are shown: available — as sent; masked — the send is sensitive (its template carries a code or a one-time link, or said so when it was sent, or it is a single mail whose template does not say it may be shown), and the content sweep replaced every code, one-time link and IP address with •••••• once the send was done (masked_variables, masked_by); the unmasked mail is not kept, and each opening is recorded in sent_content_views; pending — sensitive and not masked yet (a row still to go out, or sent in the last minutes): not shown; restricted — shown to the send's sender, for a send to a list, a group or an approved request to holders of skymail:mails:write, and to holders of skymail:system-mails:read; expired — past MAIL_CONTENT_RETENTION_DAYS (3650 by default) and no longer kept; not_kept — a sensitive send whose content was emptied (before sensitive content was kept, 2026-10-13, or because it could not be masked for certain), which does not come back; unavailable — holds nothing (Account erasure emptied it, or it never rendered). The fields are null unless access is available or masked. The HTML may reach the network (images, a tracking pixel): show it sandboxed, with remote content blocked by default. Never cached.",
                 "parameters": [
                     {
                         "description": "Task ID",
@@ -2977,7 +2979,7 @@ const docTemplate = `{
                         "description": "Internal Server Error"
                     }
                 },
-                "summary": "Get one recipient's mail as sent",
+                "summary": "Get one recipient's mail as kept",
                 "tags": [
                     "Mail"
                 ]
@@ -4062,7 +4064,7 @@ const docTemplate = `{
         },
         "/templates/{id}/content-sensitive": {
             "put": {
-                "description": "Sets the template's content_sensitive, as the panel's switch does: true hides the content of its sends from everyone, false lets those who may read a send's content see it. A template whose mail carries a credential (keycloak.*, account.*, core.contact-consent-confirm, event.ticket-created, event.reminder) is locked sensitive and answers 409 template.content_sensitive_locked to false. Each change is recorded with who made it and the value before and after (GET /templates/{id}/content-sensitive/events); setting the value the template has records nothing. No version is written and updated_at stays. An archived template is 404.",
+                "description": "Sets the template's content_sensitive, as the panel's switch does: true keeps the content of its sends masked (every code and one-time link replaced on the server once a send is done, for good), false lets those who may read a send's content see it as sent — for sends from then on: a send sensitive when it was queued stays so. A template whose mail carries a credential (keycloak.*, account.*, core.contact-consent-confirm, event.ticket-created, event.reminder) is locked sensitive and answers 409 template.content_sensitive_locked to false. Each change is recorded with who made it and the value before and after (GET /templates/{id}/content-sensitive/events); setting the value the template has records nothing. No version is written and updated_at stays. An archived template is 404.",
                 "parameters": [
                     {
                         "description": "Template ID",

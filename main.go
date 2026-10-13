@@ -332,8 +332,9 @@ func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, m
 	tasks.Get("/:id/queue/:itemId/content", auth.RequireAnyPermission("skymail:mails:read"), mail.GetQueueItemContent)
 }
 
-// contentSweepInterval is how often the content sweep runs: a send's content
-// is gone within it of its retention period ending.
+// contentSweepInterval is how often the content sweep runs: a sensitive
+// send's raw mail is masked within it of the send being done, and a send's
+// content is gone within it of its retention period ending.
 const contentSweepInterval = 5 * time.Minute
 
 // contentSweepBatch is how many sends one statement of the sweep empties. A
@@ -342,8 +343,13 @@ const contentSweepInterval = 5 * time.Minute
 // transactions rather than a few long ones.
 const contentSweepBatch = 20
 
-// clearMailContent empties the content of the sends due — past retentionDays,
-// sensitive or not, once none of its rows is still to go out — at
+// contentMaskBatch is how many sensitive sends one transaction of the sweep
+// masks: each is read, rendered again and written row by row.
+const contentMaskBatch = 10
+
+// clearMailContent masks the sensitive sends that are done and empties the
+// content of the sends due — past retentionDays, sensitive or not, once none
+// of its rows is still to go out — at
 // startup and every interval after (docs/data-lifecycle.md, sent mail
 // content). It runs while the sender is paused too: it touches no row still
 // to go out. It logs counts only.
@@ -352,6 +358,16 @@ func clearMailContent(ctx context.Context, db *database.Store, retentionDays int
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
+		// Sensitive sends are masked first, so the raw mail is gone within a
+		// tick of a send being done (internal/mailer/mask.go).
+		masked, err := mailer.MaskSensitiveContent(ctx, db, contentMaskBatch)
+		if err != nil && ctx.Err() == nil {
+			log.Error().Err(err).Msg("sensitive content masking failed")
+		}
+		if masked.Sends > 0 || masked.NotKept > 0 {
+			log.Info().Int("sends", masked.Sends).Int("rows", masked.Rows).Int("not_kept", masked.NotKept).
+				Msg("masked the content of sensitive sends")
+		}
 		sends, rows, err := db.ClearMailContent(ctx, retentionDays, contentSweepBatch)
 		if err != nil && ctx.Err() == nil {
 			log.Error().Err(err).Msg("mail content sweep failed")

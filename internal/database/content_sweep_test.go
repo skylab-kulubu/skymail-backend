@@ -34,9 +34,10 @@ func seedSweepSend(t *testing.T, db *Store, send sweepSend) uuid.UUID {
 	}
 	var taskID uuid.UUID
 	if err := db.Conn.QueryRow(ctx, `
-		INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, created_at)
-		VALUES ('31ef736f-72da-4a40-8791-d523199cf9f0', $1, $2, '{"code":"123456"}', now() - $3::interval)
-		RETURNING id`, templateID, list, send.age.String()).Scan(&taskID); err != nil {
+		INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, created_at, content_sensitive_at_send)
+		VALUES ('31ef736f-72da-4a40-8791-d523199cf9f0', $1, $2, '{"code":"123456"}', now() - $3::interval,
+		        COALESCE($4::boolean::text, 'unset'))
+		RETURNING id`, templateID, list, send.age.String(), send.sensitive).Scan(&taskID); err != nil {
 		t.Fatal(err)
 	}
 	for _, status := range send.statuses {

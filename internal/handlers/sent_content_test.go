@@ -82,9 +82,10 @@ func seedContentSend(t *testing.T, db *database.Store, send contentSend) (uuid.U
 	}
 	var taskID, rowID uuid.UUID
 	if err := db.Conn.QueryRow(ctx, `
-		INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at)
-		VALUES ($1, $2, $3, '{"Heading":"Merhaba"}', $4, $5) RETURNING id`,
-		send.sentBy, templateID, list, send.createdAt, cleared).Scan(&taskID); err != nil {
+		INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at,
+		                        content_sensitive_at_send)
+		VALUES ($1, $2, $3, '{"Heading":"Merhaba"}', $4, $5, COALESCE($6::boolean::text, 'unset')) RETURNING id`,
+		send.sentBy, templateID, list, send.createdAt, cleared, send.sensitive).Scan(&taskID); err != nil {
 		t.Fatal(err)
 	}
 	subject, body, html := "Duyuru", "Merhaba Ayşe", "<p>Merhaba <b>Ayşe</b></p>"
@@ -161,6 +162,7 @@ func TestSentMailContentFollowsWhoMayReadIt(t *testing.T) {
 	singleTask, singleRow := seedContentSend(t, db, contentSend{sentBy: contentSender, createdAt: recent})
 	shownTask, shownRow := seedContentSend(t, db, contentSend{sensitive: &no, sentBy: contentSender, createdAt: recent})
 	markedTask, markedRow := seedContentSend(t, db, contentSend{sensitive: &yes, list: true, sentBy: contentSender, createdAt: recent})
+	maskNow(t, db)
 
 	reader := []string{"skymail:access", "skymail:mails:read"}
 	writer := []string{"skymail:access", "skymail:mails:read", "skymail:mails:write"}
@@ -261,6 +263,7 @@ func TestSendCarriesContentAccessAndHidesValuesItCannotShow(t *testing.T) {
 	recent := now.Add(-time.Hour)
 	listTask, _ := seedContentSend(t, db, contentSend{list: true, sentBy: contentSender, createdAt: recent})
 	singleTask, _ := seedContentSend(t, db, contentSend{sentBy: contentSender, createdAt: recent})
+	maskNow(t, db)
 	writer := []string{"skymail:access", "skymail:mails:read", "skymail:mails:write"}
 	reader := []string{"skymail:access", "skymail:mails:read"}
 
