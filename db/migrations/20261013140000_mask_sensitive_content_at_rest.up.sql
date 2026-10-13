@@ -43,7 +43,9 @@ ALTER TABLE mail_tasks
     ADD COLUMN content_masked_at         TIMESTAMPTZ,
     ADD COLUMN content_masked_by         TEXT
         CONSTRAINT mail_tasks_content_masked_by_value CHECK (content_masked_by IN ('variables', 'patterns')),
-    ADD COLUMN content_masked_variables  TEXT[];
+    ADD COLUMN content_masked_variables  TEXT[],
+    ADD COLUMN content_mask_due          BOOLEAN  NOT NULL DEFAULT true,
+    ADD COLUMN content_mask_failures     SMALLINT NOT NULL DEFAULT 0;
 
 UPDATE mail_tasks mt
 SET content_sensitive_at_send = t.content_sensitive::text
@@ -53,6 +55,18 @@ WHERE t.id = mt.template_id
 
 COMMENT ON COLUMN mail_tasks.content_sensitive_at_send IS
     'The template''s content_sensitive when the send was queued: true, false or unset (NULL). A send is sensitive if this or its template now says so.';
+-- Only the sends still to be looked at are due: a send masked, emptied, or
+-- found not sensitive is not, until its template's content_sensitive or key
+-- changes (the trigger below). The sweep reads the due ones alone
+-- (idx_mail_tasks_content_mask_due, 20261013140100).
+UPDATE mail_tasks
+SET content_mask_due = false
+WHERE content_cleared_at IS NOT NULL;
+
+COMMENT ON COLUMN mail_tasks.content_mask_due IS
+    'Whether the content sweep still has to decide on masking the send: true when queued and again when its template''s content_sensitive or key changes; false once masked, emptied or found not sensitive.';
+COMMENT ON COLUMN mail_tasks.content_mask_failures IS
+    'How many times in a row masking the send failed; at 3 its content is emptied (not kept), so one send cannot hold the others back.';
 COMMENT ON COLUMN mail_tasks.content_masked_at IS
     'When the content sweep replaced the send''s content and body_variables with their masked copies; null while raw or never sensitive.';
 
@@ -102,6 +116,31 @@ SELECT COALESCE((SELECT template_key_content_locked(t.key)
                  WHERE mt.id = for_task),
                 true)
 $$;
+
+-- A template made sensitive (or given a locked key) after a send: the send is
+-- looked at again, and masked if it is sensitive now.
+CREATE FUNCTION mail_tasks_mask_due_on_template_change() RETURNS TRIGGER
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, public
+AS
+$$
+BEGIN
+    UPDATE mail_tasks
+    SET content_mask_due = true
+    WHERE template_id = NEW.id
+      AND NOT content_mask_due
+      AND content_masked_at IS NULL
+      AND content_cleared_at IS NULL;
+    RETURN NULL;
+END
+$$;
+
+CREATE TRIGGER templates_mask_due
+    AFTER UPDATE OF content_sensitive, key
+    ON templates
+    FOR EACH ROW
+    WHEN (OLD.content_sensitive IS DISTINCT FROM NEW.content_sensitive OR OLD.key IS DISTINCT FROM NEW.key)
+EXECUTE FUNCTION mail_tasks_mask_due_on_template_change();
 
 CREATE TABLE sent_content_views
 (

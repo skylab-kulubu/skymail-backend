@@ -4,6 +4,8 @@
 SET lock_timeout = '5s';
 
 DROP TABLE IF EXISTS sent_content_views;
+DROP TRIGGER IF EXISTS templates_mask_due ON templates;
+DROP FUNCTION IF EXISTS mail_tasks_mask_due_on_template_change();
 
 CREATE OR REPLACE FUNCTION mail_task_content_sensitive(for_task UUID) RETURNS BOOLEAN
     LANGUAGE sql
@@ -21,6 +23,8 @@ $$;
 DROP FUNCTION IF EXISTS template_key_content_locked(TEXT);
 
 ALTER TABLE mail_tasks
+    DROP COLUMN IF EXISTS content_mask_failures,
+    DROP COLUMN IF EXISTS content_mask_due,
     DROP COLUMN IF EXISTS content_masked_variables,
     DROP COLUMN IF EXISTS content_masked_by,
     DROP COLUMN IF EXISTS content_masked_at,

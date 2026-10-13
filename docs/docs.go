@@ -174,7 +174,7 @@ const docTemplate = `{
                 "type": "object"
             },
             "handlers.ContentAccess": {
-                "description": "Whether the caller may open the send's content (GET /mail_tasks/{id}/queue/{itemId}/content), and if not why.\nmasked: a sensitive send, opened with its codes and one-time links masked; not_kept: a sensitive send emptied before sensitive content was kept.",
+                "description": "Whether the caller may open the send's content (GET /mail_tasks/{id}/queue/{itemId}/content), and if not why.\nmasked: a sensitive send, kept with its codes and one-time links masked; pending: a sensitive send not masked yet, not shown; not_kept: a sensitive send emptied (before sensitive content was kept, or not masked for certain).",
                 "enum": [
                     "available",
                     "masked",
@@ -186,6 +186,7 @@ const docTemplate = `{
                     "unavailable",
                     "available",
                     "masked",
+                    "pending",
                     "restricted",
                     "expired",
                     "not_kept",

@@ -82,11 +82,32 @@ type MaskedMail struct {
 // masking: it is not kept.
 var ErrCannotMask = errors.New("mailer: a code or a link in the mail could not be masked")
 
-// Masker masks the mails of one send: its variables are read and masked once.
+// Masker masks the mails of one send: its variables are read and masked, and
+// its templates parsed, once.
 type Masker struct {
-	vars   map[string]any
-	known  bool
-	masked maskedVariables
+	vars       map[string]any
+	known      bool
+	masked     maskedVariables
+	candidates []parsedCandidate
+}
+
+// parsedCandidate is a candidate template, parsed, with what it writes itself.
+type parsedCandidate struct {
+	source TemplateParts
+	parsed mailTemplates
+}
+
+// UseTemplates gives the masker the template's parts as they stood when the
+// send was queued: never a version written after it, whose render could
+// depend on the hidden value. A part that does not parse is left out.
+func (m *Masker) UseTemplates(candidates []TemplateParts) {
+	m.candidates = nil
+	for _, candidate := range candidates {
+		parsed, err := parseMailTemplates(candidate.Subject, candidate.PlainText, candidate.HTML)
+		if err == nil {
+			m.candidates = append(m.candidates, parsedCandidate{source: candidate, parsed: parsed})
+		}
+	}
 }
 
 // NewMasker reads a send's body_variables. Variables that do not read as an
@@ -118,16 +139,11 @@ func (m *Masker) MaskedVariables() []byte {
 	return out
 }
 
-// Mail masks one recipient's sent mail. candidates are the template's parts
-// as they stood when the send was queued: never a version written after it,
-// whose render could depend on the hidden value.
-func (m *Masker) Mail(sent Rendered, recipient RecipientInfo, candidates []TemplateParts) (MaskedMail, error) {
+// Mail masks one recipient's sent mail with the templates UseTemplates gave.
+func (m *Masker) Mail(sent Rendered, recipient RecipientInfo) (MaskedMail, error) {
 	if m.known {
-		for _, candidate := range candidates {
-			parsed, err := parseMailTemplates(candidate.Subject, candidate.PlainText, candidate.HTML)
-			if err != nil {
-				continue
-			}
+		for _, c := range m.candidates {
+			candidate, parsed := c.source, c.parsed
 			original, err := parsed.render(m.vars, recipient)
 			if err != nil || original != sent {
 				continue
@@ -168,7 +184,9 @@ func (m *Masker) Mail(sent Rendered, recipient RecipientInfo, candidates []Templ
 // the send's body_variables, recipient whom the row went to, and candidates
 // the template's parts in force when it was sent.
 func MaskSent(sent Rendered, variables []byte, recipient RecipientInfo, candidates []TemplateParts) (MaskedMail, error) {
-	return NewMasker(variables).Mail(sent, recipient, candidates)
+	m := NewMasker(variables)
+	m.UseTemplates(candidates)
+	return m.Mail(sent, recipient)
 }
 
 // parseSendVariables reads a send's body_variables; an empty one is no

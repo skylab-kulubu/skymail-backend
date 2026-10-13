@@ -952,22 +952,43 @@ FROM mail_queue q
 WHERE q.task_id = sqlc.arg(task_id)
   AND q.id = sqlc.arg(id);
 
--- The sensitive sends the content sweep masks: not masked or emptied yet,
--- five minutes old, none of whose rows is still to go out. SKIP LOCKED lets a
--- second replica's sweep take others.
--- name: ListSendsToMask :many
-SELECT mt.id, mt.template_id, mt.body_variables, mt.created_at
+-- The next send the content sweep has to decide on masking (content_mask_due,
+-- idx_mail_tasks_content_mask_due): not masked or emptied, five minutes old,
+-- none of whose rows is still to go out, not among those it already tried in
+-- this run. sensitive says whether to mask it. SKIP LOCKED lets a second
+-- replica's sweep take another.
+-- name: TakeSendToMask :many
+SELECT mt.id,
+       mt.template_id,
+       mt.body_variables,
+       mt.created_at,
+       mt.content_mask_failures,
+       mail_task_content_sensitive(mt.id)::boolean AS sensitive
 FROM mail_tasks mt
-WHERE mt.content_masked_at IS NULL
+WHERE mt.content_mask_due
+  AND mt.content_masked_at IS NULL
   AND mt.content_cleared_at IS NULL
   AND mt.created_at < now() - INTERVAL '5 minutes'
   AND NOT EXISTS (SELECT 1
                   FROM mail_queue q
                   WHERE q.task_id = mt.id
                     AND q.status IN ('pending', 'processing'))
-  AND mail_task_content_sensitive(mt.id)
+  AND NOT (mt.id = ANY (sqlc.arg(tried)::uuid[]))
 ORDER BY mt.created_at
-LIMIT sqlc.arg(batch_size)::int FOR UPDATE OF mt SKIP LOCKED;
+LIMIT 1 FOR UPDATE OF mt SKIP LOCKED;
+
+-- A send found not sensitive: not looked at again until its template changes.
+-- name: MarkSendNotDueForMasking :exec
+UPDATE mail_tasks
+SET content_mask_due = false
+WHERE id = sqlc.arg(id);
+
+-- Counts a failed masking of a send, in a transaction of its own.
+-- name: RecordMaskFailure :one
+UPDATE mail_tasks
+SET content_mask_failures = content_mask_failures + 1
+WHERE id = sqlc.arg(id)
+RETURNING content_mask_failures;
 
 -- A template's parts as they stood when a send was queued: the row, if it has
 -- not been written since, and the newest version published by then. Never a
@@ -987,16 +1008,22 @@ FROM (SELECT t.subject, t.plain_text_content, t.html_content, 0 AS rank
        LIMIT 1)) parts
 ORDER BY parts.rank;
 
--- The rows of a send that still hold a mail, for the sweep to mask.
+-- The next rows of a send that still hold a mail, after the row after, for the
+-- sweep to mask; locked until it has, so Account erasure cannot empty one
+-- between the reading and the writing (a row it is emptying is waited for and
+-- read again: emptied, it is not taken).
 -- name: ListQueueRowsToMask :many
 SELECT id, recipient_full_name, recipient_email, subject, body, body_html
 FROM mail_queue
 WHERE task_id = sqlc.arg(task_id)
+  AND id > sqlc.arg(after)
   AND (subject <> '' OR body <> '' OR body_html IS NOT NULL)
-ORDER BY id;
+ORDER BY id
+LIMIT sqlc.arg(row_limit) FOR UPDATE;
 
 -- Puts each row's masked mail in place of what was sent; an empty HTML is
--- none.
+-- none. Only a row of the send that still holds a mail, of a send not masked
+-- or emptied yet: never one Account erasure emptied.
 -- name: SetMaskedQueueContent :exec
 UPDATE mail_queue q
 SET subject   = u.subject,
@@ -1006,18 +1033,28 @@ FROM (SELECT unnest(sqlc.arg(ids)::uuid[])      AS id,
              unnest(sqlc.arg(subjects)::text[]) AS subject,
              unnest(sqlc.arg(bodies)::text[])   AS body,
              unnest(sqlc.arg(htmls)::text[])    AS body_html) u
-WHERE q.id = u.id;
+WHERE q.id = u.id
+  AND q.task_id = sqlc.arg(task_id)
+  AND (q.subject <> '' OR q.body <> '' OR q.body_html IS NOT NULL)
+  AND EXISTS (SELECT 1
+              FROM mail_tasks mt
+              WHERE mt.id = q.task_id
+                AND mt.content_masked_at IS NULL
+                AND mt.content_cleared_at IS NULL);
 
 -- Marks a send masked and puts its masked variables in place of its own.
 -- name: MarkSendMasked :exec
 UPDATE mail_tasks
 SET body_variables           = sqlc.arg(body_variables),
+    content_mask_due         = false,
+    content_mask_failures    = 0,
     content_masked_at        = now(),
     content_masked_by        = sqlc.arg(masked_by),
     content_masked_variables = sqlc.arg(masked_variables)::text[]
 WHERE id = sqlc.arg(id);
 
--- Empties a send the sweep could not mask for certain: it is not kept.
+-- Empties a send the sweep could not mask for certain, or failed to mask three
+-- times: it is not kept.
 -- name: ClearSendContent :exec
 WITH emptied AS (UPDATE mail_queue
     SET subject = '', body = '', body_html = NULL
@@ -1025,6 +1062,7 @@ WITH emptied AS (UPDATE mail_queue
     RETURNING mail_queue.id)
 UPDATE mail_tasks
 SET body_variables     = '{}',
+    content_mask_due   = false,
     content_cleared_at = now()
 WHERE mail_tasks.id = sqlc.arg(task_id);
 

@@ -307,11 +307,13 @@ WITH emptied AS (UPDATE mail_queue
     RETURNING mail_queue.id)
 UPDATE mail_tasks
 SET body_variables     = '{}',
+    content_mask_due   = false,
     content_cleared_at = now()
 WHERE mail_tasks.id = $1
 `
 
-// Empties a send the sweep could not mask for certain: it is not kept.
+// Empties a send the sweep could not mask for certain, or failed to mask three
+// times: it is not kept.
 func (q *Queries) ClearSendContent(ctx context.Context, taskID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, clearSendContent, taskID)
 	return err
@@ -817,7 +819,7 @@ WITH active_source AS (
 ), inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send)
         SELECT $3, template_id, mail_list_id, $4, content_sensitive FROM active_source
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -915,7 +917,7 @@ WITH active_template AS (
 ), inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, body_variables, content_sensitive_at_send)
         SELECT $4, id, $5, content_sensitive FROM active_template
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1604,7 +1606,7 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 }
 
 const getMailTaskById = `-- name: GetMailTaskById :one
-SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables,
+SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures,
        t.name  AS template_name,
        ml.name AS mail_list_name
 FROM mail_tasks mt
@@ -1625,6 +1627,8 @@ type GetMailTaskByIdRow struct {
 	ContentMaskedAt        *time.Time `json:"content_masked_at"`
 	ContentMaskedBy        *string    `json:"content_masked_by"`
 	ContentMaskedVariables []string   `json:"content_masked_variables"`
+	ContentMaskDue         bool       `json:"content_mask_due"`
+	ContentMaskFailures    int16      `json:"content_mask_failures"`
 	TemplateName           *string    `json:"template_name"`
 	MailListName           *string    `json:"mail_list_name"`
 }
@@ -1644,6 +1648,8 @@ func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTas
 		&i.ContentMaskedAt,
 		&i.ContentMaskedBy,
 		&i.ContentMaskedVariables,
+		&i.ContentMaskDue,
+		&i.ContentMaskFailures,
 		&i.TemplateName,
 		&i.MailListName,
 	)
@@ -2515,9 +2521,17 @@ const listQueueRowsToMask = `-- name: ListQueueRowsToMask :many
 SELECT id, recipient_full_name, recipient_email, subject, body, body_html
 FROM mail_queue
 WHERE task_id = $1
+  AND id > $2
   AND (subject <> '' OR body <> '' OR body_html IS NOT NULL)
 ORDER BY id
+LIMIT $3 FOR UPDATE
 `
+
+type ListQueueRowsToMaskParams struct {
+	TaskID   uuid.UUID `json:"task_id"`
+	After    uuid.UUID `json:"after"`
+	RowLimit int32     `json:"row_limit"`
+}
 
 type ListQueueRowsToMaskRow struct {
 	ID                uuid.UUID `json:"id"`
@@ -2528,9 +2542,12 @@ type ListQueueRowsToMaskRow struct {
 	BodyHtml          *string   `json:"body_html"`
 }
 
-// The rows of a send that still hold a mail, for the sweep to mask.
-func (q *Queries) ListQueueRowsToMask(ctx context.Context, taskID uuid.UUID) ([]ListQueueRowsToMaskRow, error) {
-	rows, err := q.db.Query(ctx, listQueueRowsToMask, taskID)
+// The next rows of a send that still hold a mail, after the row after, for the
+// sweep to mask; locked until it has, so Account erasure cannot empty one
+// between the reading and the writing (a row it is emptying is waited for and
+// read again: emptied, it is not taken).
+func (q *Queries) ListQueueRowsToMask(ctx context.Context, arg ListQueueRowsToMaskParams) ([]ListQueueRowsToMaskRow, error) {
+	rows, err := q.db.Query(ctx, listQueueRowsToMask, arg.TaskID, arg.After, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -2545,56 +2562,6 @@ func (q *Queries) ListQueueRowsToMask(ctx context.Context, taskID uuid.UUID) ([]
 			&i.Subject,
 			&i.Body,
 			&i.BodyHtml,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listSendsToMask = `-- name: ListSendsToMask :many
-SELECT mt.id, mt.template_id, mt.body_variables, mt.created_at
-FROM mail_tasks mt
-WHERE mt.content_masked_at IS NULL
-  AND mt.content_cleared_at IS NULL
-  AND mt.created_at < now() - INTERVAL '5 minutes'
-  AND NOT EXISTS (SELECT 1
-                  FROM mail_queue q
-                  WHERE q.task_id = mt.id
-                    AND q.status IN ('pending', 'processing'))
-  AND mail_task_content_sensitive(mt.id)
-ORDER BY mt.created_at
-LIMIT $1::int FOR UPDATE OF mt SKIP LOCKED
-`
-
-type ListSendsToMaskRow struct {
-	ID            uuid.UUID  `json:"id"`
-	TemplateID    *uuid.UUID `json:"template_id"`
-	BodyVariables []byte     `json:"body_variables"`
-	CreatedAt     time.Time  `json:"created_at"`
-}
-
-// The sensitive sends the content sweep masks: not masked or emptied yet,
-// five minutes old, none of whose rows is still to go out. SKIP LOCKED lets a
-// second replica's sweep take others.
-func (q *Queries) ListSendsToMask(ctx context.Context, batchSize int) ([]ListSendsToMaskRow, error) {
-	rows, err := q.db.Query(ctx, listSendsToMask, batchSize)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListSendsToMaskRow
-	for rows.Next() {
-		var i ListSendsToMaskRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.TemplateID,
-			&i.BodyVariables,
-			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -2979,6 +2946,8 @@ func (q *Queries) LockTemplateByKey(ctx context.Context, key *string) (Template,
 const markSendMasked = `-- name: MarkSendMasked :exec
 UPDATE mail_tasks
 SET body_variables           = $1,
+    content_mask_due         = false,
+    content_mask_failures    = 0,
     content_masked_at        = now(),
     content_masked_by        = $2,
     content_masked_variables = $3::text[]
@@ -3000,6 +2969,18 @@ func (q *Queries) MarkSendMasked(ctx context.Context, arg MarkSendMaskedParams) 
 		arg.MaskedVariables,
 		arg.ID,
 	)
+	return err
+}
+
+const markSendNotDueForMasking = `-- name: MarkSendNotDueForMasking :exec
+UPDATE mail_tasks
+SET content_mask_due = false
+WHERE id = $1
+`
+
+// A send found not sensitive: not looked at again until its template changes.
+func (q *Queries) MarkSendNotDueForMasking(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markSendNotDueForMasking, id)
 	return err
 }
 
@@ -3259,6 +3240,21 @@ func (q *Queries) RecordMailApprovalEvent(ctx context.Context, arg RecordMailApp
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const recordMaskFailure = `-- name: RecordMaskFailure :one
+UPDATE mail_tasks
+SET content_mask_failures = content_mask_failures + 1
+WHERE id = $1
+RETURNING content_mask_failures
+`
+
+// Counts a failed masking of a send, in a transaction of its own.
+func (q *Queries) RecordMaskFailure(ctx context.Context, id uuid.UUID) (int16, error) {
+	row := q.db.QueryRow(ctx, recordMaskFailure, id)
+	var content_mask_failures int16
+	err := row.Scan(&content_mask_failures)
+	return content_mask_failures, err
 }
 
 const recordSeedRefusal = `-- name: RecordSeedRefusal :exec
@@ -3997,14 +3993,22 @@ UPDATE mail_queue q
 SET subject   = u.subject,
     body      = u.body,
     body_html = NULLIF(u.body_html, '')
-FROM (SELECT unnest($1::uuid[])      AS id,
-             unnest($2::text[]) AS subject,
-             unnest($3::text[])   AS body,
-             unnest($4::text[])    AS body_html) u
+FROM (SELECT unnest($2::uuid[])      AS id,
+             unnest($3::text[]) AS subject,
+             unnest($4::text[])   AS body,
+             unnest($5::text[])    AS body_html) u
 WHERE q.id = u.id
+  AND q.task_id = $1
+  AND (q.subject <> '' OR q.body <> '' OR q.body_html IS NOT NULL)
+  AND EXISTS (SELECT 1
+              FROM mail_tasks mt
+              WHERE mt.id = q.task_id
+                AND mt.content_masked_at IS NULL
+                AND mt.content_cleared_at IS NULL)
 `
 
 type SetMaskedQueueContentParams struct {
+	TaskID   uuid.UUID   `json:"task_id"`
 	Ids      []uuid.UUID `json:"ids"`
 	Subjects []string    `json:"subjects"`
 	Bodies   []string    `json:"bodies"`
@@ -4012,9 +4016,11 @@ type SetMaskedQueueContentParams struct {
 }
 
 // Puts each row's masked mail in place of what was sent; an empty HTML is
-// none.
+// none. Only a row of the send that still holds a mail, of a send not masked
+// or emptied yet: never one Account erasure emptied.
 func (q *Queries) SetMaskedQueueContent(ctx context.Context, arg SetMaskedQueueContentParams) error {
 	_, err := q.db.Exec(ctx, setMaskedQueueContent,
+		arg.TaskID,
 		arg.Ids,
 		arg.Subjects,
 		arg.Bodies,
@@ -4150,6 +4156,68 @@ func (q *Queries) StartLeaseOnUnclaimedJobs(ctx context.Context) (int64, error) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const takeSendToMask = `-- name: TakeSendToMask :many
+SELECT mt.id,
+       mt.template_id,
+       mt.body_variables,
+       mt.created_at,
+       mt.content_mask_failures,
+       mail_task_content_sensitive(mt.id)::boolean AS sensitive
+FROM mail_tasks mt
+WHERE mt.content_mask_due
+  AND mt.content_masked_at IS NULL
+  AND mt.content_cleared_at IS NULL
+  AND mt.created_at < now() - INTERVAL '5 minutes'
+  AND NOT EXISTS (SELECT 1
+                  FROM mail_queue q
+                  WHERE q.task_id = mt.id
+                    AND q.status IN ('pending', 'processing'))
+  AND NOT (mt.id = ANY ($1::uuid[]))
+ORDER BY mt.created_at
+LIMIT 1 FOR UPDATE OF mt SKIP LOCKED
+`
+
+type TakeSendToMaskRow struct {
+	ID                  uuid.UUID  `json:"id"`
+	TemplateID          *uuid.UUID `json:"template_id"`
+	BodyVariables       []byte     `json:"body_variables"`
+	CreatedAt           time.Time  `json:"created_at"`
+	ContentMaskFailures int16      `json:"content_mask_failures"`
+	Sensitive           bool       `json:"sensitive"`
+}
+
+// The next send the content sweep has to decide on masking (content_mask_due,
+// idx_mail_tasks_content_mask_due): not masked or emptied, five minutes old,
+// none of whose rows is still to go out, not among those it already tried in
+// this run. sensitive says whether to mask it. SKIP LOCKED lets a second
+// replica's sweep take another.
+func (q *Queries) TakeSendToMask(ctx context.Context, tried []uuid.UUID) ([]TakeSendToMaskRow, error) {
+	rows, err := q.db.Query(ctx, takeSendToMask, tried)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TakeSendToMaskRow
+	for rows.Next() {
+		var i TakeSendToMaskRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TemplateID,
+			&i.BodyVariables,
+			&i.CreatedAt,
+			&i.ContentMaskFailures,
+			&i.Sensitive,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateMailingList = `-- name: UpdateMailingList :one

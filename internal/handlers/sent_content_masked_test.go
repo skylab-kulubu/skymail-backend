@@ -20,7 +20,7 @@ import (
 // minutes.
 func maskNow(t *testing.T, db *database.Store) mailer.MaskResult {
 	t.Helper()
-	result, err := mailer.MaskSensitiveContent(context.Background(), db, 2)
+	result, err := mailer.MaskSensitiveContent(context.Background(), db, mailer.MaskOptions{RowsPerChunk: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,4 +494,85 @@ func TestTheDatabaseLocksTheSameKeysAsGo(t *testing.T) {
 			t.Errorf("%s: database %v, Go %v", key, locked, want)
 		}
 	}
+}
+
+// One send whose masking keeps failing holds no other back, is tried once a
+// run, and on its third failure is emptied (not kept); a send of many rows is
+// masked a chunk at a time (#63 re-review R2).
+func TestMaskingAFailingSendHoldsNoOtherBackAndIsEmptiedOnItsThirdFailure(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	app := contentApp(t, db, now)
+	ctx := context.Background()
+	failing, failingRow := seedRenderedSend(t, db, keycloakLike("keycloak.reset-password", contentSender, now.Add(-2*time.Hour)))
+	many, manyRow := seedRenderedSend(t, db, keycloakLike("keycloak.verify-email", contentSender, now.Add(-time.Hour)))
+	// Four more recipients of the second send: five rows, masked two at a time.
+	if _, err := db.Conn.Exec(ctx, `
+		INSERT INTO mail_queue (task_id, recipient_full_name, recipient_email, subject, body, body_html, status, created_at)
+		SELECT task_id, recipient_full_name, recipient_email, subject, body, body_html, status, created_at
+		FROM mail_queue, generate_series(1, 4) WHERE id = $1`, manyRow); err != nil {
+		t.Fatal(err)
+	}
+	// Writing the first send's masked mail fails, whatever the cause.
+	if _, err := db.Conn.Exec(ctx, `
+		CREATE FUNCTION refuse_mask() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'disk full'; END $$;
+		CREATE TRIGGER refuse_mask BEFORE UPDATE ON mail_queue FOR EACH ROW
+			WHEN (NEW.task_id = '`+failing.String()+`' AND NEW.subject <> '') EXECUTE FUNCTION refuse_mask();`); err != nil {
+		t.Fatal(err)
+	}
+
+	first := maskNow(t, db)
+	if first.Sends != 1 || first.Rows != 5 || first.Failed != 1 || first.NotKept != 0 {
+		t.Fatalf("first run = %+v, want the second send's five rows masked and the first failed", first)
+	}
+	assertNoSecret(t, "the second send", keptContent(t, db, many), resetLink, loginCode)
+	if answer := contentAs(t, app, many, manyRow, contentSender, "skymail:access", "skymail:mails:read"); answer.Access != "masked" {
+		t.Errorf("second send: %+v, want masked", answer)
+	}
+	if answer := contentAs(t, app, failing, failingRow, contentSender, "skymail:access", "skymail:mails:read"); answer.Access != "pending" {
+		t.Errorf("failing send after one failure: %+v, want pending", answer)
+	}
+	if second := maskNow(t, db); second.Failed != 1 || second.NotKept != 0 {
+		t.Fatalf("second run = %+v, want one failure", second)
+	}
+	third := maskNow(t, db)
+	if third.Failed != 1 || third.NotKept != 1 {
+		t.Fatalf("third run = %+v, want the failing send emptied", third)
+	}
+	assertNoSecret(t, "the failing send", keptContent(t, db, failing), resetLink, loginCode, "Merhaba")
+	if answer := contentAs(t, app, failing, failingRow, contentSender, "skymail:access", "skymail:mails:read"); answer.Access != "not_kept" {
+		t.Errorf("failing send after three failures: %+v, want not_kept", answer)
+	}
+	if fourth := maskNow(t, db); fourth != (mailer.MaskResult{}) {
+		t.Errorf("fourth run = %+v, want nothing to do", fourth)
+	}
+}
+
+// A send found not sensitive is looked at once; made sensitive later, by its
+// template, it is looked at again and masked (#63 re-review R7).
+func TestASendFoundNotSensitiveIsLookedAtAgainWhenItsTemplateChanges(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	app := contentApp(t, db, now)
+	no := false
+	send := keycloakLike("core.welcome", contentSender, now.Add(-time.Hour))
+	send.sensitive = &no
+	task, row := seedRenderedSend(t, db, send)
+	if result := maskNow(t, db); result.NotSensitive != 1 || result.Sends != 0 {
+		t.Fatalf("first run = %+v, want one send found not sensitive", result)
+	}
+	if result := maskNow(t, db); result != (mailer.MaskResult{}) {
+		t.Fatalf("second run = %+v, want nothing to look at", result)
+	}
+	if _, err := db.Conn.Exec(context.Background(), `
+		UPDATE templates SET content_sensitive = true WHERE id = (SELECT template_id FROM mail_tasks WHERE id = $1)`, task); err != nil {
+		t.Fatal(err)
+	}
+	if result := maskNow(t, db); result.Sends != 1 {
+		t.Fatalf("after the template changed = %+v, want the send masked", result)
+	}
+	if answer := contentAs(t, app, task, row, contentSender, "skymail:access", "skymail:mails:read"); answer.Access != "masked" {
+		t.Errorf("content = %+v, want masked", answer)
+	}
+	assertNoSecret(t, "kept", keptContent(t, db, task), resetLink, loginCode)
 }

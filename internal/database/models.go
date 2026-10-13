@@ -324,6 +324,10 @@ type MailTask struct {
 	ContentMaskedAt        *time.Time `json:"content_masked_at"`
 	ContentMaskedBy        *string    `json:"content_masked_by"`
 	ContentMaskedVariables []string   `json:"content_masked_variables"`
+	// Whether the content sweep still has to decide on masking the send: true when queued and again when its template's content_sensitive or key changes; false once masked, emptied or found not sensitive.
+	ContentMaskDue bool `json:"content_mask_due"`
+	// How many times in a row masking the send failed; at 3 its content is emptied (not kept), so one send cannot hold the others back.
+	ContentMaskFailures int16 `json:"content_mask_failures"`
 }
 
 type MailingList struct {

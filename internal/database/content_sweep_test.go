@@ -189,3 +189,100 @@ func TestApprovedSendToAPersonIsBulk(t *testing.T) {
 		t.Fatal("a missing task is shown; want sensitive")
 	}
 }
+
+// Account erasure empties a recipient's row of a sensitive send while the
+// sweep is masking that send (#63 re-review R1): the sweep's reading waits for
+// the erasure and then does not take the emptied row, and its writing never
+// puts a mail back into an emptied row.
+func TestMaskingNeverWritesBackARowErasureEmptied(t *testing.T) {
+	db := lifecycleStore(t)
+	ctx := context.Background()
+	yes := true
+	task := seedSweepSend(t, db, sweepSend{sensitive: &yes, list: true, age: time.Hour, statuses: []string{"sent", "sent"}})
+	var ids []uuid.UUID
+	rows, err := db.Conn.Query(ctx, `SELECT id FROM mail_queue WHERE task_id = $1 ORDER BY id`, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+
+	// Erasure empties the rows, not committed yet.
+	erasure, err := db.Conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = erasure.Rollback(ctx) }()
+	if _, err := erasure.Exec(ctx, `UPDATE mail_queue SET recipient_full_name = 'Silinmiş kullanıcı', recipient_email = '',
+		subject = '', body = '', body_html = NULL WHERE task_id = $1`, task); err != nil {
+		t.Fatal(err)
+	}
+
+	sweep, err := db.Conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sweep.Rollback(ctx) }()
+	q := New(sweep)
+	sends, err := q.TakeSendToMask(ctx, []uuid.UUID{})
+	if err != nil || len(sends) != 1 || sends[0].ID != task || !sends[0].Sensitive {
+		t.Fatalf("sends %+v err %v", sends, err)
+	}
+	read := make(chan []ListQueueRowsToMaskRow, 1)
+	failed := make(chan error, 1)
+	go func() {
+		rows, err := q.ListQueueRowsToMask(ctx, ListQueueRowsToMaskParams{TaskID: task, RowLimit: 10})
+		if err != nil {
+			failed <- err
+			return
+		}
+		read <- rows
+	}()
+	select {
+	case rows := <-read:
+		t.Fatalf("the sweep read %d rows while erasure held them", len(rows))
+	case err := <-failed:
+		t.Fatal(err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := erasure.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case rows := <-read:
+		if len(rows) != 0 {
+			t.Fatalf("the sweep took %d rows erasure emptied", len(rows))
+		}
+	case err := <-failed:
+		t.Fatal(err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the sweep's reading never came back")
+	}
+
+	// A write from a reading made before the erasure does not land.
+	if err := q.SetMaskedQueueContent(ctx, SetMaskedQueueContentParams{
+		TaskID:   task,
+		Ids:      ids,
+		Subjects: []string{"Kodun ••••••", "Kodun ••••••"},
+		Bodies:   []string{"Merhaba Ayşe Kaya", "Merhaba Ayşe Kaya"},
+		Htmls:    []string{"<p>Merhaba Ayşe Kaya</p>", "<p>Merhaba Ayşe Kaya</p>"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sweep.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var held int
+	if err := db.Conn.QueryRow(ctx, `SELECT count(*) FROM mail_queue WHERE task_id = $1 AND (subject <> '' OR body <> '' OR body_html IS NOT NULL)`, task).Scan(&held); err != nil {
+		t.Fatal(err)
+	}
+	if held != 0 {
+		t.Fatalf("%d erased rows hold a mail again", held)
+	}
+}

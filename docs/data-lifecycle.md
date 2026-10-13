@@ -267,12 +267,21 @@ seed, is a row of `template_content_sensitive_events`: `actor_kind`,
 the actor with Silinmiş kullanıcı.
 
 **Masked when stored** (`internal/mailer/mask.go`, `mask_sweep.go`). Every
-five minutes, in every replica, the content sweep takes the sensitive sends
-that are done (none of their rows pending or processing, five minutes old)
-and replaces each row's subject, plain text and HTML with its masked copy and
-the send's `body_variables` with their masked values
-(`mail_tasks.content_masked_at`, `content_masked_by`,
-`content_masked_variables`). Every code, one-time link and IP address becomes
+five minutes, in every replica, the content sweep takes the sends still to be
+decided on (`mail_tasks.content_mask_due`, indexed) that are done (none of
+their rows pending or processing, five minutes old), **one send a
+transaction** (`FOR UPDATE SKIP LOCKED`). A send found not sensitive is not
+looked at again until its template's `content_sensitive` or key changes (a
+trigger makes its unmasked sends due again). A sensitive one has each row's
+subject, plain text and HTML replaced with its masked copy, 500 rows at a
+time, and its `body_variables` with their masked values
+(`content_masked_at`, `content_masked_by`, `content_masked_variables`). The
+rows are read `FOR UPDATE` and written only while they still hold a mail and
+the send is not masked or emptied: a row Account erasure empties meanwhile is
+never written back. A send whose masking fails is counted
+(`content_mask_failures`), tried once a run, and on its third failure emptied
+(`not_kept`, logged with the send's id, never its content), so it holds no
+other back and its raw mail is not kept. Every code, one-time link and IP address becomes
 `••••••`; in the HTML's text `<mark data-skymail-masked="">••••••</mark>`.
 Nothing is masked on reading. Two ways, the first when it can be proved:
 
