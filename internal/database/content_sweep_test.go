@@ -286,3 +286,56 @@ func TestMaskingNeverWritesBackARowErasureEmptied(t *testing.T) {
 		t.Fatalf("%d erased rows hold a mail again", held)
 	}
 }
+
+// The sweep marks a send not sensitive and, before it commits, the send's
+// template is made sensitive (#63 Ek 2, Y1): the template's write waits for
+// the sweep and makes the send due again, so it is masked.
+func TestATemplateMadeSensitiveWhileTheSweepDecidesMakesTheSendDue(t *testing.T) {
+	db := lifecycleStore(t)
+	ctx := context.Background()
+	no := false
+	task := seedSweepSend(t, db, sweepSend{sensitive: &no, list: true, age: time.Hour, statuses: []string{"sent"}})
+
+	sweep, err := db.Conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sweep.Rollback(ctx) }()
+	q := New(sweep)
+	sends, err := q.TakeSendToMask(ctx, []uuid.UUID{})
+	if err != nil || len(sends) != 1 || sends[0].Sensitive {
+		t.Fatalf("sends %+v err %v", sends, err)
+	}
+	if err := q.MarkSendNotDueForMasking(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := db.Conn.Exec(ctx, `UPDATE templates SET content_sensitive = true WHERE id = (SELECT template_id FROM mail_tasks WHERE id = $1)`, task)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("the template's write did not wait for the sweep (err %v)", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := sweep.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the template's write never came back")
+	}
+	var due, sensitive bool
+	if err := db.Conn.QueryRow(ctx, `SELECT content_mask_due, mail_task_content_sensitive(id) FROM mail_tasks WHERE id = $1`, task).Scan(&due, &sensitive); err != nil {
+		t.Fatal(err)
+	}
+	if !sensitive || !due {
+		t.Fatalf("after both: sensitive %v, due %v; want a sensitive send due to be masked", sensitive, due)
+	}
+}

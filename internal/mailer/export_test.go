@@ -2,6 +2,7 @@ package mailer
 
 import (
 	"context"
+	"github.com/google/uuid"
 	"time"
 
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
@@ -94,3 +95,10 @@ func BulkRoom(budget RateBudget, at time.Time, counted []database.MailSendWindow
 // PruneSendWindows drops the send windows m's budget reads no more, as the
 // reaper does.
 func PruneSendWindows(ctx context.Context, m Transactional) { m.(*mailerImpl).pruneSendWindows(ctx) }
+
+// SetMaskSendHook runs hook before each send the masking sweep masks, until
+// the returned function is called.
+func SetMaskSendHook(hook func(uuid.UUID)) func() {
+	maskSendHook = hook
+	return func() { maskSendHook = nil }
+}

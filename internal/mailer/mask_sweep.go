@@ -3,6 +3,7 @@ package mailer
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -12,12 +13,17 @@ import (
 // MaskOptions bound one run of MaskSensitiveContent; a zero field is its
 // default.
 type MaskOptions struct {
-	// How many sends one run looks at, at most (200).
-	MaxSends int
+	// How many sensitive sends one run masks or tries, at most (200). Sends
+	// found not sensitive do not count; NotSensitiveSends bounds them (5000).
+	MaxSends          int
+	NotSensitiveSends int
 	// How many rows of a send are read, masked and written at a time (500).
 	RowsPerChunk int
 	// After how many failures in a row a send's content is emptied (3).
 	MaxFailures int
+	// After how many sends failing one after another a run stops and counts
+	// none of its failures (5): the fault is SkyMail's, not the sends'.
+	BreakerFailures int
 }
 
 func (o MaskOptions) withDefaults() MaskOptions {
@@ -29,6 +35,12 @@ func (o MaskOptions) withDefaults() MaskOptions {
 	}
 	if o.MaxFailures <= 0 {
 		o.MaxFailures = 3
+	}
+	if o.NotSensitiveSends <= 0 {
+		o.NotSensitiveSends = 5000
+	}
+	if o.BreakerFailures <= 0 {
+		o.BreakerFailures = 5
 	}
 	return o
 }
@@ -45,7 +57,13 @@ type MaskResult struct {
 	NotSensitive int
 	// Sends whose masking failed in this run (each tried once).
 	Failed int
+	// The run stopped after BreakerFailures sends failed one after another,
+	// and counted none of its failures.
+	BreakerTripped bool
 }
+
+// maskSendHook, when set (tests), runs before each send is masked.
+var maskSendHook func(uuid.UUID)
 
 // MaskSensitiveContent looks at the sends still to be decided on
 // (content_mask_due) that are done — none of their rows is still to go out,
@@ -60,10 +78,15 @@ type MaskResult struct {
 func MaskSensitiveContent(ctx context.Context, db *database.Store, opts MaskOptions) (MaskResult, error) {
 	opts = opts.withDefaults()
 	var total MaskResult
+	// The sends that failed in this run, not to be taken again in it; their
+	// failures are counted once the run is over, unless the breaker trips.
+	var failed []failedSend
 	tried := []uuid.UUID{}
-	for len(tried) < opts.MaxSends {
+	inARow := 0
+	sensitive := 0
+	for sensitive < opts.MaxSends && total.NotSensitive < opts.NotSensitiveSends {
 		if err := ctx.Err(); err != nil {
-			return total, err
+			return total, countFailures(ctx, db, failed, opts, &total, err)
 		}
 		var send *database.TakeSendToMaskRow
 		var outcome sendOutcome
@@ -73,34 +96,74 @@ func MaskSensitiveContent(ctx context.Context, db *database.Store, opts MaskOpti
 				return err
 			}
 			send = &sends[0]
-			outcome, err = maskSend(ctx, q, *send, opts.RowsPerChunk)
+			outcome, err = maskSendSafely(ctx, q, *send, opts.RowsPerChunk)
 			return err
 		})
 		if send == nil {
-			return total, err
+			return total, countFailures(ctx, db, failed, opts, &total, err)
 		}
-		tried = append(tried, send.ID)
 		if err != nil {
 			if ctx.Err() != nil {
-				return total, ctx.Err()
+				return total, countFailures(ctx, db, failed, opts, &total, ctx.Err())
 			}
+			sensitive++
 			total.Failed++
-			if notKept := failSend(ctx, db, send.ID, opts.MaxFailures, err); notKept {
-				total.NotKept++
+			tried = append(tried, send.ID)
+			failed = append(failed, failedSend{id: send.ID, cause: err})
+			inARow++
+			if inARow >= opts.BreakerFailures {
+				total.BreakerTripped = true
+				log.Error().Err(err).Int("sends", inARow).
+					Msg("masking failed for several sends in a row: a fault across SkyMail; the run stops and counts none of its failures")
+				return total, nil
 			}
 			continue
 		}
+		inARow = 0
 		switch outcome.kind {
 		case outcomeMasked:
+			sensitive++
 			total.Sends++
 			total.Rows += outcome.rows
 		case outcomeNotKept:
+			sensitive++
 			total.NotKept++
 		case outcomeNotSensitive:
 			total.NotSensitive++
 		}
 	}
-	return total, nil
+	return total, countFailures(ctx, db, failed, opts, &total, nil)
+}
+
+type failedSend struct {
+	id    uuid.UUID
+	cause error
+}
+
+// countFailures counts the run's failures, each in a transaction of its own,
+// and returns err.
+func countFailures(ctx context.Context, db *database.Store, failed []failedSend, opts MaskOptions, total *MaskResult, err error) error {
+	for _, f := range failed {
+		if failSend(context.WithoutCancel(ctx), db, f.id, opts.MaxFailures, f.cause) {
+			total.NotKept++
+		}
+	}
+	return err
+}
+
+// maskSendSafely is maskSend with a panic turned into the send's failure: one
+// mail that breaks the masking never brings SkyMail down, nor the sweep that
+// runs as it starts.
+func maskSendSafely(ctx context.Context, q *database.Queries, send database.TakeSendToMaskRow, rowsPerChunk int) (outcome sendOutcome, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("masking the send panicked: %v", r)
+		}
+	}()
+	if maskSendHook != nil {
+		maskSendHook(send.ID)
+	}
+	return maskSend(ctx, q, send, rowsPerChunk)
 }
 
 // failSend counts a failed masking of a send; on its maxFailures-th it empties

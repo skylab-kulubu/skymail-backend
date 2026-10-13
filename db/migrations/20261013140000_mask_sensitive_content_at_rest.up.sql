@@ -118,7 +118,10 @@ SELECT COALESCE((SELECT template_key_content_locked(t.key)
 $$;
 
 -- A template made sensitive (or given a locked key) after a send: the send is
--- looked at again, and masked if it is sensitive now.
+-- looked at again, and masked if it is sensitive now. Every unmasked send of
+-- the template is updated, due or not: a sweep that is marking one not due
+-- holds its row, so this waits for it and writes due after it (a condition
+-- on content_mask_due would read the row as it was and skip it).
 CREATE FUNCTION mail_tasks_mask_due_on_template_change() RETURNS TRIGGER
     LANGUAGE plpgsql
     SET search_path = pg_catalog, public
@@ -128,7 +131,6 @@ BEGIN
     UPDATE mail_tasks
     SET content_mask_due = true
     WHERE template_id = NEW.id
-      AND NOT content_mask_due
       AND content_masked_at IS NULL
       AND content_cleared_at IS NULL;
     RETURN NULL;
@@ -141,6 +143,16 @@ CREATE TRIGGER templates_mask_due
     FOR EACH ROW
     WHEN (OLD.content_sensitive IS DISTINCT FROM NEW.content_sensitive OR OLD.key IS DISTINCT FROM NEW.key)
 EXECUTE FUNCTION mail_tasks_mask_due_on_template_change();
+
+-- The kept sends that are not sensitive need no look: only the sensitive ones
+-- are left due, so the first sweeps mask them instead of reading the club's
+-- whole history first.
+UPDATE mail_tasks
+SET content_mask_due = false
+WHERE content_mask_due
+  AND content_masked_at IS NULL
+  AND content_cleared_at IS NULL
+  AND NOT mail_task_content_sensitive(id);
 
 CREATE TABLE sent_content_views
 (

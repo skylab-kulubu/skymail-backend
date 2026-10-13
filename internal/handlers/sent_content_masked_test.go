@@ -576,3 +576,29 @@ func TestASendFoundNotSensitiveIsLookedAtAgainWhenItsTemplateChanges(t *testing.
 	}
 	assertNoSecret(t, "kept", keptContent(t, db, task), resetLink, loginCode)
 }
+
+// Sends found not sensitive do not count toward a run's limit: a run that
+// may mask one sensitive send masks it, however many shown sends come first
+// (#63 Ek 2, Y2).
+func TestShownSendsDoNotHoldAMaskingRunBack(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	app := contentApp(t, db, now)
+	no := false
+	for i := 0; i < 3; i++ {
+		shown := keycloakLike("core.welcome-"+strconv.Itoa(i), contentSender, now.Add(-3*time.Hour))
+		shown.sensitive = &no
+		seedRenderedSend(t, db, shown)
+	}
+	task, row := seedRenderedSend(t, db, keycloakLike("keycloak.reset-password", contentSender, now.Add(-time.Hour)))
+	result, err := mailer.MaskSensitiveContent(context.Background(), db, mailer.MaskOptions{MaxSends: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Sends != 1 || result.NotSensitive != 3 {
+		t.Fatalf("run = %+v, want three shown sends looked at and the sensitive one masked", result)
+	}
+	if answer := contentAs(t, app, task, row, contentSender, "skymail:access", "skymail:mails:read"); answer.Access != "masked" {
+		t.Errorf("content = %+v, want masked", answer)
+	}
+}

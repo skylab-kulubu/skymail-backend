@@ -278,10 +278,17 @@ time, and its `body_variables` with their masked values
 (`content_masked_at`, `content_masked_by`, `content_masked_variables`). The
 rows are read `FOR UPDATE` and written only while they still hold a mail and
 the send is not masked or emptied: a row Account erasure empties meanwhile is
-never written back. A send whose masking fails is counted
-(`content_mask_failures`), tried once a run, and on its third failure emptied
-(`not_kept`, logged with the send's id, never its content), so it holds no
-other back and its raw mail is not kept. Every code, one-time link and IP address becomes
+never written back. A send whose masking fails (a panic
+included) is counted (`content_mask_failures`), tried once a run, and on its
+third failure emptied (`not_kept`, logged with the send's id, never its
+content), so it holds no other back and its raw mail is not kept. When five
+sends fail one after another the fault is SkyMail's: the run stops and counts
+none of its failures. A run masks at most 200 sensitive sends; sends found
+not sensitive do not count (at most 5000 a run). The migration left due only
+the kept sends that were sensitive then, so the first runs do not read the
+history first. A template's `content_sensitive` or key change makes its
+unmasked sends due again (`templates_mask_due`, `idx_mail_tasks_template`),
+waiting for a sweep that is deciding on one of them. Every code, one-time link and IP address becomes
 `••••••`; in the HTML's text `<mark data-skymail-masked="">••••••</mark>`.
 Nothing is masked on reading. Two ways, the first when it can be proved:
 
