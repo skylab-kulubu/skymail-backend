@@ -719,21 +719,32 @@ func Render(subject, plainText, html string, variables []byte, recipient Recipie
 // render executes the three parts for one recipient. It is the one place a
 // send and a preview render, so a preview is what the send would queue.
 func (t mailTemplates) render(vars map[string]interface{}, recipient RecipientInfo) (Rendered, error) {
-	data := make(map[string]interface{}, len(vars)+2)
-	for k, v := range vars {
-		data[k] = v
+	return t.renderWith(vars, vars, recipient)
+}
+
+// renderWith renders the subject and the plain text with textVars and the
+// HTML with htmlVars: a masked mail (mask.go) marks what it hid in the HTML
+// only. A send passes the same variables to both.
+func (t mailTemplates) renderWith(textVars, htmlVars map[string]interface{}, recipient RecipientInfo) (Rendered, error) {
+	withRecipient := func(vars map[string]interface{}) map[string]interface{} {
+		data := make(map[string]interface{}, len(vars)+2)
+		for k, v := range vars {
+			data[k] = v
+		}
+		data["Email"] = recipient.Email
+		data["FullName"] = recipient.FullName
+		return data
 	}
-	data["Email"] = recipient.Email
-	data["FullName"] = recipient.FullName
+	textData, htmlData := withRecipient(textVars), withRecipient(htmlVars)
 
 	var subject, text, html bytes.Buffer
-	if err := t.subject.Execute(&subject, data); err != nil {
+	if err := t.subject.Execute(&subject, textData); err != nil {
 		return Rendered{}, fmt.Errorf("render %s: %w", PartSubject, err)
 	}
-	if err := t.text.Execute(&text, data); err != nil {
+	if err := t.text.Execute(&text, textData); err != nil {
 		return Rendered{}, fmt.Errorf("render %s: %w", PartPlainText, err)
 	}
-	if err := t.html.Execute(&html, data); err != nil {
+	if err := t.html.Execute(&html, htmlData); err != nil {
 		return Rendered{}, fmt.Errorf("render %s: %w", PartHTML, err)
 	}
 	return Rendered{Subject: subject.String(), PlainText: text.String(), HTML: html.String()}, nil

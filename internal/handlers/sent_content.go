@@ -9,6 +9,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 )
 
 // SystemMailsReadRole reads the content of single mail — the mail a service
@@ -26,15 +27,32 @@ const mailsWriteRole = "skymail:mails:write"
 const DefaultContentRetentionDays = MaxContentRetentionDays
 
 // ContentAccess is whether a caller may open a send's content, and if not,
-// why. A sensitive send's content is never shown, to anyone; a restricted one
-// is shown to others; an expired one is no longer kept.
+// why. A sensitive send's content is kept masked and shown so; a restricted
+// one is shown to others; an expired one is no longer kept.
 type ContentAccess string
 
 const (
-	ContentAvailable  ContentAccess = "available"
+	ContentAvailable ContentAccess = "available"
+	// ContentMasked is a sensitive send's content as the content sweep kept
+	// it: every code, one-time link and IP address replaced by •••••• (Yusuf,
+	// 2026-10-13: "kod/bağlantı maskeli, gerisi açık"). The raw value is not
+	// kept.
+	ContentMasked ContentAccess = "masked"
+	// ContentPending is a sensitive send the sweep has not masked yet: some of
+	// its rows are still to go out, or it went out in the last minutes. Its
+	// content is not shown until it is masked.
+	ContentPending ContentAccess = "pending"
+	// ContentSensitive is what a backend from before masking answered for a
+	// sensitive send; this one does not.
 	ContentSensitive  ContentAccess = "sensitive"
 	ContentRestricted ContentAccess = "restricted"
 	ContentExpired    ContentAccess = "expired"
+	// ContentNotKept is a sensitive send whose content was emptied within the
+	// retention period: from 2026-10-13 11:16 (skymail-backend #61) until
+	// sensitive content was kept masked, a sensitive send was emptied five
+	// minutes after it went out, the sends from before that among them; and a
+	// send the sweep could not mask for certain. It does not come back.
+	ContentNotKept ContentAccess = "not_kept"
 	// ContentUnavailable is one recipient's mail that holds nothing within the
 	// retention period: Account erasure emptied it, or it never rendered.
 	ContentUnavailable ContentAccess = "unavailable"
@@ -81,13 +99,12 @@ func (c contentCaller) has(role string) bool {
 
 // sendContent is what decides who may open a send's content.
 type sendContent struct {
-	// The template's key: a locked one is sensitive whatever its row says.
-	templateKey *string
-	sentBy      string
-	bulk        bool
-	sensitive   bool
-	createdAt   time.Time
-	clearedAt   *time.Time
+	sentBy    string
+	bulk      bool
+	sensitive bool
+	createdAt time.Time
+	clearedAt *time.Time
+	maskedAt  *time.Time
 }
 
 // mayRead is the rule (Yusuf, 2026-10-12): a send's own sender; for a send to
@@ -104,43 +121,64 @@ func (c contentCaller) mayRead(send sendContent) bool {
 	}
 }
 
-// contentAccess decides in this order: sensitive content is shown to no one,
-// so who asks does not matter; then who asks; then whether it is still kept.
+// contentAccess decides in this order: who asks; then whether the content is
+// still kept; then whether it is kept masked, still to be masked, or as sent.
+// sensitive is mail_task_content_sensitive(), which counts the locked keys.
 func (h *mailHandlerImpl) contentAccess(caller contentCaller, send sendContent) (ContentAccess, *time.Time) {
-	if send.sensitive || ContentSensitiveLocked(send.templateKey) {
-		return ContentSensitive, nil
-	}
 	if !caller.mayRead(send) {
 		return ContentRestricted, nil
 	}
 	expires := send.createdAt.Add(h.retention())
-	if send.clearedAt != nil || !h.now().Before(expires) {
+	if !h.now().Before(expires) {
 		return ContentExpired, nil
 	}
-	return ContentAvailable, &expires
+	if send.clearedAt != nil {
+		// Emptied within the retention period: a sensitive send by the sweep
+		// that emptied those at once until 2026-10-13, or one it could not
+		// mask; any other by a shorter MAIL_CONTENT_RETENTION_DAYS than now.
+		if send.sensitive {
+			return ContentNotKept, nil
+		}
+		return ContentExpired, nil
+	}
+	switch {
+	case send.maskedAt != nil:
+		return ContentMasked, &expires
+	case send.sensitive:
+		return ContentPending, nil
+	default:
+		return ContentAvailable, &expires
+	}
 }
 
-// SentMailContent is one recipient's mail as it was rendered and sent:
-// subject, plain text and HTML, each null unless access is available.
+// SentMailContent is one recipient's mail as it is kept: subject, plain text
+// and HTML, each null unless access is available or masked.
 type SentMailContent struct {
 	ID     uuid.UUID     `json:"id"`
 	TaskID uuid.UUID     `json:"task_id"`
-	Access ContentAccess `json:"access" enums:"available,sensitive,restricted,expired,unavailable"`
+	Access ContentAccess `json:"access" enums:"available,masked,pending,restricted,expired,not_kept,unavailable"`
 	// The subject as the recipient's inbox shows it.
 	Subject *string `json:"subject"`
 	// The plain-text part.
 	PlainText *string `json:"plain_text"`
-	// The HTML part, as sent: show it only in a sandboxed frame, with remote
-	// content blocked unless the operator asks for it.
+	// The HTML part: show it only in a sandboxed frame, with remote content
+	// blocked unless the operator asks for it. Masked, each masked value in its
+	// text is <mark data-skymail-masked="">••••••</mark>.
 	HTML *string `json:"html"`
 	// When the content sweep empties it; null when it is not shown.
 	ExpiresAt *time.Time `json:"expires_at"`
+	// Masked content only: the send's variables masked, by their path (link,
+	// code, answers[0].url), and how — variables (rendered again with them
+	// masked) or patterns (every link, IP address, long number and code in the
+	// stored mail masked). Null otherwise.
+	MaskedVariables []string `json:"masked_variables"`
+	MaskedBy        *string  `json:"masked_by" enums:"variables,patterns"`
 }
 
 // GetQueueItemContent godoc
 //
-//	@Summary		Get one recipient's mail as sent
-//	@Description	The subject, plain text and HTML a recipient of the send was sent, rendered for them. access says whether they are shown: sensitive — the template carries a code or a one-time link, or it is a single mail whose template does not say it may be shown — is never shown to anyone; restricted is shown to the send's sender, for a send to a list, a group or an approved request to holders of skymail:mails:write, and to holders of skymail:system-mails:read; expired is past MAIL_CONTENT_RETENTION_DAYS (3650 by default) and no longer kept; unavailable holds nothing (Account erasure emptied it, or it never rendered). The fields are null unless access is available. The HTML may reach the network (images, a tracking pixel): show it sandboxed, with remote content blocked by default.
+//	@Summary		Get one recipient's mail as kept
+//	@Description	The subject, plain text and HTML a recipient of the send was sent, as SkyMail keeps it. access says whether and how they are shown: available — as sent; masked — the send is sensitive (its template carries a code or a one-time link, or said so when it was sent, or it is a single mail whose template does not say it may be shown), and the content sweep replaced every code, one-time link and IP address with •••••• once the send was done (masked_variables, masked_by); the unmasked mail is not kept, and each opening is recorded in sent_content_views; pending — sensitive and not masked yet (a row still to go out, or sent in the last minutes): not shown; restricted — shown to the send's sender, for a send to a list, a group or an approved request to holders of skymail:mails:write, and to holders of skymail:system-mails:read; expired — past MAIL_CONTENT_RETENTION_DAYS (3650 by default) and no longer kept; not_kept — a sensitive send whose content was emptied (before sensitive content was kept, 2026-10-13, or because it could not be masked for certain), which does not come back; unavailable — holds nothing (Account erasure emptied it, or it never rendered). The fields are null unless access is available or masked. The HTML may reach the network (images, a tracking pixel): show it sandboxed, with remote content blocked by default. Never cached.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id		path		string	true	"Task ID"
@@ -152,6 +190,7 @@ type SentMailContent struct {
 //	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/mail_tasks/{id}/queue/{itemId}/content [get]
 func (h *mailHandlerImpl) GetQueueItemContent(c fiber.Ctx) error {
+	c.Set(fiber.HeaderCacheControl, "no-store")
 	taskID, err := uuid.Parse(c.Params("id"))
 	if err != nil {
 		return err
@@ -167,20 +206,43 @@ func (h *mailHandlerImpl) GetQueueItemContent(c fiber.Ctx) error {
 	}
 
 	access, expires := h.contentAccess(contentCallerOf(c), sendContent{
-		templateKey: row.TemplateKey,
-		sentBy:      row.SentBy,
-		bulk:        row.Bulk,
-		sensitive:   row.ContentSensitive,
-		createdAt:   row.TaskCreatedAt,
-		clearedAt:   row.ContentClearedAt,
+		sentBy:    row.SentBy,
+		bulk:      row.Bulk,
+		sensitive: row.ContentSensitive,
+		createdAt: row.TaskCreatedAt,
+		clearedAt: row.ContentClearedAt,
+		maskedAt:  row.ContentMaskedAt,
 	})
 	answer := SentMailContent{ID: row.ID, TaskID: row.TaskID, Access: access}
-	if access != ContentAvailable {
+	if access != ContentAvailable && access != ContentMasked {
 		return c.JSON(answer)
 	}
 	if row.Subject == "" && row.Body == "" && (row.BodyHtml == nil || *row.BodyHtml == "") {
 		answer.Access = ContentUnavailable
 		return c.JSON(answer)
+	}
+	if access == ContentMasked {
+		answer.MaskedVariables = row.ContentMaskedVariables
+		if answer.MaskedVariables == nil {
+			answer.MaskedVariables = []string{}
+		}
+		answer.MaskedBy = row.ContentMaskedBy
+		// No content leaves without the record of who opened it.
+		actor := versionAuthor(c, database.TemplateAuthorKindOperator)
+		maskedBy := string(mailer.MaskedByPatterns)
+		if row.ContentMaskedBy != nil {
+			maskedBy = *row.ContentMaskedBy
+		}
+		if err := h.db.RecordSentContentView(c.Context(), database.RecordSentContentViewParams{
+			TaskID:          row.TaskID,
+			QueueItemID:     row.ID,
+			ActorSub:        actor.Sub,
+			ActorName:       actor.Name,
+			MaskedBy:        maskedBy,
+			MaskedVariables: answer.MaskedVariables,
+		}); err != nil {
+			return err
+		}
 	}
 	answer.Subject = &row.Subject
 	answer.PlainText = &row.Body
