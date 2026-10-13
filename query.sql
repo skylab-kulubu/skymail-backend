@@ -11,7 +11,7 @@ WHERE key = $1
 
 -- name: UpsertTemplateByKey :one
 INSERT INTO templates (key, name, subject, html_content, plain_text_content, react_email_content, system,
-                       contract_required_variables)
+                       contract_required_variables, content_sensitive)
 VALUES (sqlc.arg(key)::text,
         sqlc.arg(name)::text,
         sqlc.arg(subject)::text,
@@ -19,7 +19,8 @@ VALUES (sqlc.arg(key)::text,
         sqlc.arg(plain_text_content)::text,
         sqlc.arg(react_email_content)::text,
         sqlc.arg(system)::boolean,
-        COALESCE(sqlc.narg(contract_required_variables)::jsonb, '[]'))
+        COALESCE(sqlc.narg(contract_required_variables)::jsonb, '[]'),
+        sqlc.narg(content_sensitive)::boolean)
 -- The seed writes everything it sends, the subject included. It is the
 -- caller that keeps an operator's change — the subject too — from being
 -- overwritten: it refuses the seed before it gets here unless it is forced
@@ -31,6 +32,9 @@ ON CONFLICT (key) DO UPDATE
         plain_text_content  = EXCLUDED.plain_text_content,
         react_email_content = EXCLUDED.react_email_content,
         system              = EXCLUDED.system,
+        -- Whether a send's content is shown is the seed's too: a seed that
+        -- says (true or false) sets it, a seed that does not (NULL) leaves it.
+        content_sensitive   = COALESCE(sqlc.narg(content_sensitive)::boolean, templates.content_sensitive),
         -- The contract set is the seed's, like the key: a seed that sends one
         -- replaces it (sorted, each name once, by the caller), a seed that
         -- sends none (NULL) leaves it. A name the contract now declares leaves
@@ -145,6 +149,34 @@ RETURNING *;
 -- already in either set changes nothing: one the contract declares is required
 -- already, and stays the contract's. Takes the row's lock, so the caller can
 -- check the body against the sets it returns before committing.
+-- Sets whether the content of the template's sends is shown, as the panel
+-- does; like a Required variable, a setting of the row: no version, and
+-- updated_at stays. An archived template is not found.
+-- name: SetTemplateContentSensitive :one
+UPDATE templates
+SET content_sensitive = sqlc.arg(content_sensitive)::boolean
+WHERE id = sqlc.arg(id)
+  AND archived_at IS NULL
+RETURNING *;
+
+-- name: RecordTemplateContentSensitiveEvent :exec
+INSERT INTO template_content_sensitive_events (template_id, actor_kind, actor_sub, actor_name, old_value, new_value)
+VALUES (sqlc.arg(template_id), sqlc.arg(actor_kind), sqlc.narg(actor_sub), sqlc.narg(actor_name),
+        sqlc.narg(old_value), sqlc.narg(new_value));
+
+-- A template's content_sensitive changes, newest first.
+-- name: ListTemplateContentSensitiveEvents :many
+SELECT id, template_id, actor_kind, actor_sub, actor_name, old_value, new_value, created_at
+FROM template_content_sensitive_events
+WHERE template_id = sqlc.arg(template_id)
+ORDER BY created_at DESC, id DESC
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
+
+-- name: CountTemplateContentSensitiveEvents :one
+SELECT count(*)
+FROM template_content_sensitive_events
+WHERE template_id = sqlc.arg(template_id);
+
 -- name: AddOperatorRequiredVariable :one
 UPDATE templates
 SET operator_required_variables = CASE
@@ -893,6 +925,68 @@ WHERE task_id = $1
   AND (sqlc.narg(status)::mail_queue_status IS NULL OR status = sqlc.narg(status)::mail_queue_status);
 
 
+-- One recipient's mail as it was rendered and sent, with what decides who may
+-- see it: the send's sender, whether it is bulk, whether its content is
+-- sensitive and whether the sweep has emptied it.
+-- name: GetMailQueueItemContent :one
+SELECT q.id,
+       q.task_id,
+       q.status,
+       q.subject,
+       q.body,
+       q.body_html,
+       q.created_at,
+       mt.sent_by,
+       mt.created_at                               AS task_created_at,
+       mt.content_cleared_at,
+       mail_task_bulk(mt.id)::boolean              AS bulk,
+       mail_task_content_sensitive(mt.id)::boolean AS content_sensitive,
+       t.key                                       AS template_key
+FROM mail_queue q
+         JOIN mail_tasks mt ON mt.id = q.task_id
+         LEFT JOIN templates t ON t.id = mt.template_id
+WHERE q.task_id = sqlc.arg(task_id)
+  AND q.id = sqlc.arg(id);
+
+-- Empties the content of up to batch_size sends none of whose rows is still to
+-- go out (pending or processing): a sensitive one five minutes after it was
+-- created, any other once it is older than retention_days. Their rows' subject and body become '' and
+-- body_html NULL, as Account erasure leaves a row; the send's body_variables
+-- become {}; content_cleared_at says when. Status, recipient, error and counts
+-- stay. SKIP LOCKED lets a second replica's sweep take other sends. Returns
+-- the sends emptied.
+-- name: ClearDueMailContent :many
+WITH due AS (SELECT mt.id
+             FROM mail_tasks mt
+             WHERE mt.content_cleared_at IS NULL
+               -- Five minutes for the rows to be written: an image from before
+               -- the send's task and rows were written in one transaction
+               -- (#58) writes the task first, and a send emptied before its
+               -- rows exist would keep them.
+               AND mt.created_at < now() - INTERVAL '5 minutes'
+               AND (mt.created_at < now() - make_interval(days => sqlc.arg(retention_days)::int)
+                 OR mail_task_content_sensitive(mt.id))
+               AND NOT EXISTS (SELECT 1
+                               FROM mail_queue q
+                               WHERE q.task_id = mt.id
+                                 AND q.status IN ('pending', 'processing'))
+             ORDER BY mt.created_at
+             LIMIT sqlc.arg(batch_size)::int FOR UPDATE OF mt SKIP LOCKED),
+     rows AS (UPDATE mail_queue q
+         SET subject   = '',
+             body      = '',
+             body_html = NULL
+         FROM due
+         WHERE q.task_id = due.id
+           AND (q.subject <> '' OR q.body <> '' OR q.body_html IS NOT NULL)
+         RETURNING q.task_id)
+UPDATE mail_tasks mt
+SET body_variables     = '{}',
+    content_cleared_at = now()
+FROM due
+WHERE mt.id = due.id
+RETURNING mt.id, (SELECT count(*) FROM rows WHERE rows.task_id = mt.id) AS rows_cleared;
+
 -- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables)
 SELECT sqlc.arg(sent_by), sqlc.arg(template_id), sqlc.narg(mail_list_id), sqlc.arg(body_variables)
@@ -980,7 +1074,10 @@ SELECT mt.id,
        rc.sent,
        rc.failed,
        single.recipient_full_name   AS single_recipient_full_name,
-       single.recipient_email       AS single_recipient_email
+       single.recipient_email       AS single_recipient_email,
+       mail_task_bulk(mt.id)::boolean              AS bulk,
+       mail_task_content_sensitive(mt.id)::boolean AS content_sensitive,
+       mt.content_cleared_at
 FROM page
          JOIN mail_tasks mt ON mt.id = page.id
          LEFT JOIN templates t ON mt.template_id = t.id

@@ -43,6 +43,9 @@ VALUES ('11000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-0000000
         '` + otherSub + `', 'Ayşe Kaya', '2026-09-02T10:00:00Z', NULL);
 UPDATE templates SET published_version_id = '11000000-0000-4000-8000-000000000001'
 WHERE id = '10000000-0000-4000-8000-000000000001';
+INSERT INTO template_content_sensitive_events (id, template_id, actor_kind, actor_sub, actor_name, old_value, new_value) VALUES
+    ('12000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'operator', '` + erasedSub + `', 'Deniz Yılmaz', NULL, false),
+    ('12000000-0000-4000-8000-000000000002', '10000000-0000-4000-8000-000000000001', 'operator', '` + otherSub + `', 'Ayşe Kaya', false, true);
 INSERT INTO templates (id, name, subject, html_content, plain_text_content, react_email_content, archived_at, archived_by)
 VALUES ('10000000-0000-4000-8000-000000000002', 'Eski', 'Eski', '<p>x</p>', 'x', '', '2026-09-03T10:00:00Z', '` + erasedSub + `'),
        ('10000000-0000-4000-8000-000000000003', 'Eski 2', 'Eski 2', '<p>x</p>', 'x', '', '2026-09-03T10:00:00Z', '` + otherSub + `');
@@ -166,17 +169,18 @@ INSERT INTO mail_approval_events (id, approval_id, seq, kind, actor_sub, actor_n
 // erasureTables names every table erasure may touch and the key each row is
 // told apart by.
 var erasureTables = map[string]string{
-	"recipients":               "id::text",
-	"mailing_list_recipients":  "mail_list_id::text || '/' || recipient_id::text",
-	"templates":                "id::text",
-	"mailing_lists":            "id::text",
-	"template_versions":        "id::text",
-	"mail_tasks":               "id::text",
-	"mail_queue":               "id::text",
-	"mail_approvals":           "id::text",
-	"mail_approval_recipients": "approval_id::text || '/' || position::text",
-	"mail_approval_tasks":      "approval_id::text || '/' || position::text",
-	"mail_approval_events":     "id::text",
+	"recipients":                        "id::text",
+	"mailing_list_recipients":           "mail_list_id::text || '/' || recipient_id::text",
+	"templates":                         "id::text",
+	"mailing_lists":                     "id::text",
+	"template_versions":                 "id::text",
+	"template_content_sensitive_events": "id::text",
+	"mail_tasks":                        "id::text",
+	"mail_queue":                        "id::text",
+	"mail_approvals":                    "id::text",
+	"mail_approval_recipients":          "approval_id::text || '/' || position::text",
+	"mail_approval_tasks":               "approval_id::text || '/' || position::text",
+	"mail_approval_events":              "id::text",
 }
 
 type tableRows map[string]map[string]string
@@ -289,7 +293,7 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 		AccountErasureQueueRowsCleared:          2 + 1,
 		AccountErasureBodiesCleared:             3,
 		AccountErasureVariablesCleared:          4 + 1,
-		AccountErasureActorColumnsReplaced:      9,
+		AccountErasureActorColumnsReplaced:      10,
 		AccountErasureNotesCleared:              3,
 		AccountErasureChangesCleared:            2,
 		AccountErasureApprovalRecipientsRemoved: 5,
@@ -306,9 +310,10 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 			"20000000-0000-4000-8000-000000000001/30000000-0000-4000-8000-000000000001",
 			"20000000-0000-4000-8000-000000000002/30000000-0000-4000-8000-000000000002",
 		},
-		"templates":         {"10000000-0000-4000-8000-000000000002"},
-		"mailing_lists":     {"20000000-0000-4000-8000-000000000003"},
-		"template_versions": {"11000000-0000-4000-8000-000000000001"},
+		"templates":                         {"10000000-0000-4000-8000-000000000002"},
+		"mailing_lists":                     {"20000000-0000-4000-8000-000000000003"},
+		"template_versions":                 {"11000000-0000-4000-8000-000000000001"},
+		"template_content_sensitive_events": {"12000000-0000-4000-8000-000000000001"},
 		"mail_tasks": {
 			"40000000-0000-4000-8000-00000000000a", "40000000-0000-4000-8000-00000000000b",
 			"40000000-0000-4000-8000-0000000000b2", "40000000-0000-4000-8000-00000000000c",
@@ -354,6 +359,8 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 			{`SELECT archived_by FROM mailing_lists WHERE id = '20000000-0000-4000-8000-000000000003'`, DeletedUserSubject},
 			{`SELECT author_sub FROM template_versions WHERE id = '11000000-0000-4000-8000-000000000001'`, DeletedUserSubject},
 			{`SELECT author_name FROM template_versions WHERE id = '11000000-0000-4000-8000-000000000001'`, DeletedUserName},
+			{`SELECT actor_sub FROM template_content_sensitive_events WHERE id = '12000000-0000-4000-8000-000000000001'`, DeletedUserSubject},
+			{`SELECT actor_name FROM template_content_sensitive_events WHERE id = '12000000-0000-4000-8000-000000000001'`, DeletedUserName},
 			{`SELECT actor_sub FROM mail_approval_events WHERE id = '70000000-0000-4000-8000-000000000011'`, DeletedUserSubject},
 			{`SELECT actor_name FROM mail_approval_events WHERE id = '70000000-0000-4000-8000-000000000071'`, DeletedUserName},
 		} {
@@ -733,7 +740,7 @@ func TestEraseAccountWithoutAddressesStillReplacesTheSubject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if counts := receiptCounts(t, receipt); counts[AccountErasureActorColumnsReplaced] != 9 || counts[AccountErasureRecipientsDeleted] != 0 {
+	if counts := receiptCounts(t, receipt); counts[AccountErasureActorColumnsReplaced] != 10 || counts[AccountErasureRecipientsDeleted] != 0 {
 		t.Errorf("counts = %v", counts)
 	}
 	// The names the subject's own rows carry are still searched for.

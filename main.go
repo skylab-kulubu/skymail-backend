@@ -113,6 +113,11 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid v1 token audience configuration")
 	}
+	// How long a send's content is kept and shown (docs/data-lifecycle.md).
+	contentRetentionDays, err := handlers.ContentRetentionDaysFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid mail content retention configuration")
+	}
 	if migrationConfig.Mode == migrations.ModeApply {
 		// A stop signal ends a wait for another process's migrations, never
 		// a migration under way.
@@ -184,7 +189,7 @@ func main() {
 
 	templateHandler := handlers.NewTemplateHandler(db)
 	listHandler := handlers.NewListHandler(db, kcClient)
-	mailHandler := handlers.NewMailHandler(db, mailerService, kcClient)
+	mailHandler := handlers.NewMailHandler(db, mailerService, kcClient, handlers.WithContentRetentionDays(contentRetentionDays))
 	approvalHandler := handlers.NewMailApprovalHandler(db, mailerService, kcClient, handlers.MailApprovalOptions{
 		ClientID: cfg.KeycloakClientID,
 		UIURL:    config.Value("SKYMAIL_UI_URL"),
@@ -240,6 +245,11 @@ func main() {
 		defer close(approvalsStopped)
 		expireMailApprovals(workers, approvalHandler, time.Minute)
 	}()
+	contentSweepStopped := make(chan struct{})
+	go func() {
+		defer close(contentSweepStopped)
+		clearMailContent(workers, db, contentRetentionDays, contentSweepInterval)
+	}()
 
 	addr := fmt.Sprintf(":%d", 3000)
 	if cfg.AppPort != 0 {
@@ -264,6 +274,7 @@ func main() {
 		StopWorkers:  stopWorkers,
 		Wait: []stopping{
 			{name: "the mail approval expiry sweep", done: approvalsStopped},
+			{name: "the mail content sweep", done: contentSweepStopped},
 			{name: "the mailer's sends", done: mailerService.Stopped()},
 		},
 		Close: closers,
@@ -303,6 +314,8 @@ func registerTemplateRoutes(api fiber.Router, auth middlewares.AuthMiddleware, t
 	templates.Post("/:id/versions/:versionId/publish", auth.RequireAnyPermission("skymail:templates:write"), template.PublishTemplateVersion)
 	templates.Post("/:id/versions/:versionId/restore", auth.RequireAnyPermission("skymail:templates:write"), template.RestoreTemplateVersion)
 	templates.Post("/:id/versions/:versionId/discard", auth.RequireAnyPermission("skymail:templates:write"), template.DiscardTemplateVersion)
+	templates.Put("/:id/content-sensitive", auth.RequireAnyPermission("skymail:templates:write"), template.SetContentSensitive)
+	templates.Get("/:id/content-sensitive/events", auth.RequireAnyPermission("skymail:templates:read"), template.ListContentSensitiveEvents)
 }
 
 func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, mail handlers.MailHandler) {
@@ -314,6 +327,44 @@ func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, m
 	tasks.Get("/summary", auth.RequireAnyPermission("skymail:mails:read"), mail.GetSummary)
 	tasks.Get("/:id", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTask)
 	tasks.Get("/:id/queue", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTaskQueueItems)
+	// Who may see the content itself the handler decides from the send and
+	// the caller's roles (handlers.SystemMailsReadRole).
+	tasks.Get("/:id/queue/:itemId/content", auth.RequireAnyPermission("skymail:mails:read"), mail.GetQueueItemContent)
+}
+
+// contentSweepInterval is how often the content sweep runs: a sensitive
+// send's content is gone within it of its last row going out.
+const contentSweepInterval = 5 * time.Minute
+
+// contentSweepBatch is how many sends one statement of the sweep empties. A
+// list send can hold thousands of rows with their HTML, so the batch is kept
+// small: the first run, which empties every sensitive send there is, is many
+// short transactions rather than a few long ones.
+const contentSweepBatch = 20
+
+// clearMailContent empties the content of the sends due — a sensitive one
+// once none of its rows is still to go out, any other past retentionDays — at
+// startup and every interval after (docs/data-lifecycle.md, sent mail
+// content). It runs while the sender is paused too: it touches no row still
+// to go out. It logs counts only.
+func clearMailContent(ctx context.Context, db *database.Store, retentionDays int, interval time.Duration) {
+	log.Info().Int("retention_days", retentionDays).Msg("mail content sweep (MAIL_CONTENT_RETENTION_DAYS)")
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		sends, rows, err := db.ClearMailContent(ctx, retentionDays, contentSweepBatch)
+		if err != nil && ctx.Err() == nil {
+			log.Error().Err(err).Msg("mail content sweep failed")
+		}
+		if sends > 0 {
+			log.Info().Int("sends", sends).Int64("rows", rows).Msg("emptied the content of sends past retention or sensitive")
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // registerMailApprovalRoutes serves Mail onayı. Anyone who can use SkyMail —

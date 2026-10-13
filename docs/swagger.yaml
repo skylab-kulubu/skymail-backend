@@ -100,6 +100,8 @@ components:
       - SeedConflictNewerOperatorVersion
       - SeedConflictOperatorSubject
     database.VersionAuthor:
+      description: 'Who: an operator in the panel, or the Template seed; sub and name
+        as their token carried them.'
       properties:
         kind:
           description: 'operator: written in SkyMail; template_seed: written by the
@@ -117,6 +119,45 @@ components:
             Null when not known: the first versions, made from templates written before
             versions were kept.'
           type: string
+      type: object
+    handlers.ContentAccess:
+      description: Whether the caller may open the send's content (GET /mail_tasks/{id}/queue/{itemId}/content),
+        and if not why.
+      enum:
+      - available
+      - sensitive
+      - restricted
+      - expired
+      - unavailable
+      - available
+      - sensitive
+      - restricted
+      - expired
+      - available
+      - sensitive
+      - restricted
+      - expired
+      - unavailable
+      type: string
+      x-enum-varnames:
+      - ContentAvailable
+      - ContentSensitive
+      - ContentRestricted
+      - ContentExpired
+      - ContentUnavailable
+    handlers.ContentSensitiveEvent:
+      properties:
+        actor:
+          $ref: '#/components/schemas/database.VersionAuthor'
+        created_at:
+          type: string
+        id:
+          type: string
+        new_value:
+          type: boolean
+        old_value:
+          description: The value before and after; null is "left to the kind of send".
+          type: boolean
       type: object
     handlers.DailySent:
       properties:
@@ -414,6 +455,12 @@ components:
             type: integer
           type: array
           uniqueItems: false
+        content_access:
+          $ref: '#/components/schemas/handlers.ContentAccess'
+        content_expires_at:
+          description: When the content sweep empties the send's content; null unless
+            content_access is available.
+          type: string
         created_at:
           type: string
         id:
@@ -516,6 +563,17 @@ components:
           type: string
         archived_by:
           type: string
+        content_sensitive:
+          description: 'Whether the content of a send of this template is never shown:
+            true for mail carrying a code or a one-time link, false for mail that
+            may be shown, null to leave it to the kind of send (a single mail hidden,
+            a send to many shown). Set by the Template seed.'
+          type: boolean
+        content_sensitive_locked:
+          description: 'The template''s mail carries a credential (a code, a one-time
+            or account link, a ticket''s code): its content stays hidden, and content_sensitive
+            cannot be set to false.'
+          type: boolean
         contract_required_variables:
           description: Required variables from the sending service's contract, sorted
             by name, each with why the mail needs it. Written only by the Template
@@ -645,12 +703,46 @@ components:
           example: Europe/Istanbul
           type: string
       type: object
+    handlers.SentMailContent:
+      properties:
+        access:
+          $ref: '#/components/schemas/handlers.ContentAccess'
+        expires_at:
+          description: When the content sweep empties it; null when it is not shown.
+          type: string
+        html:
+          description: |-
+            The HTML part, as sent: show it only in a sandboxed frame, with remote
+            content blocked unless the operator asks for it.
+          type: string
+        id:
+          type: string
+        plain_text:
+          description: The plain-text part.
+          type: string
+        subject:
+          description: The subject as the recipient's inbox shows it.
+          type: string
+        task_id:
+          type: string
+      type: object
     handlers.Template:
       properties:
         archived_at:
           type: string
         archived_by:
           type: string
+        content_sensitive:
+          description: 'Whether the content of a send of this template is never shown:
+            true for mail carrying a code or a one-time link, false for mail that
+            may be shown, null to leave it to the kind of send (a single mail hidden,
+            a send to many shown). Set by the Template seed.'
+          type: boolean
+        content_sensitive_locked:
+          description: 'The template''s mail carries a credential (a code, a one-time
+            or account link, a ticket''s code): its content stays hidden, and content_sensitive
+            cannot be set to false.'
+          type: boolean
         contract_required_variables:
           description: Required variables from the sending service's contract, sorted
             by name, each with why the mail needs it. Written only by the Template
@@ -1038,6 +1130,15 @@ components:
       required:
       - recipient_email
       type: object
+    requests.SetContentSensitive:
+      properties:
+        content_sensitive:
+          description: true hides the content of the template's sends from everyone;
+            false shows it to those who may read a send's content.
+          type: boolean
+      required:
+      - content_sensitive
+      type: object
     requests.SubmitMailApproval:
       properties:
         body_variables:
@@ -1090,6 +1191,13 @@ components:
       type: object
     requests.UpsertTemplateByKey:
       properties:
+        content_sensitive:
+          description: 'Whether the content of this template''s sends is never shown
+            in SkyMail: true for mail that carries a code or a one-time link, false
+            for mail whose content may be shown. Leave it out (or null) to keep what
+            the template has; a template that never said leaves it to the kind of
+            send, a single mail hidden and a send to many shown.'
+          type: boolean
         contract_required_variables:
           description: The Required variables the sending service's contract declares,
             which the body must keep referencing, each with why the mail needs it.
@@ -1924,6 +2032,66 @@ paths:
       summary: Get mail queue items for a task
       tags:
       - Mail
+  /mail_tasks/{id}/queue/{itemId}/content:
+    get:
+      description: 'The subject, plain text and HTML a recipient of the send was sent,
+        rendered for them. access says whether they are shown: sensitive — the template
+        carries a code or a one-time link, or it is a single mail whose template does
+        not say it may be shown — is never shown to anyone; restricted is shown to
+        the send''s sender, for a send to a list, a group or an approved request to
+        holders of skymail:mails:write, and to holders of skymail:system-mails:read;
+        expired is past MAIL_CONTENT_RETENTION_DAYS (3650 by default) and no longer
+        kept; unavailable holds nothing (Account erasure emptied it, or it never rendered).
+        The fields are null unless access is available. The HTML may reach the network
+        (images, a tracking pixel): show it sandboxed, with remote content blocked
+        by default.'
+      parameters:
+      - description: Task ID
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      - description: Queue row ID
+        in: path
+        name: itemId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.SentMailContent'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Internal Server Error
+      summary: Get one recipient's mail as sent
+      tags:
+      - Mail
   /mail_tasks/single:
     post:
       description: Send a single email to a specific recipient using a template.
@@ -2579,6 +2747,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/apperrors.AppError'
           description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'template.system_key_immutable or template.sensitive_key_immutable:
+            the key of a system template, or of one whose mail carries a credential,
+            cannot be changed or removed'
         "422":
           content:
             application/json:
@@ -2594,6 +2770,127 @@ paths:
                 $ref: '#/components/schemas/apperrors.AppError'
           description: Internal Server Error
       summary: Update an email template
+      tags:
+      - Templates
+  /templates/{id}/content-sensitive:
+    put:
+      description: 'Sets the template''s content_sensitive, as the panel''s switch
+        does: true hides the content of its sends from everyone, false lets those
+        who may read a send''s content see it. A template whose mail carries a credential
+        (keycloak.*, account.*, core.contact-consent-confirm, event.ticket-created,
+        event.reminder) is locked sensitive and answers 409 template.content_sensitive_locked
+        to false. Each change is recorded with who made it and the value before and
+        after (GET /templates/{id}/content-sensitive/events); setting the value the
+        template has records nothing. No version is written and updated_at stays.
+        An archived template is 404.'
+      parameters:
+      - description: Template ID
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/requests.SetContentSensitive'
+                description: The new value
+                summary: body
+        description: The new value
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.Template'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'template.content_sensitive_locked: the template carries a
+            credential and stays hidden; params.key'
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Internal Server Error
+      summary: Set whether a template's sends show their content
+      tags:
+      - Templates
+  /templates/{id}/content-sensitive/events:
+    get:
+      description: 'Every change of whether the template''s sends show their content,
+        newest first: who (an operator or the Template seed), when, before and after.
+        Archived templates included.'
+      parameters:
+      - description: Template ID
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      - description: Start index
+        in: query
+        name: _start
+        schema:
+          type: integer
+      - description: End index
+        in: query
+        name: _end
+        schema:
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/handlers.ContentSensitiveEvent'
+                type: array
+          description: OK
+          headers:
+            X-Total-Count:
+              description: Number of changes
+              schema:
+                type: integer
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Not Found
+      summary: List the changes of a template's content_sensitive
       tags:
       - Templates
   /templates/{id}/drafts:
