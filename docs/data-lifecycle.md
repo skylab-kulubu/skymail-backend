@@ -209,6 +209,8 @@ takes the person out of them:
   the name their token carried then.
 - `template_content_sensitive_events.actor_sub` with `actor_name` — who changed
   whether a template's sends show their content.
+- `sent_content_views.actor_sub` with `actor_name` — who opened a sensitive
+  send's masked content (see [Sent mail content](#sent-mail-content)).
 - `mail_approvals.submitter_sub`, `submitter_name` and `submitter_email` — who
   submitted a request, and the name and verified address their token carried
   (`submitter_email_unverified` says the token carried an address Keycloak
@@ -224,80 +226,154 @@ takes the person out of them:
 
 ## Sent mail content
 
-Every queue row holds its recipient's mail as it was rendered and sent:
-`subject`, `body` (plain text) and `body_html`. A send's page shows it,
-recipient by recipient, through
-`GET /v1/mail_tasks/{id}/queue/{itemId}/content` (Yusuf, 2026-10-12: shown,
-the sensitive ones hidden).
+Every queue row holds its recipient's mail: `subject`, `body` (plain text)
+and `body_html`. A send's page shows it, recipient by recipient, through
+`GET /v1/mail_tasks/{id}/queue/{itemId}/content` (`Cache-Control: no-store`).
+Yusuf, 2026-10-12: shown; 2026-10-13: the sensitive ones too, their codes and
+one-time links masked. After the #63 review the orchestrator decided to mask
+when the content is stored: a sensitive send's raw mail is not kept.
 
-**Sensitive mail is never shown.** `templates.content_sensitive` says it:
-`true` for mail that carries a code or a one-time link (Keycloak's
-verification, reset and personal e-mail mails, the account center's mails,
-core's contact consent confirmation, an event ticket's code), `false` for
-mail that may be shown, and
-`null`, the default, leaves it to the kind of send: a single mail
-(`POST /mail_tasks/single`: what a service sends one person, a code among it)
-is hidden, a send to a list, a Keycloak group or an approved Mail onayı
-request is shown. `mail_task_bulk()` and `mail_task_content_sensitive()` are
-the one definition. A new template is therefore hidden on the single path
-until its seed or an operator says `false`. The Template seed sets the flag
-(`content_sensitive` in `PUT /v1/templates/by-key/{key}`; left out, it stays),
-and the panel sets it either way (`PUT /v1/templates/{id}/content-sensitive`,
-`skymail:templates:write`). The migration marked the credential-carrying
-templates `true` and the ones the seed shows (`free.basic`, `core.welcome`,
-`core.certificate`, `club.team-membership`, `event.updated`,
-`event.cancelled`, `mail.approval-*`, `ops.send-failed`) `false`, so the
-first sweep does not empty their single mails before the next seed.
+**Which mail is sensitive.** `templates.content_sensitive`: `true` for mail
+that carries a code or a one-time link (Keycloak's verification, reset and
+personal e-mail mails, the account center's mails, core's contact consent
+confirmation, an event ticket's code), `false` for mail that may be shown as
+sent, and `null`, the default, leaves it to the kind of send: a single mail
+(`POST /mail_tasks/single`) is sensitive, a send to a list, a Keycloak group
+or an approved Mail onayı request is not. The value is copied onto the send
+when it is queued (`mail_tasks.content_sensitive_at_send`: `true`, `false`,
+`unset`), and a send is sensitive if that copy **or** its template now says
+so, or its template's key is locked: changing a template to `false` after a
+send never shows that send as sent. `mail_task_content_sensitive()` is the
+one definition. The Template seed sets the flag (`content_sensitive` in
+`PUT /v1/templates/by-key/{key}`), the panel either way
+(`PUT /v1/templates/{id}/content-sensitive`, `skymail:templates:write`).
 
-**Locked sensitive.** `keycloak.*`, `account.*`,
-`core.contact-consent-confirm`, `event.ticket-created` and `event.reminder`
-carry a credential: a login or verification code, a reset or account link, a
-ticket's code. So does any key under `auth.`, `login.` or `otp.`, or with a
-word such as `login`, `code`, `otp`, `reset`, `verify`, `confirm`, `token`,
-`magic`, `invite`, `ticket` or `link` between its dots and dashes (two words
-joined count too: `sign-in`, `log-in`), for the sign-in flows that may move to
-SkyMail (YıldızPlace mails its login link over its own SMTP today). The key of
-a locked template cannot be changed or removed (`PATCH` answers
-`409 template.sensitive_key_immutable`), as a system template's cannot: the
-lock goes with the key, and renaming would open its past sends. The lock is
-read from the template's key when content is asked for, not fixed on the send
-(a follow-up ticket fixes it at send time). Whoever reads system mail would otherwise read everyone's.
-They are sensitive whatever their row says; the panel's `false` is refused
-with `409 template.content_sensitive_locked`, the seed's is written as `true`,
-and a create or edit that gives a template such a key marks it `true`. The
-list is `internal/handlers/content_sensitivity.go`.
+**Locked sensitive.** `keycloak.*`, `account.*`, `auth.*`, `login.*`,
+`otp.*`, `core.contact-consent-confirm`, `event.ticket-created`,
+`event.reminder`, and any key with a word such as `login`, `code`, `otp`,
+`reset`, `verify`, `confirm`, `token`, `magic`, `invite`, `ticket`, `link`, or
+Turkish `giris`, `kod`, `dogrulama`, `sifre`, `parola`, `baglanti`, `davet`,
+`onay` between its dots and dashes (two words joined count too: `sign-in`).
+Go's list is `internal/handlers/content_sensitivity.go`, the database's
+`template_key_content_locked()`; `TestTheDatabaseLocksTheSameKeysAsGo` holds
+them together. A locked template's key cannot be changed or removed
+(`409 template.sensitive_key_immutable`); the panel's `false` is refused
+(`409 template.content_sensitive_locked`), the seed's is written `true`.
 
 **Who changed it.** Every change of `content_sensitive`, by the panel or the
 seed, is a row of `template_content_sensitive_events`: `actor_kind`,
 `actor_sub`, `actor_name`, `old_value`, `new_value`, `created_at`
-(`GET /v1/templates/{id}/content-sensitive/events`). The migration's own
-marks are not rows there. The rows are never rewritten but by Account
-erasure, which replaces the actor with Silinmiş kullanıcı.
+(`GET /v1/templates/{id}/content-sensitive/events`). Account erasure replaces
+the actor with Silinmiş kullanıcı.
 
-**Who sees what is not sensitive.** The route takes `skymail:mails:read`;
-the handler then shows the content to the send's sender, for a send to many
-to holders of `skymail:mails:write`, and to holders of
-`skymail:system-mails:read`, the administrator's role. Anyone else gets
-`access: restricted`. A send's `body_variables` in the send list and on its
-page follow the same rule (`content_access`).
+**Masked when stored** (`internal/mailer/mask.go`, `mask_sweep.go`). Every
+five minutes, in every replica, the content sweep takes the sends still to be
+decided on (`mail_tasks.content_mask_due`, indexed) that are done (none of
+their rows pending or processing, five minutes old), **one send a
+transaction** (`FOR UPDATE SKIP LOCKED`). A send found not sensitive is not
+looked at again until its template's `content_sensitive` or key changes (a
+trigger makes its unmasked sends due again). A sensitive one has each row's
+subject, plain text and HTML replaced with its masked copy, 500 rows at a
+time, and its `body_variables` with their masked values
+(`content_masked_at`, `content_masked_by`, `content_masked_variables`). The
+rows are read `FOR UPDATE` and written only while they still hold a mail and
+the send is not masked or emptied: a row Account erasure empties meanwhile is
+never written back. A send whose masking fails (a panic
+included) is put back: tried again after five minutes, doubled for each
+failure (a day at most, `content_mask_retry_at`), behind the sends that never
+failed, so broken sends at the head of the queue hold no other back. Its
+failure waits (`content_mask_unconfirmed`) and is counted
+(`content_mask_failures`) only when a run masks some other send — the fault
+was the send's; a run that masks none counts none, as the fault may be
+SkyMail's. On its third counted failure the send is emptied (`not_kept`,
+logged with the send's id, never its content), so its raw mail is not kept.
+A run stops after five sends fail one after another. A run masks at most 200 sensitive sends; sends found
+not sensitive do not count (at most 5000 a run). The migration left due only
+the kept sends that were sensitive then, so the first runs do not read the
+history first. A template's `content_sensitive` or key change makes its
+unmasked sends due again (`templates_mask_due`, `idx_mail_tasks_template`),
+waiting for a sweep that is deciding on one of them. Every code, one-time link and IP address becomes
+`••••••`; in the HTML's text `<mark data-skymail-masked="">••••••</mark>`.
+Nothing is masked on reading. Two ways, the first when it can be proved:
 
-**How long.** A sweep runs at startup and every five minutes, in every
-replica (`FOR UPDATE SKIP LOCKED`, 20 sends a statement). It takes the sends
-none of whose rows is still pending or processing and that are at least five
-minutes old, and empties a sensitive one at once, any other
-`MAIL_CONTENT_RETENTION_DAYS` after it was created (unset: 3650, the most it
-may be): its rows' `subject` and `body` become
-`''` and `body_html` `NULL`, as Account erasure leaves a row, its
-`body_variables` `{}`, and `mail_tasks.content_cleared_at` says when. Status,
-recipient, error and the counts stay. Past the period the API answers
-`expired` even before the sweep has run. A sweep runs while the sender is
-paused too: it never touches mail still to go out. The first run after the
-release empties every sensitive send there is.
+1. *Variables.* The send's variables that carry a code, a link, an IP address
+   or a place are masked — by name (the last word: `link`, `url`, `code`,
+   `otp`, `pin`, `token`, `password`, `secret`, `verifier`, `invite`, `key`,
+   `kod`, `bağlantı`, `şifre`, `parola`, `davet`…; `IpAddress`, `ClientIP`,
+   `Location`, `Konum`; but `subjectKey`, and a number under `…Minutes`,
+   `…Seconds`, `…Hours`, `…Days`, `…Count`, stay), by shape (an address with
+   or without a scheme, an IPv4 or IPv6 address with or without a port, four
+   or more digits, a code such as `QR-88K2` or `x7Gk2pQ9`, a token of 20 or
+   more characters) and inside text (each such piece on its own; a date or a
+   time stays). The mail is rendered again with **the template as it stood
+   when the send was queued** only: the row, if it has not been written
+   since, and the newest version published by then. A version written after
+   the send is never used: its render could depend on the hidden value. The
+   render is used only if the unmasked variables render exactly the stored
+   mail.
+2. *Patterns,* when it does not, or the variables are gone. The known values
+   are replaced in the stored mail in every form the renderers print them
+   (`&amp;`, `&#43;`, URL escapes), then every address, IP address, run of
+   four or more digits, code cut by spaces (`483 920`), code- or token-shaped
+   word is masked in the subject, the plain text, and the HTML's text,
+   comments and attributes (`data-*` too); every address in an attribute is
+   masked whole (relative ones too; a `mailto:`, a `tel:` and a `#` link
+   stay); a style sheet's strings and long numbers are masked, its colours
+   and sizes kept. It masks more than it must.
+
+A last check, both ways: every credential the variables held (a code, a
+token, an IP address, a link that carries a query or a code-shaped path, and
+each of its query values, raw and decoded) is looked for in every escaped
+form, letter case aside, and a number one with its digits cut apart; and any
+code-shaped string the mail shows must be one the template writes itself,
+the recipient's, or a value left as it is. One found: the send is not kept —
+its content is emptied (`content_cleared_at`) and reads `not_kept`.
+
+**Reading.** In this order: who asks (`restricted`), still kept (`expired`),
+emptied (`not_kept` if sensitive, else `expired`), then masked (`masked`, with
+`masked_variables` and `masked_by`), sensitive but not masked yet (`pending`:
+nothing shown until the sweep has masked it), or as sent (`available`). A
+send's `body_variables` are listed only when `available`.
+
+**Who opened it.** Every opening of a recipient's masked mail is a row of
+`sent_content_views`: `task_id`, `queue_item_id`, `actor_sub`, `actor_name`
+(from the token), `masked_by`, `masked_variables`, `created_at`. No content
+is returned unless the row is written. It names no recipient; Account erasure
+replaces the actor. No API reads it yet (hub ticket
+`.scratch/skymail-frontend-rewrite/issues/32-maskeli-icerik-acilis-kaydi-okuma.md`).
+
+**Who sees it.** The route takes `skymail:mails:read`; the handler then shows
+the content to the send's sender, for a send to many to holders of
+`skymail:mails:write`, and to holders of `skymail:system-mails:read`, the
+administrator's role. Anyone else gets `access: restricted`, sensitive or
+not.
+
+**How long.** The same sweep, after masking, takes the sends none of whose
+rows is still to go out and empties each `MAIL_CONTENT_RETENTION_DAYS` after
+it was created, sensitive or not (unset: 3650, the most it may be): its rows'
+`subject` and `body` become `''` and `body_html` `NULL`, its `body_variables`
+`{}`, and `mail_tasks.content_cleared_at` says when. Status, recipient, error
+and the counts stay. Past the period the API answers `expired` even before
+the sweep has run. It runs while the sender is paused too.
+
+**Not kept: before 2026-10-13.** From #61's release (2026-10-13 11:16) until
+sensitive content was kept masked, the sweep emptied every sensitive send
+five minutes after it went out: on its first run every one there was, the
+sends from before #61 among them (Keycloak's mails, Forms' single mails,
+core's consent confirmations). Only the nightly dump still holds them. The
+API answers `not_kept` for such a send.
+
+**Rolling back.** An image from before this one (#61) empties every
+sensitive send on its first sweep, masked or not: safe, and for good. Its
+sends are queued with `content_sensitive_at_send = unset` (the column's
+default). Do not run the down migration of `20261013140000`: it drops
+`sent_content_views`, the record of who opened what.
 
 The period is Yusuf's decision (2026-10-12: the longest allowed). KVKK's
 storage limitation principle (Law 6698, art. 4(2)(d): kept only as long as
 needed for its purpose) asks that it be reviewed: the content names and
 addresses people, and a shorter period is set with the variable alone.
+`sent_content_views` has no period of its own yet.
 
 The sweep covers what a send keeps, not a Mail onayı request:
 `mail_approvals.body_variables` stays as the request was (see Mail approvals)
@@ -305,7 +381,8 @@ until Account erasure.
 
 **Account erasure** empties the person's rows and the rows that name them
 (below); the content route then answers `unavailable` for them. A restore
-brings content back with the dump; the sweep empties it again on its next run.
+brings content back with the dump; the sweep masks or empties it again on its
+next run.
 
 ## Account erasure
 
