@@ -470,6 +470,17 @@ func contractSet(sent *[]requests.ContractVariable) ([]byte, error) {
 	return json.Marshal(set)
 }
 
+// sensitiveVariables is the list a seed sent, sorted, each name once; nil
+// when it sent none, which keeps the template's.
+func sensitiveVariables(sent *[]string) []string {
+	if sent == nil {
+		return nil
+	}
+	list := append([]string{}, (*sent)...)
+	slices.Sort(list)
+	return slices.Compact(list)
+}
+
 // GetTemplateByKey godoc
 //
 //	@Summary		Get an email template by key
@@ -573,6 +584,7 @@ func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 			System:                    params.System,
 			ContractRequiredVariables: contract,
 			ContentSensitive:          sensitive,
+			SensitiveVariables:        sensitiveVariables(params.SensitiveVariables),
 		})
 		if err != nil {
 			return written, err

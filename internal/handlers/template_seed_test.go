@@ -858,3 +858,45 @@ func TestSeedSetsWhetherSendsShowTheirContent(t *testing.T) {
 		t.Fatalf("served template content_sensitive = %v, want true", served.ContentSensitive)
 	}
 }
+
+// The seed states which variables a send's masking hides whole
+// (sensitive_variables): sorted, each name once; a seed that says nothing
+// keeps the list, [] clears it, and a name a body could not reach is refused.
+func TestSeedSetsTheSensitiveVariables(t *testing.T) {
+	db := lifecycleHandlerStore(t)
+	app := templateVersionsApp(t, db)
+	const key = "core.welcome"
+
+	payload := welcomeSeed("<p>Hoş geldin {{.FullName}}</p>")
+	response, template, body := seedAs(t, app, key, payload, false)
+	if response.StatusCode != fiber.StatusOK || template.SensitiveVariables != nil {
+		t.Fatalf("first seed without it = %d %s, want sensitive_variables null", response.StatusCode, body)
+	}
+
+	payload["sensitive_variables"] = []string{"link", "code", "link"}
+	response, template, body = seedAs(t, app, key, payload, false)
+	if response.StatusCode != fiber.StatusOK || fmt.Sprint(template.SensitiveVariables) != "[code link]" {
+		t.Fatalf("seed with a list = %d %s, want [code link]", response.StatusCode, body)
+	}
+	assertTemplateShape(t, body)
+
+	delete(payload, "sensitive_variables")
+	if response, template, body = seedAs(t, app, key, payload, false); response.StatusCode != fiber.StatusOK ||
+		fmt.Sprint(template.SensitiveVariables) != "[code link]" {
+		t.Fatalf("seed that does not say = %d %s, want the list kept", response.StatusCode, body)
+	}
+	if served := getTemplate(t, app, "/templates/by-key/"+key); fmt.Sprint(served.SensitiveVariables) != "[code link]" {
+		t.Fatalf("served sensitive_variables = %v", served.SensitiveVariables)
+	}
+
+	payload["sensitive_variables"] = []string{"bad name"}
+	if response, _, body = seedAs(t, app, key, payload, false); response.StatusCode != fiber.StatusBadRequest {
+		t.Fatalf("seed with a bad name = %d %s, want 400", response.StatusCode, body)
+	}
+
+	payload["sensitive_variables"] = []string{}
+	if response, template, body = seedAs(t, app, key, payload, false); response.StatusCode != fiber.StatusOK ||
+		template.SensitiveVariables == nil || len(template.SensitiveVariables) != 0 {
+		t.Fatalf("seed with [] = %d %s, want an empty list", response.StatusCode, body)
+	}
+}

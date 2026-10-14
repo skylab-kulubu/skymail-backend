@@ -251,6 +251,30 @@ func (h *mailHandlerImpl) GetQueueItemContent(c fiber.Ctx) error {
 	return c.JSON(answer)
 }
 
+// ViewRetentionEnv names how many days a record of who opened a masked mail
+// (sent_content_views) is kept.
+const ViewRetentionEnv = "SENT_CONTENT_VIEWS_RETENTION_DAYS"
+
+// DefaultViewRetentionDays is how long a record of who opened a masked mail is
+// kept when SENT_CONTENT_VIEWS_RETENTION_DAYS does not say: two years (Yusuf,
+// 2026-10-14).
+const DefaultViewRetentionDays = 730
+
+// ViewRetentionDaysFromEnv reads SENT_CONTENT_VIEWS_RETENTION_DAYS, a whole
+// number of days from 1 to MaxContentRetentionDays. Unset is
+// DefaultViewRetentionDays. Anything else stops startup.
+func ViewRetentionDaysFromEnv(getenv func(string) string) (int, error) {
+	raw := strings.TrimSpace(getenv(ViewRetentionEnv))
+	if raw == "" {
+		return DefaultViewRetentionDays, nil
+	}
+	days, err := strconv.Atoi(raw)
+	if err != nil || days < 1 || days > MaxContentRetentionDays {
+		return 0, fmt.Errorf("%s must be a whole number of days from 1 to %d, not %q", ViewRetentionEnv, MaxContentRetentionDays, raw)
+	}
+	return days, nil
+}
+
 // ContentRetentionEnv names how many days a send's content is kept.
 const ContentRetentionEnv = "MAIL_CONTENT_RETENTION_DAYS"
 
