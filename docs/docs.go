@@ -803,6 +803,14 @@ const docTemplate = `{
                     "seed_refusal": {
                         "$ref": "#/components/schemas/handlers.SeedRefusal"
                     },
+                    "sensitive_variables": {
+                        "description": "The top-level variables whose values the content sweep masks whole in a sensitive send, as the Template seed states them; null: by name and shape only.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
                     "subject": {
                         "type": "string"
                     },
@@ -1028,6 +1036,14 @@ const docTemplate = `{
                     },
                     "seed_refusal": {
                         "$ref": "#/components/schemas/handlers.SeedRefusal"
+                    },
+                    "sensitive_variables": {
+                        "description": "The top-level variables whose values the content sweep masks whole in a sensitive send, as the Template seed states them; null: by name and shape only.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
                     },
                     "subject": {
                         "type": "string"
@@ -1557,6 +1573,19 @@ const docTemplate = `{
                     "react_email_content": {
                         "description": "The template's JSX source: its .tsx file in the repo as it is, of which html_content and plain_text_content are the render. It becomes the version's JSX Main source, which the panel's JSX mode opens. Text with nothing but comments in it — the pointer comment the seed sent before it sent the source — is no source: html_content is then the HTML Main source.",
                         "type": "string"
+                    },
+                    "sensitive_variables": {
+                        "description": "The variables whose values carry a credential — a code, a one-time link, a pass phrase — named as the body reaches them with .Name, at the top level. A sensitive send's masking hides each one whole, whatever its name or shape, and everything under it; the others are still masked by their names and shapes. Leave it out (or null) to keep the list the template has; send [] to clear it. A template with no list is masked by names and shapes alone.",
+                        "example": [
+                            "code",
+                            "link"
+                        ],
+                        "items": {
+                            "type": "string"
+                        },
+                        "maxItems": 50,
+                        "type": "array",
+                        "uniqueItems": false
                     },
                     "subject": {
                         "type": "string"

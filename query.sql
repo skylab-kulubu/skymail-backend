@@ -11,7 +11,7 @@ WHERE key = $1
 
 -- name: UpsertTemplateByKey :one
 INSERT INTO templates (key, name, subject, html_content, plain_text_content, react_email_content, system,
-                       contract_required_variables, content_sensitive)
+                       contract_required_variables, content_sensitive, sensitive_variables)
 VALUES (sqlc.arg(key)::text,
         sqlc.arg(name)::text,
         sqlc.arg(subject)::text,
@@ -20,7 +20,8 @@ VALUES (sqlc.arg(key)::text,
         sqlc.arg(react_email_content)::text,
         sqlc.arg(system)::boolean,
         COALESCE(sqlc.narg(contract_required_variables)::jsonb, '[]'),
-        sqlc.narg(content_sensitive)::boolean)
+        sqlc.narg(content_sensitive)::boolean,
+        sqlc.narg(sensitive_variables)::text[])
 -- The seed writes everything it sends, the subject included. It is the
 -- caller that keeps an operator's change — the subject too — from being
 -- overwritten: it refuses the seed before it gets here unless it is forced
@@ -35,6 +36,10 @@ ON CONFLICT (key) DO UPDATE
         -- Whether a send's content is shown is the seed's too: a seed that
         -- says (true or false) sets it, a seed that does not (NULL) leaves it.
         content_sensitive   = COALESCE(sqlc.narg(content_sensitive)::boolean, templates.content_sensitive),
+        -- So are the variables a send's masking hides whole: a seed that
+        -- sends a list (sorted, each name once, by the caller; [] clears it)
+        -- replaces it, a seed that sends none (NULL) leaves it.
+        sensitive_variables = COALESCE(sqlc.narg(sensitive_variables)::text[], templates.sensitive_variables),
         -- The contract set is the seed's, like the key: a seed that sends one
         -- replaces it (sorted, each name once, by the caller), a seed that
         -- sends none (NULL) leaves it. A name the contract now declares leaves
@@ -956,16 +961,20 @@ WHERE q.task_id = sqlc.arg(task_id)
 -- idx_mail_tasks_content_mask_due): not masked or emptied, five minutes old,
 -- none of whose rows is still to go out, not among those it already tried in
 -- this run, and, if its masking failed before, due to be tried again. The
--- sends that never failed go first. sensitive says whether to mask it. SKIP
--- LOCKED lets a second replica's sweep take another.
+-- sends that never failed go first. sensitive says whether to mask it;
+-- sensitive_variables are the variables its template lists as sensitive
+-- (empty: none listed). SKIP LOCKED lets a second replica's sweep take
+-- another.
 -- name: TakeSendToMask :many
 SELECT mt.id,
        mt.template_id,
        mt.body_variables,
        mt.created_at,
        mt.content_mask_failures,
-       mail_task_content_sensitive(mt.id)::boolean AS sensitive
+       mail_task_content_sensitive(mt.id)::boolean      AS sensitive,
+       COALESCE(t.sensitive_variables, '{}')::text[] AS sensitive_variables
 FROM mail_tasks mt
+         LEFT JOIN templates t ON t.id = mt.template_id
 WHERE mt.content_mask_due
   AND mt.content_masked_at IS NULL
   AND mt.content_cleared_at IS NULL
@@ -980,31 +989,76 @@ ORDER BY mt.content_mask_retry_at NULLS FIRST, mt.created_at
 LIMIT 1 FOR UPDATE OF mt SKIP LOCKED;
 
 -- A send found not sensitive: not looked at again until its template changes.
+-- Its failures from when it was sensitive go: made sensitive again, it starts
+-- afresh, its deadline too (#65 review, K2).
 -- name: MarkSendNotDueForMasking :exec
 UPDATE mail_tasks
-SET content_mask_due = false
+SET content_mask_due           = false,
+    content_mask_failures      = 0,
+    content_mask_unconfirmed   = 0,
+    content_mask_retry_at      = NULL,
+    content_mask_failing_since = NULL
 WHERE id = sqlc.arg(id);
 
 -- Puts a send whose masking failed back: not counted yet, tried again after
--- base_seconds doubled for each failure it has had (a day at most).
+-- base_seconds doubled for each failure it has had (a day at most). The first
+-- failure since the send was last masked starts its deadline.
 -- name: DeferMaskFailure :exec
 UPDATE mail_tasks
-SET content_mask_unconfirmed = content_mask_unconfirmed + 1,
-    content_mask_retry_at    = now() + LEAST(sqlc.arg(base_seconds)::float8
-                                                 * power(2, content_mask_failures + content_mask_unconfirmed),
-                                             86400) * INTERVAL '1 second'
+SET content_mask_unconfirmed   = content_mask_unconfirmed + 1,
+    content_mask_retry_at      = now() + LEAST(sqlc.arg(base_seconds)::float8
+                                                   * power(2, content_mask_failures + content_mask_unconfirmed),
+                                               86400) * INTERVAL '1 second',
+    content_mask_failing_since = COALESCE(content_mask_failing_since, now())
 WHERE id = sqlc.arg(id);
 
--- Counts the failures not counted yet, once a run has masked some other send:
--- the fault was the send's. Returns each send and its count.
+-- Counts the failure of each send that failed in a run that masked some other
+-- send — the fault was the send's — and only that run's: a failure from a run
+-- that masked none (the fault may have been SkyMail's) is never counted, so a
+-- fault across SkyMail empties nothing once it is over. Those it leaves go
+-- (content_mask_unconfirmed = 0): they would hold the send's retry at a day,
+-- and an image from before this rule would count them all (#65 review, B2).
+-- Returns each send and its count.
 -- name: ConfirmMaskFailures :many
 UPDATE mail_tasks
-SET content_mask_failures    = content_mask_failures + content_mask_unconfirmed,
+SET content_mask_failures    = content_mask_failures + 1,
     content_mask_unconfirmed = 0
-WHERE content_mask_unconfirmed > 0
+WHERE id = ANY (sqlc.arg(ids)::uuid[])
+  AND content_mask_unconfirmed > 0
   AND content_masked_at IS NULL
   AND content_cleared_at IS NULL
 RETURNING id, content_mask_failures;
+
+-- Empties up to batch_size sensitive sends whose masking has been failing for
+-- longer than deadline_seconds, counted or not, the oldest first: their raw
+-- mail is not kept (not_kept). Returns each send and since when it failed.
+-- name: ClearSendsPastMaskDeadline :many
+WITH due AS (SELECT mt.id, mt.content_mask_failing_since
+             FROM mail_tasks mt
+             WHERE mt.content_mask_failing_since < now() - sqlc.arg(deadline_seconds)::float8 * INTERVAL '1 second'
+               AND mt.content_masked_at IS NULL
+               AND mt.content_cleared_at IS NULL
+               AND mail_task_content_sensitive(mt.id)
+               AND NOT EXISTS (SELECT 1
+                               FROM mail_queue q
+                               WHERE q.task_id = mt.id
+                                 AND q.status IN ('pending', 'processing'))
+             ORDER BY mt.content_mask_failing_since
+             LIMIT sqlc.arg(batch_size)::int FOR UPDATE OF mt SKIP LOCKED),
+     emptied AS (UPDATE mail_queue q
+         SET subject   = '',
+             body      = '',
+             body_html = NULL
+         FROM due
+         WHERE q.task_id = due.id
+         RETURNING q.task_id)
+UPDATE mail_tasks mt
+SET body_variables     = '{}',
+    content_mask_due   = false,
+    content_cleared_at = now()
+FROM due
+WHERE mt.id = due.id
+RETURNING mt.id, due.content_mask_failing_since::timestamptz AS failing_since;
 
 -- A template's parts as they stood when a send was queued: the row, if it has
 -- not been written since, and the newest version published by then. Never a
@@ -1061,14 +1115,15 @@ WHERE q.id = u.id
 -- Marks a send masked and puts its masked variables in place of its own.
 -- name: MarkSendMasked :exec
 UPDATE mail_tasks
-SET body_variables           = sqlc.arg(body_variables),
-    content_mask_due         = false,
-    content_mask_failures    = 0,
-    content_mask_unconfirmed = 0,
-    content_mask_retry_at    = NULL,
-    content_masked_at        = now(),
-    content_masked_by        = sqlc.arg(masked_by),
-    content_masked_variables = sqlc.arg(masked_variables)::text[]
+SET body_variables             = sqlc.arg(body_variables),
+    content_mask_due           = false,
+    content_mask_failures      = 0,
+    content_mask_unconfirmed   = 0,
+    content_mask_retry_at      = NULL,
+    content_mask_failing_since = NULL,
+    content_masked_at          = now(),
+    content_masked_by          = sqlc.arg(masked_by),
+    content_masked_variables   = sqlc.arg(masked_variables)::text[]
 WHERE id = sqlc.arg(id);
 
 -- Empties a send the sweep could not mask for certain, or failed to mask three
@@ -1083,6 +1138,17 @@ SET body_variables     = '{}',
     content_mask_due   = false,
     content_cleared_at = now()
 WHERE mail_tasks.id = sqlc.arg(task_id);
+
+-- Deletes up to batch_size of the oldest records of who opened a masked mail
+-- that are older than retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
+-- name: DeleteOldSentContentViews :execrows
+DELETE
+FROM sent_content_views
+WHERE id IN (SELECT v.id
+             FROM sent_content_views v
+             WHERE v.created_at < now() - make_interval(days => sqlc.arg(retention_days)::int)
+             ORDER BY v.created_at
+             LIMIT sqlc.arg(batch_size)::int FOR UPDATE SKIP LOCKED);
 
 -- Records that someone opened one recipient's masked mail of a sensitive send.
 -- name: RecordSentContentView :exec

@@ -118,6 +118,11 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid mail content retention configuration")
 	}
+	// How long the record of who opened a masked mail is kept.
+	viewRetentionDays, err := handlers.ViewRetentionDaysFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid sent content views retention configuration")
+	}
 	if migrationConfig.Mode == migrations.ModeApply {
 		// A stop signal ends a wait for another process's migrations, never
 		// a migration under way.
@@ -248,7 +253,7 @@ func main() {
 	contentSweepStopped := make(chan struct{})
 	go func() {
 		defer close(contentSweepStopped)
-		clearMailContent(workers, db, contentRetentionDays, contentSweepInterval)
+		clearMailContent(workers, db, contentRetentionDays, viewRetentionDays, contentSweepInterval)
 	}()
 
 	addr := fmt.Sprintf(":%d", 3000)
@@ -343,14 +348,20 @@ const contentSweepInterval = 5 * time.Minute
 // transactions rather than a few long ones.
 const contentSweepBatch = 20
 
+// viewSweepBatch is how many records of who opened a masked mail one
+// statement deletes.
+const viewSweepBatch = 500
+
 // clearMailContent masks the sensitive sends that are done and empties the
 // content of the sends due — past retentionDays, sensitive or not, once none
 // of its rows is still to go out — at
 // startup and every interval after (docs/data-lifecycle.md, sent mail
 // content). It runs while the sender is paused too: it touches no row still
-// to go out. It logs counts only.
-func clearMailContent(ctx context.Context, db *database.Store, retentionDays int, interval time.Duration) {
-	log.Info().Int("retention_days", retentionDays).Msg("mail content sweep (MAIL_CONTENT_RETENTION_DAYS)")
+// to go out. Then it deletes the records of who opened a masked mail older
+// than viewRetentionDays. It logs counts only.
+func clearMailContent(ctx context.Context, db *database.Store, retentionDays, viewRetentionDays int, interval time.Duration) {
+	log.Info().Int("retention_days", retentionDays).Int("view_retention_days", viewRetentionDays).
+		Msg("mail content sweep (MAIL_CONTENT_RETENTION_DAYS, SENT_CONTENT_VIEWS_RETENTION_DAYS)")
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -362,7 +373,7 @@ func clearMailContent(ctx context.Context, db *database.Store, retentionDays int
 		}
 		if masked.Sends > 0 || masked.NotKept > 0 || masked.Failed > 0 {
 			log.Info().Int("sends", masked.Sends).Int("rows", masked.Rows).Int("not_kept", masked.NotKept).
-				Int("failed", masked.Failed).Int("not_sensitive", masked.NotSensitive).
+				Int("past_deadline", masked.PastDeadline).Int("failed", masked.Failed).Int("not_sensitive", masked.NotSensitive).
 				Msg("masked the content of sensitive sends")
 		}
 		sends, rows, err := db.ClearMailContent(ctx, retentionDays, contentSweepBatch)
@@ -371,6 +382,13 @@ func clearMailContent(ctx context.Context, db *database.Store, retentionDays int
 		}
 		if sends > 0 {
 			log.Info().Int("sends", sends).Int64("rows", rows).Msg("emptied the content of sends past retention")
+		}
+		views, err := db.DeleteSentContentViews(ctx, viewRetentionDays, viewSweepBatch)
+		if err != nil && ctx.Err() == nil {
+			log.Error().Err(err).Msg("sent content views sweep failed")
+		}
+		if views > 0 {
+			log.Info().Int64("views", views).Msg("deleted the records of masked mail openings past retention")
 		}
 		select {
 		case <-ctx.Done():

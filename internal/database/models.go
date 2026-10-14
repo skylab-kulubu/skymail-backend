@@ -332,6 +332,8 @@ type MailTask struct {
 	ContentMaskRetryAt *time.Time `json:"content_mask_retry_at"`
 	// Failed maskings not counted yet: counted into content_mask_failures once a run masks another send.
 	ContentMaskUnconfirmed int16 `json:"content_mask_unconfirmed"`
+	// When masking the send first failed since it was last masked; past the sweep's deadline the send is emptied (not kept).
+	ContentMaskFailingSince *time.Time `json:"content_mask_failing_since"`
 }
 
 type MailingList struct {
@@ -392,6 +394,8 @@ type Template struct {
 	SeedRefusedPayloadSha256  *string    `json:"-"`
 	// Whether the content of a send of this template is never shown: true for mail carrying a code or a one-time link, false for mail that may be shown, null to leave it to the kind of send (a single mail hidden, a send to many shown). Set by the Template seed.
 	ContentSensitive *bool `json:"content_sensitive"`
+	// The top-level variables whose values the content sweep masks whole in a sensitive send, as the Template seed states them; null: by name and shape only.
+	SensitiveVariables []string `json:"sensitive_variables"`
 }
 
 type TemplateContentSensitiveEvent struct {
