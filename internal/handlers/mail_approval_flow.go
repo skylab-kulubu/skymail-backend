@@ -547,12 +547,12 @@ func (h *mailApprovalHandlerImpl) groupRecipients(ctx context.Context, groupID u
 }
 
 // membersWithAddress is a Keycloak group's members as a send to it addresses
-// them: those with an e-mail address, each by name.
+// them: those with an e-mail address, each by name and Keycloak subject.
 func membersWithAddress(members []*gocloak.User) []mailer.RecipientInfo {
 	recipients := []mailer.RecipientInfo{}
 	for _, m := range members {
 		if email := gocloak.PString(m.Email); email != "" {
-			recipients = append(recipients, mailer.RecipientInfo{FullName: userFullName(m), Email: email})
+			recipients = append(recipients, mailer.RecipientInfo{FullName: userFullName(m), Email: email, Sub: userSub(m)})
 		}
 	}
 	return recipients

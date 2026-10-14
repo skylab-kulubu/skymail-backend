@@ -130,7 +130,7 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 			if name == "" {
 				name = gocloak.PString(m.Username)
 			}
-			recipients = append(recipients, mailer.RecipientInfo{FullName: name, Email: gocloak.PString(m.Email)})
+			recipients = append(recipients, mailer.RecipientInfo{FullName: name, Email: gocloak.PString(m.Email), Sub: userSub(m)})
 		}
 
 		mailListID := params.MailListID
