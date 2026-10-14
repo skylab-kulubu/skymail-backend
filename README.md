@@ -292,8 +292,11 @@ yalnız `available` ya da `masked` iken doludur:
   `"event":"sensitive_content_mask_attention","reason":"deadline"` (7 gün)
   ya da `"reason":"failures"` (3 hata), `task_id` ile; içerik yazılmaz. Her
   başarısız deneme warning düzeyinde
-  `"event":"sensitive_content_mask_failed"` yazar. SkyMail'in log okuyan bir
-  alarmı yok; production sunucusunda haftalık sayım (salt okunur):
+  `"event":"sensitive_content_mask_failed"` yazar. Olayın adı ve alanları
+  (`event`, `reason`, `task_id`) sözleşmedir, değiştirilmez: ADMIN'e otomatik
+  mail ops tarafında bu satırı okuyan bir alarmla gelecek (Yusuf, 2026-10-14);
+  SkyMail kendisi mail atmaz. O gelene kadar production sunucusunda haftalık
+  sayım (salt okunur):
 
 ```bash
 docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | grep -F '"event":"sensitive_content_mask_' | grep -o '"event":"[^"]*"\(,"reason":"[^"]*"\)\?' | sort | uniq -c
