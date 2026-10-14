@@ -563,6 +563,26 @@ func newFiberConfig(vld fiber.StructValidator, trustedProxies []string) fiber.Co
 	}
 }
 
+// clientClass is what a log line says of a client instead of its address:
+// loopback, private (the Docker networks, RFC 1918, fc00::/7), link_local,
+// public, or unknown when the address does not parse. An IP address is
+// personal data and is never logged.
+func clientClass(raw string) string {
+	ip := net.ParseIP(raw)
+	switch {
+	case ip == nil || ip.IsUnspecified():
+		return "unknown"
+	case ip.IsLoopback():
+		return "loopback"
+	case ip.IsPrivate():
+		return "private"
+	case ip.IsLinkLocalUnicast():
+		return "link_local"
+	default:
+		return "public"
+	}
+}
+
 func errorHandler(ctx fiber.Ctx, err error) error {
 	var validationErrors validator.ValidationErrors
 	if errors.As(err, &validationErrors) {
@@ -578,11 +598,12 @@ func errorHandler(ctx fiber.Ctx, err error) error {
 	}
 
 	if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows) {
+		// An IP address is personal data: the line says what kind of client
+		// asked (clientClass), never its address or its User-Agent.
 		log.Info().
 			Str("method", ctx.Method()).
 			Str("path", ctx.Path()).
-			Str("ip", ctx.IP()).
-			Str("ua", ctx.Get(fiber.HeaderUserAgent)).
+			Str("client", clientClass(ctx.IP())).
 			Err(err).
 			Msg("Resource not found in database (404)")
 		return ctx.Status(apperrors.ErrStatusNotFound.Status).JSON(apperrors.ErrStatusNotFound)

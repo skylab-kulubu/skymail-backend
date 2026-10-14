@@ -45,6 +45,11 @@ yalnızca bağlantı o proxy'lerden birinden geldiğinde okunur. Diğer tüm
   tek makine anlamına gelir. Varsayılan:
   `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1/128,fc00::/7`.
 
+IP adresi kişisel veridir: loglar istemcinin adresini ve User-Agent'ını
+yazmaz. Gerekirse yalnız sınıfını yazar (`"client"`: `loopback`, `private` —
+Docker ağları, RFC 1918, `fc00::/7` —, `link_local`, `public`, `unknown`);
+bugün bunu yazan tek satır veritabanında bulunamayan kaydın 404'üdür.
+
 Liste servis trafiğe açılmadan önce doğrulanır: CIDR aralığı ya da adres
 olmayan bir girdi atlanmak yerine başlatmayı durdurur. Proxy bir konteyner
 olduğu ve ağ içindeki adresi her yeniden oluşturulduğunda değiştiği için tek
