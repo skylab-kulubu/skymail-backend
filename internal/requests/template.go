@@ -38,6 +38,8 @@ type UpsertTemplateByKey struct {
 	ContentSensitive *bool `json:"content_sensitive"`
 	// The Required variables the sending service's contract declares, which the body must keep referencing, each with why the mail needs it. An entry may also be the name alone, as a string; its reason is then null. They replace the template's contract set; a name among them leaves the operators' set. Leave the field out (or null) to keep the set the template has; send [] to clear it.
 	ContractRequiredVariables *[]ContractVariable `json:"contract_required_variables" validate:"omitempty,max=50,dive"`
+	// The variables whose values carry a credential — a code, a one-time link, a pass phrase — named as the body reaches them with .Name, at the top level. A sensitive send's masking hides each one whole, whatever its name or shape, and everything under it; the others are still masked by their names and shapes. Leave it out (or null) to keep the list the template has; send [] to clear it. A template with no list is masked by names and shapes alone.
+	SensitiveVariables *[]string `json:"sensitive_variables" validate:"omitempty,max=50,dive,variablename" example:"code,link"`
 }
 
 // ContractVariable is one contract Required variable the Template seed sends:

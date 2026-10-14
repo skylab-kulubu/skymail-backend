@@ -283,11 +283,21 @@ included) is put back: tried again after five minutes, doubled for each
 failure (a day at most, `content_mask_retry_at`), behind the sends that never
 failed, so broken sends at the head of the queue hold no other back. Its
 failure waits (`content_mask_unconfirmed`) and is counted
-(`content_mask_failures`) only when a run masks some other send — the fault
-was the send's; a run that masks none counts none, as the fault may be
-SkyMail's. On its third counted failure the send is emptied (`not_kept`,
-logged with the send's id, never its content), so its raw mail is not kept.
-A run stops after five sends fail one after another. A run masks at most 200 sensitive sends; sends found
+(`content_mask_failures`) only when the same run masks some other send — the
+fault was the send's — and only that run's failure: a run that masks none
+counts none, as the fault may be SkyMail's, and its failures are never
+counted later (they are dropped when the send's next failure is counted), so
+a fault across SkyMail empties nothing once it is over. On
+its third counted failure the send is emptied (`not_kept`), so its raw mail
+is not kept. Counted or not, a sensitive send whose masking has kept failing
+for **seven days** since its first failure (`content_mask_failing_since`,
+cleared when it is masked) is emptied at the end of every run: a queue of
+broken sends alone, whose failures no run counts, keeps no raw mail for the
+retention period. Each send emptied for its failures writes an error line
+`"event":"sensitive_content_mask_attention"` with `"reason":"failures"` or
+`"deadline"` and the send's id, never its content; each failed try a warning
+`"event":"sensitive_content_mask_failed"` (README, Gönderilen içerik, for the
+count). A run stops after five sends fail one after another. A run masks at most 200 sensitive sends; sends found
 not sensitive do not count (at most 5000 a run). The migration left due only
 the kept sends that were sensitive then, so the first runs do not read the
 history first. A template's `content_sensitive` or key change makes its
@@ -297,9 +307,13 @@ waiting for a sweep that is deciding on one of them. Every code, one-time link a
 Nothing is masked on reading. Two ways, the first when it can be proved:
 
 1. *Variables.* The send's variables that carry a code, a link, an IP address
-   or a place are masked — by name (the last word: `link`, `url`, `code`,
-   `otp`, `pin`, `token`, `password`, `secret`, `verifier`, `invite`, `key`,
-   `kod`, `bağlantı`, `şifre`, `parola`, `davet`…; `IpAddress`, `ClientIP`,
+   or a place are masked — first those its template lists
+   (`templates.sensitive_variables`, set by the Template seed's
+   `sensitive_variables`), each whole with everything under it, whatever its
+   name or shape; then, listed or not, by name (the last word: `link`, `url`,
+   `code`, `otp`, `pin`, `token`, `password`, `secret`, `verifier`, `invite`,
+   `key`, `verification`, `passphrase`, `kod`, `bağlantı`, `şifre`, `parola`,
+   `davet`, `doğrulama`…; `IpAddress`, `ClientIP`,
    `Location`, `Konum`; but `subjectKey`, and a number under `…Minutes`,
    `…Seconds`, `…Hours`, `…Days`, `…Count`, stay), by shape (an address with
    or without a scheme, an IPv4 or IPv6 address with or without a port, four
@@ -313,10 +327,16 @@ Nothing is masked on reading. Two ways, the first when it can be proved:
    mail.
 2. *Patterns,* when it does not, or the variables are gone. The known values
    are replaced in the stored mail in every form the renderers print them
-   (`&amp;`, `&#43;`, URL escapes), then every address, IP address, run of
+   (`&amp;`, `&#43;`, URL escapes) — in the subject, the plain text, and the
+   HTML's text, comments, attribute values and style sheets' quoted strings,
+   never in its tags, layout attributes or the rest of its style sheets (a
+   known `482` leaves `color:#482c8f`), and one of fewer than four characters
+   only where no letter or digit touches it — then every address, IP address, run of
    four or more digits, code cut by spaces (`483 920`), code- or token-shaped
    word is masked in the subject, the plain text, and the HTML's text,
-   comments and attributes (`data-*` too); every address in an attribute is
+   comments and attributes (`data-*`, `id`, `class` and `name` too: a
+   template may write a value into one, `id="c-{{.code}}"`; a class with no
+   code in it stays); every address in an attribute is
    masked whole (relative ones too; a `mailto:`, a `tel:` and a `#` link
    stay); a style sheet's strings and long numbers are masked, its colours
    and sizes kept. It masks more than it must.
@@ -339,7 +359,8 @@ send's `body_variables` are listed only when `available`.
 `sent_content_views`: `task_id`, `queue_item_id`, `actor_sub`, `actor_name`
 (from the token), `masked_by`, `masked_variables`, `created_at`. No content
 is returned unless the row is written. It names no recipient; Account erasure
-replaces the actor. No API reads it yet (hub ticket
+replaces the actor; it is deleted after `SENT_CONTENT_VIEWS_RETENTION_DAYS`
+(two years by default, below). No API reads it yet (hub ticket
 `.scratch/skymail-frontend-rewrite/issues/32-maskeli-icerik-acilis-kaydi-okuma.md`).
 
 **Who sees it.** The route takes `skymail:mails:read`; the handler then shows
@@ -373,7 +394,8 @@ The period is Yusuf's decision (2026-10-12: the longest allowed). KVKK's
 storage limitation principle (Law 6698, art. 4(2)(d): kept only as long as
 needed for its purpose) asks that it be reviewed: the content names and
 addresses people, and a shorter period is set with the variable alone.
-`sent_content_views` has no period of its own yet.
+`sent_content_views` has its own period: `SENT_CONTENT_VIEWS_RETENTION_DAYS`
+(below, under Where the raw mail still is).
 
 The sweep covers what a send keeps, not a Mail onayı request:
 `mail_approvals.body_variables` stays as the request was (see Mail approvals)
@@ -383,6 +405,72 @@ until Account erasure.
 (below); the content route then answers `unavailable` for them. A restore
 brings content back with the dump; the sweep masks or empties it again on its
 next run.
+
+### Where the raw mail still is
+
+Masking replaces a sensitive send's raw mail in the live rows. The raw code
+or link is still, for a while, in these places (#63 review, R5):
+
+- **Until the send is done, and a run after.** The queue needs the mail to
+  send it. The sweep takes a send five minutes after it is queued and once
+  none of its rows is `pending` or `processing`, so the raw mail lives as long
+  as the send is going out, plus up to one interval (five minutes) and the
+  run. A paused sender (`MAIL_SENDER=paused`) or rows waiting for a retry keep
+  it longer. A send whose masking fails keeps it until it is masked, three
+  counted failures, or seven days after its first failure. All that time the
+  API answers `pending` and shows nothing.
+- **The nightly dump.** The production backup dumps the database every night
+  (encrypted, off the server; object lock 30 days, deleted on day 31: hub
+  ticket account-erasure 19). A dump taken before a send was masked holds its
+  raw mail until the dump is deleted. A restored dump comes back with
+  `content_masked_at` empty for those sends, so the sweep masks them again on
+  its first run. Manual dumps (`skymail-production-dump-wizard.sh`) are kept at
+  most `PERIODIC_DESTRUCTION_INTERVAL` (90 days).
+- **PostgreSQL's dead row versions.** An `UPDATE` writes a new row version;
+  the old one, with the raw mail, stays in the table's pages until `VACUUM`
+  removes it and the space is reused. No query, the API and `pg_dump`
+  included, reads a dead version: it is there only for whoever can read the
+  data files, who can read the live database too. Autovacuum takes a table
+  once about a fifth of its rows are dead (PostgreSQL's default
+  `autovacuum_vacuum_scale_factor`, 0.2), which on `mail_queue`, mostly
+  appended to, may be days or longer. So routine masking needs nothing more.
+  After a large backlog is masked or emptied at once (a first release, a
+  restore, a long sender pause), run on the database, once the sweep is
+  through: `VACUUM (VERBOSE) mail_queue; VACUUM (VERBOSE) mail_tasks;`. Plain
+  `VACUUM` takes no lock that stops reads or writes; `VACUUM FULL` is not
+  needed and locks the tables.
+- **The WAL.** Every write, the raw mail with it, is in the write-ahead log
+  until its segment is removed or recycled after a later checkpoint (every
+  five minutes on PostgreSQL's defaults), unless a replication slot or
+  `wal_keep_size` holds it. WAL archiving is off in production, so no
+  point-in-time recovery archive holds it (hub ticket account-erasure 19).
+  Turning archiving on would keep raw mail in the archive as long as the
+  archive; this page must then say how long.
+- **`mail_approvals.body_variables`.** A Mail onayı request keeps the values it
+  was submitted with until Account erasure (see Mail approvals); the sweep
+  does not mask it. Approved sends are to many, sensitive only when their
+  template says so.
+- Not kept elsewhere: `mail_queue.error` holds the SMTP or render error, not
+  the mail; the logs carry ids and counts, never a subject or a body.
+
+**`sent_content_views` period (Yusuf, 2026-10-14: two years).** A record of
+who opened a masked mail is deleted `SENT_CONTENT_VIEWS_RETENTION_DAYS` after
+`created_at` (unset: 730, two years; a whole number from 1 to 3650, anything
+else stops startup), by the same sweep, after the content, 500 rows a
+statement.
+The rows are an access log of who opened a person's masked mail, there to
+answer "who saw my mail" and to review an operator's use. KVKK fixes no
+period for such a log; it asks for one tied to its purpose (art. 4(2)(d)).
+Two years covers a full board term and the one after it: a question about
+how the previous board used the panel can still be answered after the
+handover. What matches Microsoft 365: its audit log, which records who
+opened a mailbox item (`MailItemsAccessed`), is kept for a fixed period
+separate from the mail's own retention — 180 days on Audit (Standard), one
+year on Audit (Premium), up to ten years with an add-on. Where it deviates:
+two years rather than 180 days or one year, for the yearly board term; and
+the period is SkyMail's one setting, not a per-plan default. Should the
+content's period be set shorter than two years, a view row outlives the mail
+it names; it holds no content.
 
 ## Account erasure
 
