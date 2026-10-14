@@ -153,3 +153,42 @@ func TestTheLastCheckSeesACodeInAnIdClassOrName(t *testing.T) {
 		t.Error("a colour or a size is taken for a code")
 	}
 }
+
+// In the patterns, a known value is replaced in what the mail says — its text
+// and attribute values — not in its markup or its style sheets: a listed
+// "482" leaves color:#482c8f, a listed "td" leaves the <td>s, and a value of
+// fewer than four characters is replaced only where it stands on its own
+// (#65 review, B1).
+func TestThePatternsReplaceKnownValuesOnlyInWhatTheMailSays(t *testing.T) {
+	sent := Rendered{
+		Subject:   "Numaran 482",
+		PlainText: "Numaran 482, kodun kxqpzmwt, sıran 1, saat 14:10",
+		HTML: `<html><head><style>.a{color:#482c8f}</style></head><body>` +
+			`<table width="100%"><tr><td style="color:#482c8f" title="kod kxqpzmwt">Numaran 482, kodun kxqpzmwt, etiket td, sıran 1, saat 14:10</td></tr></table>` +
+			`</body></html>`,
+	}
+	raw := []byte(`{"numara":"482","harfler":"kxqpzmwt","etiket":"td","sira":"1"}`)
+	masked := maskListing(t, sent, raw, []string{"numara", "harfler", "etiket", "sira"}, nil)
+	if masked.Method != MaskedByPatterns {
+		t.Fatalf("method = %s", masked.Method)
+	}
+	assertNoneOf(t, masked.Rendered, "kxqpzmwt")
+	for _, kept := range []string{`.a{color:#482c8f}`, `style="color:#482c8f"`, `<table width="100%">`, `<tr><td `, `</td></tr></table>`, `14:10`} {
+		if !strings.Contains(masked.HTML, kept) {
+			t.Errorf("html lost %s:\n%s", kept, masked.HTML)
+		}
+	}
+	for name, part := range map[string]string{"subject": masked.Subject, "plain text": masked.PlainText} {
+		if strings.Contains(part, "482") {
+			t.Errorf("%s still holds 482: %q", name, part)
+		}
+	}
+	if !strings.Contains(masked.PlainText, "sıran "+Mask+", saat 14:10") {
+		t.Errorf("plain text = %q, want the lone 1 masked and the time kept", masked.PlainText)
+	}
+	for _, gone := range []string{"Numaran 482", "etiket td", "sıran 1,"} {
+		if strings.Contains(masked.HTML, gone) {
+			t.Errorf("html text still holds %q:\n%s", gone, masked.HTML)
+		}
+	}
+}

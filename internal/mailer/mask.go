@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/net/html"
 )
@@ -183,7 +184,7 @@ func (m *Masker) Mail(sent Rendered, recipient RecipientInfo) (MaskedMail, error
 	out := Rendered{
 		Subject:   maskText(replaceValues(sent.Subject, known), nil),
 		PlainText: maskText(replaceValues(sent.PlainText, known), nil),
-		HTML:      maskHTML(replaceValues(sent.HTML, known)),
+		HTML:      maskHTML(sent.HTML, known),
 	}
 	if leaks(out, m.masked.credentials) || unexplained(out, nil) {
 		return MaskedMail{}, ErrCannotMask
@@ -587,7 +588,9 @@ func credentialsIn(v string) []string {
 }
 
 // replaceValues replaces each value, in the forms the renderers print it,
-// with Mask, the longest first.
+// with Mask, the longest first. A form of fewer than four characters (a
+// listed "482") is replaced only where it stands on its own, no letter or
+// digit touching it: 14:10 keeps its 1.
 func replaceValues(s string, values []string) string {
 	if s == "" || len(values) == 0 {
 		return s
@@ -604,9 +607,39 @@ func replaceValues(s string, values []string) string {
 	}
 	sort.Slice(forms, func(i, j int) bool { return len(forms[i]) > len(forms[j]) })
 	for _, form := range forms {
-		s = strings.ReplaceAll(s, form, Mask)
+		if utf8.RuneCountInString(form) < 4 {
+			s = replaceAlone(s, form)
+		} else {
+			s = strings.ReplaceAll(s, form, Mask)
+		}
 	}
 	return s
+}
+
+// replaceAlone replaces with Mask each form in s that no letter or digit
+// touches.
+func replaceAlone(s, form string) string {
+	wordy := func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
+	var out strings.Builder
+	rest := s
+	for {
+		at := strings.Index(rest, form)
+		if at < 0 {
+			out.WriteString(rest)
+			return out.String()
+		}
+		end := at + len(form)
+		before, _ := utf8.DecodeLastRuneInString(rest[:at])
+		after, _ := utf8.DecodeRuneInString(rest[end:])
+		alone := (at == 0 || !wordy(before)) && (end == len(rest) || !wordy(after))
+		out.WriteString(rest[:at])
+		if alone {
+			out.WriteString(Mask)
+		} else {
+			out.WriteString(form)
+		}
+		rest = rest[end:]
+	}
 }
 
 // printedForms is a value as text/template, html/template (in text, in an
@@ -922,12 +955,13 @@ var (
 )
 
 // maskCSS masks a style sheet or a style attribute: its addresses, the text
-// of its quoted strings (content: "…"), and a long number that is no colour
-// or size.
-func maskCSS(s string) string {
+// of its quoted strings (content: "…") with the known values in it, and a
+// long number that is no colour or size. A known value is replaced nowhere
+// else in it: a listed 482 leaves color:#482c8f.
+func maskCSS(s string, known []string) string {
 	s = urlInText.ReplaceAllString(s, Mask)
 	s = cssString.ReplaceAllStringFunc(s, func(q string) string {
-		return q[:1] + maskText(q[1:len(q)-1], nil) + q[len(q)-1:]
+		return q[:1] + maskText(replaceValues(q[1:len(q)-1], known), nil) + q[len(q)-1:]
 	})
 	return cssNumber.ReplaceAllStringFunc(s, func(w string) string {
 		if digitRun.MatchString(w) {
@@ -948,9 +982,12 @@ func maskURLAttribute(v string) string {
 }
 
 // maskHTML masks the HTML's text, comments and attributes as maskText does,
-// marking what it masked in the text; every address in an attribute whole;
-// style sheets and style attributes as maskCSS does.
-func maskHTML(src string) string {
+// after replacing the known values in them, marking what it masked in the
+// text; every address in an attribute whole; style sheets and style
+// attributes as maskCSS does. Tag and attribute names, and the attributes
+// that only lay the mail out, are left as they are: a known value is
+// replaced in what the mail says, not in its markup (#65 review, B1).
+func maskHTML(src string, known []string) string {
 	if strings.TrimSpace(src) == "" {
 		return src
 	}
@@ -975,14 +1012,14 @@ func maskHTML(src string) string {
 		case html.TextToken:
 			switch inRaw {
 			case "style":
-				out.WriteString(maskCSS(raw))
+				out.WriteString(maskCSS(raw, known))
 			case "":
-				out.WriteString(markMasked(maskText(token.Data, nil)))
+				out.WriteString(markMasked(maskText(replaceValues(token.Data, known), nil)))
 			default:
-				out.WriteString(maskText(raw, nil))
+				out.WriteString(maskText(replaceValues(raw, known), nil))
 			}
 		case html.CommentToken:
-			out.WriteString("<!--" + maskText(token.Data, nil) + "-->")
+			out.WriteString("<!--" + maskText(replaceValues(token.Data, known), nil) + "-->")
 		case html.StartTagToken, html.SelfClosingTagToken:
 			if kind == html.StartTagToken {
 				switch token.Data {
@@ -995,13 +1032,13 @@ func maskHTML(src string) string {
 				var masked string
 				switch {
 				case attr.Key == "style":
-					masked = maskCSS(attr.Val)
+					masked = maskCSS(attr.Val, known)
 				case urlAttributes[attr.Key]:
 					masked = maskURLAttribute(attr.Val)
 				case layoutAttributes[attr.Key]:
 					masked = attr.Val
 				default:
-					masked = maskText(attr.Val, nil)
+					masked = maskText(replaceValues(attr.Val, known), nil)
 				}
 				if masked != attr.Val {
 					token.Attr[i].Val = masked

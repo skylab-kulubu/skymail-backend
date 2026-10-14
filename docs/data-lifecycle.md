@@ -327,7 +327,11 @@ Nothing is masked on reading. Two ways, the first when it can be proved:
    mail.
 2. *Patterns,* when it does not, or the variables are gone. The known values
    are replaced in the stored mail in every form the renderers print them
-   (`&amp;`, `&#43;`, URL escapes), then every address, IP address, run of
+   (`&amp;`, `&#43;`, URL escapes) — in the subject, the plain text, and the
+   HTML's text, comments, attribute values and style sheets' quoted strings,
+   never in its tags, layout attributes or the rest of its style sheets (a
+   known `482` leaves `color:#482c8f`), and one of fewer than four characters
+   only where no letter or digit touches it — then every address, IP address, run of
    four or more digits, code cut by spaces (`483 920`), code- or token-shaped
    word is masked in the subject, the plain text, and the HTML's text,
    comments and attributes (`data-*`, `id`, `class` and `name` too: a
