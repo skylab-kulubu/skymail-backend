@@ -120,6 +120,11 @@ type EnqueueWithRecipientsParams struct {
 	// Tracking asks for open and click tracking (tracking.go); it is ignored
 	// while SKYMAIL_TRACKING is off.
 	Tracking bool
+	// Preferences is whom core lets be tracked, asked before the send's
+	// transaction (ResolveTracking). Mailer.EnqueueWithRecipients asks
+	// itself when it is nil; a send queued in a caller's transaction
+	// (Queue) never asks, and tracks no one core was not asked about.
+	Preferences *TrackingPreferences
 }
 
 type Mailer interface {
@@ -161,6 +166,11 @@ type Transactional interface {
 	// Queue writes sends through q, a transaction's queries, in the lane
 	// priority.
 	Queue(q *database.Queries, priority Priority) Queue
+	// ResolveTracking asks core whom of recipients a send of templateID to
+	// mailListID may track. Call it before the transaction a Queue writes
+	// in and pass the answer as EnqueueWithRecipientsParams.Preferences:
+	// SkyMail never waits for core holding a transaction.
+	ResolveTracking(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID, recipients []RecipientInfo) *TrackingPreferences
 	// Wake asks the dispatcher to look at the queue now. Call it after the
 	// transaction a Queue wrote in commits; the dispatcher's tick finds the
 	// rows anyway, only later.
@@ -534,6 +544,10 @@ func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingl
 }
 
 func (m *mailerImpl) EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error) {
+	// Core is asked before the transaction begins.
+	if params.Tracking && m.TrackingAvailable() && params.Preferences == nil {
+		params.Preferences = m.ResolveTracking(ctx, params.TemplateID, params.MailListID, params.Recipients)
+	}
 	return m.pooled(ctx, PriorityBulk, func(q *queue) (uuid.UUID, bool, error) {
 		return q.enqueueWithRecipients(ctx, params)
 	})
@@ -589,7 +603,7 @@ func (q *queue) enqueue(ctx context.Context, arg database.CreateMailTaskParams) 
 		}
 	}
 
-	queued, err := q.renderAndQueue(ctx, commonRows, false, arg.TrackingRequested)
+	queued, err := q.renderAndQueue(ctx, commonRows, false, arg.TrackingRequested, nil)
 	return rows[0].TaskID, queued, err
 }
 
@@ -616,7 +630,7 @@ func (q *queue) enqueueSingle(ctx context.Context, arg database.CreateSingleMail
 	// A single mail has one recipient, and its caller (a login code, a Forms
 	// confirmation) is waiting for it: a mail that does not render is the
 	// send failing, and the caller is told.
-	queued, err := q.renderAndQueue(ctx, commonRows, true, arg.TrackingRequested)
+	queued, err := q.renderAndQueue(ctx, commonRows, true, arg.TrackingRequested, nil)
 	return row.TaskID, queued, err
 }
 
@@ -652,7 +666,7 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 		})
 	}
 
-	queued, err := q.renderAndQueue(ctx, rows, false, tracked)
+	queued, err := q.renderAndQueue(ctx, rows, false, tracked, params.Preferences)
 	return task.ID, queued, err
 }
 
@@ -776,9 +790,10 @@ func (t mailTemplates) renderWith(textVars, htmlVars map[string]interface{}, rec
 // others are queued: one recipient never holds back a send to the rest. With
 // strict, a mail that does not render is returned as the error and nothing is
 // written. tracked says the send asked for open and click tracking with the
-// flag on: each queued row gets a token or why not, and the send's shared
-// links are registered (tracking.go).
-func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict, tracked bool) (bool, error) {
+// flag on: each queued row gets a token or why not, as preferences — what
+// core said before the transaction — allows, and the send's shared links are
+// registered (tracking.go).
+func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict, tracked bool, preferences *TrackingPreferences) (bool, error) {
 	if len(rows) == 0 {
 		return false, nil
 	}
@@ -829,7 +844,7 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 	}
 
 	if tracked && len(queueItems) > 0 {
-		if err := q.planTracking(ctx, rows[0].TaskID, queueItems); err != nil {
+		if err := q.planTracking(ctx, rows[0].TaskID, queueItems, preferences); err != nil {
 			return false, err
 		}
 		if err := q.registerLinks(ctx, rows[0].TaskID, queueItems); err != nil {

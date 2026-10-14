@@ -88,17 +88,31 @@ func trackingQueue(t *testing.T) *database.Store {
 }
 
 // fakePreferences is core's answer: who may be tracked, and every call made.
+// With db, each call also counts the database's sessions that sit in an open
+// transaction while core is asked: a send must ask core before its
+// transaction begins, never while it holds one.
 type fakePreferences struct {
 	mu        sync.Mutex
 	decisions map[uuid.UUID]tracking.Decision
 	err       error
 	calls     [][]uuid.UUID
+	db        *database.Store
+	openTx    []int
 }
 
-func (p *fakePreferences) Resolve(_ context.Context, subs []uuid.UUID) (map[uuid.UUID]tracking.Decision, error) {
+func (p *fakePreferences) Resolve(ctx context.Context, subs []uuid.UUID) (map[uuid.UUID]tracking.Decision, error) {
+	open := 0
+	if p.db != nil {
+		if err := p.db.Conn.QueryRow(ctx, `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND pid <> pg_backend_pid() AND state LIKE 'idle in transaction%'`).Scan(&open); err != nil {
+			return nil, err
+		}
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls = append(p.calls, append([]uuid.UUID(nil), subs...))
+	p.openTx = append(p.openTx, open)
 	if p.err != nil {
 		return nil, p.err
 	}
@@ -262,6 +276,96 @@ func TestATrackedGroupSendGivesATokenToWhomCoreAllows(t *testing.T) {
 	links := linksOf(t, db, task)
 	if len(links) != 1 || links[0].url != "https://skylab.example/etkinlik?gun=1&saat=2" || len(links[0].token) != tracking.LinkTokenBytes {
 		t.Fatalf("registered links = %+v, want the one every recipient has", links)
+	}
+}
+
+// Core is asked before the send's transaction begins: no transaction is
+// open, and so no lock or connection is held, while SkyMail waits for core
+// (up to 5 seconds).
+func TestCoreIsAskedBeforeTheSendsTransaction(t *testing.T) {
+	captureMailerLogs(t)
+	db := trackingQueue(t)
+	prefs := coreSays()
+	prefs.db = db
+	m := mailer.NewMailer(db, startFakeSMTP(t).config(), mailer.SenderOn, trackingOn(prefs))
+	task, err := m.EnqueueWithRecipients(context.Background(), mailer.EnqueueWithRecipientsParams{
+		SentBy: laneSender, TemplateID: announcementTemplate, MailListID: &announcementList, BodyVariables: []byte(`{}`),
+		Recipients: groupOf(), Tracking: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prefs.openTx) != 1 || prefs.openTx[0] != 0 {
+		t.Fatalf("core was asked %d times with %v transactions open; want once, with none", len(prefs.openTx), prefs.openTx)
+	}
+	if rows := trackedRows(t, db, task); len(rows["ayse@example.com"].token) != tracking.RecipientTokenBytes {
+		t.Fatalf("Ayşe is not tracked: %+v", rows)
+	}
+}
+
+// A send queued in a caller's transaction (a Mail onayı approval) never asks
+// core in it: it takes what the caller asked core before the transaction
+// (ResolveTracking). Whoever is not in that answer — a member who joined the
+// group since, or no answer at all — is not tracked (preference_unavailable),
+// and the send goes out.
+func TestASendInATransactionTracksOnlyWhomCoreWasAskedAbout(t *testing.T) {
+	captureMailerLogs(t)
+	db := trackingQueue(t)
+	prefs := coreSays()
+	prefs.db = db
+	m := mailer.NewMailer(db, startFakeSMTP(t).config(), mailer.SenderOn, trackingOn(prefs))
+	ctx := context.Background()
+	group := groupOf()
+
+	// Asked about Ayşe and the member without an id only, before the
+	// transaction; Mehmet and Zeynep are in the send but not in the answer.
+	asked := m.ResolveTracking(ctx, announcementTemplate, &announcementList, []mailer.RecipientInfo{group[0], group[3]})
+	if len(prefs.openTx) != 1 || prefs.openTx[0] != 0 {
+		t.Fatalf("ResolveTracking asked core %d times with %v transactions open", len(prefs.openTx), prefs.openTx)
+	}
+	queueIn := func(preferences *mailer.TrackingPreferences) uuid.UUID {
+		t.Helper()
+		var task uuid.UUID
+		if err := db.InTx(ctx, func(q *database.Queries) error {
+			var err error
+			task, err = m.Queue(q, mailer.PriorityBulk).EnqueueWithRecipients(ctx, mailer.EnqueueWithRecipientsParams{
+				SentBy: laneSender, TemplateID: announcementTemplate, MailListID: &announcementList, BodyVariables: []byte(`{}`),
+				Recipients: group, Tracking: true, Preferences: preferences,
+			})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return task
+	}
+
+	rows := trackedRows(t, db, queueIn(asked))
+	want := map[string]string{
+		"mehmet@example.com": tracking.SkipPreferenceUnavailable,
+		"zeynep@example.com": tracking.SkipPreferenceUnavailable,
+		"adres@example.com":  tracking.SkipNoAccount,
+	}
+	if len(rows["ayse@example.com"].token) != tracking.RecipientTokenBytes {
+		t.Errorf("Ayşe, asked about and allowed: %+v", rows["ayse@example.com"])
+	}
+	for email, reason := range want {
+		if rows[email].token != nil || rows[email].reason != reason {
+			t.Errorf("%s: token %x, reason %q; want none, %q", email, rows[email].token, rows[email].reason, reason)
+		}
+	}
+
+	rows = trackedRows(t, db, queueIn(nil))
+	for email, row := range rows {
+		reason := tracking.SkipPreferenceUnavailable
+		if email == "adres@example.com" {
+			reason = tracking.SkipNoAccount
+		}
+		if row.token != nil || row.reason != reason || row.status != "pending" {
+			t.Errorf("not asked, %s: %s, token %x, reason %q; want pending, none, %q", email, row.status, row.token, row.reason, reason)
+		}
+	}
+	if len(prefs.asked()) != 1 {
+		t.Errorf("core was asked %d times; a send in a transaction never asks it", len(prefs.asked()))
 	}
 }
 

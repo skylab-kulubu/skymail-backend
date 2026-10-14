@@ -395,6 +395,11 @@ type approvalPrepared struct {
 	groupID *uuid.UUID
 	// The group's members with an address; nil when the group is gone.
 	groupMembers []mailer.RecipientInfo
+	// Whom of them core lets be tracked, asked with them before the lock
+	// when the request asks for tracking: SkyMail never waits for core
+	// holding the request's transaction. The send tracks no one core was not
+	// asked about here.
+	tracking *mailer.TrackingPreferences
 	// A resubmission's send, as its checks passed it.
 	checked checkedSend
 }
@@ -444,6 +449,9 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 		prepared, err = h.groupRecipients(ctx, *view.MailApproval.MailListID)
 		if err != nil {
 			return err
+		}
+		if view.MailApproval.TrackingRequested && prepared.groupMembers != nil {
+			prepared.tracking = h.mailer.ResolveTracking(ctx, view.MailApproval.TemplateID, view.MailApproval.MailListID, prepared.groupMembers)
 		}
 	}
 	if action.check != nil {
@@ -733,6 +741,7 @@ func queueToList(ctx context.Context, q *database.Queries, sends mailer.Queue, a
 		BodyVariables: a.BodyVariables,
 		Recipients:    prepared.groupMembers,
 		Tracking:      a.TrackingRequested,
+		Preferences:   prepared.tracking,
 	})
 }
 

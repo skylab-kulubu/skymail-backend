@@ -134,8 +134,8 @@ type Querier interface {
 	GetAllTemplatesIncludingArchived(ctx context.Context, arg GetAllTemplatesIncludingArchivedParams) ([]Template, error)
 	GetArchivedMailingLists(ctx context.Context, arg GetArchivedMailingListsParams) ([]MailingList, error)
 	GetArchivedTemplates(ctx context.Context, arg GetArchivedTemplatesParams) ([]Template, error)
-	// A queue row's sent_at (20261015120000) is empty for every row sent before
-	// it, so created_at — when that recipient's mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
+	// A queue row has no sent time of its own. created_at — when that recipient's
+	// mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
 	// mail that goes through on its first attempt leaves within seconds, and only a
 	// retried one (the ladder tops out under eight minutes) can land later.
 	// next_attempt_at is not used: every row older than the retry migration holds
@@ -172,6 +172,12 @@ type Querier interface {
 	GetTemplateById(ctx context.Context, id uuid.UUID) (Template, error)
 	GetTemplateByIdIncludingArchived(ctx context.Context, id uuid.UUID) (Template, error)
 	GetTemplateByKey(ctx context.Context, key *string) (Template, error)
+	// Whether a send of a template would never be tracked, asked before the send
+	// exists so core is not asked about its people for nothing: a System
+	// template, or content sensitive as mail_task_content_sensitive() reads it
+	// for a send to many (bulk) or to one. GetMailTaskTrackingExclusion, in the
+	// send's transaction, decides.
+	GetTemplateTrackingExclusion(ctx context.Context, arg GetTemplateTrackingExclusionParams) (GetTemplateTrackingExclusionRow, error)
 	// One version of one template, whole. A version of another template is not
 	// found here.
 	GetTemplateVersion(ctx context.Context, arg GetTemplateVersionParams) (GetTemplateVersionRow, error)

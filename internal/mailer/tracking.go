@@ -38,16 +38,62 @@ func (m *mailerImpl) TrackingAvailable() bool { return m.tracking.Config.On() }
 // track; past it no one in the send is tracked and the send goes on.
 const preferencesBudget = 5 * time.Second
 
-// planTracking decides, for a send that asked for tracking, each queued
-// row's token or why it has none (design note 07 §4.1):
+// TrackingPreferences is what core said, before a send's transaction began,
+// about whom the send may track. Nil is core not asked: no one with a
+// Keycloak id is tracked.
+type TrackingPreferences struct {
+	decisions map[uuid.UUID]tracking.Decision
+	// err: core could not say (down, too slow, not the contract's answer).
+	err error
+}
+
+// ResolveTracking asks core, within preferencesBudget and outside any
+// transaction, whom of recipients a send of templateID to mailListID may
+// track. It asks no one when tracking is off, when no recipient has a
+// Keycloak id, or when the template is never tracked (System or sensitive;
+// the send's transaction decides that again, and its answer stands). Core
+// failing is an answer too: the send tracks no one with an id and goes out.
+func (m *mailerImpl) ResolveTracking(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID, recipients []RecipientInfo) *TrackingPreferences {
+	if !m.TrackingAvailable() {
+		return nil
+	}
+	var subs []uuid.UUID
+	for _, r := range recipients {
+		if r.Sub != nil {
+			subs = append(subs, *r.Sub)
+		}
+	}
+	if len(subs) == 0 {
+		return &TrackingPreferences{}
+	}
+	exclusion, err := m.db.GetTemplateTrackingExclusion(ctx, database.GetTemplateTrackingExclusionParams{
+		TemplateID: templateID,
+		Bulk:       mailListID != nil,
+	})
+	if err == nil && (exclusion.SystemTemplate || exclusion.ContentSensitive) {
+		return &TrackingPreferences{}
+	}
+	if m.tracking.Preferences == nil {
+		return &TrackingPreferences{err: errors.New("tracking preferences: no core client")}
+	}
+	ask, cancel := context.WithTimeout(ctx, preferencesBudget)
+	defer cancel()
+	decisions, err := m.tracking.Preferences.Resolve(ask, subs)
+	return &TrackingPreferences{decisions: decisions, err: err}
+}
+
+// planTracking decides, in the send's transaction, for a send that asked for
+// tracking, each queued row's token or why it has none (design note 07
+// §4.1):
 //
 //   - a single mail (the system lane), or a send of a System template or of
 //     one whose content is sensitive (mail_task_content_sensitive): no one,
 //     transactional;
 //   - a recipient SkyMail knows only by address: no_account;
-//   - everyone else as core says, asked once for the send; when core cannot
-//     say, no one with an id is tracked (preference_unavailable).
-func (q *queue) planTracking(ctx context.Context, taskID uuid.UUID, items []database.CreateMailQueueItemsParams) error {
+//   - everyone else as core said before the transaction (preferences). Core
+//     not asked, failing, or not asked about this person (the recipients
+//     changed since): preference_unavailable. Core is never asked here.
+func (q *queue) planTracking(ctx context.Context, taskID uuid.UUID, items []database.CreateMailQueueItemsParams, preferences *TrackingPreferences) error {
 	skipAll := func(reason string) {
 		for i := range items {
 			items[i].TrackingSkipReason = &reason
@@ -66,22 +112,26 @@ func (q *queue) planTracking(ctx context.Context, taskID uuid.UUID, items []data
 		return nil
 	}
 
-	var subs []uuid.UUID
+	var decisions map[uuid.UUID]tracking.Decision
+	subjects := 0
 	for _, item := range items {
 		if item.RecipientSub != nil {
-			subs = append(subs, *item.RecipientSub)
+			subjects++
 		}
 	}
-	var decisions map[uuid.UUID]tracking.Decision
-	if len(subs) > 0 {
-		decisions, err = q.resolvePreferences(ctx, subs)
-		if err != nil {
-			// The people are counted, never named.
-			q.logger.Warn().Err(err).Str("event", "tracking_preferences_unavailable").
-				Str("task_id", taskID.String()).Int("subjects", len(subs)).
-				Msg("Core could not say who may be tracked: no one in the send is tracked, it goes out as usual")
-			decisions = nil
-		}
+	switch {
+	case subjects == 0:
+	case preferences == nil:
+		q.logger.Warn().Str("event", "tracking_preferences_unavailable").Str("cause", "not_asked").
+			Str("task_id", taskID.String()).Int("subjects", subjects).
+			Msg("Core was not asked who may be tracked: no one in the send is tracked, it goes out as usual")
+	case preferences.err != nil:
+		// The people are counted, never named.
+		q.logger.Warn().Err(preferences.err).Str("event", "tracking_preferences_unavailable").Str("cause", "core").
+			Str("task_id", taskID.String()).Int("subjects", subjects).
+			Msg("Core could not say who may be tracked: no one in the send is tracked, it goes out as usual")
+	default:
+		decisions = preferences.decisions
 	}
 
 	for i := range items {
@@ -102,16 +152,6 @@ func (q *queue) planTracking(ctx context.Context, taskID uuid.UUID, items []data
 		items[i].TrackingSkipReason = &reason
 	}
 	return nil
-}
-
-// resolvePreferences asks core about subs within preferencesBudget.
-func (q *queue) resolvePreferences(ctx context.Context, subs []uuid.UUID) (map[uuid.UUID]tracking.Decision, error) {
-	if q.tracking.Preferences == nil {
-		return nil, errors.New("tracking preferences: no core client")
-	}
-	ctx, cancel := context.WithTimeout(ctx, preferencesBudget)
-	defer cancel()
-	return q.tracking.Preferences.Resolve(ctx, subs)
 }
 
 // registerLinks registers the links of a send with a tracked row: the http

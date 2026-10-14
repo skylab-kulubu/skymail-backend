@@ -8,20 +8,34 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
+	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
 )
 
 // routePreferences is core's answer in the route tests: Elif may be tracked,
-// Başka turned it off.
+// Başka turned it off. Each call counts the sessions sitting in an open
+// transaction while core is asked: an approval must ask before it locks the
+// request.
 type routePreferences struct {
-	mu    sync.Mutex
-	asked int
+	mu     sync.Mutex
+	asked  int
+	openTx []int
+	store  *database.Store
 }
 
-func (p *routePreferences) Resolve(_ context.Context, subs []uuid.UUID) (map[uuid.UUID]tracking.Decision, error) {
+func (p *routePreferences) Resolve(ctx context.Context, subs []uuid.UUID) (map[uuid.UUID]tracking.Decision, error) {
+	open := 0
+	if p.store != nil {
+		if err := p.store.Conn.QueryRow(ctx, `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND pid <> pg_backend_pid() AND state LIKE 'idle in transaction%'`).Scan(&open); err != nil {
+			return nil, err
+		}
+	}
 	p.mu.Lock()
 	p.asked++
+	p.openTx = append(p.openTx, open)
 	p.mu.Unlock()
 	out := map[uuid.UUID]tracking.Decision{}
 	for _, sub := range subs {
@@ -46,6 +60,7 @@ func trackedWorld(t *testing.T, on bool) (*approvalWorld, *routePreferences) {
 		Config:      tracking.Config{Mode: mode, BaseURL: "https://api.example.test/api/skymail", CoreURL: "http://core.invalid"},
 		Preferences: prefs,
 	}))
+	prefs.store = w.store
 	return w, prefs
 }
 
@@ -137,7 +152,7 @@ func TestASendTakesTrackingAndSaysWhetherItGotIt(t *testing.T) {
 // send asks for it; off, the box is kept false. A resubmission says it anew.
 func TestAnApprovedSendKeepsTheSubmittersTracking(t *testing.T) {
 	for _, on := range []bool{true, false} {
-		w, _ := trackedWorld(t, on)
+		w, prefs := trackedWorld(t, on)
 		send := w.listSend()
 		send["mail_list_id"] = w.group
 		send["tracking"] = true
@@ -160,6 +175,14 @@ func TestAnApprovedSendKeepsTheSubmittersTracking(t *testing.T) {
 		}
 		if on && (len(rows[elif.email].token) != tracking.RecipientTokenBytes || rows[baska.email].reason != tracking.SkipPreferenceOff) {
 			t.Errorf("the approved send's rows = %+v, want Elif tracked and Başka not", rows)
+		}
+		// Core was asked once, for the approval, before the request was
+		// locked: no transaction open while waiting for it.
+		if on && (prefs.asked != 1 || prefs.openTx[0] != 0) {
+			t.Errorf("core asked %d times with %v transactions open; want once, with none", prefs.asked, prefs.openTx)
+		}
+		if !on && prefs.asked != 0 {
+			t.Errorf("off: core asked %d times", prefs.asked)
 		}
 	}
 

@@ -361,6 +361,10 @@ Hatalı adres, değeri değil değişkeni söyleyerek açılışı durdurur. Aç
   şeritte; şablon System değil ve hassas değil (`mail_task_content_sensitive()`,
   içerik panelinin tek tanımı); alıcının Keycloak `sub`'ı biliniyor
   (`recipient_sub`: yalnız Keycloak grubu üyeleri) ve core izin veriyor.
+  core'a gönderimin veritabanı işlemi **başlamadan önce** sorulur (Mail
+  onayında istek kilitlenmeden önce, grup üyeleriyle birlikte); SkyMail core'u
+  hiçbir zaman işlem ya da kilit tutarken beklemez. O yanıtta olmayan kişi
+  (sorulmamış, ör. yanıt gelmemiş) takip edilmez.
   Takip edilen satır 16 baytlık rastgele bir belirteç alır
   (`mail_queue.tracking_token`); edilmeyen satır nedenini
   (`tracking_skip_reason`): `transactional`, `no_account`, `preference_off`,
@@ -368,8 +372,10 @@ Hatalı adres, değeri değil değişkeni söyleyerek açılışı durdurur. Aç
   `flag_off`. Gönderim takip istemediyse ikisi de boştur.
 - **core'a ulaşılamazsa** (5 saniye, hata ya da sözleşme dışı yanıt) o
   gönderimde kimse takip edilmez (`preference_unavailable`), gönderim durmaz.
-  Uyarı satırı `"event":"tracking_preferences_unavailable"` gönderim kimliğini
-  ve kişi sayısını yazar, kimseyi adlandırmaz.
+  Uyarı satırı `"event":"tracking_preferences_unavailable"` (`"cause":"core"`
+  ya da sorulmadıysa `"not_asked"`) gönderim kimliğini ve kişi sayısını yazar,
+  kimseyi adlandırmaz. System ya da hassas şablonun gönderiminde core'a hiç
+  sorulmaz.
 - **Bağlantılar:** takip edilen satırı olan gönderimde, bütün alıcıların
   postasında aynı olan `http`/`https` bağlantıları (sırayla, en çok 100)
   kendi 8 baytlık belirteçleriyle `mail_task_links`'e yazılır. Değişkenle

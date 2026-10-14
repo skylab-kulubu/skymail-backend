@@ -1567,8 +1567,8 @@ type GetDailySentCountsRow struct {
 	Sent int64     `json:"sent"`
 }
 
-// A queue row's sent_at (20261015120000) is empty for every row sent before
-// it, so created_at — when that recipient's mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
+// A queue row has no sent time of its own. created_at — when that recipient's
+// mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
 // mail that goes through on its first attempt leaves within seconds, and only a
 // retried one (the ladder tops out under eight minutes) can land later.
 // next_attempt_at is not used: every row older than the retry migration holds
@@ -2140,6 +2140,35 @@ func (q *Queries) GetTemplateByKey(ctx context.Context, key *string) (Template, 
 		&i.ContentSensitive,
 		&i.SensitiveVariables,
 	)
+	return i, err
+}
+
+const getTemplateTrackingExclusion = `-- name: GetTemplateTrackingExclusion :one
+SELECT t.system::boolean                                                                            AS system_template,
+       (template_key_content_locked(t.key) OR COALESCE(t.content_sensitive, NOT $1::boolean))::boolean AS content_sensitive
+FROM templates t
+WHERE t.id = $2
+`
+
+type GetTemplateTrackingExclusionParams struct {
+	Bulk       bool      `json:"bulk"`
+	TemplateID uuid.UUID `json:"template_id"`
+}
+
+type GetTemplateTrackingExclusionRow struct {
+	SystemTemplate   bool `json:"system_template"`
+	ContentSensitive bool `json:"content_sensitive"`
+}
+
+// Whether a send of a template would never be tracked, asked before the send
+// exists so core is not asked about its people for nothing: a System
+// template, or content sensitive as mail_task_content_sensitive() reads it
+// for a send to many (bulk) or to one. GetMailTaskTrackingExclusion, in the
+// send's transaction, decides.
+func (q *Queries) GetTemplateTrackingExclusion(ctx context.Context, arg GetTemplateTrackingExclusionParams) (GetTemplateTrackingExclusionRow, error) {
+	row := q.db.QueryRow(ctx, getTemplateTrackingExclusion, arg.Bulk, arg.TemplateID)
+	var i GetTemplateTrackingExclusionRow
+	err := row.Scan(&i.SystemTemplate, &i.ContentSensitive)
 	return i, err
 }
 
