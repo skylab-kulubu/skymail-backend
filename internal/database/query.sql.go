@@ -441,7 +441,7 @@ func (q *Queries) CloseRestoredQueueItems(ctx context.Context, arg CloseRestored
 const confirmMaskFailures = `-- name: ConfirmMaskFailures :many
 UPDATE mail_tasks
 SET content_mask_failures    = content_mask_failures + 1,
-    content_mask_unconfirmed = GREATEST(content_mask_unconfirmed - 1, 0)
+    content_mask_unconfirmed = 0
 WHERE id = ANY ($1::uuid[])
   AND content_mask_unconfirmed > 0
   AND content_masked_at IS NULL
@@ -457,8 +457,10 @@ type ConfirmMaskFailuresRow struct {
 // Counts the failure of each send that failed in a run that masked some other
 // send — the fault was the send's — and only that run's: a failure from a run
 // that masked none (the fault may have been SkyMail's) is never counted, so a
-// fault across SkyMail empties nothing once it is over. Returns each send and
-// its count.
+// fault across SkyMail empties nothing once it is over. Those it leaves go
+// (content_mask_unconfirmed = 0): they would hold the send's retry at a day,
+// and an image from before this rule would count them all (#65 review, B2).
+// Returns each send and its count.
 func (q *Queries) ConfirmMaskFailures(ctx context.Context, ids []uuid.UUID) ([]ConfirmMaskFailuresRow, error) {
 	rows, err := q.db.Query(ctx, confirmMaskFailures, ids)
 	if err != nil {

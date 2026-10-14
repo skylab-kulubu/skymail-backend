@@ -181,8 +181,8 @@ func TestBrokenSendsAtTheHeadOfTheQueueHoldNoOtherBack(t *testing.T) {
 		t.Fatal("the sound send was not masked in the second run")
 	}
 	for _, task := range broken {
-		if st := s.state(task); st.failures != 1 || st.unconfirmed != 1 {
-			t.Errorf("broken %s after the second run: %+v; want the second run's failure counted, the first's not", task, st)
+		if st := s.state(task); st.failures != 1 || st.unconfirmed != 0 {
+			t.Errorf("broken %s after the second run: %+v; want the second run's failure counted, the first's dropped", task, st)
 		}
 	}
 
@@ -271,8 +271,9 @@ func TestARunCountsOnlyTheSendsItTried(t *testing.T) {
 	if st := s.state(held); st.failures != 0 {
 		t.Errorf("a send not tried in the run was counted: %+v", st)
 	}
-	if st := s.state(again); st.failures != 1 {
-		t.Errorf("the send that failed again: %+v; want one failure counted", st)
+	// What the fault left is dropped, not kept waiting (#65 review, B2).
+	if st := s.state(again); st.failures != 1 || st.unconfirmed != 0 {
+		t.Errorf("the send that failed again: %+v; want one failure counted and none waiting", st)
 	}
 }
 

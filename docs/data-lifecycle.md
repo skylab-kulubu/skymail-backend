@@ -286,7 +286,8 @@ failure waits (`content_mask_unconfirmed`) and is counted
 (`content_mask_failures`) only when the same run masks some other send — the
 fault was the send's — and only that run's failure: a run that masks none
 counts none, as the fault may be SkyMail's, and its failures are never
-counted later, so a fault across SkyMail empties nothing once it is over. On
+counted later (they are dropped when the send's next failure is counted), so
+a fault across SkyMail empties nothing once it is over. On
 its third counted failure the send is emptied (`not_kept`), so its raw mail
 is not kept. Counted or not, a sensitive send whose masking has kept failing
 for **seven days** since its first failure (`content_mask_failing_since`,

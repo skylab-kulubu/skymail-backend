@@ -48,8 +48,10 @@ type Querier interface {
 	// Counts the failure of each send that failed in a run that masked some other
 	// send — the fault was the send's — and only that run's: a failure from a run
 	// that masked none (the fault may have been SkyMail's) is never counted, so a
-	// fault across SkyMail empties nothing once it is over. Returns each send and
-	// its count.
+	// fault across SkyMail empties nothing once it is over. Those it leaves go
+	// (content_mask_unconfirmed = 0): they would hold the send's retry at a day,
+	// and an image from before this rule would count them all (#65 review, B2).
+	// Returns each send and its count.
 	ConfirmMaskFailures(ctx context.Context, ids []uuid.UUID) ([]ConfirmMaskFailuresRow, error)
 	CountAllMailingListsIncludingArchived(ctx context.Context) (int64, error)
 	CountAllTemplatesIncludingArchived(ctx context.Context) (int64, error)
