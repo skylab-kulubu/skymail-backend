@@ -3120,11 +3120,17 @@ func (q *Queries) MarkSendMasked(ctx context.Context, arg MarkSendMaskedParams) 
 
 const markSendNotDueForMasking = `-- name: MarkSendNotDueForMasking :exec
 UPDATE mail_tasks
-SET content_mask_due = false
+SET content_mask_due           = false,
+    content_mask_failures      = 0,
+    content_mask_unconfirmed   = 0,
+    content_mask_retry_at      = NULL,
+    content_mask_failing_since = NULL
 WHERE id = $1
 `
 
 // A send found not sensitive: not looked at again until its template changes.
+// Its failures from when it was sensitive go: made sensitive again, it starts
+// afresh, its deadline too (#65 review, K2).
 func (q *Queries) MarkSendNotDueForMasking(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, markSendNotDueForMasking, id)
 	return err

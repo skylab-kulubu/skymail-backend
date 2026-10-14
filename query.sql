@@ -989,9 +989,15 @@ ORDER BY mt.content_mask_retry_at NULLS FIRST, mt.created_at
 LIMIT 1 FOR UPDATE OF mt SKIP LOCKED;
 
 -- A send found not sensitive: not looked at again until its template changes.
+-- Its failures from when it was sensitive go: made sensitive again, it starts
+-- afresh, its deadline too (#65 review, K2).
 -- name: MarkSendNotDueForMasking :exec
 UPDATE mail_tasks
-SET content_mask_due = false
+SET content_mask_due           = false,
+    content_mask_failures      = 0,
+    content_mask_unconfirmed   = 0,
+    content_mask_retry_at      = NULL,
+    content_mask_failing_since = NULL
 WHERE id = sqlc.arg(id);
 
 -- Puts a send whose masking failed back: not counted yet, tried again after

@@ -409,6 +409,51 @@ func TestTheDeadlineEmptiesOnlySensitiveSends(t *testing.T) {
 	}
 }
 
+// A send found not sensitive drops what its failures left: made sensitive
+// again weeks later, one passing failure does not empty it (#65 review, K2).
+func TestASendFoundNotSensitiveStartsItsDeadlineAfresh(t *testing.T) {
+	s := newMaskSends(t)
+	task := s.add(1)[0]
+	ctx := context.Background()
+	stop := mailer.SetMaskSendHook(func(uuid.UUID) { panic("broken") })
+	s.run(time.Millisecond)
+	stop()
+	if _, err := s.db.Conn.Exec(ctx, `
+		UPDATE mail_tasks SET content_mask_failing_since = now() - interval '30 days',
+		                      content_mask_retry_at = now() - interval '1 second',
+		                      content_sensitive_at_send = 'false'
+		WHERE id = $1;`, task); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Conn.Exec(ctx,
+		`UPDATE templates SET key = 'club.notice', content_sensitive = false WHERE id = $1`, s.template); err != nil {
+		t.Fatal(err)
+	}
+	if result := s.run(time.Millisecond); result.NotSensitive != 1 {
+		t.Fatalf("run = %+v, want the send found not sensitive", result)
+	}
+	if since := s.failingSince(task); since != nil {
+		t.Fatalf("found not sensitive, the send still fails since %v", since)
+	}
+	if st := s.state(task); st.failures != 0 || st.unconfirmed != 0 {
+		t.Fatalf("found not sensitive: %+v; want no failures left", st)
+	}
+
+	// Sensitive again: one passing failure keeps it.
+	if _, err := s.db.Conn.Exec(ctx, `UPDATE templates SET content_sensitive = true WHERE id = $1`, s.template); err != nil {
+		t.Fatal(err)
+	}
+	stop = mailer.SetMaskSendHook(func(uuid.UUID) { panic("passing") })
+	defer stop()
+	result := s.run(time.Millisecond)
+	if result.Failed != 1 || result.PastDeadline != 0 {
+		t.Fatalf("run = %+v, want one failure and nothing emptied", result)
+	}
+	if st := s.state(task); st.emptied {
+		t.Errorf("one passing failure emptied the send: %+v", st)
+	}
+}
+
 // The sweep masks a template's listed sensitive variables whatever their
 // names: a code of letters alone, a pass phrase (#63 review, R3).
 func TestTheSweepMasksATemplatesListedVariables(t *testing.T) {

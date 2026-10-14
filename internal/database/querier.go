@@ -234,6 +234,8 @@ type Querier interface {
 	// Marks a send masked and puts its masked variables in place of its own.
 	MarkSendMasked(ctx context.Context, arg MarkSendMaskedParams) error
 	// A send found not sensitive: not looked at again until its template changes.
+	// Its failures from when it was sensitive go: made sensitive again, it starts
+	// afresh, its deadline too (#65 review, K2).
 	MarkSendNotDueForMasking(ctx context.Context, id uuid.UUID) error
 	// The same for the bulk lane (lists, groups, approved sends), which reads
 	// idx_mail_queue_pending_bulk. The process asks for no more rows than the
