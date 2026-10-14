@@ -12,9 +12,7 @@ import (
 // SetDeliver makes m send a row with deliver instead of SMTP. Call it before
 // Start.
 func SetDeliver(m Transactional, deliver func(ctx context.Context, job database.MailQueue) error) {
-	m.(*mailerImpl).deliver = func(ctx context.Context, _ *mail.Client, job database.MailQueue) error {
-		return deliver(ctx, job)
-	}
+	SetChannelSender(m, ChannelEmail, deliver)
 }
 
 // Claimant is the name m writes in the rows it takes (claimed_by).
@@ -42,15 +40,14 @@ func SetClientOptions(m Transactional, opts ...mail.Option) {
 	m.(*mailerImpl).clientOptions = append(m.(*mailerImpl).clientOptions, opts...)
 }
 
-// SendOnce sends job the way a worker does (its SMTP client, sendEmail),
+// SendOnce sends job the way a worker does (its e-mail sender),
 // without a queue or a database.
 func SendOnce(ctx context.Context, m Transactional, job database.MailQueue) error {
-	impl := m.(*mailerImpl)
-	client, err := impl.newSMTPClient()
+	sender, err := m.(*mailerImpl).newEmailSender()
 	if err != nil {
 		return err
 	}
-	return impl.sendEmail(ctx, client, job)
+	return sender.Send(ctx, job)
 }
 
 // WindowRoom is the room one send window leaves the bulk lane.
@@ -101,4 +98,10 @@ func PruneSendWindows(ctx context.Context, m Transactional) { m.(*mailerImpl).pr
 func SetMaskSendHook(hook func(uuid.UUID)) func() {
 	maskSendHook = hook
 	return func() { maskSendHook = nil }
+}
+
+// SetChannelSender makes m's workers send the rows of channel with send. Call
+// it before Start.
+func SetChannelSender(m Transactional, channel string, send func(ctx context.Context, job database.MailQueue) error) {
+	m.(*mailerImpl).channels[channel] = func() (ChannelSender, error) { return channelSenderFunc(send), nil }
 }

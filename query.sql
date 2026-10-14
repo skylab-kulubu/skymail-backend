@@ -880,11 +880,14 @@ FROM inserted_task it
          JOIN mailing_list_recipients mlr ON it.mail_list_id = mlr.mail_list_id
          JOIN recipients r ON mlr.recipient_id = r.id;
 
+-- A send's rows. Every row queued here is an e-mail: the channel is left to
+-- its default ('email'); a channel that queues its own rows names it.
+-- recipient_sub is the recipient's Keycloak subject when the send knew it.
 -- name: CreateMailQueueItems :copyfrom
 INSERT INTO mail_queue (
     task_id, recipient_full_name, recipient_email,
-    subject, body, body_html, priority
-) VALUES ($1, $2, $3, $4, $5, $6, $7);
+    subject, body, body_html, priority, recipient_sub
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
 
 -- A recipient whose mail did not render, say a template that slices an empty
 -- full name, is written failed, with the render error the send's page shows:
@@ -893,10 +896,10 @@ INSERT INTO mail_queue (
 -- name: CreateFailedMailQueueItem :exec
 INSERT INTO mail_queue (
     task_id, recipient_full_name, recipient_email,
-    subject, body, priority, status, error
+    subject, body, priority, status, error, recipient_sub
 ) VALUES (
     sqlc.arg(task_id), sqlc.arg(recipient_full_name), sqlc.arg(recipient_email),
-    '', '', sqlc.arg(priority), 'failed', sqlc.arg(error)::text
+    '', '', sqlc.arg(priority), 'failed', sqlc.arg(error)::text, sqlc.narg(recipient_sub)::uuid
 );
 
 -- name: GetMailTaskById :one
@@ -916,7 +919,7 @@ FROM mail_tasks;
 -- and share a created_at, so the id breaks the tie: pages neither repeat nor
 -- skip a recipient. A NULL status lists every recipient.
 -- name: GetMailQueueItemsByTaskId :many
-SELECT id, recipient_full_name, recipient_email, status, error, attempts, next_attempt_at, created_at
+SELECT id, channel, recipient_full_name, recipient_email, status, error, attempts, next_attempt_at, created_at
 FROM mail_queue
 WHERE task_id = $1
   AND (sqlc.narg(status)::mail_queue_status IS NULL OR status = sqlc.narg(status)::mail_queue_status)

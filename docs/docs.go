@@ -41,6 +41,9 @@ const docTemplate = `{
                     "attempts": {
                         "type": "integer"
                     },
+                    "channel": {
+                        "type": "string"
+                    },
                     "created_at": {
                         "type": "string"
                     },
