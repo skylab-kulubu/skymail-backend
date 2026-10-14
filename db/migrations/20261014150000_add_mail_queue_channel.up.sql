@@ -10,9 +10,10 @@
 -- channel's address; a rename is a later contract.
 --
 -- mail_queue.recipient_sub: the recipient's Keycloak subject, when the sender
--- knows it (a Keycloak group's member, an approver, a request's submitter).
--- Null when only an address is known: a mailing list's recipient, a person
--- named by address, a single mail (POST /mail_tasks/single takes an address).
+-- knows it (a Keycloak group's member, in a direct or an approved send to the
+-- group). Null when only an address is known: a mailing list's recipient, a
+-- person named by address, a single mail (POST /mail_tasks/single takes an
+-- address; the Mail onayı notifications go that way too).
 --
 -- A constant default is stored in the catalog and a nullable column has
 -- none, so adding them rewrites nothing; an image from before them names its
