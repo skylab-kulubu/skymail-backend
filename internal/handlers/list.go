@@ -86,6 +86,16 @@ func rejectArchivedInternalList(ctx context.Context, db *database.Store, id uuid
 	return err
 }
 
+// userSub is a Keycloak user's subject, their id, as a send records who a
+// row went to (mail_queue.recipient_sub); nil when it is not a UUID.
+func userSub(u *gocloak.User) *uuid.UUID {
+	sub, err := uuid.Parse(gocloak.PString(u.ID))
+	if err != nil {
+		return nil
+	}
+	return &sub
+}
+
 func userFullName(u *gocloak.User) string {
 	name := strings.TrimSpace(gocloak.PString(u.FirstName) + " " + gocloak.PString(u.LastName))
 	if name == "" {

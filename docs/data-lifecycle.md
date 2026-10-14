@@ -193,8 +193,9 @@ takes the person out of them:
 
 - `recipients.full_name` and `email`, and their `mailing_list_recipients` —
   the people on internal mailing lists.
-- `mail_queue.recipient_full_name`, `recipient_email`, and `error`, which can
-  quote the address. The mail rendered for them — `subject`, `body`,
+- `mail_queue.recipient_full_name`, `recipient_email`, `recipient_sub` (the
+  recipient's Keycloak subject, when the send knew it: a Keycloak group's
+  member), and `error`, which can quote the address. The mail rendered for them — `subject`, `body`,
   `body_html` — is kept only for a while: see
   [Sent mail content](#sent-mail-content).
 - `mail_tasks.sent_by` — who sent: the Keycloak subject of the token that
@@ -500,7 +501,7 @@ contract; this section is SkyMail's part of it.
 
 What it erases, with S the subject, E the addresses (compared whole,
 case-insensitively) and N the full names SkyMail holds on S's actor rows and
-E's recipient rows. Free text is searched for E and N, case-insensitively; a
+the recipient rows of E (and of S, in the queue). Free text is searched for E and N, case-insensitively; a
 single-word name is never searched for, and a namesake's text that contains
 the same full name is cleared too — the accepted cost. A field that names the
 person is cleared whole, never masked.
@@ -508,9 +509,9 @@ person is cleared whole, never masked.
 | Where | Which rows | What happens |
 |---|---|---|
 | `recipients` | `email` in E | deleted, with their `mailing_list_recipients` |
-| `mail_queue`, `pending` | `recipient_email` in E | deleted: never sent |
-| `mail_queue`, `processing` | `recipient_email` in E | waited for (`202`) |
-| `mail_queue`, `sent`/`failed` | `recipient_email` in E | `recipient_full_name` Silinmiş kullanıcı, `recipient_email`, `subject`, `body` `''`, `body_html`, `error` NULL; the row stays for the counts |
+| `mail_queue`, `pending` | `recipient_email` in E or `recipient_sub` = S | deleted: never sent |
+| `mail_queue`, `processing` | `recipient_email` in E or `recipient_sub` = S | waited for (`202`) |
+| `mail_queue`, `sent`/`failed` | `recipient_email` in E or `recipient_sub` = S | `recipient_full_name` Silinmiş kullanıcı, `recipient_email`, `subject`, `body` `''`, `body_html`, `error`, `recipient_sub` NULL; the row stays for the counts |
 | `mail_queue`, anyone else's, `sent`/`failed` | `subject`, `body` or `body_html` names E or N | those three cleared (`''`, `''`, NULL) |
 | `mail_queue`, anyone else's, `pending`/`processing` | the same | waited for (`202`): it goes out as it was rendered, then it is cleared |
 | `mail_tasks` | `sent_by` = S | Silinmiş kullanıcı |

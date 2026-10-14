@@ -211,7 +211,7 @@ func newEraser(ctx context.Context, tx pgx.Tx, erasure AccountErasure) (*eraser,
 		           WHERE btrim(x) <> ''),
 		     held AS (SELECT full_name AS name FROM recipients WHERE lower(email) IN (SELECT email FROM e)
 		              UNION ALL
-		              SELECT recipient_full_name FROM mail_queue WHERE lower(recipient_email) IN (SELECT email FROM e)
+		              SELECT recipient_full_name FROM mail_queue WHERE lower(recipient_email) IN (SELECT email FROM e) OR recipient_sub::text = @subject
 		              UNION ALL
 		              SELECT full_name FROM mail_approval_recipients WHERE lower(email) IN (SELECT email FROM e)
 		              UNION ALL
@@ -261,7 +261,11 @@ func nameIn(text string) string {
 // A queue row's rendered mail names the person.
 var mailNames = "(" + nameIn("q.subject") + " OR " + nameIn("q.body") + " OR " + nameIn("COALESCE(q.body_html, '')") + ")"
 
-const toPerson = "lower(q.recipient_email) = ANY (@emails::text[])"
+// A queue row is to the person when it went to one of their addresses or,
+// when the send knew who it went to (mail_queue.recipient_sub), to their
+// subject: an address core no longer lists is still theirs. Never NULL, so
+// NOT toPerson is the rows to anyone else, a row without a subject included.
+const toPerson = "(lower(q.recipient_email) = ANY (@emails::text[]) OR COALESCE(q.recipient_sub::text = @subject::text, false))"
 
 // erasureStep is one statement; the rows it changes are added to count.
 type erasureStep struct {
@@ -513,7 +517,8 @@ var dropAddressSteps = []erasureStep{
 		          subject = '',
 		          body = '',
 		          body_html = NULL,
-		          error = NULL
+		          error = NULL,
+		          recipient_sub = NULL
 		      WHERE q.status IN ('sent', 'failed')
 		        AND ` + toPerson,
 	},

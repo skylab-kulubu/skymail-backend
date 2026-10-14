@@ -143,9 +143,33 @@ göndermeden kapatılır: `skymail-backend queue-close-restored --before <RFC333
 yalnız `MAIL_SENDER=paused` iken çalışır. Prosedür ve `docker exec` satırları:
 [`docs/data-lifecycle.md`](docs/data-lifecycle.md#backup-and-restore).
 
+## Kanallar (`mail_queue.channel`, `mail_queue.recipient_sub`)
+
+Bir kuyruk satırı bir kişiye bir kanaldan bir teslimdir. Motor (kira, deneme,
+şerit, bütçe) kanaldan bağımsızdır: işçi aldığı satırı satırın kanalının
+göndericisine verir (`internal/mailer/channel.go`, `ChannelSender`). Her işçi
+açılışta her kanalın kendi göndericisini kurar; e-postada bu işçinin SMTP
+istemcisidir (go-mail, STARTTLS zorunlu, `Message-ID`, gönderim başına 1
+dakika). Göndericinin hatası sonucu söyler: hata yok gönderildi, kalıcı hata
+(geçersiz adres) hemen düşer, ötekiler yeniden denenir.
+
+Bugün tek kanal `email`'dir: `recipient_email` kanalın adresidir. Var olan ve
+eski imajın yazdığı satırlar varsayılanla `email` olur; `CHECK` başka kanalı
+reddeder, yeni bir kanal kendi migration'ında eklenir. Bu sürecin göndericisi
+olmayan bir kanalın satırı (daha yeni bir imajın yazdığı, geri dönülmüşse)
+kalıcı hatayla düşer, işçi sıradakine geçer.
+
+`recipient_sub` alıcının Keycloak `sub`'ıdır, gönderim biliyorsa: Keycloak
+grubuna (doğrudan ya da onaylı) gönderimde her üyenin id'si. Yalnız adres
+bilinen gönderimlerde (liste, adla yazılan kişiler, `POST /mail_tasks/single`)
+boştur. Hesap silme kişinin satırlarını adresleriyle ve `sub`'ıyla bulur;
+silinen satırda `recipient_sub` da boşalır. `GET /v1/mail_tasks/{id}/queue`
+her satırın `channel`'ını döner.
+
 ## Mail kuyruğu kirası (`MAIL_QUEUE_LEASE`)
 
-Dağıtıcı bir kuyruk satırını aldığında satır o sürecin olur: `claimed_by`
+Dağıtıcı bir kuyruk satırını, kanalı ne olursa olsun, aldığında satır o
+sürecin olur: `claimed_by`
 süreci (host adı + açılışta seçilen rastgele ek), `claimed_at` alış anını
 yazar. Süreç yalnız boş işçisi kadar satır alır. `processing` bir satır ancak
 kirası dolunca (`claimed_at` kiradan eski) `pending`'e geri döner: açılışta ve
@@ -167,7 +191,7 @@ dolduktan sonra yeniden almışsa eski talebin sonucu da yazılmaz.
 
 ## Öncelik şeritleri (`mail_queue.priority`)
 
-Her kuyruk satırı bir şerittedir. `1` sistem şeridi: `POST /mail_tasks/single`
+Her kuyruk satırı, kanalından bağımsız, bir şerittedir. `1` sistem şeridi: `POST /mail_tasks/single`
 ile gelen tekil postalar (giriş kodu, sertifika, Forms, Mail onayı
 bildirimleri). `0` toplu şerit: listeye ve Keycloak grubuna gönderim, onaylı
 gönderimler (listeye de kişilere de). Dağıtıcı her turda önce sistem şeridinden
