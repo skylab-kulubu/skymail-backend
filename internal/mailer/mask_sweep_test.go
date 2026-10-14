@@ -244,6 +244,38 @@ func TestAFaultAcrossSkyMailCountsNothingOnceItIsOver(t *testing.T) {
 	}
 }
 
+// After a fault across SkyMail, a run that masks a send and sees another
+// fail again counts that one failure only: a send the run did not try keeps
+// its failures from the fault uncounted (#65 review, K1).
+func TestARunCountsOnlyTheSendsItTried(t *testing.T) {
+	s := newMaskSends(t)
+	sends := s.add(2)
+	held, again := sends[0], sends[1]
+	stop := mailer.SetMaskSendHook(func(uuid.UUID) { panic("SkyMail is broken") })
+	if result := s.run(time.Millisecond); result.Failed != 2 || !result.FailuresUnconfirmed {
+		t.Fatalf("run during the fault = %+v", result)
+	}
+	stop()
+
+	// held is not due in the next run; again fails again; a new send is masked.
+	if _, err := s.db.Conn.Exec(context.Background(),
+		`UPDATE mail_tasks SET content_mask_retry_at = now() + interval '1 hour' WHERE id = $1`, held); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	failFor(t, again)
+	s.add(1)
+	if result := s.run(time.Millisecond); result.Sends != 1 || result.Failed != 1 || result.FailuresUnconfirmed {
+		t.Fatalf("run after the fault = %+v, want one send masked and one failure counted", result)
+	}
+	if st := s.state(held); st.failures != 0 {
+		t.Errorf("a send not tried in the run was counted: %+v", st)
+	}
+	if st := s.state(again); st.failures != 1 {
+		t.Errorf("the send that failed again: %+v; want one failure counted", st)
+	}
+}
+
 // failingSince is when the masking of task started failing, or nil.
 func (s *maskSends) failingSince(task uuid.UUID) *time.Time {
 	s.t.Helper()
