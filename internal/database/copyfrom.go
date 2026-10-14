@@ -37,6 +37,8 @@ func (r iteratorForCreateMailQueueItems) Values() ([]interface{}, error) {
 		r.rows[0].BodyHtml,
 		r.rows[0].Priority,
 		r.rows[0].RecipientSub,
+		r.rows[0].TrackingToken,
+		r.rows[0].TrackingSkipReason,
 	}, nil
 }
 
@@ -47,6 +49,45 @@ func (r iteratorForCreateMailQueueItems) Err() error {
 // A send's rows. Every row queued here is an e-mail: the channel is left to
 // its default ('email'); a channel that queues its own rows names it.
 // recipient_sub is the recipient's Keycloak subject when the send knew it.
+// tracking_token is the recipient's token when the row is tracked, and
+// tracking_skip_reason why not when the send asked for tracking.
 func (q *Queries) CreateMailQueueItems(ctx context.Context, arg []CreateMailQueueItemsParams) (int64, error) {
-	return q.db.CopyFrom(ctx, []string{"mail_queue"}, []string{"task_id", "recipient_full_name", "recipient_email", "subject", "body", "body_html", "priority", "recipient_sub"}, &iteratorForCreateMailQueueItems{rows: arg})
+	return q.db.CopyFrom(ctx, []string{"mail_queue"}, []string{"task_id", "recipient_full_name", "recipient_email", "subject", "body", "body_html", "priority", "recipient_sub", "tracking_token", "tracking_skip_reason"}, &iteratorForCreateMailQueueItems{rows: arg})
+}
+
+// iteratorForCreateMailTaskLinks implements pgx.CopyFromSource.
+type iteratorForCreateMailTaskLinks struct {
+	rows                 []CreateMailTaskLinksParams
+	skippedFirstNextCall bool
+}
+
+func (r *iteratorForCreateMailTaskLinks) Next() bool {
+	if len(r.rows) == 0 {
+		return false
+	}
+	if !r.skippedFirstNextCall {
+		r.skippedFirstNextCall = true
+		return true
+	}
+	r.rows = r.rows[1:]
+	return len(r.rows) > 0
+}
+
+func (r iteratorForCreateMailTaskLinks) Values() ([]interface{}, error) {
+	return []interface{}{
+		r.rows[0].TaskID,
+		r.rows[0].LinkToken,
+		r.rows[0].Url,
+		r.rows[0].Position,
+	}, nil
+}
+
+func (r iteratorForCreateMailTaskLinks) Err() error {
+	return nil
+}
+
+// A tracked send's links that are the same for every recipient, each with
+// its own token (open and click tracking).
+func (q *Queries) CreateMailTaskLinks(ctx context.Context, arg []CreateMailTaskLinksParams) (int64, error) {
+	return q.db.CopyFrom(ctx, []string{"mail_task_links"}, []string{"task_id", "link_token", "url", "position"}, &iteratorForCreateMailTaskLinks{rows: arg})
 }

@@ -208,6 +208,8 @@ type MailApprovalItem struct {
 	TaskIDs []uuid.UUID `json:"task_ids"`
 	// What happened to it last.
 	LastEvent *MailApprovalEvent `json:"last_event"`
+	// The submitter asked for open and click tracking, with SkyMail's tracking on then; the approved send gets it if tracking is still on.
+	Tracking bool `json:"tracking"`
 }
 
 // MailApprovalRecipient is someone a request goes to, or a preview is
@@ -372,6 +374,7 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 			BodyVariables:            send.variables,
 			At:                       now,
 			DeadlineAt:               now.Add(mailApprovalDeadline),
+			TrackingRequested:        send.tracking && h.mailer.TrackingAvailable(),
 		})
 		if err != nil {
 			return err

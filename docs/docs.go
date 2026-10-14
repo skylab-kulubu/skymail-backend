@@ -234,6 +234,18 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
+            "handlers.CreatedMailTask": {
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "tracking": {
+                        "description": "Whether the send asked for open and click tracking and got it: false when it did not ask, or SkyMail's tracking is off (GET /mail_tasks/summary tracking_available).",
+                        "type": "boolean"
+                    }
+                },
+                "type": "object"
+            },
             "handlers.DailySent": {
                 "properties": {
                     "date": {
@@ -328,6 +340,10 @@ const docTemplate = `{
                     },
                     "template": {
                         "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
+                    },
+                    "tracking": {
+                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then; the approved send gets it if tracking is still on.",
+                        "type": "boolean"
                     },
                     "updated_at": {
                         "type": "string"
@@ -467,6 +483,10 @@ const docTemplate = `{
                     },
                     "template": {
                         "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
+                    },
+                    "tracking": {
+                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then; the approved send gets it if tracking is still on.",
+                        "type": "boolean"
                     },
                     "updated_at": {
                         "type": "string"
@@ -630,6 +650,10 @@ const docTemplate = `{
                     },
                     "template_name": {
                         "type": "string"
+                    },
+                    "tracking": {
+                        "description": "Whether the send asked for open and click tracking and got it (SkyMail's tracking was on when it was queued).",
+                        "type": "boolean"
                     }
                 },
                 "type": "object"
@@ -915,6 +939,10 @@ const docTemplate = `{
                     "time_zone": {
                         "example": "Europe/Istanbul",
                         "type": "string"
+                    },
+                    "tracking_available": {
+                        "description": "True while SKYMAIL_TRACKING=on: a send may ask for open and click tracking. The send form shows its tracking box only then.",
+                        "type": "boolean"
                     }
                 },
                 "type": "object"
@@ -1268,6 +1296,10 @@ const docTemplate = `{
                     },
                     "template_id": {
                         "type": "string"
+                    },
+                    "tracking": {
+                        "description": "Open and click tracking: each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links. Ignored (and answered false) while SkyMail's tracking is off; a System or sensitive template, and a mailing list's address-only recipients, are never tracked.",
+                        "type": "boolean"
                     }
                 },
                 "required": [
@@ -1501,6 +1533,10 @@ const docTemplate = `{
                     },
                     "template_id": {
                         "type": "string"
+                    },
+                    "tracking": {
+                        "description": "Open and click tracking for the send once approved (as POST /mail_tasks takes it). Ignored (and kept false) while SkyMail's tracking is off.",
+                        "type": "boolean"
                     }
                 },
                 "required": [
@@ -2571,7 +2607,7 @@ const docTemplate = `{
                 ]
             },
             "post": {
-                "description": "Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups.",
+                "description": "Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyMail's tracking is off the field is ignored and the answer says tracking false.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -2597,7 +2633,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "type": "object"
+                                    "$ref": "#/components/schemas/handlers.CreatedMailTask"
                                 }
                             }
                         },
@@ -2693,7 +2729,7 @@ const docTemplate = `{
         },
         "/mail_tasks/summary": {
             "get": {
-                "description": "Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).",
+                "description": "Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).",
                 "parameters": [
                     {
                         "description": "Days in the daily series, ending today in Europe/Istanbul (1-90)",

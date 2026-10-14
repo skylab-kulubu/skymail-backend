@@ -383,6 +383,26 @@ func (q *Queries) ClearSendsPastMaskDeadline(ctx context.Context, arg ClearSends
 	return items, nil
 }
 
+const closeQueueTrackingFlagOff = `-- name: CloseQueueTrackingFlagOff :execrows
+UPDATE mail_queue
+SET tracking_disabled_at = NOW(),
+    tracking_skip_reason = 'flag_off'
+WHERE id = $1
+  AND tracking_token IS NOT NULL
+  AND tracking_disabled_at IS NULL
+`
+
+// A tracked row whose mail goes out while SKYMAIL_TRACKING is off: it goes
+// out clean and its token is closed, so nothing is recorded for it should the
+// flag be turned on again.
+func (q *Queries) CloseQueueTrackingFlagOff(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, closeQueueTrackingFlagOff, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const closeRestoredQueueItems = `-- name: CloseRestoredQueueItems :one
 WITH closing AS (SELECT id, status AS was
                  FROM mail_queue
@@ -846,12 +866,12 @@ func (q *Queries) CreateFailedMailQueueItem(ctx context.Context, arg CreateFaile
 const createMailApproval = `-- name: CreateMailApproval :one
 INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, submitter_email_unverified, template_id,
                             template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at,
-                            updated_at)
+                            updated_at, tracking_requested)
 VALUES ($1, $2, $3,
         $4, $5,
         $6, $7, $8, $9, $9,
-        $10, $9)
-RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at
+        $10, $9, $11::boolean)
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested
 `
 
 type CreateMailApprovalParams struct {
@@ -865,6 +885,7 @@ type CreateMailApprovalParams struct {
 	BodyVariables            []byte     `json:"body_variables"`
 	At                       time.Time  `json:"at"`
 	DeadlineAt               time.Time  `json:"deadline_at"`
+	TrackingRequested        bool       `json:"tracking_requested"`
 }
 
 // A new Mail onayı request, pending until its deadline. Every later write of
@@ -886,6 +907,7 @@ func (q *Queries) CreateMailApproval(ctx context.Context, arg CreateMailApproval
 		arg.BodyVariables,
 		arg.At,
 		arg.DeadlineAt,
+		arg.TrackingRequested,
 	)
 	var i MailApproval
 	err := row.Scan(
@@ -903,19 +925,22 @@ func (q *Queries) CreateMailApproval(ctx context.Context, arg CreateMailApproval
 		&i.SubmittedAt,
 		&i.DeadlineAt,
 		&i.UpdatedAt,
+		&i.TrackingRequested,
 	)
 	return i, err
 }
 
 type CreateMailQueueItemsParams struct {
-	TaskID            uuid.UUID  `json:"task_id"`
-	RecipientFullName string     `json:"recipient_full_name"`
-	RecipientEmail    string     `json:"recipient_email"`
-	Subject           string     `json:"subject"`
-	Body              string     `json:"body"`
-	BodyHtml          *string    `json:"body_html"`
-	Priority          int16      `json:"priority"`
-	RecipientSub      *uuid.UUID `json:"recipient_sub"`
+	TaskID             uuid.UUID  `json:"task_id"`
+	RecipientFullName  string     `json:"recipient_full_name"`
+	RecipientEmail     string     `json:"recipient_email"`
+	Subject            string     `json:"subject"`
+	Body               string     `json:"body"`
+	BodyHtml           *string    `json:"body_html"`
+	Priority           int16      `json:"priority"`
+	RecipientSub       *uuid.UUID `json:"recipient_sub"`
+	TrackingToken      []byte     `json:"-"`
+	TrackingSkipReason *string    `json:"tracking_skip_reason"`
 }
 
 const createMailTask = `-- name: CreateMailTask :many
@@ -927,9 +952,12 @@ WITH active_source AS (
       AND t.archived_at IS NULL
       AND ml.archived_at IS NULL
 ), inserted_task AS (
-    INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send)
-        SELECT $3, template_id, mail_list_id, $4, content_sensitive FROM active_source
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since
+    INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send,
+                            tracking_requested)
+        SELECT $3, template_id, mail_list_id, $4, content_sensitive,
+               $5::boolean
+        FROM active_source
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -946,10 +974,11 @@ FROM inserted_task it
 `
 
 type CreateMailTaskParams struct {
-	MailListID    *uuid.UUID `json:"mail_list_id"`
-	TemplateID    *uuid.UUID `json:"template_id"`
-	SentBy        string     `json:"sent_by"`
-	BodyVariables []byte     `json:"body_variables"`
+	MailListID        *uuid.UUID `json:"mail_list_id"`
+	TemplateID        *uuid.UUID `json:"template_id"`
+	SentBy            string     `json:"sent_by"`
+	BodyVariables     []byte     `json:"body_variables"`
+	TrackingRequested bool       `json:"tracking_requested"`
 }
 
 type CreateMailTaskRow struct {
@@ -969,6 +998,7 @@ func (q *Queries) CreateMailTask(ctx context.Context, arg CreateMailTaskParams) 
 		arg.TemplateID,
 		arg.SentBy,
 		arg.BodyVariables,
+		arg.TrackingRequested,
 	)
 	if err != nil {
 		return nil, err
@@ -995,6 +1025,13 @@ func (q *Queries) CreateMailTask(ctx context.Context, arg CreateMailTaskParams) 
 		return nil, err
 	}
 	return items, nil
+}
+
+type CreateMailTaskLinksParams struct {
+	TaskID    uuid.UUID `json:"task_id"`
+	LinkToken []byte    `json:"link_token"`
+	Url       *string   `json:"url"`
+	Position  int16     `json:"position"`
 }
 
 const createMailingList = `-- name: CreateMailingList :one
@@ -1025,9 +1062,10 @@ WITH active_template AS (
     WHERE templates.id = $3::uuid
       AND archived_at IS NULL
 ), inserted_task AS (
-    INSERT INTO mail_tasks (sent_by, template_id, body_variables, content_sensitive_at_send)
-        SELECT $4, id, $5, content_sensitive FROM active_template
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since
+    INSERT INTO mail_tasks (sent_by, template_id, body_variables, content_sensitive_at_send, tracking_requested)
+        SELECT $4, id, $5, content_sensitive, $6::boolean
+        FROM active_template
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1047,6 +1085,7 @@ type CreateSingleMailTaskParams struct {
 	TemplateID        *uuid.UUID `json:"template_id"`
 	SentBy            string     `json:"sent_by"`
 	BodyVariables     []byte     `json:"body_variables"`
+	TrackingRequested bool       `json:"tracking_requested"`
 }
 
 type CreateSingleMailTaskRow struct {
@@ -1067,6 +1106,7 @@ func (q *Queries) CreateSingleMailTask(ctx context.Context, arg CreateSingleMail
 		arg.TemplateID,
 		arg.SentBy,
 		arg.BodyVariables,
+		arg.TrackingRequested,
 	)
 	var i CreateSingleMailTaskRow
 	err := row.Scan(
@@ -1527,8 +1567,8 @@ type GetDailySentCountsRow struct {
 	Sent int64     `json:"sent"`
 }
 
-// A queue row has no sent time of its own. created_at — when that recipient's
-// mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
+// A queue row's sent_at (20261015120000) is empty for every row sent before
+// it, so created_at — when that recipient's mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
 // mail that goes through on its first attempt leaves within seconds, and only a
 // retried one (the ladder tops out under eight minutes) can land later.
 // next_attempt_at is not used: every row older than the retry migration holds
@@ -1556,7 +1596,7 @@ func (q *Queries) GetDailySentCounts(ctx context.Context, arg GetDailySentCounts
 }
 
 const getMailApproval = `-- name: GetMailApproval :one
-SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at,
+SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.tracking_requested,
        t.name                             AS template_name,
        t.key                              AS template_key,
        t.published_version_id             AS template_published_version_id,
@@ -1614,6 +1654,7 @@ func (q *Queries) GetMailApproval(ctx context.Context, id uuid.UUID) (GetMailApp
 		&i.MailApproval.SubmittedAt,
 		&i.MailApproval.DeadlineAt,
 		&i.MailApproval.UpdatedAt,
+		&i.MailApproval.TrackingRequested,
 		&i.TemplateName,
 		&i.TemplateKey,
 		&i.TemplatePublishedVersionID,
@@ -1770,7 +1811,7 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 }
 
 const getMailTaskById = `-- name: GetMailTaskById :one
-SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since,
+SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at,
        t.name  AS template_name,
        ml.name AS mail_list_name
 FROM mail_tasks mt
@@ -1796,6 +1837,8 @@ type GetMailTaskByIdRow struct {
 	ContentMaskRetryAt      *time.Time `json:"content_mask_retry_at"`
 	ContentMaskUnconfirmed  int16      `json:"content_mask_unconfirmed"`
 	ContentMaskFailingSince *time.Time `json:"content_mask_failing_since"`
+	TrackingRequested       bool       `json:"tracking_requested"`
+	TrackingClosedAt        *time.Time `json:"tracking_closed_at"`
 	TemplateName            *string    `json:"template_name"`
 	MailListName            *string    `json:"mail_list_name"`
 }
@@ -1820,9 +1863,36 @@ func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTas
 		&i.ContentMaskRetryAt,
 		&i.ContentMaskUnconfirmed,
 		&i.ContentMaskFailingSince,
+		&i.TrackingRequested,
+		&i.TrackingClosedAt,
 		&i.TemplateName,
 		&i.MailListName,
 	)
+	return i, err
+}
+
+const getMailTaskTrackingExclusion = `-- name: GetMailTaskTrackingExclusion :one
+SELECT COALESCE(t.system, true)::boolean                                       AS system_template,
+       (t.id IS NULL OR mail_task_content_sensitive(mt.id))::boolean AS content_sensitive
+FROM mail_tasks mt
+         LEFT JOIN templates t ON t.id = mt.template_id
+WHERE mt.id = $1
+`
+
+type GetMailTaskTrackingExclusionRow struct {
+	SystemTemplate   bool `json:"system_template"`
+	ContentSensitive bool `json:"content_sensitive"`
+}
+
+// Whether a send is never tracked, whatever was asked: its template is a
+// System template, or its content is sensitive by the one definition the
+// content panel and the masking sweep use (mail_task_content_sensitive: the
+// template says so now or said so when the send was queued, or its key is
+// locked sensitive). A send without a template is never tracked.
+func (q *Queries) GetMailTaskTrackingExclusion(ctx context.Context, taskID uuid.UUID) (GetMailTaskTrackingExclusionRow, error) {
+	row := q.db.QueryRow(ctx, getMailTaskTrackingExclusion, taskID)
+	var i GetMailTaskTrackingExclusionRow
+	err := row.Scan(&i.SystemTemplate, &i.ContentSensitive)
 	return i, err
 }
 
@@ -2166,9 +2236,10 @@ func (q *Queries) GetTemplateVersionSummary(ctx context.Context, arg GetTemplate
 }
 
 const insertMailTask = `-- name: InsertMailTask :one
-INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send)
+INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send,
+                        tracking_requested)
 SELECT $1, $2, $3, $4,
-       COALESCE(templates.content_sensitive::text, 'unset')
+       COALESCE(templates.content_sensitive::text, 'unset'), $5::boolean
 FROM templates
 WHERE templates.id = $2
   AND archived_at IS NULL
@@ -2176,10 +2247,11 @@ RETURNING mail_tasks.id, sent_by, template_id, mail_list_id, body_variables, cre
 `
 
 type InsertMailTaskParams struct {
-	SentBy        string     `json:"sent_by"`
-	TemplateID    *uuid.UUID `json:"template_id"`
-	MailListID    *uuid.UUID `json:"mail_list_id"`
-	BodyVariables []byte     `json:"body_variables"`
+	SentBy            string     `json:"sent_by"`
+	TemplateID        *uuid.UUID `json:"template_id"`
+	MailListID        *uuid.UUID `json:"mail_list_id"`
+	BodyVariables     []byte     `json:"body_variables"`
+	TrackingRequested bool       `json:"tracking_requested"`
 }
 
 type InsertMailTaskRow struct {
@@ -2197,6 +2269,7 @@ func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) 
 		arg.TemplateID,
 		arg.MailListID,
 		arg.BodyVariables,
+		arg.TrackingRequested,
 	)
 	var i InsertMailTaskRow
 	err := row.Scan(
@@ -2368,7 +2441,7 @@ func (q *Queries) ListMailApprovalRecipients(ctx context.Context, approvalID uui
 }
 
 const listMailApprovals = `-- name: ListMailApprovals :many
-SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at,
+SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.tracking_requested,
        t.name                             AS template_name,
        t.key                              AS template_key,
        t.published_version_id             AS template_published_version_id,
@@ -2451,6 +2524,7 @@ func (q *Queries) ListMailApprovals(ctx context.Context, arg ListMailApprovalsPa
 			&i.MailApproval.SubmittedAt,
 			&i.MailApproval.DeadlineAt,
 			&i.MailApproval.UpdatedAt,
+			&i.MailApproval.TrackingRequested,
 			&i.TemplateName,
 			&i.TemplateKey,
 			&i.TemplatePublishedVersionID,
@@ -2461,6 +2535,41 @@ func (q *Queries) ListMailApprovals(ctx context.Context, arg ListMailApprovalsPa
 			&i.RecipientFullNames,
 			&i.TaskIds,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMailTaskLinkTargets = `-- name: ListMailTaskLinkTargets :many
+SELECT link_token, url::text AS url
+FROM mail_task_links
+WHERE task_id = $1
+  AND url IS NOT NULL
+ORDER BY position
+`
+
+type ListMailTaskLinkTargetsRow struct {
+	LinkToken []byte `json:"link_token"`
+	Url       string `json:"url"`
+}
+
+// The links a tracked row's mail gets its click addresses for when it goes
+// out: the send's links whose address is still kept.
+func (q *Queries) ListMailTaskLinkTargets(ctx context.Context, taskID uuid.UUID) ([]ListMailTaskLinkTargetsRow, error) {
+	rows, err := q.db.Query(ctx, listMailTaskLinkTargets, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMailTaskLinkTargetsRow
+	for rows.Next() {
+		var i ListMailTaskLinkTargetsRow
+		if err := rows.Scan(&i.LinkToken, &i.Url); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2498,7 +2607,8 @@ SELECT mt.id,
        mail_task_bulk(mt.id)::boolean              AS bulk,
        mail_task_content_sensitive(mt.id)::boolean AS content_sensitive,
        mt.content_cleared_at,
-       mt.content_masked_at
+       mt.content_masked_at,
+       mt.tracking_requested
 FROM page
          JOIN mail_tasks mt ON mt.id = page.id
          LEFT JOIN templates t ON mt.template_id = t.id
@@ -2548,6 +2658,7 @@ type ListMailTaskSendsRow struct {
 	ContentSensitive        bool       `json:"content_sensitive"`
 	ContentClearedAt        *time.Time `json:"content_cleared_at"`
 	ContentMaskedAt         *time.Time `json:"content_masked_at"`
+	TrackingRequested       bool       `json:"tracking_requested"`
 }
 
 // A send as every screen shows it — the home screen, the send list and a
@@ -2591,6 +2702,7 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 			&i.ContentSensitive,
 			&i.ContentClearedAt,
 			&i.ContentMaskedAt,
+			&i.TrackingRequested,
 		); err != nil {
 			return nil, err
 		}
@@ -2956,7 +3068,7 @@ func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVers
 }
 
 const lockDueMailApproval = `-- name: LockDueMailApproval :one
-SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at
+SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested
 FROM mail_approvals
 WHERE state IN ('pending', 'returned')
   AND deadline_at <= $1
@@ -2984,12 +3096,13 @@ func (q *Queries) LockDueMailApproval(ctx context.Context, asOf time.Time) (Mail
 		&i.SubmittedAt,
 		&i.DeadlineAt,
 		&i.UpdatedAt,
+		&i.TrackingRequested,
 	)
 	return i, err
 }
 
 const lockMailApproval = `-- name: LockMailApproval :one
-SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at
+SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested
 FROM mail_approvals
 WHERE id = $1
     FOR UPDATE NOWAIT
@@ -3017,6 +3130,7 @@ func (q *Queries) LockMailApproval(ctx context.Context, id uuid.UUID) (MailAppro
 		&i.SubmittedAt,
 		&i.DeadlineAt,
 		&i.UpdatedAt,
+		&i.TrackingRequested,
 	)
 	return i, err
 }
@@ -3180,7 +3294,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at
 `
 
 type ProcessBulkQueueItemsParams struct {
@@ -3218,6 +3332,10 @@ func (q *Queries) ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueu
 			&i.Priority,
 			&i.Channel,
 			&i.RecipientSub,
+			&i.TrackingToken,
+			&i.TrackingDisabledAt,
+			&i.TrackingSkipReason,
+			&i.SentAt,
 		); err != nil {
 			return nil, err
 		}
@@ -3241,7 +3359,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at
 `
 
 type ProcessSystemQueueItemsParams struct {
@@ -3283,6 +3401,10 @@ func (q *Queries) ProcessSystemQueueItems(ctx context.Context, arg ProcessSystem
 			&i.Priority,
 			&i.Channel,
 			&i.RecipientSub,
+			&i.TrackingToken,
+			&i.TrackingDisabledAt,
+			&i.TrackingSkipReason,
+			&i.SentAt,
 		); err != nil {
 			return nil, err
 		}
@@ -3932,11 +4054,12 @@ SET state               = 'pending',
     template_version_id = $2,
     mail_list_id        = $3,
     body_variables      = $4,
-    submitted_at        = $5,
-    deadline_at         = $6,
-    updated_at          = $5
-WHERE id = $7
-RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at
+    tracking_requested  = $5::boolean,
+    submitted_at        = $6,
+    deadline_at         = $7,
+    updated_at          = $6
+WHERE id = $8
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested
 `
 
 type ResubmitMailApprovalParams struct {
@@ -3944,6 +4067,7 @@ type ResubmitMailApprovalParams struct {
 	TemplateVersionID uuid.UUID  `json:"template_version_id"`
 	MailListID        *uuid.UUID `json:"mail_list_id"`
 	BodyVariables     []byte     `json:"body_variables"`
+	TrackingRequested bool       `json:"tracking_requested"`
 	At                time.Time  `json:"at"`
 	DeadlineAt        time.Time  `json:"deadline_at"`
 	ID                uuid.UUID  `json:"id"`
@@ -3959,6 +4083,7 @@ func (q *Queries) ResubmitMailApproval(ctx context.Context, arg ResubmitMailAppr
 		arg.TemplateVersionID,
 		arg.MailListID,
 		arg.BodyVariables,
+		arg.TrackingRequested,
 		arg.At,
 		arg.DeadlineAt,
 		arg.ID,
@@ -3979,6 +4104,7 @@ func (q *Queries) ResubmitMailApproval(ctx context.Context, arg ResubmitMailAppr
 		&i.SubmittedAt,
 		&i.DeadlineAt,
 		&i.UpdatedAt,
+		&i.TrackingRequested,
 	)
 	return i, err
 }
@@ -4029,7 +4155,7 @@ SET state       = $1,
     deadline_at = COALESCE($2, deadline_at),
     updated_at  = $3
 WHERE id = $4
-RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested
 `
 
 type SetMailApprovalStateParams struct {
@@ -4063,6 +4189,7 @@ func (q *Queries) SetMailApprovalState(ctx context.Context, arg SetMailApprovalS
 		&i.SubmittedAt,
 		&i.DeadlineAt,
 		&i.UpdatedAt,
+		&i.TrackingRequested,
 	)
 	return i, err
 }
@@ -4072,7 +4199,7 @@ UPDATE mail_approvals
 SET body_variables = $1,
     updated_at     = $2
 WHERE id = $3
-RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested
 `
 
 type SetMailApprovalVariablesParams struct {
@@ -4099,6 +4226,7 @@ func (q *Queries) SetMailApprovalVariables(ctx context.Context, arg SetMailAppro
 		&i.SubmittedAt,
 		&i.DeadlineAt,
 		&i.UpdatedAt,
+		&i.TrackingRequested,
 	)
 	return i, err
 }
@@ -4137,7 +4265,8 @@ func (q *Queries) SetMailQueueItemFailed(ctx context.Context, arg SetMailQueueIt
 const setMailQueueItemSent = `-- name: SetMailQueueItemSent :execrows
 UPDATE mail_queue
 SET status    = 'sent',
-    error     = NULL
+    error     = NULL,
+    sent_at   = NOW()
 WHERE id = $1
   AND status = 'processing'
   AND claimed_by = $2::text

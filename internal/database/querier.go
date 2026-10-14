@@ -40,6 +40,10 @@ type Querier interface {
 	// longer than deadline_seconds, counted or not, the oldest first: their raw
 	// mail is not kept (not_kept). Returns each send and since when it failed.
 	ClearSendsPastMaskDeadline(ctx context.Context, arg ClearSendsPastMaskDeadlineParams) ([]ClearSendsPastMaskDeadlineRow, error)
+	// A tracked row whose mail goes out while SKYMAIL_TRACKING is off: it goes
+	// out clean and its token is closed, so nothing is recorded for it should the
+	// flag be turned on again.
+	CloseQueueTrackingFlagOff(ctx context.Context, id uuid.UUID) (int64, error)
 	// Closes the rows CountRestoredQueueItems counts as restored without sending
 	// them: failed, with the error the send's page shows. mail_task_status then
 	// reports their sends as failed. attempts is left as it was: nothing tried
@@ -97,8 +101,13 @@ type Querier interface {
 	// A send's rows. Every row queued here is an e-mail: the channel is left to
 	// its default ('email'); a channel that queues its own rows names it.
 	// recipient_sub is the recipient's Keycloak subject when the send knew it.
+	// tracking_token is the recipient's token when the row is tracked, and
+	// tracking_skip_reason why not when the send asked for tracking.
 	CreateMailQueueItems(ctx context.Context, arg []CreateMailQueueItemsParams) (int64, error)
 	CreateMailTask(ctx context.Context, arg CreateMailTaskParams) ([]CreateMailTaskRow, error)
+	// A tracked send's links that are the same for every recipient, each with
+	// its own token (open and click tracking).
+	CreateMailTaskLinks(ctx context.Context, arg []CreateMailTaskLinksParams) (int64, error)
 	CreateMailingList(ctx context.Context, name string) (MailingList, error)
 	CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error)
 	CreateTemplate(ctx context.Context, arg CreateTemplateParams) (Template, error)
@@ -125,8 +134,8 @@ type Querier interface {
 	GetAllTemplatesIncludingArchived(ctx context.Context, arg GetAllTemplatesIncludingArchivedParams) ([]Template, error)
 	GetArchivedMailingLists(ctx context.Context, arg GetArchivedMailingListsParams) ([]MailingList, error)
 	GetArchivedTemplates(ctx context.Context, arg GetArchivedTemplatesParams) ([]Template, error)
-	// A queue row has no sent time of its own. created_at — when that recipient's
-	// mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
+	// A queue row's sent_at (20261015120000) is empty for every row sent before
+	// it, so created_at — when that recipient's mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
 	// mail that goes through on its first attempt leaves within seconds, and only a
 	// retried one (the ladder tops out under eight minutes) can land later.
 	// next_attempt_at is not used: every row older than the retry migration holds
@@ -149,6 +158,12 @@ type Querier interface {
 	// skip a recipient. A NULL status lists every recipient.
 	GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueueItemsByTaskIdParams) ([]GetMailQueueItemsByTaskIdRow, error)
 	GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTaskByIdRow, error)
+	// Whether a send is never tracked, whatever was asked: its template is a
+	// System template, or its content is sensitive by the one definition the
+	// content panel and the masking sweep use (mail_task_content_sensitive: the
+	// template says so now or said so when the send was queued, or its key is
+	// locked sensitive). A send without a template is never tracked.
+	GetMailTaskTrackingExclusion(ctx context.Context, taskID uuid.UUID) (GetMailTaskTrackingExclusionRow, error)
 	GetMailingListById(ctx context.Context, id uuid.UUID) (MailingList, error)
 	GetMailingListByIdIncludingArchived(ctx context.Context, id uuid.UUID) (MailingList, error)
 	GetRecipientByEmail(ctx context.Context, email string) (Recipient, error)
@@ -178,6 +193,9 @@ type Querier interface {
 	// state it is in as of as_of: one undecided past its deadline is expired,
 	// whether or not the sweep has written it yet.
 	ListMailApprovals(ctx context.Context, arg ListMailApprovalsParams) ([]ListMailApprovalsRow, error)
+	// The links a tracked row's mail gets its click addresses for when it goes
+	// out: the send's links whose address is still kept.
+	ListMailTaskLinkTargets(ctx context.Context, taskID uuid.UUID) ([]ListMailTaskLinkTargetsRow, error)
 	// A send as every screen shows it — the home screen, the send list and a
 	// send's own page: the task, the template it used, who it went to, its status
 	// as mail_task_status derives it, and its recipients by status. A NULL task_id

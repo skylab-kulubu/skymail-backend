@@ -140,6 +140,8 @@ type approvalSend struct {
 	recipients []mailer.RecipientInfo
 	// A JSON object.
 	variables []byte
+	// The submitter asked for open and click tracking.
+	tracking bool
 }
 
 func approvalSendOf(params requests.SubmitMailApproval) (approvalSend, error) {
@@ -159,7 +161,7 @@ func approvalSendOf(params requests.SubmitMailApproval) (approvalSend, error) {
 	if err != nil {
 		return approvalSend{}, err
 	}
-	send := approvalSend{templateID: params.TemplateID, recipients: recipients, variables: raw}
+	send := approvalSend{templateID: params.TemplateID, recipients: recipients, variables: raw, tracking: params.Tracking}
 	if hasList {
 		send.mailListID = params.MailListID
 	}
@@ -674,6 +676,7 @@ func queueToPeople(ctx context.Context, q *database.Queries, sends mailer.Queue,
 			BodyVariables:     a.BodyVariables,
 			RecipientFullName: to.FullName,
 			RecipientEmail:    to.Email,
+			TrackingRequested: a.TrackingRequested,
 		}); err != nil {
 			return nil, err
 		}
@@ -698,10 +701,11 @@ func queueToList(ctx context.Context, q *database.Queries, sends mailer.Queue, a
 			return uuid.Nil, errApprovalAudienceEmpty
 		}
 		taskID, err := sends.Enqueue(ctx, database.CreateMailTaskParams{
-			SentBy:        a.SubmitterSub,
-			TemplateID:    &a.TemplateID,
-			MailListID:    a.MailListID,
-			BodyVariables: a.BodyVariables,
+			SentBy:            a.SubmitterSub,
+			TemplateID:        &a.TemplateID,
+			MailListID:        a.MailListID,
+			BodyVariables:     a.BodyVariables,
+			TrackingRequested: a.TrackingRequested,
 		})
 		if err == nil && taskID == uuid.Nil {
 			return uuid.Nil, errApprovalAudienceEmpty
@@ -728,6 +732,7 @@ func queueToList(ctx context.Context, q *database.Queries, sends mailer.Queue, a
 		MailListID:    a.MailListID,
 		BodyVariables: a.BodyVariables,
 		Recipients:    prepared.groupMembers,
+		Tracking:      a.TrackingRequested,
 	})
 }
 
@@ -795,6 +800,7 @@ func (h *mailApprovalHandlerImpl) resubmit(ctx context.Context, q *database.Quer
 		TemplateVersionID: checked.versionID,
 		MailListID:        send.mailListID,
 		BodyVariables:     send.variables,
+		TrackingRequested: send.tracking && h.mailer.TrackingAvailable(),
 		At:                now,
 		DeadlineAt:        now.Add(mailApprovalDeadline),
 		ID:                a.ID,
@@ -1001,6 +1007,7 @@ func approvalItem(view database.GetMailApprovalRow, groupNames map[uuid.UUID]*st
 		UpdatedAt:     view.MailApproval.UpdatedAt,
 		TaskIDs:       view.TaskIds,
 		LastEvent:     last,
+		Tracking:      view.MailApproval.TrackingRequested,
 	}
 }
 

@@ -824,7 +824,8 @@ FROM closed;
 -- name: SetMailQueueItemSent :execrows
 UPDATE mail_queue
 SET status    = 'sent',
-    error     = NULL
+    error     = NULL,
+    sent_at   = NOW()
 WHERE id = sqlc.arg(id)
   AND status = 'processing'
   AND claimed_by = sqlc.arg(claimed_by)::text
@@ -863,8 +864,11 @@ WITH active_source AS (
       AND t.archived_at IS NULL
       AND ml.archived_at IS NULL
 ), inserted_task AS (
-    INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send)
-        SELECT sqlc.arg(sent_by), template_id, mail_list_id, sqlc.arg(body_variables), content_sensitive FROM active_source
+    INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send,
+                            tracking_requested)
+        SELECT sqlc.arg(sent_by), template_id, mail_list_id, sqlc.arg(body_variables), content_sensitive,
+               sqlc.arg(tracking_requested)::boolean
+        FROM active_source
         RETURNING *
 )
 SELECT it.id               AS task_id,
@@ -883,11 +887,14 @@ FROM inserted_task it
 -- A send's rows. Every row queued here is an e-mail: the channel is left to
 -- its default ('email'); a channel that queues its own rows names it.
 -- recipient_sub is the recipient's Keycloak subject when the send knew it.
+-- tracking_token is the recipient's token when the row is tracked, and
+-- tracking_skip_reason why not when the send asked for tracking.
 -- name: CreateMailQueueItems :copyfrom
 INSERT INTO mail_queue (
     task_id, recipient_full_name, recipient_email,
-    subject, body, body_html, priority, recipient_sub
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+    subject, body, body_html, priority, recipient_sub,
+    tracking_token, tracking_skip_reason
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
 
 -- A recipient whose mail did not render, say a template that slices an empty
 -- full name, is written failed, with the render error the send's page shows:
@@ -901,6 +908,44 @@ INSERT INTO mail_queue (
     sqlc.arg(task_id), sqlc.arg(recipient_full_name), sqlc.arg(recipient_email),
     '', '', sqlc.arg(priority), 'failed', sqlc.arg(error)::text, sqlc.narg(recipient_sub)::uuid
 );
+
+-- Whether a send is never tracked, whatever was asked: its template is a
+-- System template, or its content is sensitive by the one definition the
+-- content panel and the masking sweep use (mail_task_content_sensitive: the
+-- template says so now or said so when the send was queued, or its key is
+-- locked sensitive). A send without a template is never tracked.
+-- name: GetMailTaskTrackingExclusion :one
+SELECT COALESCE(t.system, true)::boolean                                       AS system_template,
+       (t.id IS NULL OR mail_task_content_sensitive(mt.id))::boolean AS content_sensitive
+FROM mail_tasks mt
+         LEFT JOIN templates t ON t.id = mt.template_id
+WHERE mt.id = sqlc.arg(task_id);
+
+-- A tracked send's links that are the same for every recipient, each with
+-- its own token (open and click tracking).
+-- name: CreateMailTaskLinks :copyfrom
+INSERT INTO mail_task_links (task_id, link_token, url, position)
+VALUES ($1, $2, $3, $4);
+
+-- The links a tracked row's mail gets its click addresses for when it goes
+-- out: the send's links whose address is still kept.
+-- name: ListMailTaskLinkTargets :many
+SELECT link_token, url::text AS url
+FROM mail_task_links
+WHERE task_id = sqlc.arg(task_id)
+  AND url IS NOT NULL
+ORDER BY position;
+
+-- A tracked row whose mail goes out while SKYMAIL_TRACKING is off: it goes
+-- out clean and its token is closed, so nothing is recorded for it should the
+-- flag be turned on again.
+-- name: CloseQueueTrackingFlagOff :execrows
+UPDATE mail_queue
+SET tracking_disabled_at = NOW(),
+    tracking_skip_reason = 'flag_off'
+WHERE id = sqlc.arg(id)
+  AND tracking_token IS NOT NULL
+  AND tracking_disabled_at IS NULL;
 
 -- name: GetMailTaskById :one
 SELECT mt.*,
@@ -1199,9 +1244,10 @@ WHERE mt.id = due.id
 RETURNING mt.id, (SELECT count(*) FROM rows WHERE rows.task_id = mt.id) AS rows_cleared;
 
 -- name: InsertMailTask :one
-INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send)
+INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send,
+                        tracking_requested)
 SELECT sqlc.arg(sent_by), sqlc.arg(template_id), sqlc.narg(mail_list_id), sqlc.arg(body_variables),
-       COALESCE(templates.content_sensitive::text, 'unset')
+       COALESCE(templates.content_sensitive::text, 'unset'), sqlc.arg(tracking_requested)::boolean
 FROM templates
 WHERE templates.id = sqlc.arg(template_id)
   AND archived_at IS NULL
@@ -1214,8 +1260,9 @@ WITH active_template AS (
     WHERE templates.id = sqlc.narg(template_id)::uuid
       AND archived_at IS NULL
 ), inserted_task AS (
-    INSERT INTO mail_tasks (sent_by, template_id, body_variables, content_sensitive_at_send)
-        SELECT sqlc.arg(sent_by), id, sqlc.arg(body_variables), content_sensitive FROM active_template
+    INSERT INTO mail_tasks (sent_by, template_id, body_variables, content_sensitive_at_send, tracking_requested)
+        SELECT sqlc.arg(sent_by), id, sqlc.arg(body_variables), content_sensitive, sqlc.arg(tracking_requested)::boolean
+        FROM active_template
         RETURNING *
 )
 SELECT it.id               AS task_id,
@@ -1235,8 +1282,8 @@ SELECT (SELECT count(*) FROM mail_queue WHERE status = 'pending')    AS pending,
        (SELECT count(*) FROM mail_queue WHERE status = 'sent')       AS sent,
        (SELECT count(*) FROM mail_queue WHERE status = 'failed')     AS failed;
 
--- A queue row has no sent time of its own. created_at — when that recipient's
--- mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
+-- A queue row's sent_at (20261015120000) is empty for every row sent before
+-- it, so created_at — when that recipient's mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
 -- mail that goes through on its first attempt leaves within seconds, and only a
 -- retried one (the ladder tops out under eight minutes) can land later.
 -- next_attempt_at is not used: every row older than the retry migration holds
@@ -1290,7 +1337,8 @@ SELECT mt.id,
        mail_task_bulk(mt.id)::boolean              AS bulk,
        mail_task_content_sensitive(mt.id)::boolean AS content_sensitive,
        mt.content_cleared_at,
-       mt.content_masked_at
+       mt.content_masked_at,
+       mt.tracking_requested
 FROM page
          JOIN mail_tasks mt ON mt.id = page.id
          LEFT JOIN templates t ON mt.template_id = t.id
@@ -1334,11 +1382,11 @@ WHERE (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(st
 -- name: CreateMailApproval :one
 INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, submitter_email_unverified, template_id,
                             template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at,
-                            updated_at)
+                            updated_at, tracking_requested)
 VALUES (sqlc.arg(submitter_sub), sqlc.narg(submitter_name), sqlc.narg(submitter_email),
         sqlc.arg(submitter_email_unverified), sqlc.arg(template_id),
         sqlc.arg(template_version_id), sqlc.narg(mail_list_id), sqlc.arg(body_variables), sqlc.arg(at), sqlc.arg(at),
-        sqlc.arg(deadline_at), sqlc.arg(at))
+        sqlc.arg(deadline_at), sqlc.arg(at), sqlc.arg(tracking_requested)::boolean)
 RETURNING *;
 
 -- The people a request goes to, in the order submitted, replacing whoever it
@@ -1414,6 +1462,7 @@ SET state               = 'pending',
     template_version_id = sqlc.arg(template_version_id),
     mail_list_id        = sqlc.narg(mail_list_id),
     body_variables      = sqlc.arg(body_variables),
+    tracking_requested  = sqlc.arg(tracking_requested)::boolean,
     submitted_at        = sqlc.arg(at),
     deadline_at         = sqlc.arg(deadline_at),
     updated_at          = sqlc.arg(at)
