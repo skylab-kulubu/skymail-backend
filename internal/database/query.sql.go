@@ -811,19 +811,20 @@ func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
 const createFailedMailQueueItem = `-- name: CreateFailedMailQueueItem :exec
 INSERT INTO mail_queue (
     task_id, recipient_full_name, recipient_email,
-    subject, body, priority, status, error
+    subject, body, priority, status, error, recipient_sub
 ) VALUES (
     $1, $2, $3,
-    '', '', $4, 'failed', $5::text
+    '', '', $4, 'failed', $5::text, $6::uuid
 )
 `
 
 type CreateFailedMailQueueItemParams struct {
-	TaskID            uuid.UUID `json:"task_id"`
-	RecipientFullName string    `json:"recipient_full_name"`
-	RecipientEmail    string    `json:"recipient_email"`
-	Priority          int16     `json:"priority"`
-	Error             string    `json:"error"`
+	TaskID            uuid.UUID  `json:"task_id"`
+	RecipientFullName string     `json:"recipient_full_name"`
+	RecipientEmail    string     `json:"recipient_email"`
+	Priority          int16      `json:"priority"`
+	Error             string     `json:"error"`
+	RecipientSub      *uuid.UUID `json:"recipient_sub"`
 }
 
 // A recipient whose mail did not render, say a template that slices an empty
@@ -837,6 +838,7 @@ func (q *Queries) CreateFailedMailQueueItem(ctx context.Context, arg CreateFaile
 		arg.RecipientEmail,
 		arg.Priority,
 		arg.Error,
+		arg.RecipientSub,
 	)
 	return err
 }
@@ -906,13 +908,14 @@ func (q *Queries) CreateMailApproval(ctx context.Context, arg CreateMailApproval
 }
 
 type CreateMailQueueItemsParams struct {
-	TaskID            uuid.UUID `json:"task_id"`
-	RecipientFullName string    `json:"recipient_full_name"`
-	RecipientEmail    string    `json:"recipient_email"`
-	Subject           string    `json:"subject"`
-	Body              string    `json:"body"`
-	BodyHtml          *string   `json:"body_html"`
-	Priority          int16     `json:"priority"`
+	TaskID            uuid.UUID  `json:"task_id"`
+	RecipientFullName string     `json:"recipient_full_name"`
+	RecipientEmail    string     `json:"recipient_email"`
+	Subject           string     `json:"subject"`
+	Body              string     `json:"body"`
+	BodyHtml          *string    `json:"body_html"`
+	Priority          int16      `json:"priority"`
+	RecipientSub      *uuid.UUID `json:"recipient_sub"`
 }
 
 const createMailTask = `-- name: CreateMailTask :many
@@ -1701,7 +1704,7 @@ func (q *Queries) GetMailQueueItemContent(ctx context.Context, arg GetMailQueueI
 }
 
 const getMailQueueItemsByTaskId = `-- name: GetMailQueueItemsByTaskId :many
-SELECT id, recipient_full_name, recipient_email, status, error, attempts, next_attempt_at, created_at
+SELECT id, channel, recipient_full_name, recipient_email, status, error, attempts, next_attempt_at, created_at
 FROM mail_queue
 WHERE task_id = $1
   AND ($4::mail_queue_status IS NULL OR status = $4::mail_queue_status)
@@ -1718,6 +1721,7 @@ type GetMailQueueItemsByTaskIdParams struct {
 
 type GetMailQueueItemsByTaskIdRow struct {
 	ID                uuid.UUID           `json:"id"`
+	Channel           string              `json:"channel"`
 	RecipientFullName string              `json:"recipient_full_name"`
 	RecipientEmail    string              `json:"recipient_email"`
 	Status            NullMailQueueStatus `json:"status"`
@@ -1746,6 +1750,7 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 		var i GetMailQueueItemsByTaskIdRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.Channel,
 			&i.RecipientFullName,
 			&i.RecipientEmail,
 			&i.Status,
@@ -3175,7 +3180,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub
 `
 
 type ProcessBulkQueueItemsParams struct {
@@ -3211,6 +3216,8 @@ func (q *Queries) ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueu
 			&i.ClaimedAt,
 			&i.ClaimedBy,
 			&i.Priority,
+			&i.Channel,
+			&i.RecipientSub,
 		); err != nil {
 			return nil, err
 		}
@@ -3234,7 +3241,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub
 `
 
 type ProcessSystemQueueItemsParams struct {
@@ -3274,6 +3281,8 @@ func (q *Queries) ProcessSystemQueueItems(ctx context.Context, arg ProcessSystem
 			&i.ClaimedAt,
 			&i.ClaimedBy,
 			&i.Priority,
+			&i.Channel,
+			&i.RecipientSub,
 		); err != nil {
 			return nil, err
 		}

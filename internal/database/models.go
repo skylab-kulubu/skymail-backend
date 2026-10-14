@@ -301,6 +301,10 @@ type MailQueue struct {
 	ClaimedAt         *time.Time          `json:"claimed_at"`
 	ClaimedBy         *string             `json:"claimed_by"`
 	Priority          int16               `json:"priority"`
+	// How the row goes out: email (recipient_email is the address). Other channels join mail_queue_channel_check in their own migration.
+	Channel string `json:"channel"`
+	// The recipient's Keycloak subject when the sender knew it; null when only an address was known.
+	RecipientSub *uuid.UUID `json:"recipient_sub"`
 }
 
 type MailSendWindow struct {

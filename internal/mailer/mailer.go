@@ -105,6 +105,10 @@ func bulkSlotsFor(workers int) int { return bulkShare(workers) }
 type RecipientInfo struct {
 	FullName string
 	Email    string
+	// Sub is the person's Keycloak subject when the send knows it (a
+	// Keycloak group's member), written to mail_queue.recipient_sub; nil
+	// when only an address is known. A mail never renders it.
+	Sub *uuid.UUID
 }
 
 type EnqueueWithRecipientsParams struct {
@@ -198,8 +202,9 @@ type mailerImpl struct {
 	// database's clock.
 	budget RateBudget
 	clock  func() time.Time
-	// deliver sends one row; tests replace it.
-	deliver func(ctx context.Context, client *mail.Client, job database.MailQueue) error
+	// channels makes a worker's sender of each channel it sends (channel.go);
+	// tests replace them.
+	channels map[string]newChannelSender
 	// clientOptions are added to the workers' SMTP client options; tests
 	// set them.
 	clientOptions []mail.Option
@@ -247,7 +252,7 @@ func NewMailer(db *database.Store, smtpConfig SMTPConfig, sender Sender, opts ..
 		stop:       make(chan struct{}),
 		stopped:    make(chan struct{}),
 	}
-	m.deliver = m.sendEmail
+	m.channels = map[string]newChannelSender{ChannelEmail: m.newEmailSender}
 	for _, opt := range opts {
 		opt(m)
 	}
@@ -471,6 +476,7 @@ type commonMailRow struct {
 	PlainTextContent  string
 	RecipientFullName string
 	RecipientEmail    string
+	RecipientSub      *uuid.UUID
 }
 
 // queue writes sends through q: the pool's queries, or a transaction's, in
@@ -629,6 +635,7 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 			PlainTextContent:  tmpl.PlainTextContent,
 			RecipientFullName: r.FullName,
 			RecipientEmail:    r.Email,
+			RecipientSub:      r.Sub,
 		})
 	}
 
@@ -787,6 +794,7 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 				RecipientEmail:    row.RecipientEmail,
 				Priority:          int16(q.priority),
 				Error:             err.Error(),
+				RecipientSub:      row.RecipientSub,
 			})
 			continue
 		}
@@ -801,6 +809,7 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 			Body:              rendered.PlainText,
 			BodyHtml:          &htmlRes,
 			Priority:          int16(q.priority),
+			RecipientSub:      row.RecipientSub,
 		})
 	}
 
@@ -939,32 +948,10 @@ func (m *mailerImpl) wake() {
 	}
 }
 
-// newSMTPClient is a worker's SMTP client: STARTTLS required, each send
-// bounded by sendBudget from its dial.
-func (m *mailerImpl) newSMTPClient() (*mail.Client, error) {
-	authType := mail.SMTPAuthLogin
-	if m.smtpConfig.Plain {
-		authType = mail.SMTPAuthPlain
-	}
-	options := append([]mail.Option{
-		mail.WithDialContextFunc(dialWithin(m.sendBudget)),
-		mail.WithPort(m.smtpConfig.Port),
-		mail.WithSMTPAuth(authType),
-		mail.WithUsername(m.smtpConfig.User),
-		mail.WithPassword(m.smtpConfig.Password),
-		mail.WithTLSPolicy(mail.TLSMandatory),
-		// go-mail otherwise says NOOP before the mail and again after the
-		// relay took it (before RSET): one more round trip that can only
-		// fail a send that has gone through.
-		mail.WithoutNoop(),
-	}, m.clientOptions...)
-	return mail.NewClient(m.smtpConfig.Host, options...)
-}
-
 func (m *mailerImpl) startWorker(ctx context.Context, id int) {
 	logger := m.logger.With().Str("component", "worker").Int("worker_id", id).Logger()
 
-	client, err := m.newSMTPClient()
+	senders, err := m.newSenders()
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to create SMTP client")
 		return
@@ -988,7 +975,7 @@ func (m *mailerImpl) startWorker(ctx context.Context, id int) {
 				continue
 			}
 			logger.Debug().Str("job_id", job.ID.String()).Msg("Worker picked up job")
-			m.send(ctx, client, &logger, job)
+			m.send(ctx, senders, &logger, job)
 
 			// This worker is idle again: the dispatcher may take a row for it.
 			m.untake(job)
@@ -1000,14 +987,21 @@ func (m *mailerImpl) startWorker(ctx context.Context, id int) {
 // outcomeTimeout bounds writing a send's outcome.
 const outcomeTimeout = 5 * time.Second
 
-// send sends job and records the outcome. The outcome is written even when
-// ctx ended as the send finished: a mail the relay took and the row not
-// saying so would go out again after the lease. A send cut off because ctx
-// ended (the process going away) is no failed attempt: the row keeps its
-// claim and is put back when the lease runs out.
-func (m *mailerImpl) send(ctx context.Context, client *mail.Client, logger *zerolog.Logger, job database.MailQueue) {
-	err := m.deliver(ctx, client, job)
-	if err != nil && ctx.Err() != nil {
+// send sends job through its channel's sender and records the outcome. The
+// outcome is written even when ctx ended as the send finished: a mail the
+// relay took and the row not saying so would go out again after the lease. A
+// send cut off because ctx ended (the process going away) is no failed
+// attempt: the row keeps its claim and is put back when the lease runs out. A
+// row of a channel this process has no sender for fails for good.
+func (m *mailerImpl) send(ctx context.Context, senders map[string]ChannelSender, logger *zerolog.Logger, job database.MailQueue) {
+	sender, known := senders[job.Channel]
+	var err error
+	if known {
+		err = sender.Send(ctx, job)
+	} else {
+		err = unknownChannel(job.Channel)
+	}
+	if err != nil && known && ctx.Err() != nil {
 		logger.Warn().Err(err).Str("job_id", job.ID.String()).Dur("lease", m.lease).
 			Msg("Send cut off by shutdown: no attempt counted; the row is sent again after its lease runs out")
 		return
@@ -1105,48 +1099,4 @@ func (m *mailerImpl) recordSendFailure(ctx context.Context, logger *zerolog.Logg
 		Int("attempts", attempts).
 		Dur("retry_in", delay).
 		Msg("Retrying email")
-}
-
-func (m *mailerImpl) sendEmail(ctx context.Context, client *mail.Client, job database.MailQueue) error {
-	msg := mail.NewMsg()
-	if err := msg.From(m.smtpConfig.FromEmail); err != nil {
-		return permanentError{fmt.Errorf("invalid from email: %w", err)}
-	}
-	if err := msg.To(fmt.Sprintf("%s <%s>", job.RecipientFullName, job.RecipientEmail)); err != nil {
-		return permanentError{fmt.Errorf("invalid recipient: %w", err)}
-	}
-
-	msg.SetGenHeader(mail.HeaderMessageID, fmt.Sprintf("<%s@%s>", job.ID.String(), m.smtpConfig.FQDN))
-
-	msg.Subject(job.Subject)
-	msg.SetBodyString(mail.TypeTextPlain, job.Body)
-
-	if job.BodyHtml != nil {
-		msg.AddAlternativeString(mail.TypeTextHTML, *job.BodyHtml)
-	}
-
-	// The send's own context, ended when the send returns: the connection
-	// is closed when it ends (withSend), on ctx's cancellation as on any
-	// other way out, a failed dial included.
-	send, done := context.WithCancel(ctx)
-	defer done()
-	smtpClient, err := client.DialToSMTPClientWithContext(withSend(send))
-	if err != nil {
-		return fmt.Errorf("dial failed: %w", err)
-	}
-	defer func() { _ = client.CloseWithSMTPClient(smtpClient) }()
-	if err := client.SendWithSMTPClient(smtpClient, msg); err != nil {
-		if !msg.IsDelivered() {
-			return fmt.Errorf("send failed: %w", err)
-		}
-		// The relay took the mail with the 250 after DATA; what failed is
-		// the RSET go-mail says after it (the relay hung up, or the
-		// shutdown cut the connection). Retrying would mail the person
-		// twice.
-		m.logger.Warn().Err(err).Str("job_id", job.ID.String()).
-			Msg("The relay took the mail; the SMTP exchange after it failed: counted as sent")
-	}
-	// Nor is a QUIT that fails or is cut off a failed send (go-mail's
-	// DialAndSend reports it as one).
-	return nil
 }

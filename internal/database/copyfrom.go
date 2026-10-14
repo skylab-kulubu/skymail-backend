@@ -36,6 +36,7 @@ func (r iteratorForCreateMailQueueItems) Values() ([]interface{}, error) {
 		r.rows[0].Body,
 		r.rows[0].BodyHtml,
 		r.rows[0].Priority,
+		r.rows[0].RecipientSub,
 	}, nil
 }
 
@@ -43,6 +44,9 @@ func (r iteratorForCreateMailQueueItems) Err() error {
 	return nil
 }
 
+// A send's rows. Every row queued here is an e-mail: the channel is left to
+// its default ('email'); a channel that queues its own rows names it.
+// recipient_sub is the recipient's Keycloak subject when the send knew it.
 func (q *Queries) CreateMailQueueItems(ctx context.Context, arg []CreateMailQueueItemsParams) (int64, error) {
-	return q.db.CopyFrom(ctx, []string{"mail_queue"}, []string{"task_id", "recipient_full_name", "recipient_email", "subject", "body", "body_html", "priority"}, &iteratorForCreateMailQueueItems{rows: arg})
+	return q.db.CopyFrom(ctx, []string{"mail_queue"}, []string{"task_id", "recipient_full_name", "recipient_email", "subject", "body", "body_html", "priority", "recipient_sub"}, &iteratorForCreateMailQueueItems{rows: arg})
 }

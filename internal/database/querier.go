@@ -94,6 +94,9 @@ type Querier interface {
 	// same transaction: it goes to a list or to people, which is checked when the
 	// transaction commits.
 	CreateMailApproval(ctx context.Context, arg CreateMailApprovalParams) (MailApproval, error)
+	// A send's rows. Every row queued here is an e-mail: the channel is left to
+	// its default ('email'); a channel that queues its own rows names it.
+	// recipient_sub is the recipient's Keycloak subject when the send knew it.
 	CreateMailQueueItems(ctx context.Context, arg []CreateMailQueueItemsParams) (int64, error)
 	CreateMailTask(ctx context.Context, arg CreateMailTaskParams) ([]CreateMailTaskRow, error)
 	CreateMailingList(ctx context.Context, name string) (MailingList, error)
