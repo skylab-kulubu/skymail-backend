@@ -29,7 +29,8 @@ import (
 // How, most reliable first:
 //
 //  1. Variables: the send's variables that carry a code, a link, an IP address
-//     or a place are masked — by name, by shape, and inside text — and the
+//     or a place are masked — those the template lists as sensitive whole,
+//     the others by name, by shape, and inside text — and the
 //     mail is rendered again with the template version in force when the send
 //     was queued. That render is trusted only when the same template rendered
 //     with the unmasked variables gives back exactly the mail that was sent.
@@ -38,7 +39,8 @@ import (
 //     in the stored mail, then every link, IP address, run of four or more
 //     digits (a date or a time stays), code- or token-shaped word and code cut
 //     by spaces is masked in the subject, the plain text, and the HTML's text,
-//     comments, attributes and style sheets. It masks more than it must.
+//     comments, attributes (an id, a class and a name too) and style sheets.
+//     It masks more than it must.
 //
 // Either way a last check looks for every credential the variables held, raw,
 // in each form the renderers escape it to, and with its digits cut apart; and
@@ -113,8 +115,17 @@ func (m *Masker) UseTemplates(candidates []TemplateParts) {
 // NewMasker reads a send's body_variables. Variables that do not read as an
 // object are unknown: only the patterns mask its mails.
 func NewMasker(variables []byte) *Masker {
+	return NewMaskerListing(variables, nil)
+}
+
+// NewMaskerListing is NewMasker for a template that lists its sensitive
+// variables (templates.sensitive_variables, the Template seed's): each listed
+// top-level variable is masked whole, whatever its name or shape; the others
+// are masked by name and shape as NewMasker does. No list (nil or empty) is
+// NewMasker.
+func NewMaskerListing(variables []byte, listed []string) *Masker {
 	vars, known := parseSendVariables(variables)
-	return &Masker{vars: vars, known: known, masked: maskVariables(vars)}
+	return &Masker{vars: vars, known: known, masked: maskVariables(vars, listed)}
 }
 
 // Variables are the paths of the variables masked (link, answers[0].url),
@@ -218,11 +229,15 @@ type maskedVariables struct {
 	kept []string
 }
 
-func maskVariables(vars map[string]any) maskedVariables {
+func maskVariables(vars map[string]any, listed []string) maskedVariables {
 	m := maskedVariables{text: map[string]any{}, html: map[string]any{}}
 	names := map[string]bool{}
+	isListed := map[string]bool{}
+	for _, name := range listed {
+		isListed[name] = true
+	}
 	for key, value := range vars {
-		m.text[key], m.html[key] = m.mask(key, key, value, names)
+		m.text[key], m.html[key] = m.mask(key, key, value, names, isListed[key])
 	}
 	for name := range names {
 		m.names = append(m.names, name)
@@ -231,24 +246,30 @@ func maskVariables(vars map[string]any) maskedVariables {
 	return m
 }
 
-// mask masks one value found under name (its last key) at path.
-func (m *maskedVariables) mask(name, path string, value any, names map[string]bool) (text, markup any) {
+// mask masks one value found under name (its last key) at path; listed says
+// the template lists it, or a variable it is under, as sensitive.
+func (m *maskedVariables) mask(name, path string, value any, names map[string]bool, listed bool) (text, markup any) {
 	switch v := value.(type) {
 	case map[string]any:
 		text, markup := map[string]any{}, map[string]any{}
 		for key, inner := range v {
-			text[key], markup[key] = m.mask(key, path+"."+key, inner, names)
+			text[key], markup[key] = m.mask(key, path+"."+key, inner, names, listed)
 		}
 		return text, markup
 	case []any:
 		text, markup := make([]any, len(v)), make([]any, len(v))
 		for i, inner := range v {
-			text[i], markup[i] = m.mask(name, path+"["+strconv.Itoa(i)+"]", inner, names)
+			text[i], markup[i] = m.mask(name, path+"["+strconv.Itoa(i)+"]", inner, names, listed)
 		}
 		return text, markup
 	case string:
 		if v == "" {
 			return v, v
+		}
+		if listed {
+			names[path] = true
+			m.addValue(v, true)
+			return Mask, htmlt.HTML(maskMark)
 		}
 		trimmed := strings.TrimSpace(v)
 		if quantityName(name) && digitRun.MatchString(trimmed) {
@@ -290,6 +311,11 @@ func (m *maskedVariables) mask(name, path string, value any, names map[string]bo
 		return strings.Join(parts, Mask), htmlt.HTML(markup.String())
 	case float64:
 		digits := strconv.FormatFloat(v, 'f', -1, 64)
+		if listed {
+			names[path] = true
+			m.addValue(digits, true)
+			return Mask, htmlt.HTML(maskMark)
+		}
 		if quantityName(name) {
 			m.kept = append(m.kept, digits)
 			return v, v
@@ -315,7 +341,8 @@ func (m *maskedVariables) addValue(v string, guard bool) {
 }
 
 // secretNameEnds are the last word of a variable that carries a code or a
-// link: link, ActionUrl, CancelUrl, code, TicketCode, otp, token, invite… A
+// link: link, ActionUrl, CancelUrl, code, TicketCode, otp, token, invite,
+// verification, doğrulama, passphrase… A
 // name only containing one (codeExpirationMinutes, linkExpirationMinutes,
 // subjectKey) is not one: masking a variable a template branches on would
 // change the mail.
@@ -323,6 +350,7 @@ var secretNameEnds = []string{
 	"link", "links", "url", "urls", "uri", "href", "code", "codes", "otp", "pin", "token", "tokens",
 	"passcode", "password", "secret", "verifier", "invite", "invitation", "nonce", "key",
 	"kod", "kodu", "baglanti", "bağlantı", "bağlantısı", "baglantisi", "sifre", "şifre", "parola", "davet",
+	"verification", "dogrulama", "doğrulama", "passphrase",
 }
 
 // secretNameParts are words that make any variable a credential.
@@ -767,11 +795,14 @@ func codeItemsOf(s string) map[string]bool {
 }
 
 // layoutAttributes say how a mail looks, not what it says: they are not
-// masked as text, and not looked into.
+// masked as text, and not looked into. An id, a class and a name are not
+// among them (#63 review, R4): a template may write a value into one
+// (id="c-{{.code}}"), so they are masked as text and looked at like any
+// attribute a reader may see; a class with no code in it stays as it is.
 var layoutAttributes = map[string]bool{
-	"class": true, "id": true, "bgcolor": true, "color": true, "width": true, "height": true, "align": true,
+	"bgcolor": true, "color": true, "width": true, "height": true, "align": true,
 	"valign": true, "cellpadding": true, "cellspacing": true, "border": true, "dir": true, "lang": true,
-	"role": true, "type": true, "name": true, "target": true, "rel": true, "xmlns": true, "http-equiv": true,
+	"role": true, "type": true, "target": true, "rel": true, "xmlns": true, "http-equiv": true,
 	"charset": true, "style": true, "face": true, "size": true, "colspan": true, "rowspan": true,
 }
 

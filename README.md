@@ -264,13 +264,41 @@ yalnız `available` ya da `masked` iken doludur:
   geçen her şablon. Go listesi `internal/handlers/content_sensitivity.go`,
   veritabanınınki `template_key_content_locked()`; bir test ikisini eşit
   tutar.
-- **Yeni tekil entegrasyonlar için sözleşme:** kimlik bilgisi taşıyan
-  değişkenin adı `link`, `url`, `code`, `token`, `otp`, `pin`, `password`,
-  `secret`, `key`, `invite` ya da `verifier` ile bitsin; şablon anahtarı
-  kilitli bir sözcük taşısın.
+- **Yeni tekil entegrasyonlar için sözleşme:**
+  - Şablon, kimlik bilgisi (kod, tek kullanımlık bağlantı, parola cümlesi)
+    taşıyan değişkenlerini Template seed'de `sensitive_variables` ile
+    listelesin (`PUT /v1/templates/by-key/{key}`, üst düzey adlar, en çok 50;
+    gönderilmezse var olan liste kalır, `[]` siler). Süpürücü listedeki her
+    değişkeni, adı ve biçimi ne olursa olsun, altındakilerle birlikte bütünüyle
+    maskeler: yalnız harften kod (`kxqpzmwt`), parola cümlesi
+    (`elma-armut-kiraz-nar`), 3 haneli kod da. Listede olmayanlar yine ad ve
+    biçimle maskelenir.
+  - Liste yoksa (eski seed) yalnız ad ve biçim: değişkenin adı `link`, `url`,
+    `code`, `token`, `otp`, `pin`, `password`, `secret`, `key`, `invite`,
+    `verifier`, `verification`, `dogrulama` ya da `passphrase` ile bitsin.
+  - Şablon anahtarı kilitli bir sözcük taşısın.
 - `not_kept`: hassas gönderimin içeriği boşaltılmış (2026-10-13 11:16'dan
   yazarken maskelemeye kadar; #61 öncesi gönderimler dahil; ya da güvenle
   maskelenemedi). Geri gelmez.
+- **Maskelenemeyen gönderim:** maskeleme hata verirse gönderim geri atılır
+  (5 dk, her hatada ×2, en çok 1 gün). Hata yalnız **aynı turda** başka bir
+  gönderim maskelendiyse sayılır ve yalnız o turun hatası sayılır: hiçbir
+  şeyin maskelenmediği turların (SkyMail çapında arıza) hataları arıza
+  bitince toptan sayılmaz. 3 sayılmış hatada içerik boşaltılır. Sayılsın
+  sayılmasın, ilk hatasından **7 gün** sonra hâlâ maskelenemeyen hassas
+  gönderim de boşaltılır (`mail_tasks.content_mask_failing_since`); kuyrukta
+  yalnız bozuk gönderimler kalsa da ham içerik saklama süresi boyunca durmaz.
+- **Alarm:** her boşaltma error düzeyinde bir satır yazar:
+  `"event":"sensitive_content_mask_attention","reason":"deadline"` (7 gün)
+  ya da `"reason":"failures"` (3 hata), `task_id` ile; içerik yazılmaz. Her
+  başarısız deneme warning düzeyinde
+  `"event":"sensitive_content_mask_failed"` yazar. SkyMail'in log okuyan bir
+  alarmı yok; production sunucusunda haftalık sayım (salt okunur):
+
+```bash
+docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | grep -F '"event":"sensitive_content_mask_' | grep -o '"event":"[^"]*"\(,"reason":"[^"]*"\)\?' | sort | uniq -c
+```
+
 - `skymail:system-mails:read` SkyMail istemcisinin rolüdür (yönetici: YK, DK,
   ADMIN).
 - Süpürücü beş dakikada bir önce hassasları maskeler, sonra

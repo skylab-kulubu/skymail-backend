@@ -36,14 +36,21 @@ type Querier interface {
 	// Empties a send the sweep could not mask for certain, or failed to mask three
 	// times: it is not kept.
 	ClearSendContent(ctx context.Context, taskID uuid.UUID) error
+	// Empties up to batch_size sensitive sends whose masking has been failing for
+	// longer than deadline_seconds, counted or not, the oldest first: their raw
+	// mail is not kept (not_kept). Returns each send and since when it failed.
+	ClearSendsPastMaskDeadline(ctx context.Context, arg ClearSendsPastMaskDeadlineParams) ([]ClearSendsPastMaskDeadlineRow, error)
 	// Closes the rows CountRestoredQueueItems counts as restored without sending
 	// them: failed, with the error the send's page shows. mail_task_status then
 	// reports their sends as failed. attempts is left as it was: nothing tried
 	// them. It counts what it closed by the status each row had.
 	CloseRestoredQueueItems(ctx context.Context, arg CloseRestoredQueueItemsParams) (CloseRestoredQueueItemsRow, error)
-	// Counts the failures not counted yet, once a run has masked some other send:
-	// the fault was the send's. Returns each send and its count.
-	ConfirmMaskFailures(ctx context.Context) ([]ConfirmMaskFailuresRow, error)
+	// Counts the failure of each send that failed in a run that masked some other
+	// send — the fault was the send's — and only that run's: a failure from a run
+	// that masked none (the fault may have been SkyMail's) is never counted, so a
+	// fault across SkyMail empties nothing once it is over. Returns each send and
+	// its count.
+	ConfirmMaskFailures(ctx context.Context, ids []uuid.UUID) ([]ConfirmMaskFailuresRow, error)
 	CountAllMailingListsIncludingArchived(ctx context.Context) (int64, error)
 	CountAllTemplatesIncludingArchived(ctx context.Context) (int64, error)
 	CountArchivedMailingLists(ctx context.Context) (int64, error)
@@ -96,7 +103,8 @@ type Querier interface {
 	// a transaction reads the instant it counts at.
 	DatabaseNow(ctx context.Context) (time.Time, error)
 	// Puts a send whose masking failed back: not counted yet, tried again after
-	// base_seconds doubled for each failure it has had (a day at most).
+	// base_seconds doubled for each failure it has had (a day at most). The first
+	// failure since the send was last masked starts its deadline.
 	DeferMaskFailure(ctx context.Context, arg DeferMaskFailureParams) error
 	// Discards a draft: it stays in the history, but it is nobody's draft in
 	// progress any more and it is never published. A draft discarded already
@@ -369,8 +377,10 @@ type Querier interface {
 	// idx_mail_tasks_content_mask_due): not masked or emptied, five minutes old,
 	// none of whose rows is still to go out, not among those it already tried in
 	// this run, and, if its masking failed before, due to be tried again. The
-	// sends that never failed go first. sensitive says whether to mask it. SKIP
-	// LOCKED lets a second replica's sweep take another.
+	// sends that never failed go first. sensitive says whether to mask it;
+	// sensitive_variables are the variables its template lists as sensitive
+	// (empty: none listed). SKIP LOCKED lets a second replica's sweep take
+	// another.
 	TakeSendToMask(ctx context.Context, tried []uuid.UUID) ([]TakeSendToMaskRow, error)
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
 	UpdateRecipient(ctx context.Context, arg UpdateRecipientParams) (Recipient, error)

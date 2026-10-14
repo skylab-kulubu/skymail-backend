@@ -186,7 +186,7 @@ func storedVersions(t *testing.T, db *database.Store, templateID uuid.UUID) ([]s
 var templateFields = []string{
 	"archived_at", "archived_by", "content_sensitive", "content_sensitive_locked", "contract_required_variables", "created_at", "drafts", "html_content", "id", "key",
 	"main_mode", "name", "operator_required_variables", "plain_text_content", "published_version_id",
-	"react_email_content", "seed_refusal", "subject", "system", "updated_at",
+	"react_email_content", "seed_refusal", "sensitive_variables", "subject", "system", "updated_at",
 }
 
 func assertTemplateShape(t *testing.T, body []byte) {

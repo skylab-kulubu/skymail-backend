@@ -362,7 +362,7 @@ func clearMailContent(ctx context.Context, db *database.Store, retentionDays int
 		}
 		if masked.Sends > 0 || masked.NotKept > 0 || masked.Failed > 0 {
 			log.Info().Int("sends", masked.Sends).Int("rows", masked.Rows).Int("not_kept", masked.NotKept).
-				Int("failed", masked.Failed).Int("not_sensitive", masked.NotSensitive).
+				Int("past_deadline", masked.PastDeadline).Int("failed", masked.Failed).Int("not_sensitive", masked.NotSensitive).
 				Msg("masked the content of sensitive sends")
 		}
 		sends, rows, err := db.ClearMailContent(ctx, retentionDays, contentSweepBatch)
