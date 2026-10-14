@@ -1167,6 +1167,31 @@ func (q *Queries) DeferMaskFailure(ctx context.Context, arg DeferMaskFailurePara
 	return err
 }
 
+const deleteOldSentContentViews = `-- name: DeleteOldSentContentViews :execrows
+DELETE
+FROM sent_content_views
+WHERE id IN (SELECT v.id
+             FROM sent_content_views v
+             WHERE v.created_at < now() - make_interval(days => $1::int)
+             ORDER BY v.created_at
+             LIMIT $2::int FOR UPDATE SKIP LOCKED)
+`
+
+type DeleteOldSentContentViewsParams struct {
+	RetentionDays int `json:"retention_days"`
+	BatchSize     int `json:"batch_size"`
+}
+
+// Deletes up to batch_size of the oldest records of who opened a masked mail
+// that are older than retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
+func (q *Queries) DeleteOldSentContentViews(ctx context.Context, arg DeleteOldSentContentViewsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOldSentContentViews, arg.RetentionDays, arg.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const discardTemplateDraft = `-- name: DiscardTemplateDraft :exec
 UPDATE template_versions
 SET discarded_at = COALESCE(discarded_at, NOW())

@@ -339,3 +339,38 @@ func TestATemplateMadeSensitiveWhileTheSweepDecidesMakesTheSendDue(t *testing.T)
 		t.Fatalf("after both: sensitive %v, due %v; want a sensitive send due to be masked", sensitive, due)
 	}
 }
+
+// The record of who opened a masked mail is kept retentionDays and then
+// deleted, a batch at a time (Yusuf, 2026-10-14: two years by default).
+func TestSentContentViewsAreDeletedPastTheirRetention(t *testing.T) {
+	db := lifecycleStore(t)
+	ctx := context.Background()
+	yes := true
+	task := seedSweepSend(t, db, sweepSend{sensitive: &yes, age: time.Hour, statuses: []string{"sent"}})
+	for _, age := range []string{"800 days", "731 days", "729 days", "1 day"} {
+		if _, err := db.Conn.Exec(ctx, `
+			INSERT INTO sent_content_views (task_id, queue_item_id, actor_sub, actor_name, masked_by, created_at)
+			VALUES ($1, gen_random_uuid(), 's', 'Ayşe', 'variables', now() - $2::interval)`, task, age); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deleted, err := db.DeleteSentContentViews(ctx, 730, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 2 {
+		t.Errorf("deleted %d views, want the two older than 730 days", deleted)
+	}
+	var left int
+	if err := db.Conn.QueryRow(ctx,
+		`SELECT count(*) FROM sent_content_views WHERE created_at > now() - interval '730 days'`).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	var all int
+	if err := db.Conn.QueryRow(ctx, `SELECT count(*) FROM sent_content_views`).Scan(&all); err != nil {
+		t.Fatal(err)
+	}
+	if left != 2 || all != 2 {
+		t.Errorf("left %d of %d views, want the two younger than 730 days", left, all)
+	}
+}

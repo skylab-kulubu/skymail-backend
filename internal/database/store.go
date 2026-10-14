@@ -28,6 +28,26 @@ func (s *Store) InTx(ctx context.Context, fn func(*Queries) error) error {
 	})
 }
 
+// DeleteSentContentViews runs DeleteOldSentContentViews until a batch comes
+// back short: it deletes every record of who opened a masked mail older than
+// retentionDays, batchSize at a time. It returns how many it deleted.
+func (s *Store) DeleteSentContentViews(ctx context.Context, retentionDays, batchSize int) (int64, error) {
+	var deleted int64
+	for {
+		n, err := s.DeleteOldSentContentViews(ctx, DeleteOldSentContentViewsParams{
+			RetentionDays: retentionDays,
+			BatchSize:     batchSize,
+		})
+		deleted += n
+		if err != nil || n < int64(batchSize) {
+			return deleted, err
+		}
+		if err := ctx.Err(); err != nil {
+			return deleted, err
+		}
+	}
+}
+
 // ClearMailContent runs ClearDueMailContent until a batch comes back short:
 // it empties the content of every send due (a sensitive one once none of its
 // rows is still to go out, any other past retentionDays), batchSize sends at a

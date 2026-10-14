@@ -359,7 +359,8 @@ send's `body_variables` are listed only when `available`.
 `sent_content_views`: `task_id`, `queue_item_id`, `actor_sub`, `actor_name`
 (from the token), `masked_by`, `masked_variables`, `created_at`. No content
 is returned unless the row is written. It names no recipient; Account erasure
-replaces the actor. No API reads it yet (hub ticket
+replaces the actor; it is deleted after `SENT_CONTENT_VIEWS_RETENTION_DAYS`
+(two years by default, below). No API reads it yet (hub ticket
 `.scratch/skymail-frontend-rewrite/issues/32-maskeli-icerik-acilis-kaydi-okuma.md`).
 
 **Who sees it.** The route takes `skymail:mails:read`; the handler then shows
@@ -393,8 +394,8 @@ The period is Yusuf's decision (2026-10-12: the longest allowed). KVKK's
 storage limitation principle (Law 6698, art. 4(2)(d): kept only as long as
 needed for its purpose) asks that it be reviewed: the content names and
 addresses people, and a shorter period is set with the variable alone.
-`sent_content_views` has no period of its own yet: Yusuf's decision, pending
-(proposal below, under Where the raw mail still is).
+`sent_content_views` has its own period: `SENT_CONTENT_VIEWS_RETENTION_DAYS`
+(below, under Where the raw mail still is).
 
 The sweep covers what a send keeps, not a Mail onayı request:
 `mail_approvals.body_variables` stays as the request was (see Mail approvals)
@@ -452,9 +453,11 @@ or link is still, for a while, in these places (#63 review, R5):
 - Not kept elsewhere: `mail_queue.error` holds the SMTP or render error, not
   the mail; the logs carry ids and counts, never a subject or a body.
 
-**`sent_content_views`, proposed period (pending Yusuf's decision; the code
-keeps every row, as today).** Two years from `created_at`, emptied by the
-same sweep, as a setting of its own beside `MAIL_CONTENT_RETENTION_DAYS`.
+**`sent_content_views` period (Yusuf, 2026-10-14: two years).** A record of
+who opened a masked mail is deleted `SENT_CONTENT_VIEWS_RETENTION_DAYS` after
+`created_at` (unset: 730, two years; a whole number from 1 to 3650, anything
+else stops startup), by the same sweep, after the content, 500 rows a
+statement.
 The rows are an access log of who opened a person's masked mail, there to
 answer "who saw my mail" and to review an operator's use. KVKK fixes no
 period for such a log; it asks for one tied to its purpose (art. 4(2)(d)).

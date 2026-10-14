@@ -108,6 +108,9 @@ type Querier interface {
 	// base_seconds doubled for each failure it has had (a day at most). The first
 	// failure since the send was last masked starts its deadline.
 	DeferMaskFailure(ctx context.Context, arg DeferMaskFailureParams) error
+	// Deletes up to batch_size of the oldest records of who opened a masked mail
+	// that are older than retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
+	DeleteOldSentContentViews(ctx context.Context, arg DeleteOldSentContentViewsParams) (int64, error)
 	// Discards a draft: it stays in the history, but it is nobody's draft in
 	// progress any more and it is never published. A draft discarded already
 	// keeps the time it was. The caller holds the template row's lock and has

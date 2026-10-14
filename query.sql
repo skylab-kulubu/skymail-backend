@@ -1139,6 +1139,17 @@ SET body_variables     = '{}',
     content_cleared_at = now()
 WHERE mail_tasks.id = sqlc.arg(task_id);
 
+-- Deletes up to batch_size of the oldest records of who opened a masked mail
+-- that are older than retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
+-- name: DeleteOldSentContentViews :execrows
+DELETE
+FROM sent_content_views
+WHERE id IN (SELECT v.id
+             FROM sent_content_views v
+             WHERE v.created_at < now() - make_interval(days => sqlc.arg(retention_days)::int)
+             ORDER BY v.created_at
+             LIMIT sqlc.arg(batch_size)::int FOR UPDATE SKIP LOCKED);
+
 -- Records that someone opened one recipient's masked mail of a sensitive send.
 -- name: RecordSentContentView :exec
 INSERT INTO sent_content_views (task_id, queue_item_id, actor_sub, actor_name, masked_by, masked_variables)

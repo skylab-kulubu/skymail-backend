@@ -303,7 +303,10 @@ docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | 
   ADMIN).
 - Süpürücü beş dakikada bir önce hassasları maskeler, sonra
   `MAIL_CONTENT_RETENTION_DAYS` (varsayılan `3650`, 1–3650) dolmuş
-  gönderimlerin içeriğini boşaltır.
+  gönderimlerin içeriğini boşaltır, sonra
+  `SENT_CONTENT_VIEWS_RETENTION_DAYS`'ten (varsayılan `730`, 1–3650; Yusuf,
+  2026-10-14: 2 yıl) eski `sent_content_views` satırlarını siler. Geçersiz
+  değer açılışı durdurur.
 - **Geri dönüş:** #61 imajına dönmek ilk süpürmede bütün hassas içeriği
   boşaltır (güvenli, geri gelmez). `20261013140000` down migration'ı
   koşturulmaz (açılış kaydını siler).
