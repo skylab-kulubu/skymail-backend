@@ -386,7 +386,11 @@ Hatalı adres, değeri değil değişkeni söyleyerek açılışı durdurur. Aç
   ya da `unsubscribe` geçen adres (core'un çıkış bağlantısı, my.'nın tercih
   sayfası), SkyMail'in kendi `/t/` adresleri ve `data-skymail-notrack`
   öznitelikli bağlantı kaydedilmez, postada olduğu gibi kalır.
-  `List-Unsubscribe` başlığına dokunulmaz.
+  `List-Unsubscribe` başlığına dokunulmaz. **İstisna:** tek alıcılı (ya da
+  tek postası işlenebilen) gönderimde karşılaştıracak başka posta olmadığı
+  için değişkenle kişiselleşmiş bağlantılar da kaydedilir ve yeniden yazılır;
+  `mail_task_links.url` o kişiyi adlandırabilir. Hesap silme, yalnız kişiye
+  giden gönderimin bağlantılarını boşaltır.
 - **Yerleştirme SMTP anında:** saklanan `body_html` değişmez (içerik paneli
   pikselsiz gösterir; operatörün bakması alıcı adına açılma sayılmaz).
   Belirteci açık satırın postası relay'e giderken `<body>`'nin hemen
