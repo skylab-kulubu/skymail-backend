@@ -96,6 +96,25 @@ func TestDecorateWithoutABody(t *testing.T) {
 	}
 }
 
+// A mail with a doctype but no <body> (valid HTML) keeps its doctype first:
+// markup before it would put clients in quirks mode. The pixel goes where
+// the body begins: after </head>, else after <html>, else after the
+// doctype.
+func TestDecorateWithoutABodyKeepsTheDoctypeFirst(t *testing.T) {
+	img := tracking.PixelHTML(pixel)
+	for body, want := range map[string]string{
+		`<!DOCTYPE html><html lang="tr"><head><title>x</title></head><p>x</p></html>`: `<!DOCTYPE html><html lang="tr"><head><title>x</title></head>` + img + `<p>x</p></html>`,
+		`<!DOCTYPE html><html><p>x</p></html>`:                                        `<!DOCTYPE html><html>` + img + `<p>x</p></html>`,
+		`<!DOCTYPE html><p>x</p>`:                                                     `<!DOCTYPE html>` + img + `<p>x</p>`,
+		"\n<!-- önce --><!doctype html>\n<p>x</p>":                                    "\n<!-- önce --><!doctype html>" + img + "\n<p>x</p>",
+		`<html><head></head><p>x</p>`:                                                 `<html><head></head>` + img + `<p>x</p>`,
+	} {
+		if got := tracking.Decorate(body, pixel, nil); got != want {
+			t.Errorf("Decorate(%q)\n = %q\nwant %q", body, got, want)
+		}
+	}
+}
+
 // Markup the tokenizer cannot finish (a mail cut in a tag) comes out as it
 // went in, with the pixel.
 func TestDecorateKeepsBrokenMarkup(t *testing.T) {

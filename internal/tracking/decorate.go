@@ -25,19 +25,24 @@ func PixelHTML(pixelURL string) string {
 }
 
 // Decorate is a tracked mail as it goes out: body with the pixel right after
-// the <body> tag (first of all when there is none: Gmail clips the end of a
-// long mail, never its start), and each <a> whose href is a key of clicks
+// the <body> tag (Gmail clips the end of a long mail, never its start), and
+// each <a> whose href is a key of clicks
 // pointing at its value instead. An <a> marked data-skymail-notrack keeps its
 // href. Nothing else changes: every other byte of body is copied as it is,
 // so markup the tokenizer cannot read, conditional comments, styles and
 // text that looks like a link come out as they went in. No sentence, footer
-// or link is added (T8).
+// or link is added (T8). A mail without <body> gets the pixel where its body
+// begins: after </head>, else after <html>, else after the doctype, else
+// first; never before the doctype, which would put clients in quirks mode.
 func Decorate(body, pixelURL string, clicks map[string]string) string {
 	img := PixelHTML(pixelURL)
 	var out strings.Builder
 	out.Grow(len(body) + len(img) + 64*len(clicks))
 	z := html.NewTokenizer(strings.NewReader(body))
 	consumed, placed := 0, false
+	// Where the pixel goes when there is no <body>: the end of each of these
+	// in out, -1 until seen.
+	afterHead, afterHTML, afterDoctype := -1, -1, -1
 	for {
 		tt := z.Next()
 		if tt == html.ErrorToken {
@@ -47,9 +52,25 @@ func Decorate(body, pixelURL string, clicks map[string]string) string {
 		// lower-cases and unescapes them in the tokenizer's buffer.
 		raw := string(z.Raw())
 		consumed += len(raw)
+		if tt == html.DoctypeToken && afterDoctype < 0 {
+			out.WriteString(raw)
+			afterDoctype = out.Len()
+			continue
+		}
+		if tt == html.EndTagToken && afterHead < 0 {
+			if name, _ := z.TagName(); string(name) == "head" {
+				out.WriteString(raw)
+				afterHead = out.Len()
+				continue
+			}
+		}
 		if tt == html.StartTagToken || tt == html.SelfClosingTagToken {
 			name, hasAttr := z.TagName()
 			switch {
+			case string(name) == "html" && afterHTML < 0:
+				out.WriteString(raw)
+				afterHTML = out.Len()
+				continue
 			case string(name) == "body":
 				out.WriteString(raw)
 				if !placed {
@@ -68,10 +89,18 @@ func Decorate(body, pixelURL string, clicks map[string]string) string {
 	}
 	// What the tokenizer did not hand back (a tag cut off at the end).
 	out.WriteString(body[consumed:])
-	if !placed {
-		return img + out.String()
+	if placed {
+		return out.String()
 	}
-	return out.String()
+	at := 0
+	for _, position := range []int{afterHead, afterHTML, afterDoctype} {
+		if position >= 0 {
+			at = position
+			break
+		}
+	}
+	decorated := out.String()
+	return decorated[:at] + img + decorated[at:]
 }
 
 // rewriteAnchor writes the current <a> anew with its href pointing at its
