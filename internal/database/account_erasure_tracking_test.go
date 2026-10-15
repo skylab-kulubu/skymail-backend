@@ -97,3 +97,24 @@ func TestEraseAccountTakesThePersonOutOfTracking(t *testing.T) {
 		t.Errorf("repeat = %+v, %v; want the first receipt", again, err)
 	}
 }
+
+// The names searched for come from Postgres's lower(), which leaves Turkish
+// capitals as they are under the C ctype; the address is lower-cased in Go.
+// The needle is lower-cased in Go too, so both sides fold the same way
+// whatever the database's ctype.
+func TestLinkNamesFoldsTheNeedleAsWellAsTheLink(t *testing.T) {
+	for _, c := range []struct {
+		link   string
+		needle string
+		want   bool
+	}{
+		{"https://skylab.example/ad/%C4%B0smail+%C5%9Eahin", "İsmail Şahin", true},
+		{"https://skylab.example/u?e=deniz%40example.com", "DENIZ@EXAMPLE.COM", true},
+		{"https://skylab.example/ad/Ayse+Kaya", "İsmail Şahin", false},
+		{"https://skylab.example/", "", false},
+	} {
+		if got := linkNames(c.link, []string{c.needle}); got != c.want {
+			t.Errorf("linkNames(%q, %q) = %v, want %v", c.link, c.needle, got, c.want)
+		}
+	}
+}

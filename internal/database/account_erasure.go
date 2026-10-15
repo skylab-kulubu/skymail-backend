@@ -455,8 +455,10 @@ func (e *eraser) clearTrackedLinks(ctx context.Context) error {
 	return nil
 }
 
-// linkNames reports whether an address holds one of the needles (lower-case
-// addresses and full names), as written or URL-decoded.
+// linkNames reports whether an address holds one of the needles (addresses
+// and full names), as written or URL-decoded. Both sides are lower-cased
+// here: the needles come from Postgres's lower(), which under the C ctype
+// leaves letters such as İ and Ş as they are.
 func linkNames(link string, needles []string) bool {
 	forms := []string{strings.ToLower(link)}
 	if decoded, err := url.QueryUnescape(link); err == nil {
@@ -467,7 +469,7 @@ func linkNames(link string, needles []string) bool {
 	}
 	for _, form := range forms {
 		for _, needle := range needles {
-			if needle != "" && strings.Contains(form, needle) {
+			if needle != "" && strings.Contains(form, strings.ToLower(needle)) {
 				return true
 			}
 		}
