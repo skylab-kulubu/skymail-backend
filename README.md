@@ -357,10 +357,12 @@ Hatalı adres, değeri değil değişkeni söyleyerek açılışı durdurur. Aç
 `open and click tracking (SKYMAIL_TRACKING)` satırı kipi ve adresleri yazar.
 
 - **Kim takip edilir (gönderim kuyruğa yazılırken sabitlenir):** bayrak açık;
-  gönderim `tracking: true` istedi (`POST /v1/mail_tasks`, Mail onayı isteği;
-  bayrak kapalıyken alan yok sayılır, yanıt `tracking: false` der); satır toplu
-  şeritte; şablon System değil ve hassas değil (`mail_task_content_sensitive()`,
-  içerik panelinin tek tanımı); alıcının Keycloak `sub`'ı biliniyor
+  gönderim `tracking: true` istedi (`POST /v1/mail_tasks`, Mail onayı isteği);
+  satır toplu şeritte; şablon System değil ve hassas değil
+  (`mail_task_content_sensitive()`, içerik panelinin tek tanımı). Bayrak
+  kapalıyken ya da şablon System/hassasken alan yok sayılır: yanıt, gönderim
+  ve onay isteği `tracking: false` der, satırlara neden yazılmaz. Sonra
+  alıcının Keycloak `sub`'ı biliniyor
   (`recipient_sub`: yalnız Keycloak grubu üyeleri) ve core izin veriyor.
   core'a gönderimin veritabanı işlemi **başlamadan önce** sorulur (Mail
   onayında istek kilitlenmeden önce, grup üyeleriyle birlikte); SkyMail core'u
@@ -368,9 +370,10 @@ Hatalı adres, değeri değil değişkeni söyleyerek açılışı durdurur. Aç
   (sorulmamış, ör. yanıt gelmemiş) takip edilmez.
   Takip edilen satır 16 baytlık rastgele bir belirteç alır
   (`mail_queue.tracking_token`); edilmeyen satır nedenini
-  (`tracking_skip_reason`): `transactional`, `no_account`, `preference_off`,
-  `not_member`, `inactive`, `not_allowed`, `preference_unavailable`,
-  `flag_off`. Gönderim takip istemediyse ikisi de boştur.
+  (`tracking_skip_reason`): `no_account`, `preference_off`, `not_member`,
+  `inactive`, `not_allowed`, `preference_unavailable`, `flag_off`. Gönderim
+  takip istemediyse ya da takip edilemezse (`tracking: false`) ikisi de
+  boştur. (`transactional` kısıtta duruyor, yazılmıyor.)
 - **core'a ulaşılamazsa** (5 saniye, hata ya da sözleşme dışı yanıt) o
   gönderimde kimse takip edilmez (`preference_unavailable`), gönderim durmaz.
   Uyarı satırı `"event":"tracking_preferences_unavailable"` (`"cause":"core"`

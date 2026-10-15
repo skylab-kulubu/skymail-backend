@@ -371,13 +371,26 @@ func TestASendInATransactionTracksOnlyWhomCoreWasAskedAbout(t *testing.T) {
 
 // Single mail (the system lane), a System template, a sensitive template and
 // a template whose key is locked sensitive are never tracked, the flag on and
-// tracking asked for: no token, no link, core not asked; the rows say why.
+// tracking asked for: no token, no link, core not asked, and the send says it
+// is not tracked (tracking_requested false, no row reasons), as
+// TrackingApplies told the caller beforehand.
 func TestNoTokenWhereTrackingNeverGoes(t *testing.T) {
 	captureMailerLogs(t)
 	db := trackingQueue(t)
 	prefs := coreSays()
 	m := mailer.NewMailer(db, startFakeSMTP(t).config(), mailer.SenderOn, trackingOn(prefs))
 	ctx := context.Background()
+
+	for template, applies := range map[uuid.UUID]bool{
+		announcementTemplate: true, systemTemplate: false, sensitiveTemplate: false, lockedKeyTemplate: false,
+	} {
+		if got := m.TrackingApplies(ctx, template, &announcementList); got != applies {
+			t.Errorf("TrackingApplies(%s) = %v, want %v", template, got, applies)
+		}
+	}
+	if m.TrackingApplies(ctx, uuid.New(), &announcementList) {
+		t.Error("TrackingApplies of a template that is not there")
+	}
 
 	var tasks []uuid.UUID
 	single := announcementTemplate
@@ -401,9 +414,12 @@ func TestNoTokenWhereTrackingNeverGoes(t *testing.T) {
 	}
 
 	for i, task := range tasks {
+		if trackingRequested(t, db, task) {
+			t.Errorf("send %d says it is tracked", i)
+		}
 		for email, row := range trackedRows(t, db, task) {
-			if row.token != nil || row.reason != tracking.SkipTransactional {
-				t.Errorf("send %d, %s: token %x, reason %q; want none, transactional", i, email, row.token, row.reason)
+			if row.token != nil || row.reason != "" {
+				t.Errorf("send %d, %s: token %x, reason %q; want neither", i, email, row.token, row.reason)
 			}
 		}
 		if links := linksOf(t, db, task); len(links) != 0 {

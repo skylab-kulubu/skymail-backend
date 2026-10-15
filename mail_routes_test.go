@@ -26,6 +26,8 @@ func (idleMailer) SenderPaused() bool { return false }
 
 func (idleMailer) TrackingAvailable() bool { return false }
 
+func (idleMailer) TrackingApplies(context.Context, uuid.UUID, *uuid.UUID) bool { return false }
+
 func (idleMailer) Enqueue(context.Context, database.CreateMailTaskParams) (uuid.UUID, error) {
 	return uuid.Nil, nil
 }

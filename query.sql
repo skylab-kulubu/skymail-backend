@@ -932,6 +932,14 @@ SELECT t.system::boolean                                                        
 FROM templates t
 WHERE t.id = sqlc.arg(template_id);
 
+-- A send that asked for tracking but can never be tracked (single mail, a
+-- System or sensitive template) says it is not tracked: no token, no row
+-- reasons, tracking_requested false, as TrackingApplies told the caller.
+-- name: ClearMailTaskTracking :exec
+UPDATE mail_tasks
+SET tracking_requested = false
+WHERE id = sqlc.arg(task_id);
+
 -- A tracked send's links that are the same for every recipient, each with
 -- its own token (open and click tracking).
 -- name: CreateMailTaskLinks :copyfrom

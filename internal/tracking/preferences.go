@@ -20,10 +20,6 @@ const (
 	// SkipFlagOff: the row was queued tracked, and SKYMAIL_TRACKING was off
 	// when it went out; it went out clean and its token is closed.
 	SkipFlagOff = "flag_off"
-	// SkipTransactional: a single mail (the system lane), or a send of a
-	// System template or of one whose content is sensitive (a code, a
-	// one-time link). Never tracked, whatever was asked.
-	SkipTransactional = "transactional"
 	// SkipNoAccount: SkyMail knows only the address (a mailing list's
 	// recipient, a person named by address): no Keycloak account to ask
 	// about.

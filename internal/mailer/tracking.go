@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
 )
@@ -33,6 +34,36 @@ func WithTracking(t Tracking) Option {
 // TrackingAvailable reports whether SKYMAIL_TRACKING is on: whether a send
 // that asks for tracking gets it.
 func (m *mailerImpl) TrackingAvailable() bool { return m.tracking.Config.On() }
+
+// TrackingApplies reports whether a send of templateID to mailListID that
+// asks for tracking gets it: tracking is on and the template is neither a
+// System template nor sensitive (GetTemplateTrackingExclusion). It says
+// false when that cannot be read. The send's transaction decides again
+// (GetMailTaskTrackingExclusion) and, should the template have changed in
+// between, says not tracked.
+func (m *mailerImpl) TrackingApplies(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID) bool {
+	if !m.TrackingAvailable() || m.db == nil {
+		return false
+	}
+	trackable, err := m.templateTrackable(ctx, templateID, mailListID)
+	return err == nil && trackable
+}
+
+// templateTrackable reads whether a send of templateID to mailListID may be
+// tracked at all; a template that is not there may not.
+func (m *mailerImpl) templateTrackable(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID) (bool, error) {
+	exclusion, err := m.db.GetTemplateTrackingExclusion(ctx, database.GetTemplateTrackingExclusionParams{
+		TemplateID: templateID,
+		Bulk:       mailListID != nil,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !exclusion.SystemTemplate && !exclusion.ContentSensitive, nil
+}
 
 // preferencesBudget is all the time a send gives core to say whom it may
 // track; past it no one in the send is tracked and the send goes on.
@@ -66,11 +97,7 @@ func (m *mailerImpl) ResolveTracking(ctx context.Context, templateID uuid.UUID, 
 	if len(subs) == 0 {
 		return &TrackingPreferences{}
 	}
-	exclusion, err := m.db.GetTemplateTrackingExclusion(ctx, database.GetTemplateTrackingExclusionParams{
-		TemplateID: templateID,
-		Bulk:       mailListID != nil,
-	})
-	if err == nil && (exclusion.SystemTemplate || exclusion.ContentSensitive) {
+	if trackable, err := m.templateTrackable(ctx, templateID, mailListID); err == nil && !trackable {
 		return &TrackingPreferences{}
 	}
 	if m.tracking.Preferences == nil {
@@ -87,29 +114,23 @@ func (m *mailerImpl) ResolveTracking(ctx context.Context, templateID uuid.UUID, 
 // §4.1):
 //
 //   - a single mail (the system lane), or a send of a System template or of
-//     one whose content is sensitive (mail_task_content_sensitive): no one,
-//     transactional;
+//     one whose content is sensitive (mail_task_content_sensitive): the send
+//     is not tracked at all, tracking_requested false and no row reasons, as
+//     TrackingApplies told the caller;
 //   - a recipient SkyMail knows only by address: no_account;
 //   - everyone else as core said before the transaction (preferences). Core
 //     not asked, failing, or not asked about this person (the recipients
 //     changed since): preference_unavailable. Core is never asked here.
 func (q *queue) planTracking(ctx context.Context, taskID uuid.UUID, items []database.CreateMailQueueItemsParams, preferences *TrackingPreferences) error {
-	skipAll := func(reason string) {
-		for i := range items {
-			items[i].TrackingSkipReason = &reason
-		}
-	}
 	if q.priority == PrioritySystem {
-		skipAll(tracking.SkipTransactional)
-		return nil
+		return q.q.ClearMailTaskTracking(ctx, taskID)
 	}
 	exclusion, err := q.q.GetMailTaskTrackingExclusion(ctx, taskID)
 	if err != nil {
 		return err
 	}
 	if exclusion.SystemTemplate || exclusion.ContentSensitive {
-		skipAll(tracking.SkipTransactional)
-		return nil
+		return q.q.ClearMailTaskTracking(ctx, taskID)
 	}
 
 	var decisions map[uuid.UUID]tracking.Decision

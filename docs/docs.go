@@ -240,7 +240,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Whether the send asked for open and click tracking and got it: false when it did not ask, or SkyMail's tracking is off (GET /mail_tasks/summary tracking_available).",
+                        "description": "Whether the send asked for open and click tracking and got it: false when it did not ask, when SkyMail's tracking is off (GET /mail_tasks/summary tracking_available), or when its template is a System template or sensitive, which are never tracked.",
                         "type": "boolean"
                     }
                 },
@@ -342,7 +342,7 @@ const docTemplate = `{
                         "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
                     },
                     "tracking": {
-                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then; the approved send gets it if tracking is still on.",
+                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive); the approved send gets it if that still holds.",
                         "type": "boolean"
                     },
                     "updated_at": {
@@ -485,7 +485,7 @@ const docTemplate = `{
                         "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
                     },
                     "tracking": {
-                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then; the approved send gets it if tracking is still on.",
+                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive); the approved send gets it if that still holds.",
                         "type": "boolean"
                     },
                     "updated_at": {
@@ -652,7 +652,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Whether the send asked for open and click tracking and got it (SkyMail's tracking was on when it was queued).",
+                        "description": "Whether the send asked for open and click tracking and got it: SkyMail's tracking was on when it was queued and its template may be tracked (not System, not sensitive).",
                         "type": "boolean"
                     }
                 },
@@ -1298,7 +1298,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Open and click tracking: each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links. Ignored (and answered false) while SkyMail's tracking is off; a System or sensitive template, and a mailing list's address-only recipients, are never tracked.",
+                        "description": "Open and click tracking: each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links. Ignored (and answered false) while SkyMail's tracking is off and for a System or sensitive template, which are never tracked; a mailing list's address-only recipients are not tracked.",
                         "type": "boolean"
                     }
                 },
@@ -1535,7 +1535,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Open and click tracking for the send once approved (as POST /mail_tasks takes it). Ignored (and kept false) while SkyMail's tracking is off.",
+                        "description": "Open and click tracking for the send once approved (as POST /mail_tasks takes it). Ignored (and kept false) while SkyMail's tracking is off and for a System or sensitive template.",
                         "type": "boolean"
                     }
                 },
@@ -2607,7 +2607,7 @@ const docTemplate = `{
                 ]
             },
             "post": {
-                "description": "Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyMail's tracking is off the field is ignored and the answer says tracking false.",
+                "description": "Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyMail's tracking is off, or for a System or sensitive template (never tracked), the field is ignored and the answer says tracking false.",
                 "requestBody": {
                     "content": {
                         "application/json": {

@@ -33,6 +33,10 @@ type Querier interface {
 	// went to before; none for a request to a list. emails and full_names pair up
 	// by index.
 	ClearMailApprovalRecipients(ctx context.Context, approvalID uuid.UUID) error
+	// A send that asked for tracking but can never be tracked (single mail, a
+	// System or sensitive template) says it is not tracked: no token, no row
+	// reasons, tracking_requested false, as TrackingApplies told the caller.
+	ClearMailTaskTracking(ctx context.Context, taskID uuid.UUID) error
 	// Empties a send the sweep could not mask for certain, or failed to mask three
 	// times: it is not kept.
 	ClearSendContent(ctx context.Context, taskID uuid.UUID) error

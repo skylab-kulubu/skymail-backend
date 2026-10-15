@@ -13,7 +13,7 @@ type SubmitMailApproval struct {
 	// The people, 1..100, each address once (compared case-insensitively); each gets a send of their own. Leave it out to send to a mailing list.
 	Recipients    []MailApprovalRecipient `json:"recipients" validate:"omitempty,max=100,dive"`
 	BodyVariables map[string]interface{}  `json:"body_variables"`
-	// Open and click tracking for the send once approved (as POST /mail_tasks takes it). Ignored (and kept false) while SkyMail's tracking is off.
+	// Open and click tracking for the send once approved (as POST /mail_tasks takes it). Ignored (and kept false) while SkyMail's tracking is off and for a System or sensitive template.
 	Tracking bool `json:"tracking"`
 }
 

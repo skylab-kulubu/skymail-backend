@@ -302,6 +302,20 @@ func (q *Queries) ClearMailApprovalRecipients(ctx context.Context, approvalID uu
 	return err
 }
 
+const clearMailTaskTracking = `-- name: ClearMailTaskTracking :exec
+UPDATE mail_tasks
+SET tracking_requested = false
+WHERE id = $1
+`
+
+// A send that asked for tracking but can never be tracked (single mail, a
+// System or sensitive template) says it is not tracked: no token, no row
+// reasons, tracking_requested false, as TrackingApplies told the caller.
+func (q *Queries) ClearMailTaskTracking(ctx context.Context, taskID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearMailTaskTracking, taskID)
+	return err
+}
+
 const clearSendContent = `-- name: ClearSendContent :exec
 WITH emptied AS (UPDATE mail_queue
     SET subject = '', body = '', body_html = NULL

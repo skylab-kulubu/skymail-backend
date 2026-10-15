@@ -209,6 +209,43 @@ func TestAnApprovedSendKeepsTheSubmittersTracking(t *testing.T) {
 	}
 }
 
+// A send that can never be tracked — a System template, or one whose content
+// is sensitive — says so: tracking false, though asked for with the flag on,
+// in the answer, the send and a request for approval alike.
+func TestASendThatCannotBeTrackedSaysSo(t *testing.T) {
+	w, prefs := trackedWorld(t, true)
+	ctx := context.Background()
+	for _, change := range []string{
+		`UPDATE templates SET system = true WHERE id = $1`,
+		`UPDATE templates SET system = false, content_sensitive = true WHERE id = $1`,
+	} {
+		if _, err := w.store.Conn.Exec(ctx, change, w.freeBasic.ID); err != nil {
+			t.Fatal(err)
+		}
+		send := w.listSend()
+		send["mail_list_id"] = w.group
+		send["tracking"] = true
+		var created struct {
+			ID       uuid.UUID `json:"id"`
+			Tracking *bool     `json:"tracking"`
+		}
+		status, raw := w.call("yusuf", fiber.MethodPost, "/v1/mail_tasks", send, &created)
+		if status != fiber.StatusCreated || created.Tracking == nil || *created.Tracking {
+			t.Fatalf("%s: POST /v1/mail_tasks = %d %s, want tracking false", change, status, raw)
+		}
+		if requested, rows := w.trackingOf(created.ID); requested || len(rows[elif.email].token) != 0 {
+			t.Errorf("%s: the send says tracking %v, rows %+v", change, requested, rows)
+		}
+		var submitted map[string]any
+		if status, raw := w.call("elif", fiber.MethodPost, "/v1/mail_approvals", send, &submitted); status != fiber.StatusCreated || submitted["tracking"] != false {
+			t.Errorf("%s: submit = %d %s, want tracking false", change, status, raw)
+		}
+	}
+	if prefs.asked != 0 {
+		t.Errorf("core asked %d times about sends that cannot be tracked", prefs.asked)
+	}
+}
+
 // The summary says whether a send may ask for tracking.
 func TestTheSummarySaysWhetherTrackingIsAvailable(t *testing.T) {
 	for _, on := range []bool{true, false} {

@@ -52,6 +52,10 @@ func (m *lifecycleMailerStub) SenderPaused() bool { return m.paused }
 
 func (*lifecycleMailerStub) TrackingAvailable() bool { return false }
 
+func (*lifecycleMailerStub) TrackingApplies(context.Context, uuid.UUID, *uuid.UUID) bool {
+	return false
+}
+
 func (m *lifecycleMailerStub) Enqueue(context.Context, database.CreateMailTaskParams) (uuid.UUID, error) {
 	m.enqueueCalls++
 	return uuid.New(), nil

@@ -135,9 +135,14 @@ type Mailer interface {
 	// SenderPaused says MAIL_SENDER=paused holds this process's sender back:
 	// mail is queued but none is sent.
 	SenderPaused() bool
-	// TrackingAvailable says SKYMAIL_TRACKING=on: a send that asks for open
-	// and click tracking gets it. Off, the request is ignored.
+	// TrackingAvailable says SKYMAIL_TRACKING=on: a send may ask for open
+	// and click tracking. Off, the request is ignored.
 	TrackingAvailable() bool
+	// TrackingApplies says a send of templateID to mailListID (nil: to one
+	// person) that asks for tracking gets it: the flag is on and the
+	// template is neither a System template nor sensitive. Its answer is
+	// what a send's tracking says.
+	TrackingApplies(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID) bool
 	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error)
 	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
 	EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error)

@@ -76,14 +76,14 @@ func (h *mailHandlerImpl) resolveTemplate(c fiber.Ctx, params requests.SendSingl
 // CreatedMailTask is a send just queued.
 type CreatedMailTask struct {
 	ID uuid.UUID `json:"id"`
-	// Whether the send asked for open and click tracking and got it: false when it did not ask, or SkyMail's tracking is off (GET /mail_tasks/summary tracking_available).
+	// Whether the send asked for open and click tracking and got it: false when it did not ask, when SkyMail's tracking is off (GET /mail_tasks/summary tracking_available), or when its template is a System template or sensitive, which are never tracked.
 	Tracking bool `json:"tracking"`
 }
 
 // CreateTask godoc
 //
 //	@Summary		Create a new mail task
-//	@Description	Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyMail's tracking is off the field is ignored and the answer says tracking false.
+//	@Description	Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyMail's tracking is off, or for a System or sensitive template (never tracked), the field is ignored and the answer says tracking false.
 //	@Tags			Mail
 //	@Accept			json
 //	@Produce		json
@@ -97,7 +97,7 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 	if err := c.Bind().Body(&params); err != nil {
 		return err
 	}
-	tracking := params.Tracking && h.mailer.TrackingAvailable()
+	tracking := params.Tracking && h.mailer.TrackingApplies(c.Context(), params.TemplateID, &params.MailListID)
 	if _, err := h.db.GetTemplateById(c.Context(), params.TemplateID); err != nil {
 		return err
 	}
@@ -241,7 +241,7 @@ type MailTaskItem struct {
 	ContentAccess ContentAccess `json:"content_access" enums:"available,masked,pending,restricted,expired,not_kept"`
 	// When the content sweep empties the send's content; null unless content_access is available or masked.
 	ContentExpiresAt *time.Time `json:"content_expires_at"`
-	// Whether the send asked for open and click tracking and got it (SkyMail's tracking was on when it was queued).
+	// Whether the send asked for open and click tracking and got it: SkyMail's tracking was on when it was queued and its template may be tracked (not System, not sensitive).
 	Tracking bool `json:"tracking"`
 }
 

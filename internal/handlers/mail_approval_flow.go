@@ -809,7 +809,7 @@ func (h *mailApprovalHandlerImpl) resubmit(ctx context.Context, q *database.Quer
 		TemplateVersionID: checked.versionID,
 		MailListID:        send.mailListID,
 		BodyVariables:     send.variables,
-		TrackingRequested: send.tracking && h.mailer.TrackingAvailable(),
+		TrackingRequested: send.tracking && h.mailer.TrackingApplies(ctx, checked.template.ID, send.mailListID),
 		At:                now,
 		DeadlineAt:        now.Add(mailApprovalDeadline),
 		ID:                a.ID,
