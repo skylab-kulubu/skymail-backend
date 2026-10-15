@@ -186,6 +186,8 @@ var erasureTables = map[string]string{
 	"mail_approval_recipients":          "approval_id::text || '/' || position::text",
 	"mail_approval_tasks":               "approval_id::text || '/' || position::text",
 	"mail_approval_events":              "id::text",
+	"mail_task_links":                   "id::text",
+	"mail_tracking_events":              "id::text",
 }
 
 type tableRows map[string]map[string]string
@@ -304,6 +306,8 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 		AccountErasureApprovalRecipientsRemoved: 5,
 		AccountErasureApprovalPlaceholders:      3,
 		AccountErasureApprovalSendLinksDeleted:  1,
+		AccountErasureTrackingEventsDeleted:     0,
+		AccountErasureTrackingLinksCleared:      0,
 	}
 	if counts := receiptCounts(t, receipt); !reflect.DeepEqual(counts, wantCounts) {
 		t.Errorf("counts = %v\nwant     %v", counts, wantCounts)

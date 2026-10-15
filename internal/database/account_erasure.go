@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -38,6 +40,11 @@ const (
 	AccountErasureApprovalRecipientsRemoved = "approval_recipients_removed"
 	AccountErasureApprovalPlaceholders      = "approval_recipient_placeholders"
 	AccountErasureApprovalSendLinksDeleted  = "approval_send_links_deleted"
+	// Open and click tracking: the person's openings and clicks deleted,
+	// and the tracked links whose address names them, or that only mail to
+	// them had, emptied.
+	AccountErasureTrackingEventsDeleted = "tracking_events_deleted"
+	AccountErasureTrackingLinksCleared  = "tracking_links_cleared"
 )
 
 // ErrAccountErasureInProgress says a send to the person, or another person's
@@ -145,6 +152,11 @@ func (s *Store) EraseAccount(ctx context.Context, erasure AccountErasure) (*Acco
 		if err != nil {
 			return err
 		}
+		// Before the person's queued rows go: a send to them alone is told by
+		// its rows.
+		if err := e.clearTrackedLinks(ctx); err != nil {
+			return err
+		}
 		if err := e.run(ctx, keepNamesSteps); err != nil {
 			return err
 		}
@@ -245,6 +257,7 @@ func newEraser(ctx context.Context, tx pgx.Tx, erasure AccountErasure) (*eraser,
 		AccountErasureQueueRowsCleared, AccountErasureBodiesCleared, AccountErasureVariablesCleared,
 		AccountErasureActorColumnsReplaced, AccountErasureNotesCleared, AccountErasureChangesCleared,
 		AccountErasureApprovalRecipientsRemoved, AccountErasureApprovalPlaceholders, AccountErasureApprovalSendLinksDeleted,
+		AccountErasureTrackingEventsDeleted, AccountErasureTrackingLinksCleared,
 	} {
 		counts[key] = 0
 	}
@@ -267,7 +280,8 @@ var mailNames = "(" + nameIn("q.subject") + " OR " + nameIn("q.body") + " OR " +
 // NOT toPerson is the rows to anyone else, a row without a subject included.
 const toPerson = "(lower(q.recipient_email) = ANY (@emails::text[]) OR COALESCE(q.recipient_sub::text = @subject::text, false))"
 
-// erasureStep is one statement; the rows it changes are added to count.
+// erasureStep is one statement; the rows it changes are added to count,
+// unless it has none.
 type erasureStep struct {
 	name  string
 	count string
@@ -280,7 +294,9 @@ func (e *eraser) run(ctx context.Context, steps []erasureStep) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", step.name, err)
 		}
-		e.counts[step.count] += tag.RowsAffected()
+		if step.count != "" {
+			e.counts[step.count] += tag.RowsAffected()
+		}
 	}
 	return nil
 }
@@ -289,6 +305,27 @@ func (e *eraser) run(ctx context.Context, steps []erasureStep) error {
 // stops for mail in flight leaves the next one able to find what it waited
 // for.
 var keepNamesSteps = []erasureStep{
+	{
+		// Open and click tracking: the openings and clicks of mail to the
+		// person, whoever sent it.
+		name:  "tracking events of mail to the person",
+		count: AccountErasureTrackingEventsDeleted,
+		sql: `DELETE FROM mail_tracking_events e
+		      USING mail_queue q
+		      WHERE e.queue_id = q.id
+		        AND ` + toPerson,
+	},
+	{
+		// And their tokens are closed: an opening or a click of that mail
+		// records nothing from now on; its links still redirect.
+		name: "tracking tokens of mail to the person",
+		sql: `UPDATE mail_queue q
+		      SET tracking_disabled_at = now()
+		      WHERE q.tracking_token IS NOT NULL
+		        AND q.tracking_disabled_at IS NULL
+		        AND ` + toPerson,
+	},
+
 	{
 		// Before the person's queued rows go: a send to the person alone —
 		// Keycloak's reset and verification mails among them — holds values
@@ -365,6 +402,79 @@ var keepNamesSteps = []erasureStep{
 		count: AccountErasureActorColumnsReplaced,
 		sql:   `UPDATE mailing_lists SET archived_by = @deleted_sub WHERE archived_by = @subject`,
 	},
+}
+
+// clearTrackedLinks empties the address of every tracked link that names
+// the person or that only mail to them had (open and click tracking). A
+// tracked link is one every recipient of its send had, so it names the
+// person when a variable put them in it and the send went to them alone, or
+// when the send names them to everyone. Either way the link then says it was
+// removed. An address is searched for E and N as it is and URL-decoded (a
+// name's blanks as + or %20, its Turkish letters and the @ as %XX), which
+// SQL cannot do. It changes nothing the names are read from.
+func (e *eraser) clearTrackedLinks(ctx context.Context) error {
+	rows, err := e.tx.Query(ctx, `
+		SELECT l.id,
+		       l.url,
+		       EXISTS (SELECT 1 FROM mail_queue q WHERE q.task_id = l.task_id)
+		           AND NOT EXISTS (SELECT 1 FROM mail_queue q WHERE q.task_id = l.task_id AND NOT `+toPerson+`)
+		FROM mail_task_links l
+		WHERE l.url IS NOT NULL`, e.args)
+	if err != nil {
+		return fmt.Errorf("tracked links: %w", err)
+	}
+	needles, _ := e.args["needles"].([]string)
+	var cleared []int64
+	for rows.Next() {
+		var id int64
+		var link string
+		var alone bool
+		if err := rows.Scan(&id, &link, &alone); err != nil {
+			rows.Close()
+			return fmt.Errorf("tracked links: %w", err)
+		}
+		if alone || linkNames(link, needles) {
+			cleared = append(cleared, id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("tracked links: %w", err)
+	}
+	if len(cleared) == 0 {
+		return nil
+	}
+	tag, err := e.tx.Exec(ctx, `
+		UPDATE mail_task_links
+		SET url = NULL, url_cleared_reason = 'erased'
+		WHERE id = ANY ($1::bigint[])`, cleared)
+	if err != nil {
+		return fmt.Errorf("tracked links: %w", err)
+	}
+	e.counts[AccountErasureTrackingLinksCleared] += tag.RowsAffected()
+	return nil
+}
+
+// linkNames reports whether an address holds one of the needles (addresses
+// and full names), as written or URL-decoded. Both sides are lower-cased
+// here: the needles come from Postgres's lower(), which under the C ctype
+// leaves letters such as İ and Ş as they are.
+func linkNames(link string, needles []string) bool {
+	forms := []string{strings.ToLower(link)}
+	if decoded, err := url.QueryUnescape(link); err == nil {
+		forms = append(forms, strings.ToLower(decoded))
+	}
+	if decoded, err := url.PathUnescape(link); err == nil {
+		forms = append(forms, strings.ToLower(decoded))
+	}
+	for _, form := range forms {
+		for _, needle := range needles {
+			if needle != "" && strings.Contains(form, strings.ToLower(needle)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // mailInFlight says whether mail the erasure must change is still with the

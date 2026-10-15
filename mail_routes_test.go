@@ -24,6 +24,10 @@ func (idleMailer) Start(context.Context, int) {}
 
 func (idleMailer) SenderPaused() bool { return false }
 
+func (idleMailer) TrackingAvailable() bool { return false }
+
+func (idleMailer) TrackingApplies(context.Context, uuid.UUID, *uuid.UUID) bool { return false }
+
 func (idleMailer) Enqueue(context.Context, database.CreateMailTaskParams) (uuid.UUID, error) {
 	return uuid.Nil, nil
 }
@@ -43,6 +47,8 @@ func (noGroups) ListGroups(context.Context) ([]*gocloak.Group, error) { return n
 func (noGroups) GetGroup(context.Context, string) (*gocloak.Group, error) { return nil, nil }
 
 func (noGroups) GetGroupMembers(context.Context, string) ([]*gocloak.User, error) { return nil, nil }
+
+func (noGroups) ServiceToken(context.Context) (string, error) { return "", nil }
 
 // mailRoutesApp serves the mail task routes as production registers them —
 // the real permission middleware, handler, error handler and database — with

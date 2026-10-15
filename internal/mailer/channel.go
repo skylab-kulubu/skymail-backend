@@ -64,6 +64,10 @@ type emailSender struct {
 	client *mail.Client
 	config SMTPConfig
 	logger *zerolog.Logger
+	// db and tracking put a tracked row's pixel and click addresses into its
+	// mail (outgoingHTML, tracking.go); without db no mail is tracked.
+	db       *database.Store
+	tracking Tracking
 }
 
 func (m *mailerImpl) newEmailSender() (ChannelSender, error) {
@@ -71,7 +75,7 @@ func (m *mailerImpl) newEmailSender() (ChannelSender, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &emailSender{client: client, config: m.smtpConfig, logger: m.logger}, nil
+	return &emailSender{client: client, config: m.smtpConfig, logger: m.logger, db: m.db, tracking: m.tracking}, nil
 }
 
 // newSMTPClient is a worker's SMTP client: STARTTLS required, each send
@@ -111,7 +115,7 @@ func (s *emailSender) Send(ctx context.Context, job database.MailQueue) error {
 	msg.SetBodyString(mail.TypeTextPlain, job.Body)
 
 	if job.BodyHtml != nil {
-		msg.AddAlternativeString(mail.TypeTextHTML, *job.BodyHtml)
+		msg.AddAlternativeString(mail.TypeTextHTML, s.outgoingHTML(ctx, job))
 	}
 
 	// The send's own context, ended when the send returns: the connection
