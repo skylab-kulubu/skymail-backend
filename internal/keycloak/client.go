@@ -22,6 +22,9 @@ type Client interface {
 	// group above theirs is in. Each is listed once. A role given through a
 	// composite role is not followed.
 	ClientRoleMembers(ctx context.Context, clientID, role string) ([]*gocloak.User, error)
+	// ServiceToken is the service account's access token, as Admin REST
+	// gets it: what SkyMail shows core when it asks whom it may track.
+	ServiceToken(ctx context.Context) (string, error)
 }
 
 type clientImpl struct {
@@ -125,6 +128,8 @@ func (c *clientImpl) getToken(ctx context.Context) (string, error) {
 	c.tokenExpiry = time.Now().Add(time.Duration(jwt.ExpiresIn-30) * time.Second)
 	return c.token, nil
 }
+
+func (c *clientImpl) ServiceToken(ctx context.Context) (string, error) { return c.getToken(ctx) }
 
 func (c *clientImpl) ListGroups(ctx context.Context) ([]*gocloak.Group, error) {
 	token, err := c.getToken(ctx)

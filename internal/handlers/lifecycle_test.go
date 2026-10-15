@@ -35,6 +35,8 @@ func (failingLifecycleKeycloakStub) GetGroup(context.Context, string) (*gocloak.
 	return nil, errors.New("unexpected Keycloak group lookup")
 }
 
+func (failingLifecycleKeycloakStub) ServiceToken(context.Context) (string, error) { return "", nil }
+
 func (failingLifecycleKeycloakStub) GetGroupMembers(context.Context, string) ([]*gocloak.User, error) {
 	return nil, errors.New("unexpected Keycloak member lookup")
 }
@@ -47,6 +49,12 @@ type lifecycleMailerStub struct {
 func (*lifecycleMailerStub) Start(context.Context, int) {}
 
 func (m *lifecycleMailerStub) SenderPaused() bool { return m.paused }
+
+func (*lifecycleMailerStub) TrackingAvailable() bool { return false }
+
+func (*lifecycleMailerStub) TrackingApplies(context.Context, uuid.UUID, *uuid.UUID) bool {
+	return false
+}
 
 func (m *lifecycleMailerStub) Enqueue(context.Context, database.CreateMailTaskParams) (uuid.UUID, error) {
 	m.enqueueCalls++
@@ -68,6 +76,8 @@ func (lifecycleKeycloakStub) ListGroups(context.Context) ([]*gocloak.Group, erro
 func (lifecycleKeycloakStub) GetGroup(context.Context, string) (*gocloak.Group, error) {
 	return nil, nil
 }
+
+func (lifecycleKeycloakStub) ServiceToken(context.Context) (string, error) { return "", nil }
 
 func (lifecycleKeycloakStub) GetGroupMembers(context.Context, string) ([]*gocloak.User, error) {
 	return []*gocloak.User{}, nil

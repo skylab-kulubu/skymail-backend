@@ -27,6 +27,12 @@ func (*recordingMailerStub) Start(context.Context, int) {}
 
 func (*recordingMailerStub) SenderPaused() bool { return false }
 
+func (*recordingMailerStub) TrackingAvailable() bool { return false }
+
+func (*recordingMailerStub) TrackingApplies(context.Context, uuid.UUID, *uuid.UUID) bool {
+	return false
+}
+
 func (*recordingMailerStub) Enqueue(context.Context, database.CreateMailTaskParams) (uuid.UUID, error) {
 	return uuid.New(), nil
 }

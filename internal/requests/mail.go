@@ -8,6 +8,8 @@ type CreateMailTask struct {
 	TemplateID    uuid.UUID              `json:"template_id" validate:"required"`
 	MailListID    uuid.UUID              `json:"mail_list_id" validate:"required"`
 	BodyVariables map[string]interface{} `json:"body_variables"`
+	// Open and click tracking: each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links. Ignored (and answered false) while SkyMail's tracking is off and for a System or sensitive template, which are never tracked; a mailing list's address-only recipients are not tracked.
+	Tracking bool `json:"tracking"`
 }
 
 // SendSingleMail addresses the template either by id or by key. Keycloak's mail

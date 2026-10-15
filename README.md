@@ -45,6 +45,11 @@ yalnızca bağlantı o proxy'lerden birinden geldiğinde okunur. Diğer tüm
   tek makine anlamına gelir. Varsayılan:
   `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1/128,fc00::/7`.
 
+IP adresi kişisel veridir: loglar istemcinin adresini ve User-Agent'ını
+yazmaz. Gerekirse yalnız sınıfını yazar (`"client"`: `loopback`, `private` —
+Docker ağları, RFC 1918, `fc00::/7` —, `link_local`, `public`, `unknown`);
+bugün bunu yazan tek satır veritabanında bulunamayan kaydın 404'üdür.
+
 Liste servis trafiğe açılmadan önce doğrulanır: CIDR aralığı ya da adres
 olmayan bir girdi atlanmak yerine başlatmayı durdurur. Proxy bir konteyner
 olduğu ve ağ içindeki adresi her yeniden oluşturulduğunda değiştiği için tek
@@ -337,6 +342,110 @@ docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | 
 - **Geri dönüş:** #61 imajına dönmek ilk süpürmede bütün hassas içeriği
   boşaltır (güvenli, geri gelmez). `20261013140000` down migration'ı
   koşturulmaz (açılış kaydını siler).
+
+## Açılma ve tıklama takibi (`SKYMAIL_TRACKING`)
+
+Kişi bazında açılma ve tıklama takibi (hub bilet iletişim-servisi 14, tasarım
+notu 07). **Varsayılan kapalı.** Bu sürümde takip verisi yazılır ve postaya
+yerleştirilir; `/t/` uçları, okuma uçları, geri alma ucu ve 90 günlük saklama
+işi sonraki sürümlerde gelir. Bayrak onlar yayında ve aydınlatma metni
+yayımlanmış olmadan açılmaz: **bu imaj `SKYMAIL_TRACKING=on` ile açılışı
+reddeder** (`/t/` uçları yok; 14b bu reddi uçlarla birlikte kaldırır).
+
+| Değişken | Varsayılan | Anlamı |
+|---|---|---|
+| `SKYMAIL_TRACKING` | `off` | `off` ya da `on`; başka değer açılışı durdurur |
+| `SKYMAIL_TRACKING_BASE_URL` | yok | `/t/`'nin herkese açık adresi (`https://api.yildizskylab.com/api/skymail`); yalnız https, kimlik bilgisi, sorgu ve parça yok; `on` iken zorunlu |
+| `CORE_URL` | yok | core'un Docker ağındaki adresi (`http://core-backend:8080`); `on` iken zorunlu |
+
+Hatalı adres, değeri değil değişkeni söyleyerek açılışı durdurur. Açılışta
+`open and click tracking (SKYMAIL_TRACKING)` satırı kipi ve adresleri yazar.
+
+- **Kim takip edilir (gönderim kuyruğa yazılırken sabitlenir):** bayrak açık;
+  gönderim `tracking: true` istedi (`POST /v1/mail_tasks`, Mail onayı isteği);
+  satır toplu şeritte; şablon System değil ve hassas değil
+  (`mail_task_content_sensitive()`, içerik panelinin tek tanımı). Bayrak
+  kapalıyken ya da şablon System/hassasken alan yok sayılır: yanıt, gönderim
+  ve onay isteği `tracking: false` der, satırlara neden yazılmaz. Sonra
+  alıcının Keycloak `sub`'ı biliniyor
+  (`recipient_sub`: yalnız Keycloak grubu üyeleri) ve core izin veriyor.
+  core'a gönderimin veritabanı işlemi **başlamadan önce** sorulur (Mail
+  onayında istek kilitlenmeden önce, grup üyeleriyle birlikte); SkyMail core'u
+  hiçbir zaman işlem ya da kilit tutarken beklemez. O yanıtta olmayan kişi
+  (sorulmamış, ör. yanıt gelmemiş) takip edilmez.
+  Takip edilen satır 16 baytlık rastgele bir belirteç alır
+  (`mail_queue.tracking_token`); edilmeyen satır nedenini
+  (`tracking_skip_reason`): `no_account`, `preference_off`, `not_member`,
+  `inactive`, `not_allowed`, `preference_unavailable`, `flag_off`. Gönderim
+  takip istemediyse ya da takip edilemezse (`tracking: false`) ikisi de
+  boştur. (`transactional` kısıtta duruyor, yazılmıyor.)
+- **core'a ulaşılamazsa** (5 saniye, hata ya da sözleşme dışı yanıt) o
+  gönderimde kimse takip edilmez (`preference_unavailable`), gönderim durmaz.
+  Uyarı satırı `"event":"tracking_preferences_unavailable"` (`"cause":"core"`
+  ya da sorulmadıysa `"not_asked"`) gönderim kimliğini ve kişi sayısını yazar,
+  kimseyi adlandırmaz. System ya da hassas şablonun gönderiminde core'a hiç
+  sorulmaz.
+- **Bağlantılar:** takip edilen satırı olan gönderimde, bütün alıcıların
+  postasında aynı olan `http`/`https` bağlantıları (sırayla, en çok 100)
+  kendi 8 baytlık belirteçleriyle `mail_task_links`'e yazılır. Değişkenle
+  kişiselleşmiş bağlantı (alıcıdan alıcıya değişen), `mailto:`, `tel:`, `#…`,
+  göreli adres, kullanıcı bilgili ya da 2048 karakterden uzun adres, boşluk
+  ya da denetim karakteri taşıyan adres, yolunda `communication-preferences`
+  ya da `unsubscribe` geçen adres (core'un çıkış bağlantısı, my.'nın tercih
+  sayfası), SkyMail'in kendi `/t/` adresleri ve `data-skymail-notrack`
+  öznitelikli bağlantı kaydedilmez, postada olduğu gibi kalır.
+  `List-Unsubscribe` başlığına dokunulmaz. **İstisna:** tek alıcılı (ya da
+  tek postası işlenebilen) gönderimde karşılaştıracak başka posta olmadığı
+  için değişkenle kişiselleşmiş bağlantılar da kaydedilir ve yeniden yazılır;
+  `mail_task_links.url` o kişiyi adlandırabilir. Hesap silme, yalnız kişiye
+  giden gönderimin bağlantılarını boşaltır.
+- **Yerleştirme SMTP anında:** saklanan `body_html` değişmez (içerik paneli
+  pikselsiz gösterir; operatörün bakması alıcı adına açılma sayılmaz).
+  Belirteci açık satırın postası relay'e giderken `<body>`'nin hemen
+  arkasına 1×1 piksel (`<base>/t/o/<belirteç>`) alır, kayıtlı bağlantılar
+  `<base>/t/c/<belirteç>/<bağlantı>` olur; başka hiçbir bayt değişmez,
+  altlığa cümle ya da bağlantı eklenmez (T8). Düz metin değişmez. Belirteci
+  kapalı satır (`tracking_disabled_at`) temiz gider. Bayrak kuyruğa yazıldıktan
+  sonra kapatıldıysa posta temiz gider ve belirteç `flag_off` ile kapanır.
+  `mail_queue.sent_at` relay'in postayı aldığı an.
+- **Okuma:** `GET /v1/mail_tasks/summary` → `tracking_available` (gönderim
+  formu kutuyu yalnız bu `true` iken gösterir); gönderim satırları ve Mail
+  onayı isteği `tracking` alanı taşır.
+- **Hesap silme** kişiye giden satırların olaylarını siler, belirteçlerini
+  kapatır, kişiyi adlandıran (yazıldığı gibi ya da URL çözülmüş) ya da yalnız
+  ona giden gönderimin bağlantılarının adresini boşaltır; sayaçlar
+  `tracking_events_deleted`, `tracking_links_cleared`
+  ([`docs/data-lifecycle.md`](docs/data-lifecycle.md#open-and-click-tracking)).
+
+### core sözleşmesi (bilet 16)
+
+SkyMail, takip isteyen gönderimde `sub`'ı olan alıcılar için core'a bir kez
+(1000'erlik partilerle) sorar:
+
+```http
+POST {CORE_URL}/internal/v1/communication-preferences/tracking:resolve
+Authorization: Bearer <skymail-backend servis hesabının token'ı>
+Content-Type: application/json
+
+{"subs": ["7d3c1f6e-0b9a-4c55-9a51-3f4d2b8e6a10", "…"]}
+```
+
+```json
+{"results": [
+  {"sub": "7d3c1f6e-0b9a-4c55-9a51-3f4d2b8e6a10", "allowed": true, "reason": null},
+  {"sub": "…", "allowed": false, "reason": "preference_off"}
+]}
+```
+
+- Her `sub` küçük harfli UUID, istekte bir kez, en çok 1000. Yanıt `200` ve
+  sorulan her `sub`'ı **tam bir kez** içerir, başkasını içermez; değilse
+  (ya da başka durum kodu, JSON dışı gövde) yanıt hiç yokmuş sayılır.
+- `reason` yalnız `allowed: false` iken okunur: `preference_off` (my.'da
+  kapattı), `not_member` (`/UYELER` dışında), `inactive` (hesap etkin
+  değil). Bilinmeyen neden `not_allowed` olarak kaydedilir.
+- Token: `KEYCLOAK_SERVICE_CLIENT_ID` (`skymail-backend`) servis hesabının
+  client credentials token'ı (Admin REST'in kullandığı); core `aud` ∋ `core`
+  ve `core:communication-preferences:read` arar (bilet 17).
 
 ## Veritabanı migration'ları
 

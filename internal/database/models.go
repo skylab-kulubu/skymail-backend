@@ -257,6 +257,8 @@ type MailApproval struct {
 	SubmittedAt              time.Time         `json:"submitted_at"`
 	DeadlineAt               time.Time         `json:"deadline_at"`
 	UpdatedAt                time.Time         `json:"updated_at"`
+	// The submitter asked for open and click tracking; the approved send asks for it if SKYMAIL_TRACKING is on then.
+	TrackingRequested bool `json:"tracking_requested"`
 }
 
 type MailApprovalEvent struct {
@@ -305,6 +307,14 @@ type MailQueue struct {
 	Channel string `json:"channel"`
 	// The recipient's Keycloak subject when the sender knew it; null when only an address was known.
 	RecipientSub *uuid.UUID `json:"recipient_sub"`
+	// The recipient's tracking token, 16 random bytes; null for a row that is not tracked.
+	TrackingToken []byte `json:"-"`
+	// When the token was closed (withdrawal, erasure, retention, the flag off before sending); a closed token records nothing.
+	TrackingDisabledAt *time.Time `json:"tracking_disabled_at"`
+	// Why a row of a send that asked for tracking is not tracked.
+	TrackingSkipReason *string `json:"tracking_skip_reason"`
+	// When the relay took the mail; null for a row not sent, or sent by an image from before it.
+	SentAt *time.Time `json:"sent_at"`
 }
 
 type MailSendWindow struct {
@@ -338,6 +348,46 @@ type MailTask struct {
 	ContentMaskUnconfirmed int16 `json:"content_mask_unconfirmed"`
 	// When masking the send first failed since it was last masked; past the sweep's deadline the send is emptied (not kept).
 	ContentMaskFailingSince *time.Time `json:"content_mask_failing_since"`
+	// The sender asked for open and click tracking and SKYMAIL_TRACKING was on when the send was queued.
+	TrackingRequested bool `json:"tracking_requested"`
+	// When retention closed the send's tracking: events rolled up and deleted, tokens closed. Null while open.
+	TrackingClosedAt *time.Time `json:"tracking_closed_at"`
+}
+
+// A send's links that are the same for every recipient, each with its random token: the only addresses /t/c redirects to.
+type MailTaskLink struct {
+	ID               int64     `json:"id"`
+	TaskID           uuid.UUID `json:"task_id"`
+	LinkToken        []byte    `json:"link_token"`
+	Url              *string   `json:"url"`
+	Position         int16     `json:"position"`
+	UrlClearedReason *string   `json:"url_cleared_reason"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+// A send's tracking counts without people, kept after its events go; only sends with at least 10 tracked recipients.
+type MailTaskTrackingTotal struct {
+	TaskID                 uuid.UUID `json:"task_id"`
+	TrackedRecipients      int       `json:"tracked_recipients"`
+	UntrackedByReason      []byte    `json:"untracked_by_reason"`
+	UniqueOpens            int       `json:"unique_opens"`
+	UniqueLikelyHumanOpens int       `json:"unique_likely_human_opens"`
+	UniqueClickers         int       `json:"unique_clickers"`
+	ClicksByLink           []byte    `json:"clicks_by_link"`
+	RolledUpAt             time.Time `json:"rolled_up_at"`
+}
+
+// One opening or click of a tracked mail: the row, when, the client's class. No IP address, User-Agent or referrer.
+type MailTrackingEvent struct {
+	ID                int64     `json:"id"`
+	QueueID           uuid.UUID `json:"queue_id"`
+	TaskID            uuid.UUID `json:"task_id"`
+	Kind              string    `json:"kind"`
+	LinkID            *int64    `json:"link_id"`
+	OccurredAt        time.Time `json:"occurred_at"`
+	SourceClass       string    `json:"source_class"`
+	AutomatedLikely   bool      `json:"automated_likely"`
+	ClassifierVersion int16     `json:"classifier_version"`
 }
 
 type MailingList struct {

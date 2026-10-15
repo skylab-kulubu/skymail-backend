@@ -22,6 +22,14 @@ sql:
             go_struct_tag: 'json:"-"'
           - column: "templates.seed_refused_payload_sha256"
             go_struct_tag: 'json:"-"'
+          # A recipient's tracking token is never served: it would let a
+          # reader record openings and clicks in their name.
+          - column: "mail_queue.tracking_token"
+            go_struct_tag: 'json:"-"'
+          - column: "mail_tracking_events.link_id"
+            go_type:
+              type: "int64"
+              pointer: true
           - db_type: "uuid"
             go_type:
               type: "UUID"
