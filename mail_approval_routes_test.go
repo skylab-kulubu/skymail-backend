@@ -92,6 +92,8 @@ func (d *approverDirectory) GetGroup(_ context.Context, id string) (*gocloak.Gro
 	return &gocloak.Group{ID: &id, Name: &name}, nil
 }
 
+func (*approverDirectory) ServiceToken(context.Context) (string, error) { return "", nil }
+
 func (d *approverDirectory) GetGroupMembers(_ context.Context, id string) ([]*gocloak.User, error) {
 	return d.groups[id], nil
 }
@@ -276,8 +278,8 @@ func newApprovalWorld(t *testing.T) *approvalWorld {
 }
 
 // newApprovalWorldWithPool is an approval world whose connection pool holds at
-// most poolSize connections; 0 keeps pgxpool's default.
-func newApprovalWorldWithPool(t *testing.T, poolSize int) *approvalWorld {
+// most poolSize connections; 0 keeps pgxpool's default. opts make its mailer.
+func newApprovalWorldWithPool(t *testing.T, poolSize int, opts ...mailer.Option) *approvalWorld {
 	t.Helper()
 	postgres := testpostgres.StartDatabase(t)
 	if _, err := migrations.Run(context.Background(), postgres.URL, 0); err != nil {
@@ -296,7 +298,7 @@ func newApprovalWorldWithPool(t *testing.T, poolSize int) *approvalWorld {
 	w := &approvalWorld{
 		t:     t,
 		store: store,
-		mail:  &recordingMailer{Transactional: mailer.NewMailer(store, mailer.SMTPConfig{}, mailer.SenderOn)},
+		mail:  &recordingMailer{Transactional: mailer.NewMailer(store, mailer.SMTPConfig{}, mailer.SenderOn, opts...)},
 		directory: &approverDirectory{
 			approvers: []*gocloak.User{fatih.user(), yusuf.user()},
 			groups:    map[string][]*gocloak.User{},
@@ -349,7 +351,9 @@ func newApprovalWorldWithPool(t *testing.T, poolSize int) *approvalWorld {
 		c.Locals("roles", person.roles)
 		return c.Next()
 	})
-	registerMailApprovalRoutes(api, middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff), w.handler)
+	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
+	registerMailApprovalRoutes(api, auth, w.handler)
+	registerMailTaskRoutes(api, auth, handlers.NewMailHandler(store, w.mail, w.directory))
 	w.app = app
 	return w
 }

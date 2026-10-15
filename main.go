@@ -31,6 +31,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
+	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 	"github.com/yokeTH/gofiber-scalar/scalar/v3"
 )
@@ -123,6 +124,12 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid sent content views retention configuration")
 	}
+	// Open and click tracking: off unless SKYMAIL_TRACKING=on, and then only
+	// with the public /t/ address and core to ask (README, tracking).
+	trackingConfig, err := trackingConfigFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid open and click tracking configuration")
+	}
 	if migrationConfig.Mode == migrations.ModeApply {
 		// A stop signal ends a wait for another process's migrations, never
 		// a migration under way.
@@ -154,6 +161,13 @@ func main() {
 	// Closed in this order once shutdown has stopped everything else.
 	var closers []closing
 
+	if keycloakAdminURL != "" {
+		log.Info().Str("admin_url", keycloakAdminURL).Msg("keycloak admin REST: KEYCLOAK_ADMIN_URL (tokens are still checked against KEYCLOAK_REALM_URL)")
+	}
+	kcClient := keycloak.NewClient(cfg.KeycloakRealmURL, keycloakAdminURL, cfg.KeycloakServiceClientID, cfg.KeycloakServiceClientSecret)
+
+	log.Info().Str("mode", string(trackingConfig.Mode)).Str("base_url", trackingConfig.BaseURL).Str("core_url", trackingConfig.CoreURL).
+		Msg("open and click tracking (SKYMAIL_TRACKING)")
 	db := database.NewStore(conn)
 	mailerService := mailer.NewMailer(db, mailer.SMTPConfig{
 		FromEmail: cfg.SMTPFrom,
@@ -163,7 +177,11 @@ func main() {
 		Password:  cfg.SMTPPass,
 		FQDN:      cfg.SMTPFQDN,
 		Plain:     cfg.SMTPPlain,
-	}, mailSender, mailer.WithQueueLease(queueLease), mailer.WithRateBudget(rateBudget))
+	}, mailSender, mailer.WithQueueLease(queueLease), mailer.WithRateBudget(rateBudget),
+		mailer.WithTracking(mailer.Tracking{
+			Config:      trackingConfig,
+			Preferences: tracking.NewCoreClient(trackingConfig.CoreURL, kcClient, nil),
+		}))
 
 	log.Info().Str("mode", string(audienceMode)).Str("audience", cfg.KeycloakClientID).Msg("v1 token audience check (V1_TOKEN_AUDIENCE_MODE)")
 	authMiddleware := middlewares.NewAuthMiddleware(cfg.KeycloakClientID, cfg.KeycloakRealmURL, audienceMode)
@@ -186,11 +204,6 @@ func main() {
 		log.Fatal().Err(err).Msg("invalid trusted proxy configuration")
 	}
 	log.Info().Str("ranges", strings.Join(trustedProxies, ",")).Msg("trusted proxy ranges")
-
-	if keycloakAdminURL != "" {
-		log.Info().Str("admin_url", keycloakAdminURL).Msg("keycloak admin REST: KEYCLOAK_ADMIN_URL (tokens are still checked against KEYCLOAK_REALM_URL)")
-	}
-	kcClient := keycloak.NewClient(cfg.KeycloakRealmURL, keycloakAdminURL, cfg.KeycloakServiceClientID, cfg.KeycloakServiceClientSecret)
 
 	templateHandler := handlers.NewTemplateHandler(db)
 	listHandler := handlers.NewListHandler(db, kcClient)
@@ -288,6 +301,22 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("error starting server")
 	}
+}
+
+// trackingConfigFromEnv is open and click tracking as the environment sets it
+// (tracking.ConfigFromEnv), refusing on: this build does not serve the /t/
+// routes the pixel and the click addresses point at (hub ticket iletisim-
+// servisi 14b), so a tracked mail's links would lead nowhere. Ticket 14b
+// removes the refusal together with adding the routes.
+func trackingConfigFromEnv(getenv func(string) string) (tracking.Config, error) {
+	cfg, err := tracking.ConfigFromEnv(getenv)
+	if err != nil {
+		return tracking.Config{}, err
+	}
+	if cfg.On() {
+		return tracking.Config{}, errors.New("SKYMAIL_TRACKING=on needs the /t/ routes (ticket 14b); this build does not serve them: leave it off")
+	}
+	return cfg, nil
 }
 
 // erasureTokenConfig is how the erase route checks core's token: the exact
@@ -563,6 +592,26 @@ func newFiberConfig(vld fiber.StructValidator, trustedProxies []string) fiber.Co
 	}
 }
 
+// clientClass is what a log line says of a client instead of its address:
+// loopback, private (the Docker networks, RFC 1918, fc00::/7), link_local,
+// public, or unknown when the address does not parse. An IP address is
+// personal data and is never logged.
+func clientClass(raw string) string {
+	ip := net.ParseIP(raw)
+	switch {
+	case ip == nil || ip.IsUnspecified():
+		return "unknown"
+	case ip.IsLoopback():
+		return "loopback"
+	case ip.IsPrivate():
+		return "private"
+	case ip.IsLinkLocalUnicast():
+		return "link_local"
+	default:
+		return "public"
+	}
+}
+
 func errorHandler(ctx fiber.Ctx, err error) error {
 	var validationErrors validator.ValidationErrors
 	if errors.As(err, &validationErrors) {
@@ -578,11 +627,12 @@ func errorHandler(ctx fiber.Ctx, err error) error {
 	}
 
 	if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows) {
+		// An IP address is personal data: the line says what kind of client
+		// asked (clientClass), never its address or its User-Agent.
 		log.Info().
 			Str("method", ctx.Method()).
 			Str("path", ctx.Path()).
-			Str("ip", ctx.IP()).
-			Str("ua", ctx.Get(fiber.HeaderUserAgent)).
+			Str("client", clientClass(ctx.IP())).
 			Err(err).
 			Msg("Resource not found in database (404)")
 		return ctx.Status(apperrors.ErrStatusNotFound.Status).JSON(apperrors.ErrStatusNotFound)

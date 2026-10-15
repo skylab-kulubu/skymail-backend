@@ -224,6 +224,33 @@ takes the person out of them:
 - `mail_approval_events.actor_sub` and `actor_name` — who did each thing to a
   request — `note`, and `changes`, each variable's value, and who a request
   went to, before and after an edit or a resubmission.
+- Open and click tracking (see [Open and click tracking](#open-and-click-tracking)):
+  `mail_queue.tracking_token` (a random token that stands for the row's
+  recipient in their mail's pixel and links), `tracking_skip_reason` (why
+  they are not tracked: `preference_off` says they turned it off),
+  `tracking_disabled_at`, `sent_at`; `mail_tracking_events` (when the
+  recipient's mail was opened and which link they clicked, the client's
+  class; no IP address, User-Agent or referrer); `mail_task_links.url`, which
+  can name a person when a variable put them in a link of a send to them
+  alone. `mail_task_tracking_totals` holds counts only, for sends with at
+  least 10 tracked recipients.
+
+## Open and click tracking
+
+Off unless `SKYMAIL_TRACKING=on` (hub ticket iletisim-servisi 14; design note
+07; README, "Açılma ve tıklama takibi"). What it keeps and for how long:
+
+| What | Kept | Then |
+|---|---|---|
+| `mail_queue.tracking_token`, `tracking_skip_reason`, `sent_at` | with the row | Account erasure closes the token of mail to the person |
+| `mail_tracking_events` | 90 days from the send (design note 07 §4.7; the retention job is still to come) | deleted; withdrawal (core, my.) and Account erasure delete the person's at once |
+| `mail_task_tracking_totals` | without end, sends with ≥10 tracked recipients only (T4) | — |
+| `mail_task_links.url` | one year (T3; the retention job is still to come) | emptied (`url_cleared_reason` `expired`); Account erasure empties a link naming the person (`erased`) |
+
+The mail kept (`body_html`) never holds the pixel or a click address: they
+are put in as the mail goes to the relay, so the content panel shows the
+mail as rendered and looking at it is never an opening. Single mail, System
+templates and sensitive templates are never tracked.
 
 ## Sent mail content
 
@@ -525,6 +552,9 @@ person is cleared whole, never masked.
 | `template_versions` | `author_sub` = S | `author_sub` and `author_name` Silinmiş kullanıcı |
 | `template_content_sensitive_events` | `actor_sub` = S | `actor_sub` and `actor_name` Silinmiş kullanıcı |
 | `templates`, `mailing_lists` | `archived_by` = S | Silinmiş kullanıcı |
+| `mail_tracking_events` | of a `mail_queue` row to the person (address in E or `recipient_sub` = S) | deleted |
+| `mail_queue.tracking_disabled_at` | a tracked row to the person | set: an opening or a click of that mail records nothing from now on; its links still redirect |
+| `mail_task_links.url` | names E or N, as written or URL-decoded, or every row of the send is to the person | NULL, `url_cleared_reason` `erased`: the link says it was removed |
 
 Silinmiş kullanıcı is the subject `00000000-0000-4000-8000-000000000000`
 with the name `Silinmiş kullanıcı`, the same for everyone. A request's person
@@ -556,7 +586,8 @@ address can be added to a list again.
   `queue_rows_deleted`, `queue_rows_cleared`, `bodies_cleared`,
   `variables_cleared`, `actor_columns_replaced`, `notes_cleared`,
   `changes_cleared`, `approval_recipients_removed`,
-  `approval_recipient_placeholders`, `approval_send_links_deleted`. The counts
+  `approval_recipient_placeholders`, `approval_send_links_deleted`,
+  `tracking_events_deleted`, `tracking_links_cleared`. The counts
   are what the completing call did; work committed by an earlier `202` call
   is not in them. A repeat, or a concurrent duplicate, returns the stored
   body without doing the work again. Other answers: `202` (above),

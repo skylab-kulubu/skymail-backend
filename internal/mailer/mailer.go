@@ -117,6 +117,14 @@ type EnqueueWithRecipientsParams struct {
 	MailListID    *uuid.UUID
 	BodyVariables []byte
 	Recipients    []RecipientInfo
+	// Tracking asks for open and click tracking (tracking.go); it is ignored
+	// while SKYMAIL_TRACKING is off.
+	Tracking bool
+	// Preferences is whom core lets be tracked, asked before the send's
+	// transaction (ResolveTracking). Mailer.EnqueueWithRecipients asks
+	// itself when it is nil; a send queued in a caller's transaction
+	// (Queue) never asks, and tracks no one core was not asked about.
+	Preferences *TrackingPreferences
 }
 
 type Mailer interface {
@@ -127,6 +135,14 @@ type Mailer interface {
 	// SenderPaused says MAIL_SENDER=paused holds this process's sender back:
 	// mail is queued but none is sent.
 	SenderPaused() bool
+	// TrackingAvailable says SKYMAIL_TRACKING=on: a send may ask for open
+	// and click tracking. Off, the request is ignored.
+	TrackingAvailable() bool
+	// TrackingApplies says a send of templateID to mailListID (nil: to one
+	// person) that asks for tracking gets it: the flag is on and the
+	// template is neither a System template nor sensitive. Its answer is
+	// what a send's tracking says.
+	TrackingApplies(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID) bool
 	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error)
 	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
 	EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error)
@@ -155,6 +171,11 @@ type Transactional interface {
 	// Queue writes sends through q, a transaction's queries, in the lane
 	// priority.
 	Queue(q *database.Queries, priority Priority) Queue
+	// ResolveTracking asks core whom of recipients a send of templateID to
+	// mailListID may track. Call it before the transaction a Queue writes
+	// in and pass the answer as EnqueueWithRecipientsParams.Preferences:
+	// SkyMail never waits for core holding a transaction.
+	ResolveTracking(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID, recipients []RecipientInfo) *TrackingPreferences
 	// Wake asks the dispatcher to look at the queue now. Call it after the
 	// transaction a Queue wrote in commits; the dispatcher's tick finds the
 	// rows anyway, only later.
@@ -208,6 +229,8 @@ type mailerImpl struct {
 	// clientOptions are added to the workers' SMTP client options; tests
 	// set them.
 	clientOptions []mail.Option
+	// tracking is open and click tracking (WithTracking); off by default.
+	tracking Tracking
 
 	// stop closes when Stop is called; stopOnce closes it. dispatching,
 	// sending and reaping are the dispatcher, the workers and the reaper,
@@ -485,10 +508,11 @@ type queue struct {
 	q        *database.Queries
 	logger   *zerolog.Logger
 	priority Priority
+	tracking *Tracking
 }
 
 func (m *mailerImpl) Queue(q *database.Queries, priority Priority) Queue {
-	return &queue{q: q, logger: m.logger, priority: priority}
+	return &queue{q: q, logger: m.logger, priority: priority, tracking: &m.tracking}
 }
 
 func (m *mailerImpl) Wake() { m.wake() }
@@ -502,7 +526,7 @@ func (m *mailerImpl) pooled(ctx context.Context, priority Priority, write func(*
 	var queued bool
 	err := m.db.InTx(ctx, func(q *database.Queries) error {
 		var err error
-		id, queued, err = write(&queue{q: q, logger: m.logger, priority: priority})
+		id, queued, err = write(&queue{q: q, logger: m.logger, priority: priority, tracking: &m.tracking})
 		return err
 	})
 	if err != nil {
@@ -525,6 +549,10 @@ func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingl
 }
 
 func (m *mailerImpl) EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error) {
+	// Core is asked before the transaction begins.
+	if params.Tracking && m.TrackingAvailable() && params.Preferences == nil {
+		params.Preferences = m.ResolveTracking(ctx, params.TemplateID, params.MailListID, params.Recipients)
+	}
 	return m.pooled(ctx, PriorityBulk, func(q *queue) (uuid.UUID, bool, error) {
 		return q.enqueueWithRecipients(ctx, params)
 	})
@@ -555,6 +583,7 @@ func (q *queue) EnqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 // written, which is when the dispatcher has something to do.
 
 func (q *queue) enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, bool, error) {
+	arg.TrackingRequested = arg.TrackingRequested && q.tracking.Config.On()
 	rows, err := q.q.CreateMailTask(ctx, arg)
 	if err != nil {
 		q.logger.Err(err).Msg("Failed to enqueue mail task")
@@ -579,11 +608,12 @@ func (q *queue) enqueue(ctx context.Context, arg database.CreateMailTaskParams) 
 		}
 	}
 
-	queued, err := q.renderAndQueue(ctx, commonRows, false)
+	queued, err := q.renderAndQueue(ctx, commonRows, false, arg.TrackingRequested, nil)
 	return rows[0].TaskID, queued, err
 }
 
 func (q *queue) enqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, bool, error) {
+	arg.TrackingRequested = arg.TrackingRequested && q.tracking.Config.On()
 	row, err := q.q.CreateSingleMailTask(ctx, arg)
 	if err != nil {
 		q.logger.Err(err).Msg("Failed to enqueue single mail task")
@@ -605,16 +635,18 @@ func (q *queue) enqueueSingle(ctx context.Context, arg database.CreateSingleMail
 	// A single mail has one recipient, and its caller (a login code, a Forms
 	// confirmation) is waiting for it: a mail that does not render is the
 	// send failing, and the caller is told.
-	queued, err := q.renderAndQueue(ctx, commonRows, true)
+	queued, err := q.renderAndQueue(ctx, commonRows, true, arg.TrackingRequested, nil)
 	return row.TaskID, queued, err
 }
 
 func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, bool, error) {
+	tracked := params.Tracking && q.tracking.Config.On()
 	task, err := q.q.InsertMailTask(ctx, database.InsertMailTaskParams{
-		SentBy:        params.SentBy,
-		TemplateID:    &params.TemplateID,
-		MailListID:    params.MailListID,
-		BodyVariables: params.BodyVariables,
+		SentBy:            params.SentBy,
+		TemplateID:        &params.TemplateID,
+		MailListID:        params.MailListID,
+		BodyVariables:     params.BodyVariables,
+		TrackingRequested: tracked,
 	})
 	if err != nil {
 		return uuid.Nil, false, err
@@ -639,7 +671,7 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 		})
 	}
 
-	queued, err := q.renderAndQueue(ctx, rows, false)
+	queued, err := q.renderAndQueue(ctx, rows, false, tracked, params.Preferences)
 	return task.ID, queued, err
 }
 
@@ -762,8 +794,11 @@ func (t mailTemplates) renderWith(textVars, htmlVars map[string]interface{}, rec
 // that slices an empty name) is written failed with the render error, and the
 // others are queued: one recipient never holds back a send to the rest. With
 // strict, a mail that does not render is returned as the error and nothing is
-// written.
-func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict bool) (bool, error) {
+// written. tracked says the send asked for open and click tracking with the
+// flag on: each queued row gets a token or why not, as preferences — what
+// core said before the transaction — allows, and the send's shared links are
+// registered (tracking.go).
+func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict, tracked bool, preferences *TrackingPreferences) (bool, error) {
 	if len(rows) == 0 {
 		return false, nil
 	}
@@ -813,6 +848,14 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 		})
 	}
 
+	if tracked && len(queueItems) > 0 {
+		if err := q.planTracking(ctx, rows[0].TaskID, queueItems, preferences); err != nil {
+			return false, err
+		}
+		if err := q.registerLinks(ctx, rows[0].TaskID, queueItems); err != nil {
+			return false, err
+		}
+	}
 	if len(queueItems) > 0 {
 		if _, err = q.q.CreateMailQueueItems(ctx, queueItems); err != nil {
 			return false, err

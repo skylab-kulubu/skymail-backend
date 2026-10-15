@@ -133,11 +133,14 @@ ona dokunmayın (düşerse sürüm geri çekildiği için bir daha kurulmaz).
 | `20261012180100` | `idx_mail_tasks_content_kept` | `20261012180000` |
 | `20261013140100` | `idx_mail_tasks_content_mask_due` | `20261013140000` |
 | `20261013140200` | `idx_mail_tasks_template` | `20261013140100` |
+| `20261015120100` | `idx_mail_queue_tracking_token` | `20261015120000` |
+| `20261015120200` | `idx_mail_queue_tracking_subject` | `20261015120100` |
+| `20261015120300` | `idx_mail_tasks_tracking_open` | `20261015120200` |
 
 Önce indeksin durumuna bakın (salt okunur):
 
 ```sql
-SELECT indexrelid::regclass, indisvalid FROM pg_index WHERE indexrelid::regclass::text LIKE 'idx_mail_queue_pending_%' OR indexrelid::regclass::text IN ('idx_mail_tasks_content_kept', 'idx_mail_tasks_content_mask_due', 'idx_mail_tasks_template');
+SELECT indexrelid::regclass, indisvalid FROM pg_index WHERE indexrelid::regclass::text LIKE 'idx_mail_queue_pending_%' OR indexrelid::regclass::text LIKE 'idx_mail_queue_tracking_%' OR indexrelid::regclass::text IN ('idx_mail_tasks_content_kept', 'idx_mail_tasks_content_mask_due', 'idx_mail_tasks_template', 'idx_mail_tasks_tracking_open');
 ```
 
 - İndeks yoksa: yalnız sürümü yukarıdaki değere çekin.
