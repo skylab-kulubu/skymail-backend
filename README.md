@@ -344,7 +344,8 @@ Kişi bazında açılma ve tıklama takibi (hub bilet iletişim-servisi 14, tasa
 notu 07). **Varsayılan kapalı.** Bu sürümde takip verisi yazılır ve postaya
 yerleştirilir; `/t/` uçları, okuma uçları, geri alma ucu ve 90 günlük saklama
 işi sonraki sürümlerde gelir. Bayrak onlar yayında ve aydınlatma metni
-yayımlanmış olmadan açılmaz.
+yayımlanmış olmadan açılmaz: **bu imaj `SKYMAIL_TRACKING=on` ile açılışı
+reddeder** (`/t/` uçları yok; 14b bu reddi uçlarla birlikte kaldırır).
 
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|

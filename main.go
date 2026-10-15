@@ -126,7 +126,7 @@ func main() {
 	}
 	// Open and click tracking: off unless SKYMAIL_TRACKING=on, and then only
 	// with the public /t/ address and core to ask (README, tracking).
-	trackingConfig, err := tracking.ConfigFromEnv(config.Value)
+	trackingConfig, err := trackingConfigFromEnv(config.Value)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid open and click tracking configuration")
 	}
@@ -301,6 +301,22 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("error starting server")
 	}
+}
+
+// trackingConfigFromEnv is open and click tracking as the environment sets it
+// (tracking.ConfigFromEnv), refusing on: this build does not serve the /t/
+// routes the pixel and the click addresses point at (hub ticket iletisim-
+// servisi 14b), so a tracked mail's links would lead nowhere. Ticket 14b
+// removes the refusal together with adding the routes.
+func trackingConfigFromEnv(getenv func(string) string) (tracking.Config, error) {
+	cfg, err := tracking.ConfigFromEnv(getenv)
+	if err != nil {
+		return tracking.Config{}, err
+	}
+	if cfg.On() {
+		return tracking.Config{}, errors.New("SKYMAIL_TRACKING=on needs the /t/ routes (ticket 14b); this build does not serve them: leave it off")
+	}
+	return cfg, nil
 }
 
 // erasureTokenConfig is how the erase route checks core's token: the exact
