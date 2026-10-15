@@ -183,6 +183,10 @@ func TestCoreClientTakesOnlyAWholeAnswer(t *testing.T) {
 			return http.StatusOK, map[string]any{"results": []result{
 				{Sub: subs[0], Allowed: true}, {Sub: subs[0], Allowed: true}, {Sub: subs[1], Allowed: true}}}
 		},
+		"someone else instead": func(subs []string) (int, any) {
+			return http.StatusOK, map[string]any{"results": []result{
+				{Sub: subs[0], Allowed: true}, {Sub: uuid.NewString(), Allowed: true}}}
+		},
 		"someone not asked about": func(subs []string) (int, any) {
 			return http.StatusOK, map[string]any{"results": []result{
 				{Sub: subs[0], Allowed: true}, {Sub: subs[1], Allowed: true}, {Sub: uuid.NewString(), Allowed: true}}}

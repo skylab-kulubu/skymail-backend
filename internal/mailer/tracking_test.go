@@ -480,6 +480,46 @@ func TestASendCoreCannotAnswerForTracksNoOneAndGoesOut(t *testing.T) {
 	}
 }
 
+// slowCore is a core that does not answer: it reports the time the send gave
+// it and gives up when that runs out.
+type slowCore struct {
+	mu       sync.Mutex
+	budget   time.Duration
+	deadline bool
+}
+
+func (c *slowCore) Resolve(ctx context.Context, _ []uuid.UUID) (map[uuid.UUID]tracking.Decision, error) {
+	deadline, ok := ctx.Deadline()
+	c.mu.Lock()
+	c.deadline, c.budget = ok, time.Until(deadline)
+	c.mu.Unlock()
+	return nil, context.DeadlineExceeded
+}
+
+// A send gives core 5 seconds and no more: past them no one in the send is
+// tracked and it goes out.
+func TestASendGivesCoreFiveSeconds(t *testing.T) {
+	captureMailerLogs(t)
+	db := trackingQueue(t)
+	core := &slowCore{}
+	m := mailer.NewMailer(db, startFakeSMTP(t).config(), mailer.SenderOn, trackingOn(core))
+	task, err := m.EnqueueWithRecipients(context.Background(), mailer.EnqueueWithRecipientsParams{
+		SentBy: laneSender, TemplateID: announcementTemplate, MailListID: &announcementList, BodyVariables: []byte(`{}`),
+		Recipients: groupOf(), Tracking: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !core.deadline || core.budget <= 4*time.Second || core.budget > 5*time.Second {
+		t.Errorf("core was given %s (deadline %v), want 5 seconds", core.budget, core.deadline)
+	}
+	for email, row := range trackedRows(t, db, task) {
+		if row.token != nil || row.status != "pending" {
+			t.Errorf("%s: %s, token %x; want pending and not tracked", email, row.status, row.token)
+		}
+	}
+}
+
 // With SKYMAIL_TRACKING off, tracking asked for is ignored: the send says it
 // did not ask, no row has a token or a reason, nothing is registered, core
 // is not asked.
