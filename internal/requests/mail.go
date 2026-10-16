@@ -22,3 +22,23 @@ type SendSingleMail struct {
 	RecipientFullName string                 `json:"recipient_full_name"`
 	BodyVariables     map[string]interface{} `json:"body_variables"`
 }
+
+// CreateFormMailSource is accepted only from the configured Forms service.
+// Forms derives OwnerSub and every other field after its HTTP caller's form
+// response permission check. The browser never creates these rows.
+type CreateFormMailSource struct {
+	OwnerSub       uuid.UUID               `json:"owner_sub" validate:"required"`
+	FormID         uuid.UUID               `json:"form_id" validate:"required"`
+	FormTitle      string                  `json:"form_title" validate:"required,max=100"`
+	Recipients     []MailApprovalRecipient `json:"recipients" validate:"required,min=1,dive"`
+	ResponseCount  int                     `json:"response_count" validate:"min=0"`
+	SkippedCount   int                     `json:"skipped_count" validate:"min=0"`
+	DuplicateCount int                     `json:"duplicate_count" validate:"min=0"`
+}
+
+type SendFormSource struct {
+	FormSourceID  uuid.UUID              `json:"form_source_id" validate:"required"`
+	TemplateID    uuid.UUID              `json:"template_id" validate:"required"`
+	BodyVariables map[string]interface{} `json:"body_variables"`
+	Tracking      bool                   `json:"tracking"`
+}

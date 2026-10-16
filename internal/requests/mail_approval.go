@@ -10,6 +10,9 @@ type SubmitMailApproval struct {
 	TemplateID uuid.UUID `json:"template_id" validate:"required"`
 	// An internal mailing list or a Keycloak group. Leave it out to send to people.
 	MailListID *uuid.UUID `json:"mail_list_id"`
+	// An immutable snapshot prepared by Forms for this caller. Never with a
+	// list or browser-supplied recipients. Manual recipients retain max=100.
+	FormSourceID *uuid.UUID `json:"form_source_id"`
 	// The people, 1..100, each address once (compared case-insensitively); each gets a send of their own. Leave it out to send to a mailing list.
 	Recipients    []MailApprovalRecipient `json:"recipients" validate:"omitempty,max=100,dive"`
 	BodyVariables map[string]interface{}  `json:"body_variables"`

@@ -355,6 +355,12 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 	if err := caller.mayRead(send); err != nil {
 		return err
 	}
+	if send.formSourceID != nil {
+		if err := bindFormSourceBody(c, &params); err != nil {
+			return err
+		}
+		return h.submitFormSource(c, caller, params, send)
+	}
 	checked, err := h.checkSend(c.Context(), send, caller.recipient())
 	if err != nil {
 		return err
@@ -746,6 +752,17 @@ func (h *mailApprovalHandlerImpl) Resubmit(c fiber.Ctx) error {
 		by:   bySubmitter,
 		from: []database.MailApprovalState{database.MailApprovalStateRejected, database.MailApprovalStateDeclined},
 		check: func(ctx context.Context, view database.GetMailApprovalRow, caller approvalCaller) (checkedSend, error) {
+			if view.MailApproval.FormSourceID != nil || send.formSourceID != nil {
+				if view.MailApproval.FormSourceID == nil || send.formSourceID == nil || *view.MailApproval.FormSourceID != *send.formSourceID {
+					return checkedSend{}, errFormSourceChanged
+				}
+				if err := bindFormSourceBody(c, &params); err != nil {
+					return checkedSend{}, err
+				}
+				hydrated := sendOfView(view)
+				hydrated.templateID, hydrated.variables, hydrated.tracking = send.templateID, send.variables, false
+				send = hydrated
+			}
 			if err := caller.mayRead(send); err != nil {
 				return checkedSend{}, err
 			}

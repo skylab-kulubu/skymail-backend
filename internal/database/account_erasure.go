@@ -152,6 +152,11 @@ func (s *Store) EraseAccount(ctx context.Context, erasure AccountErasure) (*Acco
 		if err != nil {
 			return err
 		}
+		// Source sends and decisions lock source -> approval -> queue. Erasure
+		// uses that same order, before its existing queue/link steps.
+		if err := e.lockAndInvalidateFormSources(ctx); err != nil {
+			return err
+		}
 		// Event writers lock queue -> link (the click's FK). Take every queue
 		// row erasure will touch before any link, including another person's
 		// mail whose rendered body names this person.
@@ -176,6 +181,9 @@ func (s *Store) EraseAccount(ctx context.Context, erasure AccountErasure) (*Acco
 		if busy {
 			inProgress = true
 			return nil
+		}
+		if err := e.scrubFormSources(ctx); err != nil {
+			return err
 		}
 		if err := e.run(ctx, dropNamesSteps); err != nil {
 			return err
@@ -235,6 +243,8 @@ func newEraser(ctx context.Context, tx pgx.Tx, erasure AccountErasure) (*eraser,
 		              SELECT recipient_full_name FROM mail_queue WHERE lower(recipient_email) IN (SELECT email FROM e) OR recipient_sub::text = @subject
 		              UNION ALL
 		              SELECT full_name FROM mail_approval_recipients WHERE lower(email) IN (SELECT email FROM e)
+                          UNION ALL
+                          SELECT full_name FROM mail_form_source_recipients WHERE lower(email) IN (SELECT email FROM e)
 		              UNION ALL
 		              SELECT submitter_name FROM mail_approvals WHERE submitter_sub = @subject
 		              UNION ALL
@@ -306,6 +316,52 @@ func (e *eraser) run(ctx context.Context, steps []erasureStep) error {
 		if step.count != "" {
 			e.counts[step.count] += tag.RowsAffected()
 		}
+	}
+	return nil
+}
+
+// A Forms source is immutable except for erasure. Invalidating it prevents a
+// pending decision from quietly sending a smaller, different snapshot.
+func (e *eraser) lockAndInvalidateFormSources(ctx context.Context) error {
+	rows, err := e.tx.Query(ctx, `SELECT fs.id FROM mail_form_sources fs
+      WHERE fs.owner_sub=@subject OR EXISTS(SELECT 1 FROM mail_form_source_recipients r WHERE r.source_id=fs.id AND lower(r.email)=ANY(@emails::text[]))
+       OR `+nameIn("fs.form_title")+` ORDER BY fs.id FOR UPDATE`, e.args)
+	if err != nil {
+		return fmt.Errorf("lock Forms sources: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return err
+	}
+	e.args["form_sources"] = ids
+	if len(ids) == 0 {
+		return nil
+	}
+	tag, err := e.tx.Exec(ctx, `UPDATE mail_form_sources SET invalidated_at=now() WHERE id=ANY(@form_sources::uuid[]) AND invalidated_at IS NULL`, e.args)
+	if err != nil {
+		return fmt.Errorf("invalidate Forms sources: %w", err)
+	}
+	if tag.RowsAffected() > 0 {
+		e.counts["form_sources_invalidated"] += tag.RowsAffected()
+	}
+	return nil
+}
+
+func (e *eraser) scrubFormSources(ctx context.Context) error {
+	tag, err := e.tx.Exec(ctx, `UPDATE mail_form_sources SET owner_sub=@deleted_sub WHERE owner_sub=@subject`, e.args)
+	if err != nil {
+		return fmt.Errorf("Forms source owner: %w", err)
+	}
+	e.counts[AccountErasureActorColumnsReplaced] += tag.RowsAffected()
+	if _, err = e.tx.Exec(ctx, `UPDATE mail_form_sources fs SET form_title=@erased_note WHERE `+nameIn("fs.form_title"), e.args); err != nil {
+		return fmt.Errorf("Forms source title: %w", err)
+	}
+	tag, err = e.tx.Exec(ctx, `DELETE FROM mail_form_source_recipients WHERE lower(email)=ANY(@emails::text[])`, e.args)
+	if err != nil {
+		return fmt.Errorf("Forms source recipients: %w", err)
+	}
+	if tag.RowsAffected() > 0 {
+		e.counts["form_source_recipients_removed"] += tag.RowsAffected()
 	}
 	return nil
 }

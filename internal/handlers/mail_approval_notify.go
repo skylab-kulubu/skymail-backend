@@ -181,6 +181,8 @@ func (h *mailApprovalHandlerImpl) notifySubmitter(ctx context.Context, view data
 // "listesine" or "N kişiye".
 func audienceKind(view database.GetMailApprovalRow) string {
 	switch {
+	case view.MailApproval.FormSourceID != nil:
+		return "form"
 	case view.MailApproval.MailListID != nil:
 		return audienceMailingList
 	case len(view.RecipientEmails) == 1:
@@ -290,6 +292,8 @@ func (h *mailApprovalHandlerImpl) notify(ctx context.Context, key, sentBy string
 // and how many more.
 func (h *mailApprovalHandlerImpl) audienceName(ctx context.Context, view database.GetMailApprovalRow) string {
 	switch {
+	case view.MailApproval.FormSourceID != nil:
+		return deref(view.FormTitle)
 	case view.MailApproval.MailListID == nil:
 		recipients := recipientsOfView(view)
 		if len(recipients) == 0 {

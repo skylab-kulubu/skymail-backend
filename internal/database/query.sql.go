@@ -48,6 +48,23 @@ func (q *Queries) AddMailApprovalTasks(ctx context.Context, arg AddMailApprovalT
 	return err
 }
 
+const addMailFormSourceRecipients = `-- name: AddMailFormSourceRecipients :exec
+INSERT INTO mail_form_source_recipients(source_id,position,email,full_name)
+SELECT $1,p.position,p.email,($2::text[])[p.position]
+FROM unnest($3::text[]) WITH ORDINALITY AS p(email,position)
+`
+
+type AddMailFormSourceRecipientsParams struct {
+	SourceID  uuid.UUID `json:"source_id"`
+	FullNames []string  `json:"full_names"`
+	Emails    []string  `json:"emails"`
+}
+
+func (q *Queries) AddMailFormSourceRecipients(ctx context.Context, arg AddMailFormSourceRecipientsParams) error {
+	_, err := q.db.Exec(ctx, addMailFormSourceRecipients, arg.SourceID, arg.FullNames, arg.Emails)
+	return err
+}
+
 const addOperatorRequiredVariable = `-- name: AddOperatorRequiredVariable :one
 UPDATE templates
 SET operator_required_variables = CASE
@@ -516,6 +533,51 @@ func (q *Queries) ConfirmMaskFailures(ctx context.Context, ids []uuid.UUID) ([]C
 	return items, nil
 }
 
+const consumeMailFormSource = `-- name: ConsumeMailFormSource :one
+UPDATE mail_form_sources
+SET consumed_at=$1, consumed_approval_id=$2, consumed_task_id=$3, consume_request_hash=$4
+WHERE id=$5 AND consumed_at IS NULL AND invalidated_at IS NULL
+RETURNING id, owner_sub, form_id, form_title, prepared_at, expires_at, response_count, recipient_count, skipped_count, duplicate_count, snapshot_hash, invalidated_at, consumed_at, consumed_approval_id, consumed_task_id, consume_request_hash
+`
+
+type ConsumeMailFormSourceParams struct {
+	At          *time.Time `json:"at"`
+	ApprovalID  *uuid.UUID `json:"approval_id"`
+	TaskID      *uuid.UUID `json:"task_id"`
+	RequestHash []byte     `json:"request_hash"`
+	ID          uuid.UUID  `json:"id"`
+}
+
+func (q *Queries) ConsumeMailFormSource(ctx context.Context, arg ConsumeMailFormSourceParams) (MailFormSource, error) {
+	row := q.db.QueryRow(ctx, consumeMailFormSource,
+		arg.At,
+		arg.ApprovalID,
+		arg.TaskID,
+		arg.RequestHash,
+		arg.ID,
+	)
+	var i MailFormSource
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerSub,
+		&i.FormID,
+		&i.FormTitle,
+		&i.PreparedAt,
+		&i.ExpiresAt,
+		&i.ResponseCount,
+		&i.RecipientCount,
+		&i.SkippedCount,
+		&i.DuplicateCount,
+		&i.SnapshotHash,
+		&i.InvalidatedAt,
+		&i.ConsumedAt,
+		&i.ConsumedApprovalID,
+		&i.ConsumedTaskID,
+		&i.ConsumeRequestHash,
+	)
+	return i, err
+}
+
 const countAllMailingListsIncludingArchived = `-- name: CountAllMailingListsIncludingArchived :one
 SELECT count(*)
 FROM mailing_lists
@@ -880,13 +942,13 @@ func (q *Queries) CreateFailedMailQueueItem(ctx context.Context, arg CreateFaile
 
 const createMailApproval = `-- name: CreateMailApproval :one
 INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, submitter_email_unverified, template_id,
-                            template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at,
+                            template_version_id, mail_list_id, form_source_id, body_variables, created_at, submitted_at, deadline_at,
                             updated_at, tracking_requested)
 VALUES ($1, $2, $3,
         $4, $5,
-        $6, $7, $8, $9, $9,
-        $10, $9, $11::boolean)
-RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested
+        $6, $7, $8, $9, $10, $10,
+        $11, $10, $12::boolean)
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id
 `
 
 type CreateMailApprovalParams struct {
@@ -897,6 +959,7 @@ type CreateMailApprovalParams struct {
 	TemplateID               uuid.UUID  `json:"template_id"`
 	TemplateVersionID        uuid.UUID  `json:"template_version_id"`
 	MailListID               *uuid.UUID `json:"mail_list_id"`
+	FormSourceID             *uuid.UUID `json:"form_source_id"`
 	BodyVariables            []byte     `json:"body_variables"`
 	At                       time.Time  `json:"at"`
 	DeadlineAt               time.Time  `json:"deadline_at"`
@@ -919,6 +982,7 @@ func (q *Queries) CreateMailApproval(ctx context.Context, arg CreateMailApproval
 		arg.TemplateID,
 		arg.TemplateVersionID,
 		arg.MailListID,
+		arg.FormSourceID,
 		arg.BodyVariables,
 		arg.At,
 		arg.DeadlineAt,
@@ -941,6 +1005,67 @@ func (q *Queries) CreateMailApproval(ctx context.Context, arg CreateMailApproval
 		&i.DeadlineAt,
 		&i.UpdatedAt,
 		&i.TrackingRequested,
+		&i.FormSourceID,
+	)
+	return i, err
+}
+
+const createMailFormSource = `-- name: CreateMailFormSource :one
+INSERT INTO mail_form_sources(id, owner_sub, form_id, form_title, prepared_at, expires_at,
+ response_count, recipient_count, skipped_count, duplicate_count, snapshot_hash)
+VALUES($1,$2,$3,$4,$5,$6,
+ $7,$8,$9,$10,$11)
+RETURNING id, owner_sub, form_id, form_title, prepared_at, expires_at, response_count, recipient_count, skipped_count, duplicate_count, snapshot_hash, invalidated_at, consumed_at, consumed_approval_id, consumed_task_id, consume_request_hash
+`
+
+type CreateMailFormSourceParams struct {
+	ID             uuid.UUID `json:"id"`
+	OwnerSub       string    `json:"owner_sub"`
+	FormID         uuid.UUID `json:"form_id"`
+	FormTitle      string    `json:"form_title"`
+	PreparedAt     time.Time `json:"prepared_at"`
+	ExpiresAt      time.Time `json:"expires_at"`
+	ResponseCount  int       `json:"response_count"`
+	RecipientCount int       `json:"recipient_count"`
+	SkippedCount   int       `json:"skipped_count"`
+	DuplicateCount int       `json:"duplicate_count"`
+	SnapshotHash   []byte    `json:"snapshot_hash"`
+}
+
+// Forms snapshots are prepared by the trusted service, owned by a person,
+// and bound exactly once inside that person's approval or send transaction.
+func (q *Queries) CreateMailFormSource(ctx context.Context, arg CreateMailFormSourceParams) (MailFormSource, error) {
+	row := q.db.QueryRow(ctx, createMailFormSource,
+		arg.ID,
+		arg.OwnerSub,
+		arg.FormID,
+		arg.FormTitle,
+		arg.PreparedAt,
+		arg.ExpiresAt,
+		arg.ResponseCount,
+		arg.RecipientCount,
+		arg.SkippedCount,
+		arg.DuplicateCount,
+		arg.SnapshotHash,
+	)
+	var i MailFormSource
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerSub,
+		&i.FormID,
+		&i.FormTitle,
+		&i.PreparedAt,
+		&i.ExpiresAt,
+		&i.ResponseCount,
+		&i.RecipientCount,
+		&i.SkippedCount,
+		&i.DuplicateCount,
+		&i.SnapshotHash,
+		&i.InvalidatedAt,
+		&i.ConsumedAt,
+		&i.ConsumedApprovalID,
+		&i.ConsumedTaskID,
+		&i.ConsumeRequestHash,
 	)
 	return i, err
 }
@@ -972,7 +1097,7 @@ WITH active_source AS (
         SELECT $3, template_id, mail_list_id, $4, content_sensitive,
                $5::boolean
         FROM active_source
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1080,7 +1205,7 @@ WITH active_template AS (
     INSERT INTO mail_tasks (sent_by, template_id, body_variables, content_sensitive_at_send, tracking_requested)
         SELECT $4, id, $5, content_sensitive, $6::boolean
         FROM active_template
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1223,6 +1348,26 @@ type DeferMaskFailureParams struct {
 func (q *Queries) DeferMaskFailure(ctx context.Context, arg DeferMaskFailureParams) error {
 	_, err := q.db.Exec(ctx, deferMaskFailure, arg.BaseSeconds, arg.ID)
 	return err
+}
+
+const deleteExpiredMailFormSources = `-- name: DeleteExpiredMailFormSources :execrows
+DELETE FROM mail_form_sources WHERE id IN (
+ SELECT fs.id FROM mail_form_sources fs WHERE fs.consumed_at IS NULL AND fs.expires_at <= $1
+ ORDER BY fs.expires_at,fs.id LIMIT $2 FOR UPDATE SKIP LOCKED
+)
+`
+
+type DeleteExpiredMailFormSourcesParams struct {
+	At        time.Time `json:"at"`
+	BatchSize int32     `json:"batch_size"`
+}
+
+func (q *Queries) DeleteExpiredMailFormSources(ctx context.Context, arg DeleteExpiredMailFormSourcesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredMailFormSources, arg.At, arg.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteOldSentContentViews = `-- name: DeleteOldSentContentViews :execrows
@@ -1611,23 +1756,27 @@ func (q *Queries) GetDailySentCounts(ctx context.Context, arg GetDailySentCounts
 }
 
 const getMailApproval = `-- name: GetMailApproval :one
-SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.tracking_requested,
+SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.tracking_requested, a.form_source_id,
        t.name                             AS template_name,
        t.key                              AS template_key,
        t.published_version_id             AS template_published_version_id,
        (t.archived_at IS NOT NULL)::boolean AS template_archived,
        ml.name                            AS mail_list_name,
        (ml.id IS NOT NULL)::boolean       AS internal_mail_list,
+       fs.form_id, fs.form_title, fs.prepared_at AS form_prepared_at,
+       fs.recipient_count AS form_recipient_count, fs.snapshot_hash AS form_snapshot_hash,
        people.emails                      AS recipient_emails,
        people.full_names                  AS recipient_full_names,
        sends.task_ids                     AS task_ids
 FROM mail_approvals a
          JOIN templates t ON t.id = a.template_id
          LEFT JOIN mailing_lists ml ON ml.id = a.mail_list_id
+         LEFT JOIN mail_form_sources fs ON fs.id = a.form_source_id
          CROSS JOIN LATERAL (SELECT COALESCE(array_agg(r.email ORDER BY r.position), '{}')::text[]     AS emails,
                                     COALESCE(array_agg(r.full_name ORDER BY r.position), '{}')::text[] AS full_names
-                             FROM mail_approval_recipients r
-                             WHERE r.approval_id = a.id) people
+                             FROM (SELECT r.email, r.full_name, r.position FROM mail_approval_recipients r WHERE r.approval_id = a.id
+                                   UNION ALL
+                                   SELECT r.email, r.full_name, r.position FROM mail_form_source_recipients r WHERE r.source_id = a.form_source_id) r) people
          CROSS JOIN LATERAL (SELECT COALESCE(array_agg(mat.task_id ORDER BY mat.position), '{}')::uuid[] AS task_ids
                              FROM mail_approval_tasks mat
                              WHERE mat.approval_id = a.id) sends
@@ -1642,6 +1791,11 @@ type GetMailApprovalRow struct {
 	TemplateArchived           bool         `json:"template_archived"`
 	MailListName               *string      `json:"mail_list_name"`
 	InternalMailList           bool         `json:"internal_mail_list"`
+	FormID                     *uuid.UUID   `json:"form_id"`
+	FormTitle                  *string      `json:"form_title"`
+	FormPreparedAt             *time.Time   `json:"form_prepared_at"`
+	FormRecipientCount         *int         `json:"form_recipient_count"`
+	FormSnapshotHash           []byte       `json:"form_snapshot_hash"`
 	RecipientEmails            []string     `json:"recipient_emails"`
 	RecipientFullNames         []string     `json:"recipient_full_names"`
 	TaskIds                    []uuid.UUID  `json:"task_ids"`
@@ -1670,12 +1824,18 @@ func (q *Queries) GetMailApproval(ctx context.Context, id uuid.UUID) (GetMailApp
 		&i.MailApproval.DeadlineAt,
 		&i.MailApproval.UpdatedAt,
 		&i.MailApproval.TrackingRequested,
+		&i.MailApproval.FormSourceID,
 		&i.TemplateName,
 		&i.TemplateKey,
 		&i.TemplatePublishedVersionID,
 		&i.TemplateArchived,
 		&i.MailListName,
 		&i.InternalMailList,
+		&i.FormID,
+		&i.FormTitle,
+		&i.FormPreparedAt,
+		&i.FormRecipientCount,
+		&i.FormSnapshotHash,
 		&i.RecipientEmails,
 		&i.RecipientFullNames,
 		&i.TaskIds,
@@ -1826,7 +1986,7 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 }
 
 const getMailTaskById = `-- name: GetMailTaskById :one
-SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at,
+SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id,
        t.name  AS template_name,
        ml.name AS mail_list_name
 FROM mail_tasks mt
@@ -1854,6 +2014,7 @@ type GetMailTaskByIdRow struct {
 	ContentMaskFailingSince *time.Time `json:"content_mask_failing_since"`
 	TrackingRequested       bool       `json:"tracking_requested"`
 	TrackingClosedAt        *time.Time `json:"tracking_closed_at"`
+	FormSourceID            *uuid.UUID `json:"form_source_id"`
 	TemplateName            *string    `json:"template_name"`
 	MailListName            *string    `json:"mail_list_name"`
 }
@@ -1880,6 +2041,7 @@ func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTas
 		&i.ContentMaskFailingSince,
 		&i.TrackingRequested,
 		&i.TrackingClosedAt,
+		&i.FormSourceID,
 		&i.TemplateName,
 		&i.MailListName,
 	)
@@ -1950,6 +2112,39 @@ func (q *Queries) GetMailingListByIdIncludingArchived(ctx context.Context, id uu
 		&i.UpdatedAt,
 		&i.ArchivedAt,
 		&i.ArchivedBy,
+	)
+	return i, err
+}
+
+const getOwnedMailFormSource = `-- name: GetOwnedMailFormSource :one
+SELECT id, owner_sub, form_id, form_title, prepared_at, expires_at, response_count, recipient_count, skipped_count, duplicate_count, snapshot_hash, invalidated_at, consumed_at, consumed_approval_id, consumed_task_id, consume_request_hash FROM mail_form_sources WHERE id=$1 AND owner_sub=$2
+`
+
+type GetOwnedMailFormSourceParams struct {
+	ID       uuid.UUID `json:"id"`
+	OwnerSub string    `json:"owner_sub"`
+}
+
+func (q *Queries) GetOwnedMailFormSource(ctx context.Context, arg GetOwnedMailFormSourceParams) (MailFormSource, error) {
+	row := q.db.QueryRow(ctx, getOwnedMailFormSource, arg.ID, arg.OwnerSub)
+	var i MailFormSource
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerSub,
+		&i.FormID,
+		&i.FormTitle,
+		&i.PreparedAt,
+		&i.ExpiresAt,
+		&i.ResponseCount,
+		&i.RecipientCount,
+		&i.SkippedCount,
+		&i.DuplicateCount,
+		&i.SnapshotHash,
+		&i.InvalidatedAt,
+		&i.ConsumedAt,
+		&i.ConsumedApprovalID,
+		&i.ConsumedTaskID,
+		&i.ConsumeRequestHash,
 	)
 	return i, err
 }
@@ -2345,10 +2540,10 @@ func (q *Queries) GetTrackingReport(ctx context.Context, arg GetTrackingReportPa
 }
 
 const insertMailTask = `-- name: InsertMailTask :one
-INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send,
+INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, form_source_id, body_variables, content_sensitive_at_send,
                         tracking_requested)
-SELECT $1, $2, $3, $4,
-       COALESCE(templates.content_sensitive::text, 'unset'), $5::boolean
+SELECT $1, $2, $3, $4, $5,
+       COALESCE(templates.content_sensitive::text, 'unset'), $6::boolean
 FROM templates
 WHERE templates.id = $2
   AND archived_at IS NULL
@@ -2359,6 +2554,7 @@ type InsertMailTaskParams struct {
 	SentBy            string     `json:"sent_by"`
 	TemplateID        *uuid.UUID `json:"template_id"`
 	MailListID        *uuid.UUID `json:"mail_list_id"`
+	FormSourceID      *uuid.UUID `json:"form_source_id"`
 	BodyVariables     []byte     `json:"body_variables"`
 	TrackingRequested bool       `json:"tracking_requested"`
 }
@@ -2377,6 +2573,7 @@ func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) 
 		arg.SentBy,
 		arg.TemplateID,
 		arg.MailListID,
+		arg.FormSourceID,
 		arg.BodyVariables,
 		arg.TrackingRequested,
 	)
@@ -2601,23 +2798,27 @@ func (q *Queries) ListMailApprovalRecipients(ctx context.Context, approvalID uui
 }
 
 const listMailApprovals = `-- name: ListMailApprovals :many
-SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.tracking_requested,
+SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.tracking_requested, a.form_source_id,
        t.name                             AS template_name,
        t.key                              AS template_key,
        t.published_version_id             AS template_published_version_id,
        (t.archived_at IS NOT NULL)::boolean AS template_archived,
        ml.name                            AS mail_list_name,
        (ml.id IS NOT NULL)::boolean       AS internal_mail_list,
+       fs.form_id, fs.form_title, fs.prepared_at AS form_prepared_at,
+       fs.recipient_count AS form_recipient_count, fs.snapshot_hash AS form_snapshot_hash,
        people.emails                      AS recipient_emails,
        people.full_names                  AS recipient_full_names,
        sends.task_ids                     AS task_ids
 FROM mail_approvals a
          JOIN templates t ON t.id = a.template_id
          LEFT JOIN mailing_lists ml ON ml.id = a.mail_list_id
+         LEFT JOIN mail_form_sources fs ON fs.id = a.form_source_id
          CROSS JOIN LATERAL (SELECT COALESCE(array_agg(r.email ORDER BY r.position), '{}')::text[]     AS emails,
                                     COALESCE(array_agg(r.full_name ORDER BY r.position), '{}')::text[] AS full_names
-                             FROM mail_approval_recipients r
-                             WHERE r.approval_id = a.id) people
+                             FROM (SELECT r.email, r.full_name, r.position FROM mail_approval_recipients r WHERE r.approval_id = a.id
+                                   UNION ALL
+                                   SELECT r.email, r.full_name, r.position FROM mail_form_source_recipients r WHERE r.source_id = a.form_source_id) r) people
          CROSS JOIN LATERAL (SELECT COALESCE(array_agg(mat.task_id ORDER BY mat.position), '{}')::uuid[] AS task_ids
                              FROM mail_approval_tasks mat
                              WHERE mat.approval_id = a.id) sends
@@ -2645,6 +2846,11 @@ type ListMailApprovalsRow struct {
 	TemplateArchived           bool         `json:"template_archived"`
 	MailListName               *string      `json:"mail_list_name"`
 	InternalMailList           bool         `json:"internal_mail_list"`
+	FormID                     *uuid.UUID   `json:"form_id"`
+	FormTitle                  *string      `json:"form_title"`
+	FormPreparedAt             *time.Time   `json:"form_prepared_at"`
+	FormRecipientCount         *int         `json:"form_recipient_count"`
+	FormSnapshotHash           []byte       `json:"form_snapshot_hash"`
 	RecipientEmails            []string     `json:"recipient_emails"`
 	RecipientFullNames         []string     `json:"recipient_full_names"`
 	TaskIds                    []uuid.UUID  `json:"task_ids"`
@@ -2685,15 +2891,50 @@ func (q *Queries) ListMailApprovals(ctx context.Context, arg ListMailApprovalsPa
 			&i.MailApproval.DeadlineAt,
 			&i.MailApproval.UpdatedAt,
 			&i.MailApproval.TrackingRequested,
+			&i.MailApproval.FormSourceID,
 			&i.TemplateName,
 			&i.TemplateKey,
 			&i.TemplatePublishedVersionID,
 			&i.TemplateArchived,
 			&i.MailListName,
 			&i.InternalMailList,
+			&i.FormID,
+			&i.FormTitle,
+			&i.FormPreparedAt,
+			&i.FormRecipientCount,
+			&i.FormSnapshotHash,
 			&i.RecipientEmails,
 			&i.RecipientFullNames,
 			&i.TaskIds,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMailFormSourceRecipients = `-- name: ListMailFormSourceRecipients :many
+SELECT source_id, position, email, full_name FROM mail_form_source_recipients WHERE source_id=$1 ORDER BY position
+`
+
+func (q *Queries) ListMailFormSourceRecipients(ctx context.Context, sourceID uuid.UUID) ([]MailFormSourceRecipient, error) {
+	rows, err := q.db.Query(ctx, listMailFormSourceRecipients, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MailFormSourceRecipient
+	for rows.Next() {
+		var i MailFormSourceRecipient
+		if err := rows.Scan(
+			&i.SourceID,
+			&i.Position,
+			&i.Email,
+			&i.FullName,
 		); err != nil {
 			return nil, err
 		}
@@ -2751,6 +2992,7 @@ SELECT mt.id,
        mt.sent_by,
        mt.template_id,
        mt.mail_list_id,
+       mt.form_source_id, fs.form_id, fs.form_title, fs.prepared_at AS form_prepared_at, fs.recipient_count AS form_recipient_count,
        mt.body_variables,
        mt.created_at,
        t.name                       AS template_name,
@@ -2773,6 +3015,7 @@ FROM page
          JOIN mail_tasks mt ON mt.id = page.id
          LEFT JOIN templates t ON mt.template_id = t.id
          LEFT JOIN mailing_lists ml ON mt.mail_list_id = ml.id
+         LEFT JOIN mail_form_sources fs ON fs.id = mt.form_source_id
          CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE q.status = 'pending')    AS pending,
                                     count(*) FILTER (WHERE q.status = 'processing') AS processing,
                                     count(*) FILTER (WHERE q.status = 'sent')       AS sent,
@@ -2801,6 +3044,11 @@ type ListMailTaskSendsRow struct {
 	SentBy                  string     `json:"sent_by"`
 	TemplateID              *uuid.UUID `json:"template_id"`
 	MailListID              *uuid.UUID `json:"mail_list_id"`
+	FormSourceID            *uuid.UUID `json:"form_source_id"`
+	FormID                  *uuid.UUID `json:"form_id"`
+	FormTitle               *string    `json:"form_title"`
+	FormPreparedAt          *time.Time `json:"form_prepared_at"`
+	FormRecipientCount      *int       `json:"form_recipient_count"`
 	BodyVariables           []byte     `json:"body_variables"`
 	CreatedAt               time.Time  `json:"created_at"`
 	TemplateName            *string    `json:"template_name"`
@@ -2845,6 +3093,11 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 			&i.SentBy,
 			&i.TemplateID,
 			&i.MailListID,
+			&i.FormSourceID,
+			&i.FormID,
+			&i.FormTitle,
+			&i.FormPreparedAt,
+			&i.FormRecipientCount,
 			&i.BodyVariables,
 			&i.CreatedAt,
 			&i.TemplateName,
@@ -3289,7 +3542,7 @@ func (q *Queries) ListTrackingRecipients(ctx context.Context, arg ListTrackingRe
 }
 
 const lockDueMailApproval = `-- name: LockDueMailApproval :one
-SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested
+SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id
 FROM mail_approvals
 WHERE state IN ('pending', 'returned')
   AND deadline_at <= $1
@@ -3318,12 +3571,13 @@ func (q *Queries) LockDueMailApproval(ctx context.Context, asOf time.Time) (Mail
 		&i.DeadlineAt,
 		&i.UpdatedAt,
 		&i.TrackingRequested,
+		&i.FormSourceID,
 	)
 	return i, err
 }
 
 const lockMailApproval = `-- name: LockMailApproval :one
-SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested
+SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id
 FROM mail_approvals
 WHERE id = $1
     FOR UPDATE NOWAIT
@@ -3352,6 +3606,68 @@ func (q *Queries) LockMailApproval(ctx context.Context, id uuid.UUID) (MailAppro
 		&i.DeadlineAt,
 		&i.UpdatedAt,
 		&i.TrackingRequested,
+		&i.FormSourceID,
+	)
+	return i, err
+}
+
+const lockMailFormSource = `-- name: LockMailFormSource :one
+SELECT id, owner_sub, form_id, form_title, prepared_at, expires_at, response_count, recipient_count, skipped_count, duplicate_count, snapshot_hash, invalidated_at, consumed_at, consumed_approval_id, consumed_task_id, consume_request_hash FROM mail_form_sources WHERE id=$1 FOR UPDATE NOWAIT
+`
+
+func (q *Queries) LockMailFormSource(ctx context.Context, id uuid.UUID) (MailFormSource, error) {
+	row := q.db.QueryRow(ctx, lockMailFormSource, id)
+	var i MailFormSource
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerSub,
+		&i.FormID,
+		&i.FormTitle,
+		&i.PreparedAt,
+		&i.ExpiresAt,
+		&i.ResponseCount,
+		&i.RecipientCount,
+		&i.SkippedCount,
+		&i.DuplicateCount,
+		&i.SnapshotHash,
+		&i.InvalidatedAt,
+		&i.ConsumedAt,
+		&i.ConsumedApprovalID,
+		&i.ConsumedTaskID,
+		&i.ConsumeRequestHash,
+	)
+	return i, err
+}
+
+const lockOwnedMailFormSource = `-- name: LockOwnedMailFormSource :one
+SELECT id, owner_sub, form_id, form_title, prepared_at, expires_at, response_count, recipient_count, skipped_count, duplicate_count, snapshot_hash, invalidated_at, consumed_at, consumed_approval_id, consumed_task_id, consume_request_hash FROM mail_form_sources WHERE id=$1 AND owner_sub=$2 FOR UPDATE NOWAIT
+`
+
+type LockOwnedMailFormSourceParams struct {
+	ID       uuid.UUID `json:"id"`
+	OwnerSub string    `json:"owner_sub"`
+}
+
+func (q *Queries) LockOwnedMailFormSource(ctx context.Context, arg LockOwnedMailFormSourceParams) (MailFormSource, error) {
+	row := q.db.QueryRow(ctx, lockOwnedMailFormSource, arg.ID, arg.OwnerSub)
+	var i MailFormSource
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerSub,
+		&i.FormID,
+		&i.FormTitle,
+		&i.PreparedAt,
+		&i.ExpiresAt,
+		&i.ResponseCount,
+		&i.RecipientCount,
+		&i.SkippedCount,
+		&i.DuplicateCount,
+		&i.SnapshotHash,
+		&i.InvalidatedAt,
+		&i.ConsumedAt,
+		&i.ConsumedApprovalID,
+		&i.ConsumedTaskID,
+		&i.ConsumeRequestHash,
 	)
 	return i, err
 }
@@ -4359,19 +4675,21 @@ SET state               = 'pending',
     template_id         = $1,
     template_version_id = $2,
     mail_list_id        = $3,
-    body_variables      = $4,
-    tracking_requested  = $5::boolean,
-    submitted_at        = $6,
-    deadline_at         = $7,
-    updated_at          = $6
-WHERE id = $8
-RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested
+    form_source_id      = $4,
+    body_variables      = $5,
+    tracking_requested  = $6::boolean,
+    submitted_at        = $7,
+    deadline_at         = $8,
+    updated_at          = $7
+WHERE id = $9
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id
 `
 
 type ResubmitMailApprovalParams struct {
 	TemplateID        uuid.UUID  `json:"template_id"`
 	TemplateVersionID uuid.UUID  `json:"template_version_id"`
 	MailListID        *uuid.UUID `json:"mail_list_id"`
+	FormSourceID      *uuid.UUID `json:"form_source_id"`
 	BodyVariables     []byte     `json:"body_variables"`
 	TrackingRequested bool       `json:"tracking_requested"`
 	At                time.Time  `json:"at"`
@@ -4388,6 +4706,7 @@ func (q *Queries) ResubmitMailApproval(ctx context.Context, arg ResubmitMailAppr
 		arg.TemplateID,
 		arg.TemplateVersionID,
 		arg.MailListID,
+		arg.FormSourceID,
 		arg.BodyVariables,
 		arg.TrackingRequested,
 		arg.At,
@@ -4411,6 +4730,7 @@ func (q *Queries) ResubmitMailApproval(ctx context.Context, arg ResubmitMailAppr
 		&i.DeadlineAt,
 		&i.UpdatedAt,
 		&i.TrackingRequested,
+		&i.FormSourceID,
 	)
 	return i, err
 }
@@ -4461,7 +4781,7 @@ SET state       = $1,
     deadline_at = COALESCE($2, deadline_at),
     updated_at  = $3
 WHERE id = $4
-RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id
 `
 
 type SetMailApprovalStateParams struct {
@@ -4496,6 +4816,7 @@ func (q *Queries) SetMailApprovalState(ctx context.Context, arg SetMailApprovalS
 		&i.DeadlineAt,
 		&i.UpdatedAt,
 		&i.TrackingRequested,
+		&i.FormSourceID,
 	)
 	return i, err
 }
@@ -4505,7 +4826,7 @@ UPDATE mail_approvals
 SET body_variables = $1,
     updated_at     = $2
 WHERE id = $3
-RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id
 `
 
 type SetMailApprovalVariablesParams struct {
@@ -4533,6 +4854,7 @@ func (q *Queries) SetMailApprovalVariables(ctx context.Context, arg SetMailAppro
 		&i.DeadlineAt,
 		&i.UpdatedAt,
 		&i.TrackingRequested,
+		&i.FormSourceID,
 	)
 	return i, err
 }

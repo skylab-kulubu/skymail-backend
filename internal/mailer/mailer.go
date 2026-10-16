@@ -112,6 +112,7 @@ type RecipientInfo struct {
 }
 
 type EnqueueWithRecipientsParams struct {
+	FormSourceID  *uuid.UUID
 	SentBy        string
 	TemplateID    uuid.UUID
 	MailListID    *uuid.UUID
@@ -645,6 +646,7 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 		SentBy:            params.SentBy,
 		TemplateID:        &params.TemplateID,
 		MailListID:        params.MailListID,
+		FormSourceID:      params.FormSourceID,
 		BodyVariables:     params.BodyVariables,
 		TrackingRequested: tracked,
 	})
