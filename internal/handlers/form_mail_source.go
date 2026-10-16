@@ -33,16 +33,19 @@ var (
 )
 
 type FormMailSource struct {
-	ID             uuid.UUID `json:"id"`
-	FormID         uuid.UUID `json:"form_id"`
-	OwnerSub       string    `json:"owner_sub"`
-	FormTitle      string    `json:"form_title"`
-	RecipientCount int       `json:"recipient_count"`
-	ResponseCount  int       `json:"response_count"`
-	SkippedCount   int       `json:"skipped_count"`
-	DuplicateCount int       `json:"duplicate_count"`
-	PreparedAt     time.Time `json:"prepared_at"`
-	ExpiresAt      time.Time `json:"expires_at"`
+	// The prepared source ID, distinct from form_id; consumed by one owner send or approval.
+	ID        uuid.UUID `json:"id"`
+	FormID    uuid.UUID `json:"form_id"`
+	OwnerSub  string    `json:"owner_sub"`
+	FormTitle string    `json:"form_title"`
+	// Fixed valid, deduplicated recipients; addresses are never returned here.
+	RecipientCount int `json:"recipient_count"`
+	ResponseCount  int `json:"response_count"`
+	SkippedCount   int `json:"skipped_count"`
+	DuplicateCount int `json:"duplicate_count"`
+	// Snapshot preparation time, not the time the owner later sends or submits it.
+	PreparedAt time.Time `json:"prepared_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 func formSourceDescriptor(s database.MailFormSource) FormMailSource {
@@ -216,6 +219,20 @@ func checkFormSourceTemplate(ctx context.Context, q *database.Queries, id uuid.U
 	return checkedSend{template: template, versionID: *template.PublishedVersionID}, nil
 }
 
+// CreateFormSource godoc
+//
+//	@Summary		Prepare an immutable Forms audience
+//	@Description	Only the configured Forms service account may create this source, after the existing bearer userinfo, SkyMail access, send-or-write permission and exact service identity checks. Forms derives owner_sub, form metadata and recipients from its authorized HTTP caller. No mail or approval is created. The source expires after 30 minutes unless its owner consumes it. The configured recipient count and existing HTTP body limits reject excess input without truncation. The response is metadata only, with no recipient addresses, and is not cacheable.
+//	@Tags			Mail
+//	@Accept			json
+//	@Produce		json
+//	@Param			source	body		requests.CreateFormMailSource	true	"Authorized Forms snapshot"
+//	@Success		201		{object}	handlers.FormMailSource
+//	@Failure		400		{object}	apperrors.AppError	"Invalid snapshot, duplicate address or configured count limit exceeded"
+//	@Failure		403		{object}	apperrors.AppError	"The caller is not the configured Forms service or lacks current send-or-write permission"
+//	@Failure		413		{string}	string	"Existing request body limit exceeded"
+//	@Failure		503		{object}	apperrors.AppError	"Forms source preparation is not configured"
+//	@Router			/form_mail_sources [post]
 func (h *mailHandlerImpl) CreateFormSource(c fiber.Ctx) error {
 	c.Set(fiber.HeaderCacheControl, "no-store")
 	var p requests.CreateFormMailSource
@@ -250,6 +267,18 @@ func (h *mailHandlerImpl) CreateFormSource(c fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(formSourceDescriptor(source))
 }
 
+// GetFormSource godoc
+//
+//	@Summary		Read a prepared Forms audience
+//	@Description	Only the authenticated owner can read this metadata descriptor; approver or admin roles do not override ownership. Reading never consumes the source and never returns recipient addresses. The response is not cacheable. Historical send and approval audience metadata is read through those existing APIs instead.
+//	@Tags			Mail
+//	@Produce		json
+//	@Param			id	path		string	true	"Prepared source ID, distinct from the form ID"
+//	@Success		200	{object}	handlers.FormMailSource
+//	@Failure		404	{object}	apperrors.AppError	"No such source owned by the caller"
+//	@Failure		409	{object}	apperrors.AppError	"Source invalidated or already consumed"
+//	@Failure		410	{object}	apperrors.AppError	"Prepare the Forms audience again"
+//	@Router			/form_mail_sources/{id} [get]
 func (h *mailHandlerImpl) GetFormSource(c fiber.Ctx) error {
 	c.Set(fiber.HeaderCacheControl, "no-store")
 	id, err := uuid.Parse(c.Params("id"))
@@ -273,6 +302,24 @@ func (h *mailHandlerImpl) GetFormSource(c fiber.Ctx) error {
 	return c.JSON(formSourceDescriptor(source))
 }
 
+// SendFormSource godoc
+//
+//	@Summary		Send to an immutable Forms audience
+//	@Description	The source owner holding current skymail:mails:send or skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. Tracking is false for this address-only source version.
+//	@Tags			Mail
+//	@Accept			json
+//	@Produce		json
+//	@Param			send	body		requests.SendFormSource	true	"Prepared source and mail content"
+//	@Success		201		{object}	handlers.CreatedMailTask	"New task"
+//	@Success		200		{object}	handlers.CreatedMailTask	"Same task for an exact retry"
+//	@Failure		400		{object}	apperrors.AppError	"Invalid request or caller-supplied recipient/metadata fields"
+//	@Failure		403		{object}	apperrors.AppError	"Current send-or-write permission required"
+//	@Failure		404		{object}	apperrors.AppError	"No such source owned by the caller"
+//	@Failure		409		{object}	apperrors.AppError	"Source invalidated, consumed differently or busy"
+//	@Failure		410		{object}	apperrors.AppError	"Prepare the Forms audience again"
+//	@Failure		422		{object}	apperrors.AppError	"Template or variables unavailable or invalid"
+//	@Failure		503		{object}	apperrors.AppError	"Transactional sending unavailable"
+//	@Router			/mail_tasks/form-source [post]
 func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 	var p requests.SendFormSource
 	if err := bindFormSourceBody(c, &p); err != nil {

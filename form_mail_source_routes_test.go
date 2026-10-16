@@ -14,6 +14,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	migrationfiles "github.com/skylab-kulubu/skymail-backend/db/migrations"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
@@ -318,11 +319,37 @@ func TestFormSourceIntegrationErasureInvalidationAndSendRace(t *testing.T) {
 		t.Fatal("send did not enter queue")
 	}
 	erased := make(chan error, 1)
+	gateOpened := false
+	defer func() {
+		if !gateOpened {
+			close(w.mail.gate)
+		}
+	}()
+	// A dedicated, named connection lets this fixture observe this erasure's
+	// real source-row lock wait, instead of guessing from goroutine scheduling.
+	eraseConfig := w.store.Conn.Config()
+	eraseConfig.MaxConns = 1
+	eraseName := "forms-source-erasure-" + uuid.NewString()
+	eraseConfig.ConnConfig.RuntimeParams["application_name"] = eraseName
+	erasePool, err := pgxpool.NewWithConfig(ctx, eraseConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(erasePool.Close)
+	var erasePID int32
+	if err := erasePool.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&erasePID); err != nil {
+		t.Fatal(err)
+	}
+	eraseCtx, cancelErase := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelErase()
+	eraseStore := database.NewStore(erasePool)
 	go func() {
-		_, err := w.store.EraseAccount(ctx, database.AccountErasure{RequestID: uuid.New(), Subject: uuid.NewString(), Emails: []string{"source-0@example.invalid"}})
+		_, err := eraseStore.EraseAccount(eraseCtx, database.AccountErasure{RequestID: uuid.New(), Subject: uuid.NewString(), Emails: []string{"source-0@example.invalid"}})
 		erased <- err
 	}()
+	waitForFormSourceErasureLock(t, w, erasePID, eraseName, erased)
 	close(w.mail.gate)
+	gateOpened = true
 	if status := <-sent; status != 201 {
 		t.Fatalf("race send=%d", status)
 	}
@@ -336,6 +363,54 @@ func TestFormSourceIntegrationErasureInvalidationAndSendRace(t *testing.T) {
 	}
 	if err := w.store.Conn.QueryRow(ctx, `SELECT count(*) FROM mail_queue WHERE recipient_email='source-0@example.invalid' AND status IN ('pending','processing')`).Scan(&personalRows); err != nil || personalRows != 0 {
 		t.Fatal("erased recipient was requeued")
+	}
+	// The reverse order also fails closed: a completed erasure invalidates a
+	// prepared source, so a later sender cannot create any task or queue rows.
+	third := prepareSource(t, w, "yusuf", 2)
+	if _, err := w.store.EraseAccount(ctx, database.AccountErasure{RequestID: uuid.New(), Subject: uuid.NewString(), Emails: []string{"source-0@example.invalid"}}); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := w.call("yusuf", http.MethodPost, "/v1/mail_tasks/form-source", sourceSend(w, third.ID), nil); status != 409 {
+		t.Fatalf("erasure-first source send=%d", status)
+	}
+	var futureTasks int
+	if err := w.store.Conn.QueryRow(ctx, `SELECT count(*) FROM mail_tasks WHERE form_source_id=$1`, third.ID).Scan(&futureTasks); err != nil || futureTasks != 0 {
+		t.Fatal("invalidated source created a future task")
+	}
+}
+
+func waitForFormSourceErasureLock(t *testing.T, w *approvalWorld, pid int32, name string, finished <-chan error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		var blocked bool
+		err := w.store.Conn.QueryRow(ctx, `SELECT EXISTS (
+ SELECT 1 FROM pg_stat_activity waiting
+ JOIN pg_stat_activity sending ON sending.pid=ANY(pg_blocking_pids(waiting.pid))
+ WHERE waiting.pid=$1 AND waiting.application_name=$2
+  AND waiting.datname=current_database() AND waiting.wait_event_type='Lock'
+  AND waiting.query LIKE 'SELECT fs.id FROM mail_form_sources fs%'
+  AND sending.datname=current_database() AND sending.state='idle in transaction'
+  AND EXISTS (SELECT 1 FROM pg_locks locks WHERE locks.pid=sending.pid
+    AND locks.relation='mail_form_sources'::regclass AND locks.granted AND locks.mode='RowShareLock')
+)`, pid, name).Scan(&blocked)
+		if err != nil {
+			t.Fatal("could not observe the fixture's source-row lock wait")
+		}
+		if blocked {
+			t.Log("erasure source-row lock wait acknowledged before releasing the sender")
+			return
+		}
+		select {
+		case <-finished:
+			t.Fatal("erasure finished before its source-row lock wait was acknowledged")
+		case <-ctx.Done():
+			t.Fatal("erasure did not reach the sender's source-row lock")
+		case <-tick.C:
+		}
 	}
 }
 
