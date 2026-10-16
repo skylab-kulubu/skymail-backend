@@ -473,3 +473,44 @@ gider, migration bağlantıları onları atar.
 </a>
 
 <sup><sub>[contrib.rocks](https://contrib.rocks) ile yapıldı.</sub></sup>
+
+
+## Forms kaynaklı alıcı snapshotı
+
+Forms'un mevcut alıcı aktarımı ve manuel/liste/Keycloak gönderimleri korunur.
+Yeni kaynak akışı `POST /v1/form_mail_sources` ile Forms backend'in yetkiyle
+hazırladığı alıcıları bir kez kaydeder; tarayıcı alıcıları veya form başlığını
+bildirmez. `GET /v1/form_mail_sources/{id}` yalnız sahibine, `no-store` ile
+kaynak bilgisini verir. Hazırlanan kaynak 30 dakika içinde sahibince
+`POST /v1/mail_tasks/form-source` ile doğrudan gönderilir veya mevcut
+`POST /v1/mail_approvals` isteğindeki `form_source_id` ile onaya sunulur.
+Doğrudan gönderim mevcut `skymail:mails:send` veya `skymail:mails:write`
+yetkisini; onay mevcut şablon okuma ve onay rollerini kullanır.
+
+Yeni kaynak hazırlama şu iki zorunlu değer yokken kapalıdır (503); eski yollar ve
+geçmiş gönderimler etkilenmez:
+
+- `SKYMAIL_FORMS_SOURCE_SERVICE_SUB`: Forms'un gerçek servis hesabının tam UUID'si.
+- `SKYMAIL_FORMS_SOURCE_MAX_RECIPIENTS`: yalnız bu özellik için pozitif, dağıtımda
+  seçilen üst sınır; varsayılan ürün limiti yoktur. Mevcut HTTP body limiti ayrıca
+  geçerlidir. Fazlası kesilmez, istek reddedilir. Manuel alıcı sınırı 100 kalır.
+- `SKYMAIL_FORMS_SOURCE_CLIENT_ID`: mevcut Forms servis istemcisi; varsayılan `forms`.
+
+Yalnız yeni hazırlama ucunda, aynı bearer Keycloak userinfo tarafından kabul
+edildikten sonra tam servis sub'ı, issuer, SkyMail audience'ı ve eşit
+`azp`/`client_id` doğrulanır. Genel token audience modu değişmez. Canlı servis
+kimliği ve limit dağıtım öncesi doğrulanmadan özellik açılmaz; token veya servis
+kimlik bilgisi çıktıya yazılmaz.
+
+Kaynak immutable snapshot'tır: onay yeni form yanıtı çekmez. Bir kaynak tek
+onay/gönderime atomik bağlanır; aynı isteğin tekrarı aynı kaydı döndürür.
+Alıcı yenilemek yeni kaynak ve yeni onay ister. Onay bir kez, tek bulk task ve
+alıcı başına mevcut queue satırıyla gönderilir. Yeni kaynak, ilk sürümde mevcut
+adres bilgisini kullanır; kişi izleme kapsamını genişletmez. Gönderim/onay
+readback'inde `audience.kind=form`, `source=forms`, form/source kimliği, ad,
+hazırlanma zamanı ve alıcı sayısı yer alır; eski audience alanları korunur.
+
+Hesap silme kaynak sahibini ve eşleşen alıcı/başlık bilgisini de temizler.
+Etkilenmiş snapshot geçersizleşir; bekleyen kaynakla gönderim/onay 409 verir.
+Harcanmamış süresi dolan kaynak mevcut expiry döngüsünde temizlenir. Kaynak
+verisi varken migration down veri silerek geri dönmez; uyumlu binary kullanılır.

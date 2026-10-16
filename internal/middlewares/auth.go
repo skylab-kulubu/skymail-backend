@@ -131,6 +131,7 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) er
 	}
 
 	c.Locals("user_id", info.ID)
+	c.Locals(acceptedTokenIdentityKey, acceptedIdentity(tokenStr))
 	c.Locals("roles", roles)
 	if name := info.displayName(); name != "" {
 		c.Locals("user_name", name)

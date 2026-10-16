@@ -258,6 +258,44 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
+            "handlers.FormMailSource": {
+                "properties": {
+                    "duplicate_count": {
+                        "type": "integer"
+                    },
+                    "expires_at": {
+                        "type": "string"
+                    },
+                    "form_id": {
+                        "type": "string"
+                    },
+                    "form_title": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "description": "The prepared source ID, distinct from form_id; consumed by one owner send or approval.",
+                        "type": "string"
+                    },
+                    "owner_sub": {
+                        "type": "string"
+                    },
+                    "prepared_at": {
+                        "description": "Snapshot preparation time, not the time the owner later sends or submits it.",
+                        "type": "string"
+                    },
+                    "recipient_count": {
+                        "description": "Fixed valid, deduplicated recipients; addresses are never returned here.",
+                        "type": "integer"
+                    },
+                    "response_count": {
+                        "type": "integer"
+                    },
+                    "skipped_count": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
             "handlers.MailApproval": {
                 "properties": {
                     "audience": {
@@ -852,12 +890,21 @@ const docTemplate = `{
             },
             "handlers.SendAudience": {
                 "properties": {
+                    "form_id": {
+                        "description": "The original Forms form; clients construct the link from a fixed trusted origin.",
+                        "type": "string"
+                    },
+                    "form_source_id": {
+                        "description": "Present only for kind=form: the persistent source ID, distinct from form_id.",
+                        "type": "string"
+                    },
                     "kind": {
-                        "description": "mailing_list, single, or — only on a Mail onayı request — people.",
+                        "description": "mailing_list, single, form, or — only on a Mail onayı request — people.",
                         "enum": [
                             "mailing_list",
                             "single",
-                            "people"
+                            "people",
+                            "form"
                         ],
                         "type": "string"
                     },
@@ -866,6 +913,13 @@ const docTemplate = `{
                     },
                     "name": {
                         "type": "string"
+                    },
+                    "prepared_at": {
+                        "type": "string"
+                    },
+                    "recipient_count": {
+                        "description": "The original snapshot count, fixed when Forms prepared the source.",
+                        "type": "integer"
                     },
                     "recipient_email": {
                         "type": "string"
@@ -876,7 +930,8 @@ const docTemplate = `{
                     "source": {
                         "enum": [
                             "internal",
-                            "keycloak"
+                            "keycloak",
+                            "forms"
                         ],
                         "type": "string"
                     }
@@ -1285,6 +1340,47 @@ const docTemplate = `{
                 ],
                 "type": "object"
             },
+            "requests.CreateFormMailSource": {
+                "properties": {
+                    "duplicate_count": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "form_id": {
+                        "type": "string"
+                    },
+                    "form_title": {
+                        "maxLength": 100,
+                        "type": "string"
+                    },
+                    "owner_sub": {
+                        "type": "string"
+                    },
+                    "recipients": {
+                        "items": {
+                            "$ref": "#/components/schemas/requests.MailApprovalRecipient"
+                        },
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "response_count": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "skipped_count": {
+                        "minimum": 0,
+                        "type": "integer"
+                    }
+                },
+                "required": [
+                    "form_id",
+                    "form_title",
+                    "owner_sub",
+                    "recipients"
+                ],
+                "type": "object"
+            },
             "requests.CreateMailTask": {
                 "properties": {
                     "body_variables": {
@@ -1476,6 +1572,28 @@ const docTemplate = `{
                 ],
                 "type": "object"
             },
+            "requests.SendFormSource": {
+                "properties": {
+                    "body_variables": {
+                        "additionalProperties": {},
+                        "type": "object"
+                    },
+                    "form_source_id": {
+                        "type": "string"
+                    },
+                    "template_id": {
+                        "type": "string"
+                    },
+                    "tracking": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "form_source_id",
+                    "template_id"
+                ],
+                "type": "object"
+            },
             "requests.SendSingleMail": {
                 "properties": {
                     "body_variables": {
@@ -1518,12 +1636,16 @@ const docTemplate = `{
                         "additionalProperties": {},
                         "type": "object"
                     },
+                    "form_source_id": {
+                        "description": "An immutable snapshot prepared by Forms for this caller. Never with a\nlist or browser-supplied recipients. Manual recipients retain max=100.",
+                        "type": "string"
+                    },
                     "mail_list_id": {
-                        "description": "An internal mailing list or a Keycloak group. Leave it out to send to people.",
+                        "description": "An internal mailing list or a Keycloak group. Choose exactly one of this,\nmanual recipients or form_source_id.",
                         "type": "string"
                     },
                     "recipients": {
-                        "description": "The people, 1..100, each address once (compared case-insensitively); each gets a send of their own. Leave it out to send to a mailing list.",
+                        "description": "The people, 1..100, each address once (compared case-insensitively); each gets a send of their own. Omit for a mailing list or Forms source.",
                         "items": {
                             "$ref": "#/components/schemas/requests.MailApprovalRecipient"
                         },
@@ -1659,6 +1781,142 @@ const docTemplate = `{
         "url": ""
     },
     "paths": {
+        "/form_mail_sources": {
+            "post": {
+                "description": "Only the configured Forms service account may create this source, after the existing bearer userinfo, SkyMail access, send-or-write permission and exact service identity checks. Forms derives owner_sub, form metadata and recipients from its authorized HTTP caller. No mail or approval is created. The source expires after 30 minutes unless its owner consumes it. The configured recipient count and existing HTTP body limits reject excess input without truncation. The response is metadata only, with no recipient addresses, and is not cacheable.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/requests.CreateFormMailSource",
+                                "summary": "source",
+                                "description": "Authorized Forms snapshot"
+                            }
+                        }
+                    },
+                    "description": "Authorized Forms snapshot",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.FormMailSource"
+                                }
+                            }
+                        },
+                        "description": "Created"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Invalid snapshot, duplicate address or configured count limit exceeded"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "The caller is not the configured Forms service or lacks current send-or-write permission"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "description": "Existing request body limit exceeded"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forms source preparation is not configured"
+                    }
+                },
+                "summary": "Prepare an immutable Forms audience",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
+        "/form_mail_sources/{id}": {
+            "get": {
+                "description": "Only the authenticated owner can read this metadata descriptor; approver or admin roles do not override ownership. Reading never consumes the source and never returns recipient addresses. The response is not cacheable. Historical send and approval audience metadata is read through those existing APIs instead.",
+                "parameters": [
+                    {
+                        "description": "Prepared source ID, distinct from the form ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.FormMailSource"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such source owned by the caller"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Source invalidated or already consumed"
+                    },
+                    "410": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Prepare the Forms audience again"
+                    }
+                },
+                "summary": "Read a prepared Forms audience",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
         "/mail_approvals": {
             "get": {
                 "description": "An approver (skymail:mails:approve) lists everyone's requests, or only their own with mine=true; anyone else lists only their own. Newest submission first; X-Total-Count counts the filtered requests. A request undecided past its deadline is listed, and filtered, as expired; listing writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.",
@@ -1763,7 +2021,7 @@ const docTemplate = `{
                 ]
             },
             "post": {
-                "description": "Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Submitting takes skymail:templates:read, and skymail:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing — before the body is checked, when templates:read is missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent.\n\nEvery approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.",
+                "description": "Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Submitting takes skymail:templates:read, and skymail:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing — before the body is checked, when templates:read is missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent.\n\nAlternatively, form_source_id selects the caller's immutable Forms snapshot instead of mail_list_id or manual recipients. Choose exactly one audience. This source does not need lists:read; its configured recipient limit is separate from the manual 100-person limit. Submission atomically binds the source to one pending request without expanding its recipients. An exact retry returns 200 with the same request, including after preparation TTL. Source ownership is checked before returning metadata; another owner's source is 404. An unconsumed expired source is 410; invalidated, differently consumed or busy source is 409. Source recipients and form metadata cannot be supplied by the browser. This source version requests no recipient tracking.\n\nEvery approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -1785,6 +2043,16 @@ const docTemplate = `{
                     "required": true
                 },
                 "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailApproval"
+                                }
+                            }
+                        },
+                        "description": "Same request for an exact Forms source retry"
+                    },
                     "201": {
                         "content": {
                             "application/json": {
@@ -1814,6 +2082,36 @@ const docTemplate = `{
                             }
                         },
                         "description": "server.forbidden: params.missing_roles names what the caller lacks of skymail:templates:read and, for a mailing list, skymail:lists:read"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such Forms source owned by the caller"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forms source invalidated, consumed differently or busy"
+                    },
+                    "410": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Prepare the Forms audience again"
                     },
                     "422": {
                         "content": {
@@ -2292,7 +2590,7 @@ const docTemplate = `{
         },
         "/mail_approvals/{id}/resubmit": {
             "post": {
-                "description": "The submitter fills a rejected request, or one whose returned edit they declined, in again — whole, as a submission is, its list or its people too — and it is pending again with a new seven-day deadline, pinned to the version its template publishes now. It is checked, and takes the roles, as a submission does. It stays the same request: a resubmitted event records what changed, and everything before it stays in the history. Every approver is mailed mail.approval-requested again.",
+                "description": "The submitter fills a rejected request, or one whose returned edit they declined, in again — whole, as a submission is, its list or its people too — and it is pending again with a new seven-day deadline, pinned to the version its template publishes now. It is checked, and takes the roles, as a submission does. It stays the same request: a resubmitted event records what changed, and everything before it stays in the history. Every approver is mailed mail.approval-requested again.\nA Forms-source request must keep the same form_source_id and immutable recipients; only content or template may change. Preparation TTL does not expire this existing request's source. A refreshed audience requires a new source and a new approval. Changing its source, or switching it to a list or manual recipients, is refused with 409.",
                 "parameters": [
                     {
                         "description": "Request ID",
@@ -2661,6 +2959,120 @@ const docTemplate = `{
                     }
                 },
                 "summary": "Create a new mail task",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
+        "/mail_tasks/form-source": {
+            "post": {
+                "description": "The source owner holding current skymail:mails:send or skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. Tracking is false for this address-only source version.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/requests.SendFormSource",
+                                "summary": "send",
+                                "description": "Prepared source and mail content"
+                            }
+                        }
+                    },
+                    "description": "Prepared source and mail content",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.CreatedMailTask"
+                                }
+                            }
+                        },
+                        "description": "Same task for an exact retry"
+                    },
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.CreatedMailTask"
+                                }
+                            }
+                        },
+                        "description": "New task"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Invalid request or caller-supplied recipient/metadata fields"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Current send-or-write permission required"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "No such source owned by the caller"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Source invalidated, consumed differently or busy"
+                    },
+                    "410": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Prepare the Forms audience again"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Template or variables unavailable or invalid"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Transactional sending unavailable"
+                    }
+                },
+                "summary": "Send to an immutable Forms audience",
                 "tags": [
                     "Mail"
                 ]

@@ -16,6 +16,7 @@ type Querier interface {
 	// The sends an approval queued, in order: a list's one send, or one per
 	// person, each at that person's position.
 	AddMailApprovalTasks(ctx context.Context, arg AddMailApprovalTasksParams) error
+	AddMailFormSourceRecipients(ctx context.Context, arg AddMailFormSourceRecipientsParams) error
 	AddOperatorRequiredVariable(ctx context.Context, arg AddOperatorRequiredVariableParams) (Template, error)
 	AddRecipientToMailingList(ctx context.Context, arg AddRecipientToMailingListParams) (AddRecipientToMailingListRow, error)
 	ArchiveMailingList(ctx context.Context, arg ArchiveMailingListParams) (MailingList, error)
@@ -61,6 +62,7 @@ type Querier interface {
 	// and an image from before this rule would count them all (#65 review, B2).
 	// Returns each send and its count.
 	ConfirmMaskFailures(ctx context.Context, ids []uuid.UUID) ([]ConfirmMaskFailuresRow, error)
+	ConsumeMailFormSource(ctx context.Context, arg ConsumeMailFormSourceParams) (MailFormSource, error)
 	CountAllMailingListsIncludingArchived(ctx context.Context) (int64, error)
 	CountAllTemplatesIncludingArchived(ctx context.Context) (int64, error)
 	CountArchivedMailingLists(ctx context.Context) (int64, error)
@@ -102,6 +104,9 @@ type Querier interface {
 	// same transaction: it goes to a list or to people, which is checked when the
 	// transaction commits.
 	CreateMailApproval(ctx context.Context, arg CreateMailApprovalParams) (MailApproval, error)
+	// Forms snapshots are prepared by the trusted service, owned by a person,
+	// and bound exactly once inside that person's approval or send transaction.
+	CreateMailFormSource(ctx context.Context, arg CreateMailFormSourceParams) (MailFormSource, error)
 	// A send's rows. Every row queued here is an e-mail: the channel is left to
 	// its default ('email'); a channel that queues its own rows names it.
 	// recipient_sub is the recipient's Keycloak subject when the send knew it.
@@ -124,6 +129,7 @@ type Querier interface {
 	// base_seconds doubled for each failure it has had (a day at most). The first
 	// failure since the send was last masked starts its deadline.
 	DeferMaskFailure(ctx context.Context, arg DeferMaskFailureParams) error
+	DeleteExpiredMailFormSources(ctx context.Context, arg DeleteExpiredMailFormSourcesParams) (int64, error)
 	// Deletes up to batch_size of the oldest records of who opened a masked mail
 	// that are older than retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
 	DeleteOldSentContentViews(ctx context.Context, arg DeleteOldSentContentViewsParams) (int64, error)
@@ -170,6 +176,7 @@ type Querier interface {
 	GetMailTaskTrackingExclusion(ctx context.Context, taskID uuid.UUID) (GetMailTaskTrackingExclusionRow, error)
 	GetMailingListById(ctx context.Context, id uuid.UUID) (MailingList, error)
 	GetMailingListByIdIncludingArchived(ctx context.Context, id uuid.UUID) (MailingList, error)
+	GetOwnedMailFormSource(ctx context.Context, arg GetOwnedMailFormSourceParams) (MailFormSource, error)
 	GetRecipientByEmail(ctx context.Context, email string) (Recipient, error)
 	GetRecipients(ctx context.Context, arg GetRecipientsParams) ([]Recipient, error)
 	GetRecipientsByMailingListId(ctx context.Context, arg GetRecipientsByMailingListIdParams) ([]Recipient, error)
@@ -203,6 +210,7 @@ type Querier interface {
 	// state it is in as of as_of: one undecided past its deadline is expired,
 	// whether or not the sweep has written it yet.
 	ListMailApprovals(ctx context.Context, arg ListMailApprovalsParams) ([]ListMailApprovalsRow, error)
+	ListMailFormSourceRecipients(ctx context.Context, sourceID uuid.UUID) ([]MailFormSourceRecipient, error)
 	// The links a tracked row's mail gets its click addresses for when it goes
 	// out: the send's links whose address is still kept.
 	ListMailTaskLinkTargets(ctx context.Context, taskID uuid.UUID) ([]ListMailTaskLinkTargetsRow, error)
@@ -249,6 +257,8 @@ type Querier interface {
 	// lock is held while the send is queued, and a wait would hold a connection
 	// that send needs.
 	LockMailApproval(ctx context.Context, id uuid.UUID) (MailApproval, error)
+	LockMailFormSource(ctx context.Context, id uuid.UUID) (MailFormSource, error)
+	LockOwnedMailFormSource(ctx context.Context, arg LockOwnedMailFormSourceParams) (MailFormSource, error)
 	// Serialises the bulk lane's take across processes: under it a process reads
 	// the send windows, takes as many bulk rows as they leave room for and counts
 	// them, and the next process reads its count. Held to the end of the
