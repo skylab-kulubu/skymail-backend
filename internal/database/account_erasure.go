@@ -152,6 +152,15 @@ func (s *Store) EraseAccount(ctx context.Context, erasure AccountErasure) (*Acco
 		if err != nil {
 			return err
 		}
+		// Event writers lock queue -> link (the click's FK). Take every queue
+		// row erasure will touch before any link, including another person's
+		// mail whose rendered body names this person.
+		if err := e.lockQueueRows(ctx); err != nil {
+			return err
+		}
+		if err := e.run(ctx, []erasureStep{closeTrackingTokensStep}); err != nil {
+			return err
+		}
 		// Before the person's queued rows go: a send to them alone is told by
 		// its rows.
 		if err := e.clearTrackedLinks(ctx); err != nil {
@@ -301,6 +310,32 @@ func (e *eraser) run(ctx context.Context, steps []erasureStep) error {
 	return nil
 }
 
+// lockQueueRows follows the same queue-before-link order as click writers.
+// The second condition covers bodies cleared below: those rows can belong to
+// another recipient whose click also needs a link being erased. Sorting the
+// overlapping queue sets gives concurrent erasures the same lock order.
+func (e *eraser) lockQueueRows(ctx context.Context) error {
+	_, err := e.tx.Exec(ctx, `SELECT q.id FROM mail_queue q
+ WHERE `+toPerson+` OR (q.status IN ('sent', 'failed') AND `+mailNames+`)
+ ORDER BY q.id FOR UPDATE`, e.args)
+	if err != nil {
+		return fmt.Errorf("lock queue before tracked links: %w", err)
+	}
+	return nil
+}
+
+var closeTrackingTokensStep = erasureStep{
+	// Close tokens before deleting events. This takes the queue-row
+	// lock shared with public writers, so an in-flight event commits
+	// before the following DELETE takes its fresh snapshot.
+	name: "tracking tokens of mail to the person",
+	sql: `UPDATE mail_queue q
+		      SET tracking_disabled_at = now()
+		      WHERE q.tracking_token IS NOT NULL
+		        AND q.tracking_disabled_at IS NULL
+		        AND ` + toPerson,
+}
+
 // keepNamesSteps change nothing the names are read from, so a call that
 // stops for mail in flight leaves the next one able to find what it waited
 // for.
@@ -313,16 +348,6 @@ var keepNamesSteps = []erasureStep{
 		sql: `DELETE FROM mail_tracking_events e
 		      USING mail_queue q
 		      WHERE e.queue_id = q.id
-		        AND ` + toPerson,
-	},
-	{
-		// And their tokens are closed: an opening or a click of that mail
-		// records nothing from now on; its links still redirect.
-		name: "tracking tokens of mail to the person",
-		sql: `UPDATE mail_queue q
-		      SET tracking_disabled_at = now()
-		      WHERE q.tracking_token IS NOT NULL
-		        AND q.tracking_disabled_at IS NULL
 		        AND ` + toPerson,
 	},
 

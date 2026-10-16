@@ -228,6 +228,7 @@ func main() {
 		}))
 	*/
 
+	handlers.NewTrackingPublicHandler(db, trackingConfig).Register(app)
 	registerPublicRoutes(app, accountAccessGate, readiness)
 	registerInternalRoutes(app, erasureHandler)
 
@@ -303,20 +304,10 @@ func main() {
 	}
 }
 
-// trackingConfigFromEnv is open and click tracking as the environment sets it
-// (tracking.ConfigFromEnv), refusing on: this build does not serve the /t/
-// routes the pixel and the click addresses point at (hub ticket iletisim-
-// servisi 14b), so a tracked mail's links would lead nowhere. Ticket 14b
-// removes the refusal together with adding the routes.
+// trackingConfigFromEnv validates tracking before any service starts. Routes
+// now exist, but production enablement still waits for the rollout gates.
 func trackingConfigFromEnv(getenv func(string) string) (tracking.Config, error) {
-	cfg, err := tracking.ConfigFromEnv(getenv)
-	if err != nil {
-		return tracking.Config{}, err
-	}
-	if cfg.On() {
-		return tracking.Config{}, errors.New("SKYMAIL_TRACKING=on needs the /t/ routes (ticket 14b); this build does not serve them: leave it off")
-	}
-	return cfg, nil
+	return tracking.ConfigFromEnv(getenv)
 }
 
 // erasureTokenConfig is how the erase route checks core's token: the exact
@@ -360,6 +351,8 @@ func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, m
 	// Before /:id, which would otherwise take "summary" for a task id.
 	tasks.Get("/summary", auth.RequireAnyPermission("skymail:mails:read"), mail.GetSummary)
 	tasks.Get("/:id", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTask)
+	tasks.Get("/:id/tracking", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTracking)
+	tasks.Get("/:id/tracking/recipients", mail.GetTrackingRecipients)
 	tasks.Get("/:id/queue", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTaskQueueItems)
 	// Who may see the content itself the handler decides from the send and
 	// the caller's roles (handlers.SystemMailsReadRole).

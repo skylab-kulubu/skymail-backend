@@ -27,6 +27,8 @@ type MailHandler interface {
 	GetTaskQueueItems(c fiber.Ctx) error
 	GetQueueItemContent(c fiber.Ctx) error
 	GetSummary(c fiber.Ctx) error
+	GetTracking(c fiber.Ctx) error
+	GetTrackingRecipients(c fiber.Ctx) error
 }
 
 type mailHandlerImpl struct {

@@ -1,0 +1,95 @@
+openapi: 3.1.0
+info:
+  title: SkyMail public tracking
+  version: 1.0.0
+  description: >-
+    Public routes outside /v1. Targets come only from mail_task_links.
+    No IP address is read. Errors are handled locally without raw paths,
+    tokens, User-Agent or Referer in logs. Feature enablement requires the
+    rollout gates documented in README; the default remains off.
+servers:
+  - url: https://api.yildizskylab.com/api/skymail
+security: []
+paths:
+  /t/o/{rt}:
+    parameters:
+      - name: rt
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Recipient token. Invalid or disabled tokens get the identical response.
+    get:
+      operationId: trackingOpen
+      description: >-
+        Always returns the same transparent 43-byte GIF, including on database
+        failure. Recording is skipped when off, disabled, past 90 days or
+        throttled. Sends no cookies or CORS headers. Cache-Control is
+        no-store, no-cache, must-revalidate, private, max-age=0; Pragma no-cache;
+        Expires 0; Referrer-Policy no-referrer; X-Robots-Tag noindex.
+      responses:
+        '200':
+          description: Transparent pixel, independent of token state.
+          content:
+            image/gif:
+              schema:
+                type: string
+                format: binary
+    head:
+      operationId: trackingOpenProbe
+      description: Identical headers to GET, no response body. Recorded probes are classified scanner_likely.
+      responses:
+        '200':
+          description: Transparent pixel headers, independent of token state.
+  /t/c/{rt}/{lt}:
+    parameters:
+      - name: rt
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Invalid, disabled or mismatched recipient tokens still redirect without recording.
+      - name: lt
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Registered link token; no arbitrary target parameter is accepted.
+    get:
+      operationId: trackingClick
+      description: >-
+        No-store and no-referrer on every response. Only redirects to the
+        stored HTTP(S) target, unchanged, even while recording is off.
+        Links expire one year after registration; cleared targets never redirect.
+      responses:
+        '302':
+          description: Registered target; recording may be skipped.
+          headers:
+            Location:
+              description: Exact registered target URL.
+              schema:
+                type: string
+                format: uri
+        '404':
+          description: Invalid or unknown link.
+        '410':
+          description: Target erased (kaldırıldı) or one-year lifetime expired (süresi doldu).
+        '503':
+          description: Resolution unavailable; no redirect.
+    head:
+      operationId: trackingClickProbe
+      description: Same resolution and headers as GET; never writes any event.
+      responses:
+        '302':
+          description: Registered target.
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+        '404':
+          description: Invalid or unknown link.
+        '410':
+          description: Erased or expired target.
+        '503':
+          description: Resolution unavailable; no redirect.

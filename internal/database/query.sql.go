@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const addMailApprovalRecipients = `-- name: AddMailApprovalRecipients :exec
@@ -2053,6 +2054,20 @@ func (q *Queries) GetRecipientsByMailingListId(ctx context.Context, arg GetRecip
 	return items, nil
 }
 
+const getRetainedTrackingReport = `-- name: GetRetainedTrackingReport :one
+SELECT jsonb_build_object('tracked_recipients',tracked_recipients,'untracked_by_reason',untracked_by_reason,
+ 'unique_opens',unique_opens,'unique_likely_human_opens',unique_likely_human_opens,
+ 'unique_clickers',unique_clickers,'clicks_by_link',clicks_by_link,'rolled_up_at',rolled_up_at)::jsonb AS report
+FROM mail_task_tracking_totals WHERE task_id = $1
+`
+
+func (q *Queries) GetRetainedTrackingReport(ctx context.Context, taskID uuid.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getRetainedTrackingReport, taskID)
+	var report []byte
+	err := row.Scan(&report)
+	return report, err
+}
+
 const getTemplateById = `-- name: GetTemplateById :one
 SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
 FROM templates
@@ -2278,6 +2293,57 @@ func (q *Queries) GetTemplateVersionSummary(ctx context.Context, arg GetTemplate
 	return i, err
 }
 
+const getTrackingReport = `-- name: GetTrackingReport :one
+WITH people AS (
+ SELECT q.id, q.tracking_token IS NOT NULL AS tracked, COALESCE(q.tracking_skip_reason,'not_requested') AS reason
+ FROM mail_queue q WHERE q.task_id = $1
+), events AS (
+ SELECT e.id, e.queue_id, e.task_id, e.kind, e.link_id, e.occurred_at, e.source_class, e.automated_likely, e.classifier_version FROM mail_tracking_events e JOIN mail_queue q ON q.id = e.queue_id
+ WHERE e.task_id = $1 AND q.sent_at > now() - interval '90 days'
+), reasons AS (
+ SELECT reason, count(*) AS n FROM people WHERE NOT tracked GROUP BY reason
+), links AS (
+ SELECT l.id, l.position, count(e.id)::int AS clicks, count(DISTINCT e.queue_id)::int AS unique_clickers
+ FROM mail_task_links l LEFT JOIN events e ON e.link_id = l.id
+ WHERE l.task_id = $1 GROUP BY l.id ORDER BY l.position
+), buckets AS (
+ SELECT CASE WHEN occurred_at < $2::timestamptz + interval '72 hours'
+             THEN date_trunc('hour',occurred_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+             ELSE date_trunc('day',occurred_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' END AS at,
+        CASE WHEN occurred_at < $2::timestamptz + interval '72 hours' THEN 'hour' ELSE 'day' END AS interval,
+        count(*) FILTER (WHERE kind='open' AND NOT automated_likely)::int AS likely_human_opens,
+        count(*) FILTER (WHERE kind='open' AND automated_likely)::int AS automated_opens,
+        count(*) FILTER (WHERE kind='click' AND NOT automated_likely)::int AS likely_human_clicks,
+        count(*) FILTER (WHERE kind='click' AND automated_likely)::int AS automated_clicks
+ FROM events GROUP BY 1,2 ORDER BY 1,2
+)
+SELECT jsonb_build_object(
+ 'tracked_recipients',(SELECT count(*) FROM people WHERE tracked),
+ 'untracked_by_reason',COALESCE((SELECT jsonb_object_agg(reason,n) FROM reasons),'{}'::jsonb),
+ 'unique_opens',(SELECT count(DISTINCT queue_id) FROM events WHERE kind='open'),
+ 'unique_likely_human_opens',(SELECT count(DISTINCT queue_id) FROM events WHERE NOT automated_likely),
+ 'automated_only_recipients',(SELECT count(*) FROM (SELECT queue_id FROM events GROUP BY queue_id HAVING bool_and(automated_likely)) a),
+ 'unique_clickers',(SELECT count(DISTINCT queue_id) FROM events WHERE kind='click'),
+ 'clicks_by_link',COALESCE((SELECT jsonb_agg(to_jsonb(links)) FROM links),'[]'::jsonb),
+ 'series',COALESCE((SELECT jsonb_agg(to_jsonb(buckets)) FROM buckets),'[]'::jsonb)
+)::jsonb AS report
+`
+
+type GetTrackingReportParams struct {
+	TaskID uuid.UUID `json:"task_id"`
+	SentAt time.Time `json:"sent_at"`
+}
+
+// Aggregates remain inside PostgreSQL: a report never loads raw events or
+// people into the HTTP process. Link URLs are omitted: one-recipient sends
+// can have personal URLs and the summary only requires mails:read.
+func (q *Queries) GetTrackingReport(ctx context.Context, arg GetTrackingReportParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getTrackingReport, arg.TaskID, arg.SentAt)
+	var report []byte
+	err := row.Scan(&report)
+	return report, err
+}
+
 const insertMailTask = `-- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send,
                         tracking_requested)
@@ -2324,6 +2390,57 @@ func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) 
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const insertTrackingEvent = `-- name: InsertTrackingEvent :execrows
+INSERT INTO mail_tracking_events (queue_id, task_id, kind, link_id, occurred_at, source_class, automated_likely, classifier_version)
+SELECT q.id, q.task_id, $1::text, $2::bigint, $3,
+       $4, $5, $6
+FROM mail_queue q
+WHERE q.id = $7 AND q.tracking_disabled_at IS NULL
+  AND q.recipient_sub IS NOT NULL AND q.status = 'sent'
+  AND q.sent_at > $3::timestamptz - interval '90 days'
+  AND q.sent_at <= $3
+  AND NOT EXISTS (SELECT 1 FROM mail_tasks t WHERE t.id = q.task_id AND t.tracking_closed_at IS NOT NULL)
+  AND (($1::text = 'open' AND $2::bigint IS NULL
+        AND (SELECT count(*) FROM mail_tracking_events e WHERE e.queue_id = q.id AND e.kind = 'open') < 20
+        AND NOT EXISTS (SELECT 1 FROM mail_tracking_events e WHERE e.queue_id = q.id AND e.kind = 'open'
+                        AND e.occurred_at > $3::timestamptz - interval '5 minutes'))
+    OR ($1::text = 'click'
+        AND EXISTS (SELECT 1 FROM mail_task_links l WHERE l.id = $2::bigint AND l.task_id = q.task_id
+                    AND l.url IS NOT NULL AND l.created_at > $3::timestamptz - interval '1 year')
+        AND (SELECT count(*) FROM mail_tracking_events e WHERE e.queue_id = q.id AND e.kind = 'click') < 50
+        AND NOT EXISTS (SELECT 1 FROM mail_tracking_events e WHERE e.queue_id = q.id AND e.kind = 'click'
+                        AND e.link_id = $2::bigint
+                        AND e.occurred_at > $3::timestamptz - interval '1 minute')))
+`
+
+type InsertTrackingEventParams struct {
+	Kind              string      `json:"kind"`
+	LinkID            pgtype.Int8 `json:"link_id"`
+	At                time.Time   `json:"at"`
+	SourceClass       string      `json:"source_class"`
+	AutomatedLikely   bool        `json:"automated_likely"`
+	ClassifierVersion int16       `json:"classifier_version"`
+	QueueID           uuid.UUID   `json:"queue_id"`
+}
+
+// Limits live in SQL as well as the process-wide recording budget. There
+// are at most 20 opens and 50 clicks per recipient across every replica.
+func (q *Queries) InsertTrackingEvent(ctx context.Context, arg InsertTrackingEventParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertTrackingEvent,
+		arg.Kind,
+		arg.LinkID,
+		arg.At,
+		arg.SourceClass,
+		arg.AutomatedLikely,
+		arg.ClassifierVersion,
+		arg.QueueID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const isJSXSource = `-- name: IsJSXSource :one
@@ -3110,6 +3227,67 @@ func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVers
 	return items, nil
 }
 
+const listTrackingRecipients = `-- name: ListTrackingRecipients :one
+WITH clicked AS (
+ SELECT e.queue_id,e.link_id,count(*)::int AS clicks,max(e.occurred_at) AS last_clicked_at
+ FROM mail_tracking_events e JOIN mail_queue q ON q.id=e.queue_id
+ WHERE e.task_id=$1 AND e.kind='click' AND q.sent_at > now() - interval '90 days'
+ GROUP BY e.queue_id,e.link_id
+), people AS (
+ SELECT q.id,q.recipient_sub,q.recipient_email,q.recipient_full_name,
+        q.tracking_token IS NOT NULL AS tracked,q.tracking_skip_reason,
+        min(e.occurred_at) FILTER (WHERE e.kind='open') AS first_open_at,
+        min(e.occurred_at) FILTER (WHERE NOT e.automated_likely AND e.kind='open') AS human_open_at,
+        min(e.occurred_at) FILTER (WHERE NOT e.automated_likely AND e.kind='click') AS human_click_at,
+        count(e.id) FILTER (WHERE e.kind='open')::int AS open_count,
+        max(e.occurred_at) FILTER (WHERE e.kind='click') AS last_clicked_at,
+        count(e.id)::int AS event_count,
+        COALESCE(bool_and(e.automated_likely),false)::boolean AS automated_only,
+        COALESCE(jsonb_agg(DISTINCT e.source_class) FILTER (WHERE e.id IS NOT NULL),'[]'::jsonb) AS source_classes,
+        COALESCE((SELECT jsonb_agg(jsonb_build_object('link_id',c.link_id,'clicks',c.clicks,'last_clicked_at',c.last_clicked_at) ORDER BY c.link_id)
+                  FROM clicked c WHERE c.queue_id=q.id),'[]'::jsonb) AS clicked_links
+ FROM mail_queue q LEFT JOIN mail_tracking_events e ON e.queue_id=q.id AND q.sent_at > now() - interval '90 days'
+ WHERE q.task_id=$1
+ GROUP BY q.id
+), filtered AS (
+ SELECT id, recipient_sub, recipient_email, recipient_full_name, tracked, tracking_skip_reason, first_open_at, human_open_at, human_click_at, open_count, last_clicked_at, event_count, automated_only, source_classes, clicked_links FROM people WHERE $2::text='' OR
+  ($2::text='opened' AND (first_open_at IS NOT NULL OR human_click_at IS NOT NULL)) OR
+  ($2::text='not_opened' AND first_open_at IS NULL AND human_click_at IS NULL) OR
+  ($2::text='clicked' AND last_clicked_at IS NOT NULL) OR
+  ($2::text='automated_only' AND automated_only AND event_count>0)
+), page AS (
+ SELECT id,recipient_sub,recipient_email,recipient_full_name,tracked,tracking_skip_reason,
+ first_open_at,COALESCE(human_open_at,human_click_at) AS first_likely_human_open_at,
+ CASE WHEN human_open_at IS NULL AND human_click_at IS NOT NULL THEN 'click_inferred'
+      WHEN human_open_at IS NOT NULL THEN 'open' ELSE NULL END AS likely_human_open_source,
+ open_count,last_clicked_at,automated_only,source_classes,clicked_links
+ FROM filtered ORDER BY recipient_full_name,id LIMIT $4 OFFSET $3
+)
+SELECT jsonb_build_object('total',(SELECT count(*) FROM filtered),'items',COALESCE((SELECT jsonb_agg(to_jsonb(page)) FROM page),'[]'::jsonb))::jsonb AS recipients
+`
+
+type ListTrackingRecipientsParams struct {
+	TaskID     uuid.UUID `json:"task_id"`
+	Filter     string    `json:"filter"`
+	PageOffset int32     `json:"page_offset"`
+	PageLimit  int32     `json:"page_limit"`
+}
+
+// One aggregate per recipient, then filtering and pagination. Events older
+// than their recipient's 90-day window never reappear while retention is
+// disabled or catching up. No tracking token or link target is selected.
+func (q *Queries) ListTrackingRecipients(ctx context.Context, arg ListTrackingRecipientsParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, listTrackingRecipients,
+		arg.TaskID,
+		arg.Filter,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	var recipients []byte
+	err := row.Scan(&recipients)
+	return recipients, err
+}
+
 const lockDueMailApproval = `-- name: LockDueMailApproval :one
 SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested
 FROM mail_approvals
@@ -3275,6 +3453,38 @@ func (q *Queries) LockTemplateByKey(ctx context.Context, key *string) (Template,
 	return i, err
 }
 
+const lockTrackingRecipient = `-- name: LockTrackingRecipient :one
+SELECT q.id, q.task_id, q.sent_at, now()::timestamptz AS at
+FROM mail_queue q JOIN mail_tasks t ON t.id = q.task_id
+WHERE q.tracking_token = $1 AND q.tracking_disabled_at IS NULL
+  AND q.recipient_sub IS NOT NULL AND q.status = 'sent'
+  AND q.sent_at IS NOT NULL AND q.sent_at > now() - interval '90 days'
+  AND q.sent_at <= now() AND t.tracking_closed_at IS NULL
+FOR UPDATE OF q
+`
+
+type LockTrackingRecipientRow struct {
+	ID     uuid.UUID  `json:"id"`
+	TaskID uuid.UUID  `json:"task_id"`
+	SentAt *time.Time `json:"sent_at"`
+	At     time.Time  `json:"at"`
+}
+
+// All writers lock the recipient before observing its event counts. Separate
+// statements after the lock take a fresh READ COMMITTED snapshot, so two
+// replicas cannot both pass the per-recipient caps on a stale snapshot.
+func (q *Queries) LockTrackingRecipient(ctx context.Context, trackingToken []byte) (LockTrackingRecipientRow, error) {
+	row := q.db.QueryRow(ctx, lockTrackingRecipient, trackingToken)
+	var i LockTrackingRecipientRow
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.SentAt,
+		&i.At,
+	)
+	return i, err
+}
+
 const markSendMasked = `-- name: MarkSendMasked :exec
 UPDATE mail_tasks
 SET body_variables             = $1,
@@ -3322,6 +3532,31 @@ WHERE id = $1
 // afresh, its deadline too (#65 review, K2).
 func (q *Queries) MarkSendNotDueForMasking(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, markSendNotDueForMasking, id)
+	return err
+}
+
+const markTrackingScannerBurst = `-- name: MarkTrackingScannerBurst :exec
+UPDATE mail_tracking_events e SET source_class = 'scanner_likely', automated_likely = true
+WHERE e.queue_id = $1 AND e.kind = 'click'
+  AND e.classifier_version = $2
+  AND e.occurred_at BETWEEN $3::timestamptz - interval '5 seconds' AND $3
+  AND (SELECT count(DISTINCT b.link_id) FROM mail_tracking_events b
+       WHERE b.queue_id = e.queue_id AND b.kind = 'click'
+         AND b.classifier_version = $2
+         AND b.occurred_at BETWEEN $3::timestamptz - interval '5 seconds' AND $3) >= 3
+`
+
+type MarkTrackingScannerBurstParams struct {
+	QueueID           uuid.UUID `json:"queue_id"`
+	ClassifierVersion int16     `json:"classifier_version"`
+	At                time.Time `json:"at"`
+}
+
+// The third distinct link in five seconds identifies the whole burst, not
+// just its last click. Only this classifier version's contemporaneous events
+// change; newer rules never reinterpret historical events.
+func (q *Queries) MarkTrackingScannerBurst(ctx context.Context, arg MarkTrackingScannerBurstParams) error {
+	_, err := q.db.Exec(ctx, markTrackingScannerBurst, arg.QueueID, arg.ClassifierVersion, arg.At)
 	return err
 }
 
@@ -4029,6 +4264,34 @@ func (q *Queries) ResetDeadJobs(ctx context.Context, leaseSeconds int) (int64, e
 	return result.RowsAffected(), nil
 }
 
+const resolveTrackingLink = `-- name: ResolveTrackingLink :one
+SELECT id, task_id, url, url_cleared_reason, created_at
+FROM mail_task_links WHERE link_token = $1
+`
+
+type ResolveTrackingLinkRow struct {
+	ID               int64     `json:"id"`
+	TaskID           uuid.UUID `json:"task_id"`
+	Url              *string   `json:"url"`
+	UrlClearedReason *string   `json:"url_cleared_reason"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+// Public click resolution is independent of the recipient and the flag: old
+// mail keeps working after withdrawal. No request data becomes a target.
+func (q *Queries) ResolveTrackingLink(ctx context.Context, linkToken []byte) (ResolveTrackingLinkRow, error) {
+	row := q.db.QueryRow(ctx, resolveTrackingLink, linkToken)
+	var i ResolveTrackingLinkRow
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.Url,
+		&i.UrlClearedReason,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const restoreMailingList = `-- name: RestoreMailingList :one
 UPDATE mailing_lists
 SET archived_at = NULL,
@@ -4576,6 +4839,47 @@ func (q *Queries) TakeSendToMask(ctx context.Context, tried []uuid.UUID) ([]Take
 		return nil, err
 	}
 	return items, nil
+}
+
+const trackingHasOpen = `-- name: TrackingHasOpen :one
+SELECT EXISTS(SELECT 1 FROM mail_tracking_events WHERE queue_id = $1 AND kind = 'open')::boolean
+`
+
+func (q *Queries) TrackingHasOpen(ctx context.Context, queueID uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, trackingHasOpen, queueID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const trackingTaskAccess = `-- name: TrackingTaskAccess :one
+SELECT t.id, t.sent_by, t.tracking_requested, t.tracking_closed_at,
+       COALESCE((SELECT max(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS sent_at,
+       COALESCE((SELECT min(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS started_at
+FROM mail_tasks t WHERE t.id = $1
+`
+
+type TrackingTaskAccessRow struct {
+	ID                uuid.UUID  `json:"id"`
+	SentBy            string     `json:"sent_by"`
+	TrackingRequested bool       `json:"tracking_requested"`
+	TrackingClosedAt  *time.Time `json:"tracking_closed_at"`
+	SentAt            time.Time  `json:"sent_at"`
+	StartedAt         time.Time  `json:"started_at"`
+}
+
+func (q *Queries) TrackingTaskAccess(ctx context.Context, id uuid.UUID) (TrackingTaskAccessRow, error) {
+	row := q.db.QueryRow(ctx, trackingTaskAccess, id)
+	var i TrackingTaskAccessRow
+	err := row.Scan(
+		&i.ID,
+		&i.SentBy,
+		&i.TrackingRequested,
+		&i.TrackingClosedAt,
+		&i.SentAt,
+		&i.StartedAt,
+	)
+	return i, err
 }
 
 const updateMailingList = `-- name: UpdateMailingList :one
