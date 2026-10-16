@@ -1590,11 +1590,9 @@ paths:
         content:
           application/json:
             schema:
-              oneOf:
-              - type: object
-              - $ref: '#/components/schemas/requests.CreateFormMailSource'
-                description: Authorized Forms snapshot
-                summary: source
+              $ref: '#/components/schemas/requests.CreateFormMailSource'
+              description: Authorized Forms snapshot
+              summary: source
         description: Authorized Forms snapshot
         required: true
       responses:
@@ -2654,11 +2652,9 @@ paths:
         content:
           application/json:
             schema:
-              oneOf:
-              - type: object
-              - $ref: '#/components/schemas/requests.SendFormSource'
-                description: Prepared source and mail content
-                summary: send
+              $ref: '#/components/schemas/requests.SendFormSource'
+              description: Prepared source and mail content
+              summary: send
         description: Prepared source and mail content
         required: true
       responses:

@@ -1981,16 +1981,9 @@ const docTemplate = `{
                     "content": {
                         "application/json": {
                             "schema": {
-                                "oneOf": [
-                                    {
-                                        "type": "object"
-                                    },
-                                    {
-                                        "$ref": "#/components/schemas/requests.CreateFormMailSource",
-                                        "summary": "source",
-                                        "description": "Authorized Forms snapshot"
-                                    }
-                                ]
+                                "$ref": "#/components/schemas/requests.CreateFormMailSource",
+                                "summary": "source",
+                                "description": "Authorized Forms snapshot"
                             }
                         }
                     },
@@ -3171,16 +3164,9 @@ const docTemplate = `{
                     "content": {
                         "application/json": {
                             "schema": {
-                                "oneOf": [
-                                    {
-                                        "type": "object"
-                                    },
-                                    {
-                                        "$ref": "#/components/schemas/requests.SendFormSource",
-                                        "summary": "send",
-                                        "description": "Prepared source and mail content"
-                                    }
-                                ]
+                                "$ref": "#/components/schemas/requests.SendFormSource",
+                                "summary": "send",
+                                "description": "Prepared source and mail content"
                             }
                         }
                     },
