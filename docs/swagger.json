@@ -1216,6 +1216,199 @@
                 },
                 "type": "object"
             },
+            "handlers.TrackingAggregate": {
+                "properties": {
+                    "automated_only_recipients": {
+                        "type": "integer"
+                    },
+                    "clicks_by_link": {
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.TrackingLinkCounts"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "rolled_up_at": {
+                        "type": "string"
+                    },
+                    "series": {
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.TrackingPoint"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "tracked_recipients": {
+                        "type": "integer"
+                    },
+                    "unique_clickers": {
+                        "type": "integer"
+                    },
+                    "unique_likely_human_opens": {
+                        "type": "integer"
+                    },
+                    "unique_opens": {
+                        "type": "integer"
+                    },
+                    "untracked_by_reason": {
+                        "additionalProperties": {
+                            "type": "integer"
+                        },
+                        "type": "object"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.TrackingLinkCounts": {
+                "properties": {
+                    "clicks": {
+                        "type": "integer"
+                    },
+                    "id": {
+                        "type": "integer"
+                    },
+                    "position": {
+                        "type": "integer"
+                    },
+                    "unique_clickers": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.TrackingPoint": {
+                "properties": {
+                    "at": {
+                        "type": "string"
+                    },
+                    "automated_clicks": {
+                        "type": "integer"
+                    },
+                    "automated_opens": {
+                        "type": "integer"
+                    },
+                    "interval": {
+                        "type": "string"
+                    },
+                    "likely_human_clicks": {
+                        "type": "integer"
+                    },
+                    "likely_human_opens": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.TrackingRecipient": {
+                "properties": {
+                    "automated_only": {
+                        "type": "boolean"
+                    },
+                    "clicked_links": {
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.TrackingRecipientLink"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "first_likely_human_open_at": {
+                        "type": "string"
+                    },
+                    "first_open_at": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "last_clicked_at": {
+                        "type": "string"
+                    },
+                    "likely_human_open_source": {
+                        "type": "string"
+                    },
+                    "open_count": {
+                        "type": "integer"
+                    },
+                    "recipient_email": {
+                        "type": "string"
+                    },
+                    "recipient_full_name": {
+                        "type": "string"
+                    },
+                    "recipient_sub": {
+                        "type": "string"
+                    },
+                    "source_classes": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "tracked": {
+                        "type": "boolean"
+                    },
+                    "tracking_skip_reason": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.TrackingRecipientLink": {
+                "properties": {
+                    "clicks": {
+                        "type": "integer"
+                    },
+                    "last_clicked_at": {
+                        "type": "string"
+                    },
+                    "link_id": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.TrackingRecipientPage": {
+                "properties": {
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.TrackingRecipient"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "page": {
+                        "type": "integer"
+                    },
+                    "page_size": {
+                        "type": "integer"
+                    },
+                    "total": {
+                        "type": "integer"
+                    },
+                    "tracking_available": {
+                        "type": "boolean"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.TrackingSummary": {
+                "properties": {
+                    "report": {
+                        "$ref": "#/components/schemas/handlers.TrackingAggregate"
+                    },
+                    "retained": {
+                        "type": "boolean"
+                    },
+                    "tracking_available": {
+                        "type": "boolean"
+                    },
+                    "tracking_requested": {
+                        "type": "boolean"
+                    }
+                },
+                "type": "object"
+            },
             "requests.AddRecipient": {
                 "properties": {
                     "email": {
@@ -3042,6 +3235,144 @@
                     }
                 },
                 "summary": "Get one recipient's mail as kept",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
+        "/mail_tasks/{id}/tracking": {
+            "get": {
+                "description": "Requires skymail:mails:read. No identities, link tokens or target URLs. After 90 days only retained totals for at least 10 tracked recipients, or null. tracking_available follows the current flag.",
+                "parameters": [
+                    {
+                        "description": "Mail task ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.TrackingSummary"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    }
+                },
+                "summary": "Tracking counts, per-link counts and hour/day series",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
+        "/mail_tasks/{id}/tracking/recipients": {
+            "get": {
+                "description": "Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub). First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 after 90 days, even if retention has not run. Does not return tracking tokens or target URLs.",
+                "parameters": [
+                    {
+                        "description": "Mail task ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "opened, not_opened, clicked, automated_only",
+                        "in": "query",
+                        "name": "filter",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Page (1–1000000)",
+                        "in": "query",
+                        "name": "page",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "Rows per page (1–100, default 25)",
+                        "in": "query",
+                        "name": "page_size",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.TrackingRecipientPage"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "410": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Gone"
+                    }
+                },
+                "summary": "Recipient opening and click observations",
                 "tags": [
                     "Mail"
                 ]

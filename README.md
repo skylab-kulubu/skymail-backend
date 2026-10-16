@@ -346,11 +346,12 @@ docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | 
 ## Açılma ve tıklama takibi (`SKYMAIL_TRACKING`)
 
 Kişi bazında açılma ve tıklama takibi (hub bilet iletişim-servisi 14, tasarım
-notu 07). **Varsayılan kapalı.** Bu sürümde takip verisi yazılır ve postaya
-yerleştirilir; `/t/` uçları, okuma uçları, geri alma ucu ve 90 günlük saklama
-işi sonraki sürümlerde gelir. Bayrak onlar yayında ve aydınlatma metni
-yayımlanmış olmadan açılmaz: **bu imaj `SKYMAIL_TRACKING=on` ile açılışı
-reddeder** (`/t/` uçları yok; 14b bu reddi uçlarla birlikte kaldırır).
+notu 07). **Varsayılan kapalı.** Bu sürümde takip verisi, SMTP anında
+yerleştirme, kimliksiz piksel/tıklama ve yetkili okuma uçları vardır.
+Geri alma ucu ve 90 günlük imha işi (14c), core tercihleri/rolleri (16/17)
+ve aydınlatma metni (18) tamamlanmadan hiçbir ortamda bayrak açılmaz;
+production açılışı bilet 19'dadır. `on` geçerli adreslerle başlatılabilir,
+ancak bu bir açılış izni değildir.
 
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
@@ -416,6 +417,61 @@ Hatalı adres, değeri değil değişkeni söyleyerek açılışı durdurur. Aç
   ona giden gönderimin bağlantılarının adresini boşaltır; sayaçlar
   `tracking_events_deleted`, `tracking_links_cleared`
   ([`docs/data-lifecycle.md`](docs/data-lifecycle.md#open-and-click-tracking)).
+
+### Piksel, tıklama ve raporlar
+
+Kimliksiz uçların OpenAPI sözleşmesi: [tracking-public.openapi.yaml](docs/tracking-public.openapi.yaml).
+Yetkili okuma uçları ana `/docs` belgesindedir.
+
+- `GET|HEAD /t/o/{rt}` daima aynı 43 bayt GIF ve önbelleksiz başlıkları
+  döner; geçersiz, kapalı, silinmiş, eski ve DB hatası ayırt edilmez.
+  `HEAD` açılma sınıflandırılır (`scanner_likely`); `HEAD` **tıklama** hiçbir
+  olay yazmaz.
+- `GET|HEAD /t/c/{rt}/{lt}` yalnız kayıtlı hedefe 302 döner. Alıcı belirteci
+  geçersiz, kapalı veya başka gönderime ait olsa da bağlantı çalışır; olay
+  yazılmaz. Geçersiz bağlantı 404, silinen hedef 410 “kaldırıldı”, bir yıllık
+  hedef 410 “süresi doldu” olur. DB kesintisi 503 olur; yanıtlar `no-store`
+  ve `Referrer-Policy: no-referrer` taşır. Bayrak kapalıyken de yönlendirme
+  çalışır. İstekten hedefe hiçbir parça eklenmez.
+- SQL, alıcı satırı kilidi altında tüm replikalar birlikte açılmayı 5
+  dakikada 1/toplam 20; tıklamayı bağlantı başına dakikada 1/alıcı başına
+  toplam 50 ile sınırlar. Teslim edilmemiş veya `sent_at + 90 gün` dolmuş
+  satır olay alamaz; imha işinin çalışması beklenmez. Süreç başına kayıt
+  kovası 50 olay denemesi/sn (patlama 50), en çok 8 eşzamanlı DB işlemi,
+  işlem başına 500 ms bütçe ve 2048 girdilik/30 sn negatif önbellek vardır.
+  Kova dolunca piksel ve kayıtlı yönlendirme yanıtı değişmez, olay atlanır.
+- Sınıflandırıcı sürümü `1`: UA sınıfı ve teslim zamanı sezgileri tasarım
+  notu 07 §3.2'deki gibidir. 5 sn içinde 3 farklı bağlantıya tıklamada aynı
+  sürümdeki bütün patlama `scanner_likely` olur. IP hiç okunmaz; ham UA ve
+  Referer saklanmaz. `/t/o` ve `/t/c` hata/bozuk yol dahil kendi yanıtını
+  üretir: günlük yalnız uç adı, sonuç sınıfı ve süre taşır.
+- `GET /v1/mail_tasks/{id}/tracking` (`skymail:mails:read`) yanıtı
+  `{tracking_available, tracking_requested, retained, report}`. Raporda
+  `tracked_recipients`, `untracked_by_reason`, `unique_opens`,
+  `unique_likely_human_opens` (otomatik olmayan tıklamadan çıkarım dahil),
+  `automated_only_recipients`, `unique_clickers`, `clicks_by_link`
+  (`id`, `position`, `clicks`, `unique_clickers`) ve `series` vardır.
+  Seri noktaları UTC'de ilk 72 saat saatlik, sonra günlük; `at`, `interval`,
+  `likely_human_opens`, `automated_opens`, `likely_human_clicks`,
+  `automated_clicks` taşır. Boş kovalar yazılmaz. Kimlik ve hedef URL yoktur
+  (tek alıcılı hedef kişiyi adlandırabilir). 90 gün sonra `retained: true`:
+  yalnız ≥10 alıcılı kişisiz toplam, yoksa `report: null`; seri dönmez.
+- `GET /v1/mail_tasks/{id}/tracking/recipients` rolü
+  `skymail:mails:tracking:read` **ya da** `sent_by = token sub` ister;
+  `mails:read` tek başına yetmez, gönderen için ayrıca gerekmez. Parametreler
+  `filter=opened|not_opened|clicked|automated_only`, `page` (1–1000000) ve
+  `page_size` (1–100, varsayılan 25). Yanıt
+  `{tracking_available, page, page_size, total, items}`; kişi satırı `id`,
+  `recipient_sub`, `recipient_email`, `recipient_full_name`, `tracked`,
+  `tracking_skip_reason`, `first_open_at`, `first_likely_human_open_at`,
+  `likely_human_open_source` (`open|click_inferred|null`), `open_count`,
+  `last_clicked_at`, `automated_only`, `source_classes`, `clicked_links`
+  (`link_id`, `clicks`, `last_clicked_at`) içerir. “opened” açılma veya
+  otomatik olmayan tıklama çıkarımını, “not_opened” ikisinin yokluğunu
+  belirtir; “okumadı” anlamına gelmez. Token/hedef URL dönmez. Gönderimin
+  son `sent_at`'ından (teslim yoksa `created_at`) 90 gün sonra 410 döner;
+  bu tarihten önce de her alıcının kendi 90 günlük pencere dışı olayları
+  gizlenir. İki okuma ucunun bütçesi 2 sn, önbelleği `no-store`'dur.
 
 ### core sözleşmesi (bilet 16)
 

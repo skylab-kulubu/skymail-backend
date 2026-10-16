@@ -306,6 +306,17 @@ func (e *eraser) run(ctx context.Context, steps []erasureStep) error {
 // for.
 var keepNamesSteps = []erasureStep{
 	{
+		// Close tokens before deleting events. This takes the queue-row
+		// lock shared with public writers, so an in-flight event commits
+		// before the following DELETE takes its fresh snapshot.
+		name: "tracking tokens of mail to the person",
+		sql: `UPDATE mail_queue q
+		      SET tracking_disabled_at = now()
+		      WHERE q.tracking_token IS NOT NULL
+		        AND q.tracking_disabled_at IS NULL
+		        AND ` + toPerson,
+	},
+	{
 		// Open and click tracking: the openings and clicks of mail to the
 		// person, whoever sent it.
 		name:  "tracking events of mail to the person",
@@ -313,16 +324,6 @@ var keepNamesSteps = []erasureStep{
 		sql: `DELETE FROM mail_tracking_events e
 		      USING mail_queue q
 		      WHERE e.queue_id = q.id
-		        AND ` + toPerson,
-	},
-	{
-		// And their tokens are closed: an opening or a click of that mail
-		// records nothing from now on; its links still redirect.
-		name: "tracking tokens of mail to the person",
-		sql: `UPDATE mail_queue q
-		      SET tracking_disabled_at = now()
-		      WHERE q.tracking_token IS NOT NULL
-		        AND q.tracking_disabled_at IS NULL
 		        AND ` + toPerson,
 	},
 
