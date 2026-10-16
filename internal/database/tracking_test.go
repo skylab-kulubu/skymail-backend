@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
 )
 
@@ -204,64 +205,107 @@ func TestTrackingReportAndRecipientFilters(t *testing.T) {
 	}
 }
 
-// A writer already holding the queue row must finish before erasure closes
-// that token; deleting its events afterwards also removes that last write.
-func TestTrackingErasureSerializesBeforeDeletingEvents(t *testing.T) {
-	s := erasureStore(t)
-	ctx := context.Background()
-	task, queue, sub := uuid.New(), uuid.New(), uuid.New()
-	token, _ := tracking.NewRecipientToken()
-	if _, err := s.Conn.Exec(ctx, `INSERT INTO mail_tasks(id,sent_by,template_id,body_variables,tracking_requested) VALUES($1,'sender','10000000-0000-4000-8000-000000000001','{}',true)`, task); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Conn.Exec(ctx, `INSERT INTO mail_queue(id,task_id,recipient_full_name,recipient_email,recipient_sub,subject,body,status,sent_at,tracking_token) VALUES($1,$2,'Concurrent Member','concurrent@example.invalid',$3,'x','x','sent',now()-interval '2 minutes',$4)`, queue, task, sub, token); err != nil {
-		t.Fatal(err)
-	}
-	tx, err := s.Conn.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(ctx)
-	q := s.WithTx(tx)
-	locked, err := q.LockTrackingRecipient(ctx, token)
-	if err != nil {
-		t.Fatal(err)
-	}
-	erased := make(chan error, 1)
-	go func() {
-		_, err := s.EraseAccount(ctx, AccountErasure{RequestID: uuid.New(), Subject: sub.String(), Emails: []string{"concurrent@example.invalid"}})
-		erased <- err
-	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		blocked := queryCount(t, s, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%SET tracking_disabled_at = now()%'`)
-		if blocked > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("erasure did not wait for the active event writer")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	count, err := q.InsertTrackingEvent(ctx, InsertTrackingEventParams{QueueID: queue, Kind: "open", At: locked.At, SourceClass: "browser", ClassifierVersion: 1})
-	if err != nil || count != 1 {
-		t.Fatalf("in-flight event: %d %v", count, err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err := <-erased:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("erasure did not finish")
-	}
-	if n := queryCount(t, s, `SELECT count(*) FROM mail_tracking_events WHERE queue_id=$1`, queue); n != 0 {
-		t.Errorf("%d in-flight tracking events survived erasure", n)
-	}
-	if written, err := s.RecordTracking(ctx, token, 0, "Mozilla/5.0 Chrome/120", "GET"); written || !errors.Is(err, pgx.ErrNoRows) {
-		t.Errorf("after erasure: %v %v", written, err)
+// A click writer holds queue -> link (the event's FK). Erasure must take
+// every queue row it will update before clearing links, even when another
+// recipient's rendered body names the person being erased.
+func TestTrackingErasureSerializesBeforeClearingLinksAndEvents(t *testing.T) {
+	for _, ownRecipient := range []bool{true, false} {
+		t.Run(fmt.Sprintf("own_recipient_%t", ownRecipient), func(t *testing.T) {
+			s := erasureStore(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			task, queue, sub := uuid.New(), uuid.New(), uuid.New()
+			recipient := sub
+			email, body := "concurrent@example.invalid", "x"
+			if !ownRecipient {
+				recipient = uuid.New()
+				email = "other-recipient@example.invalid"
+				body = "Contact concurrent@example.invalid"
+			}
+			token, _ := tracking.NewRecipientToken()
+			linkToken, _ := tracking.NewLinkToken()
+			if _, err := s.Conn.Exec(ctx, `INSERT INTO mail_tasks(id,sent_by,template_id,body_variables,tracking_requested) VALUES($1,'sender','10000000-0000-4000-8000-000000000001','{}',true)`, task); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Conn.Exec(ctx, `INSERT INTO mail_queue(id,task_id,recipient_full_name,recipient_email,recipient_sub,subject,body,status,sent_at,tracking_token) VALUES($1,$2,'Concurrent Member',$3,$4,'x',$5,'sent',now()-interval '2 minutes',$6)`, queue, task, email, recipient, body, token); err != nil {
+				t.Fatal(err)
+			}
+			var linkID int64
+			if err := s.Conn.QueryRow(ctx, `INSERT INTO mail_task_links(task_id,link_token,url,position) VALUES($1,$2,'https://destination.invalid/concurrent%40example.invalid',0) RETURNING id`, task, linkToken).Scan(&linkID); err != nil {
+				t.Fatal(err)
+			}
+			tx, err := s.Conn.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(context.Background())
+			q := s.WithTx(tx)
+			locked, err := q.LockTrackingRecipient(ctx, token)
+			if err != nil {
+				t.Fatal(err)
+			}
+			erased := make(chan error, 1)
+			go func() {
+				_, err := s.EraseAccount(ctx, AccountErasure{RequestID: uuid.New(), Subject: sub.String(), Emails: []string{"concurrent@example.invalid"}})
+				erased <- err
+			}()
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				blocked := queryCount(t, s, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%mail_queue q%'`)
+				if blocked > 0 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("erasure did not wait for the active click writer")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			// A bounded event context catches the lock inversion without waiting for
+			// deadlock_timeout: the old erasure order already owns this link's key.
+			clickCtx, stopClick := context.WithTimeout(ctx, 500*time.Millisecond)
+			count, err := q.InsertTrackingEvent(clickCtx, InsertTrackingEventParams{QueueID: queue, Kind: "click", LinkID: pgtype.Int8{Int64: linkID, Valid: true}, At: locked.At, SourceClass: "browser", ClassifierVersion: 1})
+			stopClick()
+			if err != nil || count != 1 {
+				_ = tx.Rollback(context.Background())
+				select {
+				case <-erased:
+				case <-ctx.Done():
+				}
+				t.Fatalf("in-flight click/FK must not wait behind erasure's link lock: %d %v", count, err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-erased:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-ctx.Done():
+				t.Fatal("erasure did not finish")
+			}
+			want := 0
+			if !ownRecipient {
+				want = 1
+			}
+			if n := queryCount(t, s, `SELECT count(*) FROM mail_tracking_events WHERE queue_id=$1`, queue); n != want {
+				t.Errorf("tracking events after erasure=%d, want %d", n, want)
+			}
+			if n := queryCount(t, s, `SELECT count(*) FROM mail_task_links WHERE id=$1 AND url IS NULL AND url_cleared_reason='erased'`, linkID); n != 1 {
+				t.Error("personal link was not cleared")
+			}
+			if ownRecipient {
+				if written, err := s.RecordTracking(ctx, token, linkID, "Mozilla/5.0 Chrome/120", "GET"); written || !errors.Is(err, pgx.ErrNoRows) {
+					t.Errorf("after erasure: %v %v", written, err)
+				}
+			} else {
+				if got := queryString(t, s, `SELECT body FROM mail_queue WHERE id=$1`, queue); got == nil || *got != "" {
+					t.Error("other recipient's body still names the erased person")
+				}
+				if written, err := s.RecordTracking(ctx, token, linkID, "Mozilla/5.0 Chrome/120", "GET"); written || err != nil {
+					t.Errorf("cleared link event guard: %v %v", written, err)
+				}
+			}
+		})
 	}
 }
