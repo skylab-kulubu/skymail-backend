@@ -8,9 +8,13 @@ import "github.com/google/uuid"
 // to on their own as POST /mail_tasks/single sends to one; never both.
 type SubmitMailApproval struct {
 	TemplateID uuid.UUID `json:"template_id" validate:"required"`
-	// An internal mailing list or a Keycloak group. Leave it out to send to people.
+	// An internal mailing list or a Keycloak group. Choose exactly one of this,
+	// manual recipients or form_source_id.
 	MailListID *uuid.UUID `json:"mail_list_id"`
-	// The people, 1..100, each address once (compared case-insensitively); each gets a send of their own. Leave it out to send to a mailing list.
+	// An immutable snapshot prepared by Forms for this caller. Never with a
+	// list or browser-supplied recipients. Manual recipients retain max=100.
+	FormSourceID *uuid.UUID `json:"form_source_id"`
+	// The people, 1..100, each address once (compared case-insensitively); each gets a send of their own. Omit for a mailing list or Forms source.
 	Recipients    []MailApprovalRecipient `json:"recipients" validate:"omitempty,max=100,dive"`
 	BodyVariables map[string]interface{}  `json:"body_variables"`
 	// Open and click tracking for the send once approved (as POST /mail_tasks takes it). Ignored (and kept false) while SkyMail's tracking is off and for a System or sensitive template.

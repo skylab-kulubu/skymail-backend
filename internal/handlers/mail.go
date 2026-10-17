@@ -20,6 +20,9 @@ import (
 )
 
 type MailHandler interface {
+	CreateFormSource(c fiber.Ctx) error
+	GetFormSource(c fiber.Ctx) error
+	SendFormSource(c fiber.Ctx) error
 	CreateTask(c fiber.Ctx) error
 	SendSingle(c fiber.Ctx) error
 	GetTasks(c fiber.Ctx) error
@@ -38,6 +41,7 @@ type mailHandlerImpl struct {
 	now    func() time.Time
 	// How many days a send's content is shown; 0 is DefaultContentRetentionDays.
 	contentRetentionDays int
+	formSourceLimit      int
 }
 
 func NewMailHandler(db *database.Store, mailer mailer.Mailer, kc keycloak.Client, opts ...MailHandlerOption) MailHandler {

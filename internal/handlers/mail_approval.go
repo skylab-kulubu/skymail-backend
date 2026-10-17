@@ -322,14 +322,20 @@ func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc ke
 //	@Summary		Submit a send for approval
 //	@Description	Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Submitting takes skymail:templates:read, and skymail:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing — before the body is checked, when templates:read is missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent.
 //	@Description
+//	@Description	Alternatively, form_source_id selects the caller's immutable Forms snapshot instead of mail_list_id or manual recipients. Choose exactly one audience. This source does not need lists:read; its configured recipient limit is separate from the manual 100-person limit. Submission atomically binds the source to one pending request without expanding its recipients. An exact retry returns 200 with the same request, including after preparation TTL. Source ownership is checked before returning metadata; another owner's source is 404. An unconsumed expired source is 410; invalidated, differently consumed or busy source is 409. Source recipients and form metadata cannot be supplied by the browser. This source version requests no recipient tracking.
+//	@Description
 //	@Description	Every approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.
 //	@Tags			Mail approval
 //	@Accept			json
 //	@Produce		json
 //	@Param			send	body		requests.SubmitMailApproval	true	"The send"
 //	@Success		201		{object}	handlers.MailApproval		"The request, pending, with notification"
+//	@Success		200		{object}	handlers.MailApproval		"Same request for an exact Forms source retry"
 //	@Failure		400		{object}	apperrors.AppError			"validation.error (params.errors: [{field, code, params}]): no template_id; not exactly one of mail_list_id and recipients (mail_list_id, exactly_one_of); more than 100 people (recipients, max_length); a missing or malformed address (recipients[i].email, required or invalid_email); an address twice (recipients[i].email, duplicate, params.first naming the first; or, for an address only Postgres finds twice, recipients, duplicate)"
 //	@Failure		403		{object}	apperrors.AppError			"server.forbidden: params.missing_roles names what the caller lacks of skymail:templates:read and, for a mailing list, skymail:lists:read"
+//	@Failure		404		{object}	apperrors.AppError			"No such Forms source owned by the caller"
+//	@Failure		409		{object}	apperrors.AppError			"Forms source invalidated, consumed differently or busy"
+//	@Failure		410		{object}	apperrors.AppError			"Prepare the Forms audience again"
 //	@Failure		422		{object}	apperrors.AppError			"mail_approval.template_unavailable, mail_approval.audience_unavailable, mail_approval.required_variables_missing (params.missing: [{name, source, reason}]) or mail_approval.unrenderable (params.error)"
 //	@Failure		500		{object}	apperrors.AppError			"Internal Server Error"
 //	@Router			/mail_approvals [post]
@@ -354,6 +360,12 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 	}
 	if err := caller.mayRead(send); err != nil {
 		return err
+	}
+	if send.formSourceID != nil {
+		if err := bindFormSourceBody(c, &params); err != nil {
+			return err
+		}
+		return h.submitFormSource(c, caller, params, send)
 	}
 	checked, err := h.checkSend(c.Context(), send, caller.recipient())
 	if err != nil {
@@ -720,6 +732,7 @@ func (h *mailApprovalHandlerImpl) Decline(c fiber.Ctx) error {
 //
 //	@Summary		Resubmit a rejected or declined request
 //	@Description	The submitter fills a rejected request, or one whose returned edit they declined, in again — whole, as a submission is, its list or its people too — and it is pending again with a new seven-day deadline, pinned to the version its template publishes now. It is checked, and takes the roles, as a submission does. It stays the same request: a resubmitted event records what changed, and everything before it stays in the history. Every approver is mailed mail.approval-requested again.
+//	@Description	A Forms-source request must keep the same form_source_id and immutable recipients; only content or template may change. Preparation TTL does not expire this existing request's source. A refreshed audience requires a new source and a new approval. Changing its source, or switching it to a list or manual recipients, is refused with 409.
 //	@Tags			Mail approval
 //	@Accept			json
 //	@Produce		json
@@ -746,6 +759,17 @@ func (h *mailApprovalHandlerImpl) Resubmit(c fiber.Ctx) error {
 		by:   bySubmitter,
 		from: []database.MailApprovalState{database.MailApprovalStateRejected, database.MailApprovalStateDeclined},
 		check: func(ctx context.Context, view database.GetMailApprovalRow, caller approvalCaller) (checkedSend, error) {
+			if view.MailApproval.FormSourceID != nil || send.formSourceID != nil {
+				if view.MailApproval.FormSourceID == nil || send.formSourceID == nil || *view.MailApproval.FormSourceID != *send.formSourceID {
+					return checkedSend{}, errFormSourceChanged
+				}
+				if err := bindFormSourceBody(c, &params); err != nil {
+					return checkedSend{}, err
+				}
+				hydrated := sendOfView(view)
+				hydrated.templateID, hydrated.variables, hydrated.tracking = send.templateID, send.variables, false
+				send = hydrated
+			}
 			if err := caller.mayRead(send); err != nil {
 				return checkedSend{}, err
 			}
