@@ -114,6 +114,10 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid v1 token audience configuration")
 	}
+	formsSourceConfig, err := middlewares.FormsSourceConfigFromEnv(config.Value, cfg.KeycloakRealmURL, cfg.KeycloakClientID)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid Forms source configuration")
+	}
 	// How long a send's content is kept and shown (docs/data-lifecycle.md).
 	contentRetentionDays, err := handlers.ContentRetentionDaysFromEnv(config.Value)
 	if err != nil {
@@ -207,7 +211,7 @@ func main() {
 
 	templateHandler := handlers.NewTemplateHandler(db)
 	listHandler := handlers.NewListHandler(db, kcClient)
-	mailHandler := handlers.NewMailHandler(db, mailerService, kcClient, handlers.WithContentRetentionDays(contentRetentionDays))
+	mailHandler := handlers.NewMailHandler(db, mailerService, kcClient, handlers.WithContentRetentionDays(contentRetentionDays), handlers.WithFormSourceLimit(formsSourceConfig.MaxRecipients))
 	approvalHandler := handlers.NewMailApprovalHandler(db, mailerService, kcClient, handlers.MailApprovalOptions{
 		ClientID: cfg.KeycloakClientID,
 		UIURL:    config.Value("SKYMAIL_UI_URL"),
@@ -246,6 +250,7 @@ func main() {
 	lists.Get("/:id/recipients", authMiddleware.RequireAnyPermission("skymail:lists:read"), listHandler.GetRecipients)
 	lists.Delete("/:id/recipients/:recipientId", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.RemoveRecipient)
 
+	registerFormMailSourceRoutes(api, authMiddleware, mailHandler, formsSourceConfig)
 	registerMailTaskRoutes(api, authMiddleware, mailHandler)
 	registerMailApprovalRoutes(api, authMiddleware, approvalHandler)
 
@@ -352,10 +357,17 @@ func registerTemplateRoutes(api fiber.Router, auth middlewares.AuthMiddleware, t
 	templates.Get("/:id/content-sensitive/events", auth.RequireAnyPermission("skymail:templates:read"), template.ListContentSensitiveEvents)
 }
 
+func registerFormMailSourceRoutes(api fiber.Router, auth middlewares.AuthMiddleware, mail handlers.MailHandler, cfg middlewares.FormsSourceConfig) {
+	sources := api.Group("/form_mail_sources")
+	sources.Post("/", auth.RequireAnyPermission("skymail:mails:send", "skymail:mails:write"), middlewares.RequireFormsSourceService(cfg), mail.CreateFormSource)
+	sources.Get("/:id", mail.GetFormSource)
+}
+
 func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, mail handlers.MailHandler) {
 	tasks := api.Group("/mail_tasks")
 	tasks.Post("/", auth.RequireAnyPermission("skymail:mails:write"), mail.CreateTask)
 	tasks.Post("/single", auth.RequireAnyPermission("skymail:mails:send", "skymail:mails:write"), mail.SendSingle)
+	tasks.Post("/form-source", auth.RequireAnyPermission("skymail:mails:send", "skymail:mails:write"), mail.SendFormSource)
 	tasks.Get("/", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTasks)
 	// Before /:id, which would otherwise take "summary" for a task id.
 	tasks.Get("/summary", auth.RequireAnyPermission("skymail:mails:read"), mail.GetSummary)

@@ -135,18 +135,26 @@ type DailySent struct {
 
 // SendAudience is who a send went to: a mailing list — an internal one or a
 // Keycloak group, told apart by source as in the mailing list API — or the one
-// recipient of a single send. Fields that do not apply to the kind are null.
+// recipient of a single send, or a fixed Forms snapshot. Fields that do not
+// apply to the kind are null; Forms-only fields are omitted on legacy audiences.
 //
 // A Mail onayı request's audience is this type too, so a request reads as the
 // send it becomes, and one to several people is people, its recipients naming
 // them. A send is never people: approving such a request queues one single
-// send per person. The enum is therefore wider than /mail_tasks ever answers.
+// send per person. A form source queues one bulk send for its fixed snapshot.
 type SendAudience struct {
-	// mailing_list, single, or — only on a Mail onayı request — people.
-	Kind              string     `json:"kind" enums:"mailing_list,single,people"`
+	// Present only for kind=form: the persistent source ID, distinct from form_id.
+	FormSourceID *uuid.UUID `json:"form_source_id,omitempty"`
+	// The original Forms form; clients construct the link from a fixed trusted origin.
+	FormID *uuid.UUID `json:"form_id,omitempty"`
+	// The original snapshot count, fixed when Forms prepared the source.
+	RecipientCount *int       `json:"recipient_count,omitempty"`
+	PreparedAt     *time.Time `json:"prepared_at,omitempty"`
+	// mailing_list, single, form, or — only on a Mail onayı request — people.
+	Kind              string     `json:"kind" enums:"mailing_list,single,people,form"`
 	MailListID        *uuid.UUID `json:"mail_list_id"`
 	Name              *string    `json:"name"`
-	Source            *string    `json:"source" enums:"internal,keycloak"`
+	Source            *string    `json:"source" enums:"internal,keycloak,forms"`
 	RecipientFullName *string    `json:"recipient_full_name"`
 	RecipientEmail    *string    `json:"recipient_email"`
 }
@@ -294,6 +302,10 @@ func recipientCounts(send database.ListMailTaskSendsRow) QueueCounts {
 
 func sendAudience(send database.ListMailTaskSendsRow, groupNames map[uuid.UUID]*string) SendAudience {
 	switch {
+	case send.FormSourceID != nil:
+		source := "forms"
+		return SendAudience{Kind: "form", Source: &source, Name: send.FormTitle, FormSourceID: send.FormSourceID,
+			FormID: send.FormID, RecipientCount: send.FormRecipientCount, PreparedAt: send.FormPreparedAt}
 	case send.MailListID == nil:
 		return SendAudience{
 			Kind:              audienceSingle,

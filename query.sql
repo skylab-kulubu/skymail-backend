@@ -1263,9 +1263,9 @@ WHERE mt.id = due.id
 RETURNING mt.id, (SELECT count(*) FROM rows WHERE rows.task_id = mt.id) AS rows_cleared;
 
 -- name: InsertMailTask :one
-INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send,
+INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, form_source_id, body_variables, content_sensitive_at_send,
                         tracking_requested)
-SELECT sqlc.arg(sent_by), sqlc.arg(template_id), sqlc.narg(mail_list_id), sqlc.arg(body_variables),
+SELECT sqlc.arg(sent_by), sqlc.arg(template_id), sqlc.narg(mail_list_id), sqlc.narg(form_source_id), sqlc.arg(body_variables),
        COALESCE(templates.content_sensitive::text, 'unset'), sqlc.arg(tracking_requested)::boolean
 FROM templates
 WHERE templates.id = sqlc.arg(template_id)
@@ -1340,6 +1340,7 @@ SELECT mt.id,
        mt.sent_by,
        mt.template_id,
        mt.mail_list_id,
+       mt.form_source_id, fs.form_id, fs.form_title, fs.prepared_at AS form_prepared_at, fs.recipient_count AS form_recipient_count,
        mt.body_variables,
        mt.created_at,
        t.name                       AS template_name,
@@ -1362,6 +1363,7 @@ FROM page
          JOIN mail_tasks mt ON mt.id = page.id
          LEFT JOIN templates t ON mt.template_id = t.id
          LEFT JOIN mailing_lists ml ON mt.mail_list_id = ml.id
+         LEFT JOIN mail_form_sources fs ON fs.id = mt.form_source_id
          CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE q.status = 'pending')    AS pending,
                                     count(*) FILTER (WHERE q.status = 'processing') AS processing,
                                     count(*) FILTER (WHERE q.status = 'sent')       AS sent,
@@ -1400,11 +1402,11 @@ WHERE (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(st
 -- transaction commits.
 -- name: CreateMailApproval :one
 INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, submitter_email_unverified, template_id,
-                            template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at,
+                            template_version_id, mail_list_id, form_source_id, body_variables, created_at, submitted_at, deadline_at,
                             updated_at, tracking_requested)
 VALUES (sqlc.arg(submitter_sub), sqlc.narg(submitter_name), sqlc.narg(submitter_email),
         sqlc.arg(submitter_email_unverified), sqlc.arg(template_id),
-        sqlc.arg(template_version_id), sqlc.narg(mail_list_id), sqlc.arg(body_variables), sqlc.arg(at), sqlc.arg(at),
+        sqlc.arg(template_version_id), sqlc.narg(mail_list_id), sqlc.narg(form_source_id), sqlc.arg(body_variables), sqlc.arg(at), sqlc.arg(at),
         sqlc.arg(deadline_at), sqlc.arg(at), sqlc.arg(tracking_requested)::boolean)
 RETURNING *;
 
@@ -1480,6 +1482,7 @@ SET state               = 'pending',
     template_id         = sqlc.arg(template_id),
     template_version_id = sqlc.arg(template_version_id),
     mail_list_id        = sqlc.narg(mail_list_id),
+    form_source_id      = sqlc.narg(form_source_id),
     body_variables      = sqlc.arg(body_variables),
     tracking_requested  = sqlc.arg(tracking_requested)::boolean,
     submitted_at        = sqlc.arg(at),
@@ -1516,16 +1519,20 @@ SELECT sqlc.embed(a),
        (t.archived_at IS NOT NULL)::boolean AS template_archived,
        ml.name                            AS mail_list_name,
        (ml.id IS NOT NULL)::boolean       AS internal_mail_list,
+       fs.form_id, fs.form_title, fs.prepared_at AS form_prepared_at,
+       fs.recipient_count AS form_recipient_count, fs.snapshot_hash AS form_snapshot_hash,
        people.emails                      AS recipient_emails,
        people.full_names                  AS recipient_full_names,
        sends.task_ids                     AS task_ids
 FROM mail_approvals a
          JOIN templates t ON t.id = a.template_id
          LEFT JOIN mailing_lists ml ON ml.id = a.mail_list_id
+         LEFT JOIN mail_form_sources fs ON fs.id = a.form_source_id
          CROSS JOIN LATERAL (SELECT COALESCE(array_agg(r.email ORDER BY r.position), '{}')::text[]     AS emails,
                                     COALESCE(array_agg(r.full_name ORDER BY r.position), '{}')::text[] AS full_names
-                             FROM mail_approval_recipients r
-                             WHERE r.approval_id = a.id) people
+                             FROM (SELECT r.email, r.full_name, r.position FROM mail_approval_recipients r WHERE r.approval_id = a.id
+                                   UNION ALL
+                                   SELECT r.email, r.full_name, r.position FROM mail_form_source_recipients r WHERE r.source_id = a.form_source_id) r) people
          CROSS JOIN LATERAL (SELECT COALESCE(array_agg(mat.task_id ORDER BY mat.position), '{}')::uuid[] AS task_ids
                              FROM mail_approval_tasks mat
                              WHERE mat.approval_id = a.id) sends
@@ -1543,16 +1550,20 @@ SELECT sqlc.embed(a),
        (t.archived_at IS NOT NULL)::boolean AS template_archived,
        ml.name                            AS mail_list_name,
        (ml.id IS NOT NULL)::boolean       AS internal_mail_list,
+       fs.form_id, fs.form_title, fs.prepared_at AS form_prepared_at,
+       fs.recipient_count AS form_recipient_count, fs.snapshot_hash AS form_snapshot_hash,
        people.emails                      AS recipient_emails,
        people.full_names                  AS recipient_full_names,
        sends.task_ids                     AS task_ids
 FROM mail_approvals a
          JOIN templates t ON t.id = a.template_id
          LEFT JOIN mailing_lists ml ON ml.id = a.mail_list_id
+         LEFT JOIN mail_form_sources fs ON fs.id = a.form_source_id
          CROSS JOIN LATERAL (SELECT COALESCE(array_agg(r.email ORDER BY r.position), '{}')::text[]     AS emails,
                                     COALESCE(array_agg(r.full_name ORDER BY r.position), '{}')::text[] AS full_names
-                             FROM mail_approval_recipients r
-                             WHERE r.approval_id = a.id) people
+                             FROM (SELECT r.email, r.full_name, r.position FROM mail_approval_recipients r WHERE r.approval_id = a.id
+                                   UNION ALL
+                                   SELECT r.email, r.full_name, r.position FROM mail_form_source_recipients r WHERE r.source_id = a.form_source_id) r) people
          CROSS JOIN LATERAL (SELECT COALESCE(array_agg(mat.task_id ORDER BY mat.position), '{}')::uuid[] AS task_ids
                              FROM mail_approval_tasks mat
                              WHERE mat.approval_id = a.id) sends
@@ -1599,3 +1610,41 @@ SELECT *
 FROM mailing_lists
 WHERE id = $1
     FOR SHARE;
+
+-- Forms snapshots are prepared by the trusted service, owned by a person,
+-- and bound exactly once inside that person's approval or send transaction.
+-- name: CreateMailFormSource :one
+INSERT INTO mail_form_sources(id, owner_sub, form_id, form_title, prepared_at, expires_at,
+ response_count, recipient_count, skipped_count, duplicate_count, snapshot_hash)
+VALUES(sqlc.arg(id),sqlc.arg(owner_sub),sqlc.arg(form_id),sqlc.arg(form_title),sqlc.arg(prepared_at),sqlc.arg(expires_at),
+ sqlc.arg(response_count),sqlc.arg(recipient_count),sqlc.arg(skipped_count),sqlc.arg(duplicate_count),sqlc.arg(snapshot_hash))
+RETURNING *;
+
+-- name: AddMailFormSourceRecipients :exec
+INSERT INTO mail_form_source_recipients(source_id,position,email,full_name)
+SELECT sqlc.arg(source_id),p.position,p.email,(sqlc.arg(full_names)::text[])[p.position]
+FROM unnest(sqlc.arg(emails)::text[]) WITH ORDINALITY AS p(email,position);
+
+-- name: GetOwnedMailFormSource :one
+SELECT * FROM mail_form_sources WHERE id=$1 AND owner_sub=$2;
+
+-- name: LockOwnedMailFormSource :one
+SELECT * FROM mail_form_sources WHERE id=$1 AND owner_sub=$2 FOR UPDATE NOWAIT;
+
+-- name: LockMailFormSource :one
+SELECT * FROM mail_form_sources WHERE id=$1 FOR UPDATE NOWAIT;
+
+-- name: ListMailFormSourceRecipients :many
+SELECT * FROM mail_form_source_recipients WHERE source_id=$1 ORDER BY position;
+
+-- name: ConsumeMailFormSource :one
+UPDATE mail_form_sources
+SET consumed_at=sqlc.arg(at), consumed_approval_id=sqlc.narg(approval_id), consumed_task_id=sqlc.narg(task_id), consume_request_hash=sqlc.arg(request_hash)
+WHERE id=sqlc.arg(id) AND consumed_at IS NULL AND invalidated_at IS NULL
+RETURNING *;
+
+-- name: DeleteExpiredMailFormSources :execrows
+DELETE FROM mail_form_sources WHERE id IN (
+ SELECT fs.id FROM mail_form_sources fs WHERE fs.consumed_at IS NULL AND fs.expires_at <= sqlc.arg(at)
+ ORDER BY fs.expires_at,fs.id LIMIT sqlc.arg(batch_size) FOR UPDATE SKIP LOCKED
+);

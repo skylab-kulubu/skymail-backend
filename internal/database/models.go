@@ -258,7 +258,8 @@ type MailApproval struct {
 	DeadlineAt               time.Time         `json:"deadline_at"`
 	UpdatedAt                time.Time         `json:"updated_at"`
 	// The submitter asked for open and click tracking; the approved send asks for it if SKYMAIL_TRACKING is on then.
-	TrackingRequested bool `json:"tracking_requested"`
+	TrackingRequested bool       `json:"tracking_requested"`
+	FormSourceID      *uuid.UUID `json:"form_source_id"`
 }
 
 type MailApprovalEvent struct {
@@ -285,6 +286,32 @@ type MailApprovalTask struct {
 	ApprovalID uuid.UUID `json:"approval_id"`
 	Position   int       `json:"position"`
 	TaskID     uuid.UUID `json:"task_id"`
+}
+
+type MailFormSource struct {
+	ID                 uuid.UUID  `json:"id"`
+	OwnerSub           string     `json:"owner_sub"`
+	FormID             uuid.UUID  `json:"form_id"`
+	FormTitle          string     `json:"form_title"`
+	PreparedAt         time.Time  `json:"prepared_at"`
+	ExpiresAt          time.Time  `json:"expires_at"`
+	ResponseCount      int        `json:"response_count"`
+	RecipientCount     int        `json:"recipient_count"`
+	SkippedCount       int        `json:"skipped_count"`
+	DuplicateCount     int        `json:"duplicate_count"`
+	SnapshotHash       []byte     `json:"snapshot_hash"`
+	InvalidatedAt      *time.Time `json:"invalidated_at"`
+	ConsumedAt         *time.Time `json:"consumed_at"`
+	ConsumedApprovalID *uuid.UUID `json:"consumed_approval_id"`
+	ConsumedTaskID     *uuid.UUID `json:"consumed_task_id"`
+	ConsumeRequestHash []byte     `json:"consume_request_hash"`
+}
+
+type MailFormSourceRecipient struct {
+	SourceID uuid.UUID `json:"source_id"`
+	Position int       `json:"position"`
+	Email    string    `json:"email"`
+	FullName string    `json:"full_name"`
 }
 
 type MailQueue struct {
@@ -352,6 +379,7 @@ type MailTask struct {
 	TrackingRequested bool `json:"tracking_requested"`
 	// When retention closed the send's tracking: events rolled up and deleted, tokens closed. Null while open.
 	TrackingClosedAt *time.Time `json:"tracking_closed_at"`
+	FormSourceID     *uuid.UUID `json:"form_source_id"`
 }
 
 // A send's links that are the same for every recipient, each with its random token: the only addresses /t/c redirects to.

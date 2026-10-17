@@ -134,8 +134,13 @@ func parseApprovalState(raw string) (database.NullMailApprovalState, error) {
 
 // approvalSend is what a request would send, as the submitter filled it in.
 type approvalSend struct {
-	templateID uuid.UUID
-	mailListID *uuid.UUID
+	formSourceID     *uuid.UUID
+	formID           *uuid.UUID
+	formTitle        *string
+	formPreparedAt   *time.Time
+	formSnapshotHash []byte
+	templateID       uuid.UUID
+	mailListID       *uuid.UUID
 	// The people it goes to, in order; none when it goes to a list.
 	recipients []mailer.RecipientInfo
 	// A JSON object.
@@ -145,12 +150,25 @@ type approvalSend struct {
 }
 
 func approvalSendOf(params requests.SubmitMailApproval) (approvalSend, error) {
+	if params.FormSourceID != nil && *params.FormSourceID == uuid.Nil {
+		return approvalSend{}, blankField("form_source_id")
+	}
 	recipients, err := recipientsOf(params.Recipients)
 	if err != nil {
 		return approvalSend{}, err
 	}
 	hasList := params.MailListID != nil && *params.MailListID != uuid.Nil
-	if hasList == (len(recipients) > 0) {
+	hasSource := params.FormSourceID != nil && *params.FormSourceID != uuid.Nil
+	choices := 0
+	for _, chosen := range []bool{hasList, hasSource, len(recipients) > 0} {
+		if chosen {
+			choices++
+		}
+	}
+	if choices != 1 {
+		if hasSource {
+			return approvalSend{}, apperrors.ErrValidation.WithParams(map[string]interface{}{"errors": []validator.FieldError{{Field: "form_source_id", Code: "exactly_one_of", Params: map[string]interface{}{"fields": []string{"mail_list_id", "recipients", "form_source_id"}}}}})
+		}
 		return approvalSend{}, errNotOneAudience()
 	}
 	variables := params.BodyVariables
@@ -161,7 +179,7 @@ func approvalSendOf(params requests.SubmitMailApproval) (approvalSend, error) {
 	if err != nil {
 		return approvalSend{}, err
 	}
-	send := approvalSend{templateID: params.TemplateID, recipients: recipients, variables: raw, tracking: params.Tracking}
+	send := approvalSend{formSourceID: params.FormSourceID, templateID: params.TemplateID, recipients: recipients, variables: raw, tracking: params.Tracking}
 	if hasList {
 		send.mailListID = params.MailListID
 	}
@@ -212,7 +230,7 @@ func recipientField(i int) string {
 // Postgres's to know, so the error names the list.
 func duplicateRecipientsError(err error) error {
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "mail_approval_recipients_email_once" {
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" && (pgErr.ConstraintName == "mail_approval_recipients_email_once" || pgErr.ConstraintName == "mail_form_source_recipients_email_once") {
 		return apperrors.ErrValidation.WithParams(map[string]interface{}{
 			"errors": []validator.FieldError{{Field: "recipients", Code: "duplicate"}},
 		})
@@ -232,6 +250,7 @@ func (s approvalSend) renderedFor(submitter mailer.RecipientInfo) mailer.Recipie
 // sendOfView is what a request would send, as it was read.
 func sendOfView(view database.GetMailApprovalRow) approvalSend {
 	return approvalSend{
+		formSourceID: view.MailApproval.FormSourceID, formID: view.FormID, formTitle: view.FormTitle, formPreparedAt: view.FormPreparedAt, formSnapshotHash: view.FormSnapshotHash,
 		templateID: view.MailApproval.TemplateID,
 		mailListID: view.MailApproval.MailListID,
 		recipients: recipientsOfView(view),
@@ -251,6 +270,19 @@ func recipientsOfView(view database.GetMailApprovalRow) []mailer.RecipientInfo {
 // lockedSend is what a request, locked, would send: its row and its people as
 // q's transaction sees them.
 func lockedSend(ctx context.Context, q *database.Queries, a database.MailApproval) (approvalSend, error) {
+	if a.FormSourceID != nil {
+		source, err := q.LockMailFormSource(ctx, *a.FormSourceID)
+		if err != nil {
+			return approvalSend{}, formSourceLockError(err)
+		}
+		recipients, err := formSourceRecipients(ctx, q, source)
+		if err != nil {
+			return approvalSend{}, err
+		}
+		return approvalSend{templateID: a.TemplateID, formSourceID: a.FormSourceID, formID: &source.FormID,
+			formTitle: &source.FormTitle, formPreparedAt: &source.PreparedAt, formSnapshotHash: source.SnapshotHash,
+			recipients: recipients, variables: a.BodyVariables}, nil
+	}
 	rows, err := q.ListMailApprovalRecipients(ctx, a.ID)
 	if err != nil {
 		return approvalSend{}, err
@@ -463,9 +495,26 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	var notice approvalNotice
 	expired := false
 	err = h.db.InTx(ctx, func(q *database.Queries) error {
+		// Sources are locked before approvals, also in account erasure.
+		// Recheck the pre-read link after taking the approval's lock.
+		if view.MailApproval.FormSourceID != nil {
+			source, err := q.LockMailFormSource(ctx, *view.MailApproval.FormSourceID)
+			if err != nil {
+				return formSourceLockError(err)
+			}
+			if action.check != nil {
+				if _, err := formSourceRecipients(ctx, q, source); err != nil {
+					return err
+				}
+			}
+		}
 		a, err := q.LockMailApproval(ctx, id)
 		if err != nil {
 			return lockError(err)
+		}
+		if (a.FormSourceID == nil) != (view.MailApproval.FormSourceID == nil) ||
+			(a.FormSourceID != nil && *a.FormSourceID != *view.MailApproval.FormSourceID) {
+			return errFormSourceChanged
 		}
 		if undecided(a.State) && !h.now().Before(a.DeadlineAt) {
 			expired = true
@@ -656,6 +705,13 @@ func (h *mailApprovalHandlerImpl) queue(ctx context.Context, q *database.Queries
 	// An approved send is an operator's mail, to a list or to up to 100
 	// people: the bulk lane, so it never holds back a login code.
 	sends := h.mailer.Queue(q, mailer.PriorityBulk)
+	if a.FormSourceID != nil {
+		id, err := queueToFormSource(ctx, q, sends, a)
+		if err != nil {
+			return nil, err
+		}
+		return []uuid.UUID{id}, nil
+	}
 	if a.MailListID == nil {
 		return queueToPeople(ctx, q, sends, a)
 	}
@@ -808,6 +864,7 @@ func (h *mailApprovalHandlerImpl) resubmit(ctx context.Context, q *database.Quer
 		TemplateID:        checked.template.ID,
 		TemplateVersionID: checked.versionID,
 		MailListID:        send.mailListID,
+		FormSourceID:      send.formSourceID,
 		BodyVariables:     send.variables,
 		TrackingRequested: send.tracking && h.mailer.TrackingApplies(ctx, checked.template.ID, send.mailListID),
 		At:                now,
@@ -816,7 +873,11 @@ func (h *mailApprovalHandlerImpl) resubmit(ctx context.Context, q *database.Quer
 	}); err != nil {
 		return approvalNotice{}, err
 	}
-	if err := setRecipients(ctx, q, a.ID, send.recipients); err != nil {
+	named := send.recipients
+	if send.formSourceID != nil {
+		named = nil
+	}
+	if err := setRecipients(ctx, q, a.ID, named); err != nil {
 		return approvalNotice{}, err
 	}
 	recorded, err := json.Marshal(changes)
@@ -838,7 +899,9 @@ func (h *mailApprovalHandlerImpl) resubmit(ctx context.Context, q *database.Quer
 // or {recipients: [{email, full_name}]}.
 func audienceJSON(s approvalSend) json.RawMessage {
 	var raw []byte
-	if s.mailListID != nil {
+	if s.formSourceID != nil {
+		raw, _ = json.Marshal(map[string]interface{}{"form_source_id": s.formSourceID, "form_id": s.formID, "form_title": s.formTitle, "prepared_at": s.formPreparedAt, "snapshot_hash": s.formSnapshotHash})
+	} else if s.mailListID != nil {
 		raw, _ = json.Marshal(map[string]interface{}{"mail_list_id": s.mailListID})
 	} else {
 		raw, _ = json.Marshal(map[string]interface{}{"recipients": approvalRecipients(s.recipients)})
@@ -912,6 +975,9 @@ func (h *mailApprovalHandlerImpl) expireLocked(ctx context.Context, q *database.
 const expirySweepBatch = 100
 
 func (h *mailApprovalHandlerImpl) ExpireDue(ctx context.Context) (int, error) {
+	if _, err := h.db.DeleteExpiredMailFormSources(ctx, database.DeleteExpiredMailFormSourcesParams{At: h.now(), BatchSize: expirySweepBatch}); err != nil {
+		return 0, err
+	}
 	expired := 0
 	for expired < expirySweepBatch {
 		var id uuid.UUID
@@ -1033,6 +1099,10 @@ func approvalRecipients(recipients []mailer.RecipientInfo) []MailApprovalRecipie
 // request's recipients name.
 func approvalAudience(view database.GetMailApprovalRow, groupNames map[uuid.UUID]*string) SendAudience {
 	switch {
+	case view.MailApproval.FormSourceID != nil:
+		source := "forms"
+		return SendAudience{Kind: "form", Source: &source, Name: view.FormTitle, FormSourceID: view.MailApproval.FormSourceID,
+			FormID: view.FormID, RecipientCount: view.FormRecipientCount, PreparedAt: view.FormPreparedAt}
 	case view.MailApproval.MailListID == nil && len(view.RecipientEmails) == 1:
 		return SendAudience{Kind: audienceSingle, RecipientFullName: &view.RecipientFullNames[0], RecipientEmail: &view.RecipientEmails[0]}
 	case view.MailApproval.MailListID == nil:
