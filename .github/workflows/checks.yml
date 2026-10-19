@@ -1,35 +1,112 @@
 name: Checks
 
+# The scope job picks one of three modes:
+# - full: pushes to main, a manual run (gh workflow run checks.yml --ref <branch>), pull requests
+#   into anything but main whose tree main has not tested, and pull requests into main labelled
+#   full-ci. Every job runs.
+# - fast: pull requests into main. The jobs run unless only documentation changed.
+# - tested: the push to production and pull requests into production whose tree a push to main has
+#   already tested green (production is a squash of main, so the tree is compared, not the commit).
+#   Nothing runs again; release.yml promotes that tree's main image instead of rebuilding it.
+# The tests run in three parallel jobs, split by package. One required check: gate.
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, production]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-# A newer push to the same pull request makes the older run pointless.
+# A new push to a PR cancels that PR's older run; pushes and manual runs are never cancelled (every
+# main and production commit keeps its own run).
 concurrency:
-  group: checks-${{ github.ref }}
+  group: checks-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # The job's name is the check's name, which is what a branch protection rule
-  # asks for.
-  checks:
+  scope:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      mode: ${{ steps.scope.outputs.mode }}
+      go: ${{ steps.scope.outputs.go }}
     steps:
-      # The integration tests start their own throwaway PostgreSQL and Redis
-      # containers through the runner's Docker (internal/testpostgres), so
-      # there is no `services:` database. Pulling the images now keeps them
-      # off the tests' clock.
-      - name: Start fetching what the integration tests use
-        run: |
-          for image in postgres:17-alpine redis:7-alpine; do
-            nohup docker pull --quiet "$image" >/dev/null 2>&1 &
-          done
+      - uses: actions/checkout@v4
+        with:
+          # A pull request checks out GitHub's merge commit: HEAD^1 is the base it merges into.
+          fetch-depth: 2
 
+      - name: Choose the mode and the jobs
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          REF: ${{ github.ref }}
+          FULL_CI_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: |
+          set -euo pipefail
+          select_all() {
+            printf 'mode=%s\ngo=true\n' "$1" >> "$GITHUB_OUTPUT"
+            echo "mode $1: every job" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+          # A push to main whose gate passed tested this tree in full.
+          tested_on_main() {
+            local tree run_id head_sha
+            tree=$(git rev-parse 'HEAD^{tree}')
+            while read -r run_id head_sha; do
+              [[ $run_id =~ ^[0-9]+$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || continue
+              [[ $(gh api "repos/$GITHUB_REPOSITORY/git/commits/$head_sha" --jq .tree.sha) == "$tree" ]] || continue
+              if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" \
+                --jq '.jobs[] | "\(.conclusion) \(.name)"' | grep -qxF 'success gate'; then
+                echo "$head_sha"
+                return 0
+              fi
+            done < <(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/checks.yml/runs" \
+              -f branch=main -f event=push -f status=success -f per_page=50 \
+              --jq '.workflow_runs[] | "\(.id) \(.head_sha)"')
+            return 1
+          }
+
+          if [[ $EVENT == pull_request && $BASE_REF == main ]]; then
+            [[ $FULL_CI_LABEL == true ]] && select_all full
+          elif [[ ($EVENT == push && $REF == refs/heads/production) || $EVENT == pull_request ]]; then
+            if tested_sha=$(tested_on_main); then
+              printf 'mode=tested\ngo=false\n' >> "$GITHUB_OUTPUT"
+              echo "mode tested: main $tested_sha already tested this tree; nothing runs again" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            select_all full
+          else
+            select_all full
+          fi
+
+          # fast: a pull request into main. A diff that cannot be read selects every job.
+          if ! changed=$(git diff --name-only --no-renames HEAD^1 HEAD) || [[ -z $changed ]]; then
+            echo 'the PR diff could not be read' >&2
+            select_all fast
+          fi
+          go=false
+          while IFS= read -r path; do
+            case $path in
+              docs/* | *.md | LICENSE) ;;
+              *) go=true ;;
+            esac
+          done <<<"$changed"
+          printf 'mode=fast\ngo=%s\n' "$go" >> "$GITHUB_OUTPUT"
+          echo "mode fast: static and test=$go" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  static:
+    needs: scope
+    if: needs.scope.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
       - uses: actions/checkout@v4
 
       # The newest 1.25 patch release, which is what the Dockerfile builds
@@ -70,11 +147,55 @@ jobs:
           GOOS: linux
         run: go build -o "$RUNNER_TEMP/skymail-backend" .
 
+  # go test in three jobs: internal/handlers, the root package, and every other package (on
+  # 2026-10-19 they took about 220, 175 and 130 seconds of a 290-second single job). "rest" is
+  # every package the other two do not name, so a new package is always tested.
+  test:
+    name: test (${{ matrix.shard }})
+    needs: scope
+    if: needs.scope.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [handlers, root, rest]
+    steps:
+      # The integration tests start their own throwaway PostgreSQL and Redis
+      # containers through the runner's Docker (internal/testpostgres), so
+      # there is no `services:` database. Pulling the images now keeps them
+      # off the tests' clock.
+      - name: Start fetching what the integration tests use
+        run: |
+          for image in postgres:17-alpine redis:7-alpine; do
+            nohup docker pull --quiet "$image" >/dev/null 2>&1 &
+          done
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          check-latest: true
+          cache: true
+
       # The runner's clock is UTC; the tests must pass there as well as in
       # Europe/Istanbul.
       - name: go test
         shell: bash
-        run: go test -count=1 -timeout 15m -v ./... 2>&1 | tee "$RUNNER_TEMP/test.log"
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          module=$(go list -m)
+          all=$(go list ./...)
+          case $SHARD in
+            handlers) packages=$(grep -xF "$module/internal/handlers" <<<"$all") ;;
+            root) packages=$(grep -xF "$module" <<<"$all") ;;
+            rest) packages=$(grep -vxF -e "$module/internal/handlers" -e "$module" <<<"$all") ;;
+          esac
+          echo "$packages"
+          # shellcheck disable=SC2086 # one package per word
+          go test -count=1 -timeout 15m -v $packages 2>&1 | tee "$RUNNER_TEMP/test.log"
 
       # A test that cannot reach Docker skips itself and the run stays green,
       # which would mean the database tests did not run. Fail on any skip.
@@ -84,3 +205,35 @@ jobs:
             echo "A test was skipped (often for want of Docker); see above."
             exit 1
           fi
+
+  # The one required check. Fails when a job failed or was cancelled; in full mode every job must
+  # have passed.
+  gate:
+    if: always()
+    needs: [scope, static, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every selected job passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          MODE: ${{ needs.scope.outputs.mode }}
+        run: |
+          set -euo pipefail
+          jq -r 'to_entries[] | "\(.key)=\(.value.result)"' <<<"$NEEDS"
+          test "$(jq -r '.scope.result' <<<"$NEEDS")" = success
+          bad=$(jq -r 'to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key' <<<"$NEEDS")
+          if [[ -n $bad ]]; then
+            echo "failed or cancelled: $bad" >&2
+            exit 1
+          fi
+          case $MODE in
+            full)
+              bad=$(jq -r 'to_entries[] | select(.value.result != "success") | .key' <<<"$NEEDS")
+              if [[ -n $bad ]]; then
+                echo "full mode, did not pass: $bad" >&2
+                exit 1
+              fi ;;
+            fast | tested) ;;
+            *) echo "unknown mode: $MODE" >&2; exit 1 ;;
+          esac
