@@ -624,7 +624,8 @@ Content-Type: application/json
   değil). Bilinmeyen neden `not_allowed` olarak kaydedilir.
 - Token: `KEYCLOAK_SERVICE_CLIENT_ID` (`skymail-backend`) servis hesabının
   client credentials token'ı (Admin REST'in kullandığı); core `aud` ∋ `core`
-  ve `core:communication-preferences:read` arar (bilet 17).
+  ve `core` istemcisinin `communication-preferences:read` rolünü
+  (`resource_access.core.roles`) arar (bilet 17, core #256).
 
 ## Veritabanı migration'ları
 
