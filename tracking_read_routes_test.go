@@ -54,12 +54,13 @@ func TestTrackingReadRoutesEnforceRolesSenderAndNinetyDays(t *testing.T) {
 			t.Errorf("%s status %d", query, status)
 		}
 	}
-	for _, age := range []string{"89 days", "90 days", "91 days"} {
+	// A year (tracking.EventRetention; Yusuf, 2026-10-19), not 90 days.
+	for _, age := range []string{"89 days", "91 days", "364 days", "365 days", "366 days"} {
 		if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_queue SET sent_at=now()-$2::interval WHERE task_id=$1`, created.ID, age); err != nil {
 			t.Fatal(err)
 		}
 		want := 410
-		if age == "89 days" {
+		if age == "89 days" || age == "91 days" || age == "364 days" {
 			want = 200
 		}
 		if status, raw := w.call("yusuf", "GET", base+"/recipients", nil, nil); status != want {

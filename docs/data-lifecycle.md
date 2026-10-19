@@ -242,10 +242,26 @@ Off unless `SKYMAIL_TRACKING=on` (hub ticket iletisim-servisi 14; design note
 
 | What | Kept | Then |
 |---|---|---|
-| `mail_queue.tracking_token`, `tracking_skip_reason`, `sent_at` | with the row | Account erasure closes the token of mail to the person |
-| `mail_tracking_events` | 90 days from the send (design note 07 §4.7; the retention job is still to come) | deleted; withdrawal (core, my.) and Account erasure delete the person's at once |
-| `mail_task_tracking_totals` | without end, sends with ≥10 tracked recipients only (T4) | — |
-| `mail_task_links.url` | one year (T3; the retention job is still to come) | emptied (`url_cleared_reason` `expired`); Account erasure empties a link naming the person (`erased`) |
+| `mail_queue.tracking_token`, `tracking_skip_reason`, `sent_at` | with the row | the token closes a year after `sent_at` (retention), and at once on withdrawal and Account erasure |
+| `mail_tracking_events` | **one year** from the recipient's `sent_at` (`tracking.EventRetentionDays` = 365; Yusuf, 2026-10-19 — design note 07 said 90 days). Past it no event is written or shown | deleted by the retention run; withdrawal (core, my.) and Account erasure delete the person's at once |
+| `mail_task_tracking_totals` | without end, sends with ≥10 tracked recipients only (T4); written by the retention run, from all the send's events, before the first of them goes | — |
+| `mail_task_links.url` | one year from the link's `created_at` (T3) | emptied by the retention run (`url_cleared_reason` `expired`); a send masked or sensitive since it went out (review D7) and Account erasure of a person it names: emptied (`erased`) |
+| `tracking_retention_runs` | without end: one row per run, counts and times only | — |
+
+**Withdrawal** (`PUT /internal/v1/tracking-withdrawals/{sub}`, core, when
+the person turns tracking off on my.): every token of mail to the subject
+closes, sent or still queued, and their events are deleted, in one
+transaction that locks their tracked queue rows first. Links stay and still
+redirect; counts without people already kept stay. Idempotent, `204`.
+
+**Retention** (`SKYMAIL_TRACKING_RETENTION` = `off` | `dry-run` | `apply` |
+`purge`; README, "Saklama"): daily, under an advisory lock, one transaction
+per send with the send's tracked queue rows locked first (then links, then
+events — Account erasure's order). The dry run runs the same statements and
+rolls them back; apply refuses a run past 50,000 rows (the brake). Every run
+writes its receipt to `tracking_retention_runs`. `purge`, the full
+roll-back, deletes every event and closes every token (tracking must be
+off).
 
 The mail kept (`body_html`) never holds the pixel or a click address: they
 are put in as the mail goes to the relay, so the content panel shows the

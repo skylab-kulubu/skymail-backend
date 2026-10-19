@@ -347,20 +347,28 @@ docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | 
 
 Kişi bazında açılma ve tıklama takibi (hub bilet iletişim-servisi 14, tasarım
 notu 07). **Varsayılan kapalı.** Bu sürümde takip verisi, SMTP anında
-yerleştirme, kimliksiz piksel/tıklama ve yetkili okuma uçları vardır.
-Geri alma ucu ve 90 günlük imha işi (14c), core tercihleri/rolleri (16/17)
-ve aydınlatma metni (18) tamamlanmadan hiçbir ortamda bayrak açılmaz;
+yerleştirme, kimliksiz piksel/tıklama, yetkili okuma uçları, core'dan geri
+alma ucu ve saklama işi (14c) vardır. core tercihleri/rolleri (16/17) ve
+aydınlatma metni (18) tamamlanmadan hiçbir ortamda bayrak açılmaz;
 production açılışı bilet 19'dadır. `on` geçerli adreslerle başlatılabilir,
 ancak bu bir açılış izni değildir.
+
+**Saklama süresi (Yusuf, 2026-10-19): kişi bazındaki açılma ve tıklama
+kayıtları alıcının postasının gittiği andan (`sent_at`) 1 yıl
+(`tracking.EventRetentionDays` = 365) tutulur** (tasarım notu 90 gün
+diyordu). Olay yazımı, raporlar ve saklama işi aynı sabiti kullanır.
 
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
 | `SKYMAIL_TRACKING` | `off` | `off` ya da `on`; başka değer açılışı durdurur |
 | `SKYMAIL_TRACKING_BASE_URL` | yok | `/t/`'nin herkese açık adresi (`https://api.yildizskylab.com/api/skymail`); yalnız https, kimlik bilgisi, sorgu ve parça yok; `on` iken zorunlu |
 | `CORE_URL` | yok | core'un Docker ağındaki adresi (`http://core-backend:8080`); `on` iken zorunlu |
+| `SKYMAIL_TRACKING_RETENTION` | `off` | saklama işi: `off`, `dry-run`, `apply` ya da `purge`; başka değer açılışı durdurur; `purge` için `SKYMAIL_TRACKING=off` zorunlu |
 
 Hatalı adres, değeri değil değişkeni söyleyerek açılışı durdurur. Açılışta
-`open and click tracking (SKYMAIL_TRACKING)` satırı kipi ve adresleri yazar.
+`open and click tracking (SKYMAIL_TRACKING)` satırı kipi ve adresleri,
+`open and click tracking retention (SKYMAIL_TRACKING_RETENTION)` satırı
+saklama kipini ve `event_retention_days` değerini yazar.
 
 - **Kim takip edilir (gönderim kuyruğa yazılırken sabitlenir):** bayrak açık;
   gönderim `tracking: true` istedi (`POST /v1/mail_tasks`, Mail onayı isteği);
@@ -435,7 +443,7 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   çalışır. İstekten hedefe hiçbir parça eklenmez.
 - SQL, alıcı satırı kilidi altında tüm replikalar birlikte açılmayı 5
   dakikada 1/toplam 20; tıklamayı bağlantı başına dakikada 1/alıcı başına
-  toplam 50 ile sınırlar. Teslim edilmemiş veya `sent_at + 90 gün` dolmuş
+  toplam 50 ile sınırlar. Teslim edilmemiş veya `sent_at + 1 yıl` dolmuş
   satır olay alamaz; imha işinin çalışması beklenmez. Süreç başına kayıt
   kovası 50 olay denemesi/sn (patlama 50), en çok 8 eşzamanlı DB işlemi,
   işlem başına 500 ms bütçe ve 2048 girdilik/30 sn negatif önbellek vardır.
@@ -454,7 +462,8 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   Seri noktaları UTC'de ilk 72 saat saatlik, sonra günlük; `at`, `interval`,
   `likely_human_opens`, `automated_opens`, `likely_human_clicks`,
   `automated_clicks` taşır. Boş kovalar yazılmaz. Kimlik ve hedef URL yoktur
-  (tek alıcılı hedef kişiyi adlandırabilir). 90 gün sonra `retained: true`:
+  (tek alıcılı hedef kişiyi adlandırabilir). Son postadan 1 yıl sonra
+`retained: true`:
   yalnız ≥10 alıcılı kişisiz toplam, yoksa `report: null`; seri dönmez.
 - `GET /v1/mail_tasks/{id}/tracking/recipients` rolü
   `skymail:mails:tracking:read` **ya da** `sent_by = token sub` ister;
@@ -469,9 +478,102 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   (`link_id`, `clicks`, `last_clicked_at`) içerir. “opened” açılma veya
   otomatik olmayan tıklama çıkarımını, “not_opened” ikisinin yokluğunu
   belirtir; “okumadı” anlamına gelmez. Token/hedef URL dönmez. Gönderimin
-  son `sent_at`'ından (teslim yoksa `created_at`) 90 gün sonra 410 döner;
-  bu tarihten önce de her alıcının kendi 90 günlük pencere dışı olayları
+  son `sent_at`'ından (teslim yoksa `created_at`) 1 yıl sonra 410 döner
+  ("Kişi bazında takip kaydı 1 yıl sonra silindi.");
+  bu tarihten önce de her alıcının kendi 1 yıllık pencere dışı olayları
   gizlenir. İki okuma ucunun bütçesi 2 sn, önbelleği `no-store`'dur.
+
+### Geri alma: `PUT /internal/v1/tracking-withdrawals/{sub}` (core'dan)
+
+Kişi my.'da takibi kapatınca (`enabled=false`) core bu ucu çağırır (bilet 16;
+tek yön core → SkyMail, postada kapatma bağlantısı yok, T8). Hesap silme
+ucunun kalıbı: `/v1` dışında, yalnız iç Docker ağından (`X-Forwarded-*`,
+`Forwarded`, `X-Real-Ip` taşıyan istek çıplak `404`); token realm'in JWKS'i
+ile yerelde doğrulanır ve `azp` = `core` (core'un SkyMail'i zaten çağıran
+istemcisi), `aud` ∋ `skymail`, `resource_access.skymail.roles` ∋
+`skymail:tracking:withdraw` ister. `core-erasure`'ın `skymail:account:erase`
+rolü bu uca **yetmez** (`403`). Çağıranın kendi erişim marker'ı her uçtaki
+gibi denetlenir.
+
+```http
+PUT {SKYMAIL_URL}/internal/v1/tracking-withdrawals/7d3c1f6e-0b9a-4c55-9a51-3f4d2b8e6a10
+Authorization: Bearer <core istemcisinin client credentials token'ı>
+```
+
+- Gövde yoktur (gönderilirse okunmaz). `{sub}` küçük harfli, tireli UUID;
+  başka yazım ya da Silinmiş kullanıcı `400 invalid_withdrawal_subject`.
+- Başarı **`204`**, gövdesiz; idempotent: tekrar çağrı da `204` döner,
+  hiçbir şey değiştirmez. Bayrak açık ya da kapalı fark etmez.
+- Etki, tek işlemde: kişinin `recipient_sub`'ına giden bütün takipli
+  satırlar `ORDER BY id FOR UPDATE` kilitlenir, belirteçleri kapanır
+  (`tracking_disabled_at`; gönderilmiş ve kuyrukta bekleyen postalar dahil,
+  bekleyen posta pikselsiz gider), sonra açılma ve tıklama olayları silinir.
+  Bağlantılara dokunulmaz: eski postaların bağlantıları yönlendirmeye devam
+  eder. Daha önce yazılmış kişisiz toplamlar değişmez. Sonraki gönderimlerde
+  core `tracking:resolve` ile `preference_off` der.
+- Hatalar `application/problem+json`, sabit `code` ile: `401
+  withdrawal_unauthorized`, `403 withdrawal_forbidden`, `503`
+  (`token_keys_unavailable`, `access_gate_unavailable`,
+  `withdrawal_store_unavailable`) `Retry-After: 30` ile; core'un tekrar
+  denemeli işi 5xx'te yeniden dener.
+- Günlük yalnız `"event":"tracking_withdrawal"` satırında sayılar
+  (`tokens_closed`, `events_deleted`) ya da reddin sabit kodu; `sub` hiçbir
+  yerde yazılmaz ya da yanıtta geri dönmez.
+- Bilinen sınır: core'a gönderim kuyruğa yazılmadan hemen önce sorulur;
+  geri alma o birkaç saniyelik aralığa denk gelirse o gönderimde kişi yine
+  takipli kuyruğa girebilir (bir sonraki geri alma ya da hesap silme onu da
+  kapatır).
+
+### Saklama (`SKYMAIL_TRACKING_RETENTION`)
+
+ADR-0062'nin imha işi kalıbı (core `RETENTION_SWEEP_MODE` ile aynı):
+`off` (varsayılan, hiçbir şey koşmaz), `dry-run` (her kuralı çalıştırır,
+işlemi geri alır: yalnız sayar), `apply` (değiştirir), `purge` (tam geri
+dönüş, aşağıda). Açılışta `dry-run`; ilk takipli gönderimden sonra makbuzlar
+okunup `apply`'a alınır (bilet 19).
+
+- **Zamanlama:** açılışta ve saatte bir "zamanı geldi mi" denetlenir; aynı
+  kipte son 23 saatte `ok`/`partial`/`refused_large` biten bir koşu yoksa
+  koşar. Durum veritabanındaki makbuzlardan okunur: yeniden başlatma ya da
+  yayın koşuyu tekrarlamaz; kip değişince yeni kip hemen koşar.
+- **Tek koşu:** oturum advisory lock'u (`skymail-backend tracking
+  retention`); kilidi bulamayan replika hiçbir şey yapmaz, makbuz yazmaz.
+- **Kurallar** (gönderim başına tek işlem; önce gönderimin takipli kuyruk
+  satırları `ORDER BY id FOR UPDATE`, sonra bağlantılar, sonra olaylar;
+  hesap silmenin kilit sırası):
+  1. alıcılarından birinin postası 1 yıldan eskiyse, gönderimde en az 10
+     takipli alıcı varsa ve henüz yoksa **önce** kişisiz toplam
+     (`mail_task_tracking_totals`) gönderimin bütün olaylarından yazılır;
+  2. postası 1 yıldan eski alıcıların belirteçleri kapanır;
+  3. 1 yıllık bağlantıların adresi boşalır (`expired`); maskelenmiş ya da
+     sonradan hassaslaşmış (`mail_task_content_sensitive()`) gönderimin
+     bütün bağlantılarının adresi boşalır (`erased`, inceleme D7);
+  4. postası 1 yıldan eski alıcıların olayları silinir;
+  5. kuyrukta bekleyen ya da 1 yıl içinde olan postası kalmayan gönderim
+     kapanır (`tracking_closed_at`); raporu artık yalnız kişisiz toplamdır.
+- **dry-run ile apply aynı tanımdan:** dry-run aynı ifadeleri çalıştırıp
+  işlemi geri alır; apply önce dry-run'ı koşar, sonra değiştirir.
+- **Fren:** bir koşuda kapanacak belirteç, silinecek olay ya da boşalacak
+  bağlantı sayısı 50.000'i aşarsa apply hiçbir şey değiştirmez
+  (`refused_large`, `error` düzeyinde `"alarm":"tracking_retention_brake"`).
+  dry-run aynı durumu `refused_large` diye raporlar. `purge`'ün freni yoktur.
+- **Makbuz:** her koşu `tracking_retention_runs`'a bir satır yazar (kip,
+  başlangıç/bitiş, durum `ok|partial|refused_large|failed`,
+  `events_cutoff`, sayılar: `sends`, `totals_written`, `tokens_closed`,
+  `events_deleted`, `links_expired`, `links_erased`, `sends_closed`,
+  `sends_failed`); kişi, belirteç ya da adres yoktur. Aynı sayılar
+  `"event":"tracking_retention_run"` günlük satırındadır.
+- **`purge` (tam geri dönüş):** `SKYMAIL_TRACKING=off` ister (yoksa açılış
+  durur). Bütün belirteçleri kapatır ve bütün olayları siler, yaşına
+  bakmadan; kişisiz toplamlar ve bağlantılar kalır, eski postaların
+  bağlantıları yönlendirir. Her koşuda tekrarlanır (zararsız); iş bitince
+  kip `off`'a alınır. Elle SQL gerekmez.
+
+Makbuzlar (production sunucusunda, salt okunur):
+
+```bash
+docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | grep -F '"event":"tracking_retention_run"'
+```
 
 ### core sözleşmesi (bilet 16)
 
