@@ -39,6 +39,11 @@ type TrackingWithdrawal struct {
 func (s *Store) WithdrawTracking(ctx context.Context, subject string) (TrackingWithdrawal, error) {
 	var done TrackingWithdrawal
 	err := pgx.BeginFunc(ctx, s.Conn, func(tx pgx.Tx) error {
+		// A row held longer than this (masking, an erasure) fails the call
+		// with lock_not_available; the route answers 503 and core retries.
+		if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '`+trackingLockTimeout+`'`); err != nil {
+			return err
+		}
 		// idx_mail_queue_tracking_subject holds exactly these rows.
 		if _, err := tx.Exec(ctx, `
 			SELECT q.id FROM mail_queue q
@@ -68,6 +73,10 @@ func (s *Store) WithdrawTracking(ctx context.Context, subject string) (TrackingW
 	return done, nil
 }
 
+// trackingLockTimeout bounds how long a withdrawal, or one send's
+// retention transaction, waits for a row another transaction holds.
+const trackingLockTimeout = "5s"
+
 // TrackingRetentionLockName names the session advisory lock one run holds:
 // one run at a time across replicas.
 const TrackingRetentionLockName = "skymail-backend tracking retention"
@@ -77,10 +86,14 @@ const TrackingRetentionLockName = "skymail-backend tracking retention"
 // changes nothing, and says so (refused_large). A wrong clock or a wrong
 // rule can then never empty the tables at once. purge, the roll-back asked
 // for by hand, has no brake.
-const TrackingRetentionBrakeMaxRows = 50000
+const TrackingRetentionBrakeMaxRows = tracking.DefaultRetentionMaxRows
 
 // ErrTrackingRetentionLocked is returned when another run holds the lock.
 var ErrTrackingRetentionLocked = errors.New("tracking retention: another run holds the lock")
+
+// ErrTrackingRetentionNotDue is returned by a run with OnlyIfDue that finds,
+// holding the lock, that a run of its mode is not due.
+var ErrTrackingRetentionNotDue = errors.New("tracking retention: not due")
 
 // TrackingRetentionCounts is what a run's rules changed (apply, purge) or
 // would change (a dry run, a refused apply).
@@ -118,8 +131,12 @@ type TrackingRetentionOptions struct {
 	// Mode is dry-run, apply or purge.
 	Mode tracking.RetentionMode
 	// BrakeMaxRows replaces TrackingRetentionBrakeMaxRows when positive
-	// (tests).
+	// (SKYMAIL_TRACKING_RETENTION_MAX_ROWS).
 	BrakeMaxRows int64
+	// OnlyIfDue makes the run check, once it holds the lock, that a run of
+	// its mode is due (TrackingRetentionDue), and do nothing otherwise
+	// (ErrTrackingRetentionNotDue): the schedule's runs.
+	OnlyIfDue bool
 }
 
 // TrackingRetentionReport is what a run did; its receipt is the
@@ -127,7 +144,9 @@ type TrackingRetentionOptions struct {
 type TrackingRetentionReport struct {
 	RunID int64
 	Mode  tracking.RetentionMode
-	// ok, partial (a send failed), refused_large (the brake) or failed.
+	// ok; partial (a send failed); refused_large (apply: the brake refused,
+	// nothing changed); would_refuse_large (a dry run whose apply the brake
+	// would refuse); failed.
 	Status string
 	// Mail sent at or before this is past EventRetention.
 	EventsCutoff time.Time
@@ -140,12 +159,14 @@ type TrackingRetentionReport struct {
 // count. Changing the mode makes a run of the new mode due at once.
 func (s *Store) TrackingRetentionDue(ctx context.Context, mode tracking.RetentionMode) (bool, error) {
 	var due bool
-	err := s.Conn.QueryRow(ctx, `
-		SELECT NOT EXISTS (SELECT 1 FROM tracking_retention_runs
-		                   WHERE mode = $1 AND status IN ('ok', 'partial', 'refused_large')
-		                     AND started_at > now() - interval '23 hours')`, string(mode)).Scan(&due)
+	err := s.Conn.QueryRow(ctx, trackingRetentionDueSQL, string(mode)).Scan(&due)
 	return due, err
 }
+
+const trackingRetentionDueSQL = `
+	SELECT NOT EXISTS (SELECT 1 FROM tracking_retention_runs
+	                   WHERE mode = $1 AND status IN ('ok', 'partial', 'refused_large', 'would_refuse_large')
+	                     AND started_at > now() - interval '23 hours')`
 
 // RunTrackingRetention runs the retention rules once (design note 07 §4.7,
 // Yusuf 2026-10-19: a year), holding the advisory lock, and writes its
@@ -195,6 +216,16 @@ func (s *Store) RunTrackingRetention(ctx context.Context, opts TrackingRetention
 		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, TrackingRetentionLockName)
 	}()
 
+	if opts.OnlyIfDue {
+		var due bool
+		if err := conn.QueryRow(ctx, trackingRetentionDueSQL, string(opts.Mode)).Scan(&due); err != nil {
+			return nil, fmt.Errorf("tracking retention due: %w", err)
+		}
+		if !due {
+			return nil, ErrTrackingRetentionNotDue
+		}
+	}
+
 	report := &TrackingRetentionReport{Mode: opts.Mode}
 	var now time.Time
 	if err := s.Conn.QueryRow(ctx, `
@@ -204,6 +235,7 @@ func (s *Store) RunTrackingRetention(ctx context.Context, opts TrackingRetention
 		return nil, fmt.Errorf("tracking retention receipt: %w", err)
 	}
 
+	refused := false
 	runErr := func() error {
 		if opts.Mode == tracking.RetentionPurge {
 			counts, err := s.purgeTracking(ctx)
@@ -220,7 +252,10 @@ func (s *Store) RunTrackingRetention(ctx context.Context, opts TrackingRetention
 		if err != nil {
 			return err
 		}
-		if opts.Mode == tracking.RetentionApply && !counts.refusedBy(brake) {
+		// The brake decides on the dry run's counts, and only those: an
+		// apply that went ahead is never reported refused.
+		refused = counts.refusedBy(brake)
+		if opts.Mode == tracking.RetentionApply && !refused {
 			report.Counts, err = s.trackingRetentionPass(ctx, sends, now, true)
 		}
 		return err
@@ -229,8 +264,10 @@ func (s *Store) RunTrackingRetention(ctx context.Context, opts TrackingRetention
 	switch {
 	case runErr != nil:
 		report.Status = "failed"
-	case opts.Mode != tracking.RetentionPurge && report.Counts.refusedBy(brake):
+	case refused && opts.Mode == tracking.RetentionApply:
 		report.Status = "refused_large"
+	case refused:
+		report.Status = "would_refuse_large"
 	case report.Counts.SendsFailed > 0:
 		report.Status = "partial"
 	default:
@@ -320,8 +357,18 @@ var trackingRetentionRules = []struct {
 	{
 		// 1. The counts without people (T4), as the live report has them,
 		// from every event the send still has, before any goes.
+		//
+		// A person counts as tracked only when their tracked mail went out
+		// and their token is open (T4, orchestrator 2026-10-19): a token of
+		// mail that never went out (not_delivered) or closed by a
+		// withdrawal, an erasure or the flag (tracking_closed) could leave
+		// fewer than ten behind the counts. The table's CHECK keeps
+		// tracked_recipients at 10 or more.
 		sql: `WITH people AS (
-		          SELECT q.tracking_token IS NOT NULL AS tracked, COALESCE(q.tracking_skip_reason, 'not_requested') AS reason
+		          SELECT q.tracking_token IS NOT NULL AND q.status = 'sent' AND q.tracking_disabled_at IS NULL AS tracked,
+		                 CASE WHEN q.tracking_token IS NULL THEN COALESCE(q.tracking_skip_reason, 'not_requested')
+		                      WHEN q.status <> 'sent' THEN 'not_delivered'
+		                      ELSE 'tracking_closed' END AS reason
 		          FROM mail_queue q WHERE q.task_id = @task
 		      ), events AS (
 		          SELECT e.queue_id, e.kind, e.link_id, e.automated_likely FROM mail_tracking_events e WHERE e.task_id = @task
@@ -403,7 +450,7 @@ func (s *Store) trackingRetentionSend(ctx context.Context, task uuid.UUID, now t
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	// A click in flight holds a row for milliseconds; anything longer is
 	// left for the next run rather than waited on.
-	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '5s'`); err != nil {
+	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '`+trackingLockTimeout+`'`); err != nil {
 		return counts, err
 	}
 	args := pgx.NamedArgs{"task": task, "now": now, "days": tracking.EventRetentionDays, "min": tracking.TotalsMinRecipients}

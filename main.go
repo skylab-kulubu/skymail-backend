@@ -140,6 +140,10 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid open and click tracking retention configuration")
 	}
+	trackingRetentionMaxRows, err := tracking.RetentionMaxRowsFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid open and click tracking retention configuration")
+	}
 	if migrationConfig.Mode == migrations.ModeApply {
 		// A stop signal ends a wait for another process's migrations, never
 		// a migration under way.
@@ -178,7 +182,7 @@ func main() {
 
 	log.Info().Str("mode", string(trackingConfig.Mode)).Str("base_url", trackingConfig.BaseURL).Str("core_url", trackingConfig.CoreURL).
 		Msg("open and click tracking (SKYMAIL_TRACKING)")
-	log.Info().Str("mode", string(trackingRetention)).Int("event_retention_days", tracking.EventRetentionDays).
+	log.Info().Str("mode", string(trackingRetention)).Int("event_retention_days", tracking.EventRetentionDays).Int64("max_rows", trackingRetentionMaxRows).
 		Msg("open and click tracking retention (SKYMAIL_TRACKING_RETENTION)")
 	db := database.NewStore(conn)
 	mailerService := mailer.NewMailer(db, mailer.SMTPConfig{
@@ -286,7 +290,7 @@ func main() {
 	trackingRetentionStopped := make(chan struct{})
 	go func() {
 		defer close(trackingRetentionStopped)
-		runTrackingRetention(workers, db, trackingRetention, trackingRetentionCheckInterval)
+		runTrackingRetention(workers, db, database.TrackingRetentionOptions{Mode: trackingRetention, BrakeMaxRows: trackingRetentionMaxRows, OnlyIfDue: true}, trackingRetentionCheckInterval)
 	}()
 
 	addr := fmt.Sprintf(":%d", 3000)
@@ -462,19 +466,19 @@ func clearMailContent(ctx context.Context, db *database.Store, retentionDays, vi
 const trackingRetentionCheckInterval = time.Hour
 
 // runTrackingRetention runs open and click tracking's retention rules
-// (database.RunTrackingRetention) at startup and whenever a run of mode is
-// due, checking every interval. Off, it does nothing. Each run writes its
+// (database.RunTrackingRetention) at startup and whenever a run of its mode
+// is due, checking every interval. Off, it does nothing. Each run writes its
 // receipt (tracking_retention_runs) and one log line of counts; the brake
 // and a failure log at error level. Nothing it logs names a person, a token
 // or a link.
-func runTrackingRetention(ctx context.Context, db *database.Store, mode tracking.RetentionMode, interval time.Duration) {
-	if mode == tracking.RetentionOff {
+func runTrackingRetention(ctx context.Context, db *database.Store, opts database.TrackingRetentionOptions, interval time.Duration) {
+	if opts.Mode == tracking.RetentionOff {
 		return
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		trackingRetentionOnce(ctx, db, mode)
+		trackingRetentionOnce(ctx, db, opts)
 		select {
 		case <-ctx.Done():
 			return
@@ -483,18 +487,13 @@ func runTrackingRetention(ctx context.Context, db *database.Store, mode tracking
 	}
 }
 
-func trackingRetentionOnce(ctx context.Context, db *database.Store, mode tracking.RetentionMode) {
-	due, err := db.TrackingRetentionDue(ctx, mode)
-	if err != nil {
-		if ctx.Err() == nil {
-			log.Error().Err(err).Str("event", "tracking_retention_failed").Msg("tracking retention: could not read its receipts")
-		}
+// trackingRetentionOnce runs when due: the run checks that itself, holding
+// the lock, so two replicas never run it twice in a day.
+func trackingRetentionOnce(ctx context.Context, db *database.Store, opts database.TrackingRetentionOptions) {
+	report, err := db.RunTrackingRetention(ctx, opts)
+	if errors.Is(err, database.ErrTrackingRetentionNotDue) {
 		return
 	}
-	if !due {
-		return
-	}
-	report, err := db.RunTrackingRetention(ctx, database.TrackingRetentionOptions{Mode: mode})
 	if errors.Is(err, database.ErrTrackingRetentionLocked) {
 		log.Info().Str("event", "tracking_retention_locked").Msg("tracking retention: another replica is running it")
 		return
@@ -509,7 +508,7 @@ func trackingRetentionOnce(ctx context.Context, db *database.Store, mode trackin
 	switch {
 	case err != nil || report.Status == "failed":
 		line = log.Error().Err(err)
-	case report.Status == "refused_large":
+	case report.Status == "refused_large" || report.Status == "would_refuse_large":
 		line = log.Error().Str("alarm", "tracking_retention_brake")
 	case report.Status == "partial":
 		line = log.Warn()

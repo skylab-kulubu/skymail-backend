@@ -364,11 +364,12 @@ diyordu). Olay yazımı, raporlar ve saklama işi aynı sabiti kullanır.
 | `SKYMAIL_TRACKING_BASE_URL` | yok | `/t/`'nin herkese açık adresi (`https://api.yildizskylab.com/api/skymail`); yalnız https, kimlik bilgisi, sorgu ve parça yok; `on` iken zorunlu |
 | `CORE_URL` | yok | core'un Docker ağındaki adresi (`http://core-backend:8080`); `on` iken zorunlu |
 | `SKYMAIL_TRACKING_RETENTION` | `off` | saklama işi: `off`, `dry-run`, `apply` ya da `purge`; başka değer açılışı durdurur; `purge` için `SKYMAIL_TRACKING=off` zorunlu |
+| `SKYMAIL_TRACKING_RETENTION_MAX_ROWS` | `50000` | saklama freni: bir apply'da kapanacak belirteç, silinecek olay ya da boşalacak bağlantı sınırı (1–10.000.000); başka değer açılışı durdurur |
 
 Hatalı adres, değeri değil değişkeni söyleyerek açılışı durdurur. Açılışta
 `open and click tracking (SKYMAIL_TRACKING)` satırı kipi ve adresleri,
 `open and click tracking retention (SKYMAIL_TRACKING_RETENTION)` satırı
-saklama kipini ve `event_retention_days` değerini yazar.
+saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
 
 - **Kim takip edilir (gönderim kuyruğa yazılırken sabitlenir):** bayrak açık;
   gönderim `tracking: true` istedi (`POST /v1/mail_tasks`, Mail onayı isteği);
@@ -529,13 +530,16 @@ Authorization: Bearer <core istemcisinin client credentials token'ı>
 ADR-0062'nin imha işi kalıbı (core `RETENTION_SWEEP_MODE` ile aynı):
 `off` (varsayılan, hiçbir şey koşmaz), `dry-run` (her kuralı çalıştırır,
 işlemi geri alır: yalnız sayar), `apply` (değiştirir), `purge` (tam geri
-dönüş, aşağıda). Açılışta `dry-run`; ilk takipli gönderimden sonra makbuzlar
-okunup `apply`'a alınır (bilet 19).
+dönüş, aşağıda). Açılışta `dry-run`; 1–2 dry-run makbuzu okunur okunmaz
+`apply`'a alınır (bilet 19). Bir yıl beklenmez: D7 yalnız `apply`'da
+çalışır, ilk yıl apply yalnız D7'ye dokunur.
 
 - **Zamanlama:** açılışta ve saatte bir "zamanı geldi mi" denetlenir; aynı
-  kipte son 23 saatte `ok`/`partial`/`refused_large` biten bir koşu yoksa
-  koşar. Durum veritabanındaki makbuzlardan okunur: yeniden başlatma ya da
-  yayın koşuyu tekrarlamaz; kip değişince yeni kip hemen koşar.
+  kipte son 23 saatte `ok`/`partial`/`refused_large`/`would_refuse_large`
+  biten bir koşu yoksa koşar. Bu denetim advisory lock alındıktan **sonra**
+  yapılır: iki replika aynı gün iki kez koşmaz. Durum veritabanındaki
+  makbuzlardan okunur: yeniden başlatma ya da yayın koşuyu tekrarlamaz; kip
+  değişince yeni kip hemen koşar.
 - **Tek koşu:** oturum advisory lock'u (`skymail-backend tracking
   retention`); kilidi bulamayan replika hiçbir şey yapmaz, makbuz yazmaz.
 - **Kurallar** (gönderim başına tek işlem; önce gönderimin takipli kuyruk
@@ -543,7 +547,10 @@ okunup `apply`'a alınır (bilet 19).
   hesap silmenin kilit sırası):
   1. alıcılarından birinin postası 1 yıldan eskiyse, gönderimde en az 10
      takipli alıcı varsa ve henüz yoksa **önce** kişisiz toplam
-     (`mail_task_tracking_totals`) gönderimin bütün olaylarından yazılır;
+     (`mail_task_tracking_totals`) gönderimin bütün olaylarından yazılır.
+     "Takipli alıcı" yalnız postası gitmiş (`status='sent'`) ve belirteci
+     açık (geri almamış, silinmemiş) olandır; ötekiler toplamda
+     `not_delivered` / `tracking_closed` nedeniyle görünür;
   2. postası 1 yıldan eski alıcıların belirteçleri kapanır;
   3. 1 yıllık bağlantıların adresi boşalır (`expired`); maskelenmiş ya da
      sonradan hassaslaşmış (`mail_task_content_sensitive()`) gönderimin
@@ -554,12 +561,16 @@ okunup `apply`'a alınır (bilet 19).
 - **dry-run ile apply aynı tanımdan:** dry-run aynı ifadeleri çalıştırıp
   işlemi geri alır; apply önce dry-run'ı koşar, sonra değiştirir.
 - **Fren:** bir koşuda kapanacak belirteç, silinecek olay ya da boşalacak
-  bağlantı sayısı 50.000'i aşarsa apply hiçbir şey değiştirmez
-  (`refused_large`, `error` düzeyinde `"alarm":"tracking_retention_brake"`).
-  dry-run aynı durumu `refused_large` diye raporlar. `purge`'ün freni yoktur.
+  bağlantı sayısı `SKYMAIL_TRACKING_RETENTION_MAX_ROWS`'u (varsayılan 50.000)
+  aşarsa apply hiçbir şey değiştirmez (`refused_large`, `error` düzeyinde
+  `"alarm":"tracking_retention_brake"`). Karar yalnız apply'ın önce koştuğu
+  dry-run sayılarına bakar; değişiklik yapan apply hiçbir zaman
+  `refused_large` yazmaz. dry-run aynı durumu `would_refuse_large` diye
+  raporlar. Biriken iş fren yüzünden her gün reddediliyorsa sınır bir
+  yayınlık yükseltilir. `purge`'ün freni yoktur.
 - **Makbuz:** her koşu `tracking_retention_runs`'a bir satır yazar (kip,
   başlangıç/bitiş, durum `ok|partial|refused_large|failed`,
-  `events_cutoff`, sayılar: `sends`, `totals_written`, `tokens_closed`,
+  `events_cutoff`, durum ayrıca `would_refuse_large` olabilir; sayılar: `sends`, `totals_written`, `tokens_closed`,
   `events_deleted`, `links_expired`, `links_erased`, `sends_closed`,
   `sends_failed`); kişi, belirteç ya da adres yoktur. Aynı sayılar
   `"event":"tracking_retention_run"` günlük satırındadır.
@@ -567,7 +578,17 @@ okunup `apply`'a alınır (bilet 19).
   durur). Bütün belirteçleri kapatır ve bütün olayları siler, yaşına
   bakmadan; kişisiz toplamlar ve bağlantılar kalır, eski postaların
   bağlantıları yönlendirir. Her koşuda tekrarlanır (zararsız); iş bitince
-  kip `off`'a alınır. Elle SQL gerekmez.
+  kip **`apply`'a** alınır (`off`'a değil: `off`'ta 1 yıllık bağlantı
+  boşaltması ve D7 de durur; bayrak kapalıyken `apply` zararsızdır). Elle SQL
+  gerekmez.
+- **Bilinen sınırlar:** (1) kişisiz toplam ilk alıcının yılı dolduğu koşuda
+  bir kez yazılır; aynı gönderimin sonra giden alıcılarının o andan kendi
+  yıllarına kadarki olayları toplama girmez (gönderim dakikalar içinde
+  gittiği için pratikte etkisiz). (2) Maskeleme süpürücüsü görevi sonra
+  kuyruk satırlarını, saklama ise önce kuyruk satırlarını kilitler; bir
+  yıllık takipli gönderimin şablonu tam o anda hassaslaşırsa Postgres
+  birini ölü kilit diye iptal eder: saklama `sends_failed` yazıp ertesi gün
+  dener, maskeleme başarısızlık sayar (hassas içerik için güvenli yön).
 
 Makbuzlar (production sunucusunda, salt okunur):
 

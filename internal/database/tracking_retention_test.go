@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
 )
@@ -491,13 +492,13 @@ func TestTrackingRetentionBrakeRefusesALargeRun(t *testing.T) {
 	seedSend(t, s, retentionTemplate, day+1, nil, tracked(day+1, 2, 0), tracked(day+1, 1, 0))
 	before := trackingState(t, s)
 
-	for _, mode := range []tracking.RetentionMode{tracking.RetentionDryRun, tracking.RetentionApply} {
+	for mode, status := range map[tracking.RetentionMode]string{tracking.RetentionDryRun: "would_refuse_large", tracking.RetentionApply: "refused_large"} {
 		got, err := s.RunTrackingRetention(ctx, TrackingRetentionOptions{Mode: mode, BrakeMaxRows: 2})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Status != "refused_large" || got.Counts.EventsDeleted != 3 {
-			t.Errorf("%s = %s %+v, want refused_large counting 3 events", mode, got.Status, got.Counts)
+		if got.Status != status || got.Counts.EventsDeleted != 3 {
+			t.Errorf("%s = %s %+v, want %s counting 3 events", mode, got.Status, got.Counts, status)
 		}
 		assertReceipt(t, s, got)
 	}
@@ -647,5 +648,109 @@ func TestTrackingRetentionWaitsForAnInFlightClick(t *testing.T) {
 	}
 	if n := queryCount(t, s, `SELECT count(*) FROM mail_task_links WHERE id = $1 AND url IS NULL AND url_cleared_reason = 'erased'`, send.links[0]); n != 1 {
 		t.Error("the masked send's link was not emptied")
+	}
+}
+
+// T4 counts people a count could tell about: the ≥10 threshold and
+// tracked_recipients count only the tracked mail that went out and whose
+// token is still open (not withdrawn, erased or closed). A send of ten
+// tokens one of which failed keeps no counts; one of eleven with one
+// withdrawal keeps them for ten, the withdrawn one among the untracked.
+func TestTrackingRetentionThresholdCountsOnlyDeliveredOpenTokens(t *testing.T) {
+	s := retentionStore(t)
+	ctx := context.Background()
+	day := tracking.EventRetentionDays
+	var ten, eleven []recipient
+	for i := 0; i < 10; i++ {
+		ten = append(ten, tracked(day+1, 1, 0))
+	}
+	for i := 0; i < 11; i++ {
+		eleven = append(eleven, tracked(day+1, 1, 0))
+	}
+	failed := seedSend(t, s, retentionTemplate, day+1, nil, ten...)
+	withdrawn := seedSend(t, s, retentionTemplate, day+1, nil, eleven...)
+	if _, err := s.Conn.Exec(ctx, `UPDATE mail_queue SET status = 'failed', sent_at = NULL WHERE id = $1`, failed.rows[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.WithdrawTracking(ctx, eleven[0].sub.String()); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.RunTrackingRetention(ctx, TrackingRetentionOptions{Mode: tracking.RetentionApply})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "ok" || got.Counts.TotalsWritten != 1 {
+		t.Fatalf("run = %s %+v, want ok and one send's counts", got.Status, got.Counts)
+	}
+	if _, err := s.GetRetainedTrackingReport(ctx, failed.task); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("nine delivered of ten tokens kept counts: %v", err)
+	}
+	report, err := s.GetRetainedTrackingReport(ctx, withdrawn.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var totals struct {
+		Tracked    int            `json:"tracked_recipients"`
+		Untracked  map[string]int `json:"untracked_by_reason"`
+		UniqueOpen int            `json:"unique_opens"`
+	}
+	if err := json.Unmarshal(report, &totals); err != nil {
+		t.Fatal(err)
+	}
+	if totals.Tracked != 10 || totals.UniqueOpen != 10 || !reflect.DeepEqual(totals.Untracked, map[string]int{"tracking_closed": 1}) {
+		t.Errorf("totals = %+v, want 10 tracked, 10 opens, the withdrawn one tracking_closed", totals)
+	}
+}
+
+// A second run that finds, once it holds the lock, that another just ran
+// does nothing and writes no receipt (OnlyIfDue; two replicas that both
+// found the run due run it once).
+func TestTrackingRetentionOnlyIfDueChecksUnderTheLock(t *testing.T) {
+	s := retentionStore(t)
+	ctx := context.Background()
+	if _, err := s.RunTrackingRetention(ctx, TrackingRetentionOptions{Mode: tracking.RetentionDryRun, OnlyIfDue: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RunTrackingRetention(ctx, TrackingRetentionOptions{Mode: tracking.RetentionDryRun, OnlyIfDue: true}); !errors.Is(err, ErrTrackingRetentionNotDue) {
+		t.Fatalf("second run: %v, want ErrTrackingRetentionNotDue", err)
+	}
+	if n := queryCount(t, s, `SELECT count(*) FROM tracking_retention_runs`); n != 1 {
+		t.Errorf("%d receipts, want 1", n)
+	}
+	if _, err := s.RunTrackingRetention(ctx, TrackingRetentionOptions{Mode: tracking.RetentionApply, OnlyIfDue: true}); err != nil {
+		t.Errorf("apply after a dry run: %v", err)
+	}
+}
+
+// A withdrawal does not wait on a held row for longer than its lock
+// timeout: it fails with lock_not_available, which the route answers 503
+// with Retry-After, and core tries again.
+func TestWithdrawTrackingGivesUpOnAHeldRow(t *testing.T) {
+	s := retentionStore(t)
+	ctx := context.Background()
+	deniz := tracked(1, 1, 0)
+	send := seedSend(t, s, retentionTemplate, 1, nil, deniz)
+	tx, err := s.Conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM mail_queue WHERE id = $1 FOR UPDATE`, send.rows[0]); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	bounded, stop := context.WithTimeout(ctx, 15*time.Second)
+	defer stop()
+	_, err = s.WithdrawTracking(bounded, deniz.sub.String())
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "55P03" {
+		t.Fatalf("withdrawal on a held row: %v, want lock_not_available", err)
+	}
+	if waited := time.Since(start); waited > 8*time.Second {
+		t.Errorf("waited %s", waited)
+	}
+	if n := queryCount(t, s, `SELECT count(*) FROM mail_tracking_events WHERE queue_id = $1`, send.rows[0]); n != 1 {
+		t.Error("a failed withdrawal deleted events")
 	}
 }

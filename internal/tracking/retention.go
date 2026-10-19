@@ -2,6 +2,7 @@ package tracking
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -63,4 +64,31 @@ func RetentionModeFromEnv(getenv func(string) string, cfg Config) (RetentionMode
 		return "", fmt.Errorf("%s=purge needs SKYMAIL_TRACKING=off: turn tracking off before deleting all of it", RetentionModeEnv)
 	}
 	return mode, nil
+}
+
+// RetentionMaxRowsEnv names the brake: the most tokens, events or links
+// one apply may change before it changes nothing (refused_large).
+const RetentionMaxRowsEnv = "SKYMAIL_TRACKING_RETENTION_MAX_ROWS"
+
+// DefaultRetentionMaxRows is the brake when RetentionMaxRowsEnv is unset.
+const DefaultRetentionMaxRows = 50000
+
+// maxRetentionMaxRows bounds the brake: a typo with extra zeros must not
+// turn it off.
+const maxRetentionMaxRows = 10000000
+
+// RetentionMaxRowsFromEnv reads SKYMAIL_TRACKING_RETENTION_MAX_ROWS, a whole
+// number from 1 to 10,000,000; unset is DefaultRetentionMaxRows. Raising it
+// for one release clears a backlog the brake refused. Anything else stops
+// startup.
+func RetentionMaxRowsFromEnv(getenv func(string) string) (int64, error) {
+	raw := strings.TrimSpace(getenv(RetentionMaxRowsEnv))
+	if raw == "" {
+		return DefaultRetentionMaxRows, nil
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 1 || n > maxRetentionMaxRows {
+		return 0, fmt.Errorf("%s must be a whole number from 1 to %d, not %q", RetentionMaxRowsEnv, maxRetentionMaxRows, raw)
+	}
+	return n, nil
 }

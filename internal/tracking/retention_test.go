@@ -59,3 +59,20 @@ func TestRetentionPurgeNeedsTrackingOff(t *testing.T) {
 		}
 	}
 }
+
+// SKYMAIL_TRACKING_RETENTION_MAX_ROWS sets the brake: unset is 50000, a
+// whole number from 1 to 10000000 otherwise; anything else stops startup.
+func TestRetentionMaxRowsFromEnv(t *testing.T) {
+	for raw, want := range map[string]int64{"": 50000, " ": 50000, "1": 1, " 250000 ": 250000, "10000000": 10000000} {
+		got, err := tracking.RetentionMaxRowsFromEnv(env(map[string]string{tracking.RetentionMaxRowsEnv: raw}))
+		if err != nil || got != want {
+			t.Errorf("%q: %d, %v; want %d", raw, got, err, want)
+		}
+	}
+	for _, raw := range []string{"0", "-5", "10000001", "5e4", "50 000", "abc"} {
+		if _, err := tracking.RetentionMaxRowsFromEnv(env(map[string]string{tracking.RetentionMaxRowsEnv: raw})); err == nil ||
+			!strings.Contains(err.Error(), tracking.RetentionMaxRowsEnv) {
+			t.Errorf("%q: %v, want an error naming the variable", raw, err)
+		}
+	}
+}

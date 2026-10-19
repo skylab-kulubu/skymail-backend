@@ -21,7 +21,7 @@ CREATE TABLE tracking_retention_runs
     events_cutoff TIMESTAMPTZ NOT NULL,
     counts      JSONB       NOT NULL DEFAULT '{}',
     CONSTRAINT tracking_retention_runs_mode CHECK (mode IN ('dry-run', 'apply', 'purge')),
-    CONSTRAINT tracking_retention_runs_status CHECK (status IN ('running', 'ok', 'partial', 'refused_large', 'failed')),
+    CONSTRAINT tracking_retention_runs_status CHECK (status IN ('running', 'ok', 'partial', 'refused_large', 'would_refuse_large', 'failed')),
     CONSTRAINT tracking_retention_runs_finished CHECK ((status = 'running') = (finished_at IS NULL))
 );
 

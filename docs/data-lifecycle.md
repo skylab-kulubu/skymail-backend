@@ -258,7 +258,9 @@ redirect; counts without people already kept stay. Idempotent, `204`.
 `purge`; README, "Saklama"): daily, under an advisory lock, one transaction
 per send with the send's tracked queue rows locked first (then links, then
 events — Account erasure's order). The dry run runs the same statements and
-rolls them back; apply refuses a run past 50,000 rows (the brake). Every run
+rolls them back; apply refuses a run past
+`SKYMAIL_TRACKING_RETENTION_MAX_ROWS` (50,000 by default; the brake). The
+≥10 threshold counts only delivered mail whose token is still open. Every run
 writes its receipt to `tracking_retention_runs`. `purge`, the full
 roll-back, deletes every event and closes every token (tracking must be
 off).
