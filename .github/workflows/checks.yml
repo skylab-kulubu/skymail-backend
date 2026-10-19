@@ -4,7 +4,7 @@ name: Checks
 # - full: pushes to main, a manual run (gh workflow run checks.yml --ref <branch>), pull requests
 #   into anything but main whose tree main has not tested, and pull requests into main labelled
 #   full-ci. Every job runs.
-# - fast: pull requests into main. The jobs run unless only documentation changed.
+# - fast: pull requests into main. The jobs run unless only Markdown (or LICENSE) changed.
 # - tested: the push to production and pull requests into production whose tree a push to main has
 #   already tested green (production is a squash of main, so the tree is compared, not the commit).
 #   Nothing runs again; release.yml promotes that tree's main image instead of rebuilding it.
@@ -50,6 +50,26 @@ jobs:
           FULL_CI_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
         run: |
           set -euo pipefail
+          # The only paths no build, test or image reads: Markdown and the licence. docs/ is not
+          # among them: docs/docs.go is Go code (swag) that main.go compiles and tests read.
+          skips_go() {
+            case $1 in
+              *.md | LICENSE) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          # Guard against a filter that skips code: no tracked Go file, no embedded migration and
+          # none of these examples may be skipped; documentation must be.
+          while IFS= read -r path; do
+            if skips_go "$path"; then
+              echo "the path filter would skip $path, which the build or the tests read" >&2
+              exit 1
+            fi
+          done < <(git ls-files '*.go' 'db/migrations/*' go.mod go.sum query.sql sqlc.yaml Dockerfile; printf '%s\n' docs/docs.go docs/swagger.json docs/swagger.yaml)
+          for path in README.md docs/data-lifecycle.md LICENSE; do
+            skips_go "$path" || { echo "the path filter would run the jobs for $path" >&2; exit 1; }
+          done
+
           select_all() {
             printf 'mode=%s\ngo=true\n' "$1" >> "$GITHUB_OUTPUT"
             echo "mode $1: every job" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -93,10 +113,7 @@ jobs:
           fi
           go=false
           while IFS= read -r path; do
-            case $path in
-              docs/* | *.md | LICENSE) ;;
-              *) go=true ;;
-            esac
+            skips_go "$path" || go=true
           done <<<"$changed"
           printf 'mode=fast\ngo=%s\n' "$go" >> "$GITHUB_OUTPUT"
           echo "mode fast: static and test=$go" | tee -a "$GITHUB_STEP_SUMMARY"
