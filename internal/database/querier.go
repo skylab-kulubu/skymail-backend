@@ -258,8 +258,8 @@ type Querier interface {
 	// false only drafts, discarded ones included.
 	ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]TemplateVersionSummary, error)
 	// One aggregate per recipient, then filtering and pagination. Events older
-	// than their recipient's 90-day window never reappear while retention is
-	// disabled or catching up. No tracking token or link target is selected.
+	// than their recipient's one-year window (tracking.EventRetentionDays) never
+	// reappear while retention is disabled or catching up. No tracking token or link target is selected.
 	ListTrackingRecipients(ctx context.Context, arg ListTrackingRecipientsParams) ([]byte, error)
 	// The next undecided request past its deadline that no one is deciding right
 	// now, locked for the expiry sweep.

@@ -188,7 +188,7 @@ func newErasureRoute(t *testing.T, store handlers.AccountErasureStore, gate acce
 		ResourceClient: "skymail",
 	})
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
-	registerInternalRoutes(app, handlers.NewAccountErasureHandler(store, verifier, gate))
+	registerInternalRoutes(app, handlers.NewAccountErasureHandler(store, verifier, gate), handlers.TrackingWithdrawalHandler{})
 	return &erasureRoute{app: app, keycloak: keycloak}
 }
 

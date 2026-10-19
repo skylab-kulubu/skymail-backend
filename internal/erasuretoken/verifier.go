@@ -31,6 +31,15 @@ const (
 	EraseRole      = "skymail:account:erase"
 )
 
+// The tracking withdrawal's caller and grant (hub ticket iletisim-servisi
+// 14c/17; design note 07 §4.6): core's own client, which already calls
+// SkyMail, holding SkyMail's withdraw role. core-erasure's erase role is
+// not it: a token without this role is refused.
+const (
+	WithdrawCallerClientID = "core"
+	WithdrawRole           = "skymail:tracking:withdraw"
+)
+
 var (
 	// ErrUnauthorized: no token, or one SkyMail cannot prove Keycloak
 	// issued and is still valid — signature, issuer, expiry.
@@ -59,6 +68,11 @@ type Config struct {
 	// The client SkyMail's roles are on (skymail): the token's aud must name
 	// it, and the erase role must be under resource_access.<it>.
 	ResourceClient string
+	// CallerClientID is the azp a token must carry, and Role the role it
+	// must hold on ResourceClient: CallerClientID and EraseRole, the erase
+	// route's, when empty.
+	CallerClientID string
+	Role           string
 	HTTPClient     *http.Client
 	Now            func() time.Time
 }
@@ -69,6 +83,8 @@ type Config struct {
 // to know the token is core-erasure's and meant for SkyMail (spec §2.5).
 type Verifier struct {
 	resourceClient string
+	callerClientID string
+	role           string
 	parser         *jwt.Parser
 	keys           *signingKeys
 }
@@ -95,8 +111,17 @@ func NewVerifier(config Config) *Verifier {
 	if client == nil {
 		client = &http.Client{Timeout: signingKeysFetch}
 	}
+	caller, role := config.CallerClientID, config.Role
+	if caller == "" {
+		caller = CallerClientID
+	}
+	if role == "" {
+		role = EraseRole
+	}
 	return &Verifier{
 		resourceClient: config.ResourceClient,
+		callerClientID: caller,
+		role:           role,
 		parser: jwt.NewParser(
 			// Keycloak signs with an asymmetric key; an HMAC or unsigned
 			// token is never one of its access tokens.
@@ -138,14 +163,14 @@ func (v *Verifier) Verify(ctx context.Context, authorization string) (Caller, er
 		return Caller{}, ErrUnauthorized
 	}
 
-	if azp, _ := claims["azp"].(string); azp != CallerClientID {
+	if azp, _ := claims["azp"].(string); azp != v.callerClientID {
 		return Caller{}, ErrForbidden
 	}
 	audience, err := claims.GetAudience()
 	if err != nil || !slices.Contains(audience, v.resourceClient) {
 		return Caller{}, ErrForbidden
 	}
-	if !slices.Contains(clientRoles(claims, v.resourceClient), EraseRole) {
+	if !slices.Contains(clientRoles(claims, v.resourceClient), v.role) {
 		return Caller{}, ErrForbidden
 	}
 	return Caller{Subject: subject}, nil

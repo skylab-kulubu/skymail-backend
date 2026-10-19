@@ -3661,7 +3661,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/tracking": {
             "get": {
-                "description": "Requires skymail:mails:read. No identities, link tokens or target URLs. After 90 days only retained totals for at least 10 tracked recipients, or null. tracking_available follows the current flag.",
+                "description": "Requires skymail:mails:read. No identities, link tokens or target URLs. After a year only retained totals for at least 10 tracked recipients, or null. tracking_available follows the current flag.",
                 "parameters": [
                     {
                         "description": "Mail task ID",
@@ -3713,7 +3713,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/tracking/recipients": {
             "get": {
-                "description": "Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub). First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 after 90 days, even if retention has not run. Does not return tracking tokens or target URLs.",
+                "description": "Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub). First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 a year after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.",
                 "parameters": [
                     {
                         "description": "Mail task ID",

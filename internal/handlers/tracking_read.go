@@ -11,13 +11,15 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
 )
 
 const TrackingReadRole = "skymail:mails:tracking:read"
 const trackingReadBudget = 2 * time.Second
 
-// TrackingSummary has no identities or target URLs. After 90 days report is
-// a retained >=10-recipient aggregate, or null when there is no such total.
+// TrackingSummary has no identities or target URLs. A year after the last
+// mail went out (tracking.EventRetention) report is a retained
+// >=10-recipient aggregate, or null when there is no such total.
 type TrackingSummary struct {
 	TrackingAvailable bool               `json:"tracking_available"`
 	TrackingRequested bool               `json:"tracking_requested"`
@@ -84,7 +86,7 @@ type TrackingRecipientLink struct {
 // GetTracking godoc
 //
 //	@Summary		Tracking counts, per-link counts and hour/day series
-//	@Description	Requires skymail:mails:read. No identities, link tokens or target URLs. After 90 days only retained totals for at least 10 tracked recipients, or null. tracking_available follows the current flag.
+//	@Description	Requires skymail:mails:read. No identities, link tokens or target URLs. After a year only retained totals for at least 10 tracked recipients, or null. tracking_available follows the current flag.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id	path		string	true	"Mail task ID"
@@ -104,7 +106,7 @@ func (h *mailHandlerImpl) GetTracking(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	retained := task.TrackingClosedAt != nil || !task.SentAt.Add(90*24*time.Hour).After(h.now())
+	retained := task.TrackingClosedAt != nil || !task.SentAt.Add(tracking.EventRetention).After(h.now())
 	var report []byte
 	if retained {
 		report, err = h.db.GetRetainedTrackingReport(ctx, id)
@@ -130,7 +132,7 @@ func (h *mailHandlerImpl) GetTracking(c fiber.Ctx) error {
 // GetTrackingRecipients godoc
 //
 //	@Summary		Recipient opening and click observations
-//	@Description	Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub). First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 after 90 days, even if retention has not run. Does not return tracking tokens or target URLs.
+//	@Description	Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub). First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 a year after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id			path		string	true	"Mail task ID"
@@ -158,8 +160,8 @@ func (h *mailHandlerImpl) GetTrackingRecipients(c fiber.Ctx) error {
 	if !caller.has(TrackingReadRole) && (caller.sub == "" || caller.sub != task.SentBy) {
 		return apperrors.ErrForbidden
 	}
-	if task.TrackingClosedAt != nil || !task.SentAt.Add(90*24*time.Hour).After(h.now()) {
-		return apperrors.New("mail.tracking_expired", "Kişi bazında takip kaydı 90 gün sonra silindi.", fiber.StatusGone)
+	if task.TrackingClosedAt != nil || !task.SentAt.Add(tracking.EventRetention).After(h.now()) {
+		return apperrors.New("mail.tracking_expired", "Kişi bazında takip kaydı 1 yıl sonra silindi.", fiber.StatusGone)
 	}
 	filter := c.Query("filter")
 	switch filter {

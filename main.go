@@ -134,6 +134,16 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid open and click tracking configuration")
 	}
+	// Its retention run: off unless SKYMAIL_TRACKING_RETENTION says
+	// dry-run, apply or purge (README, tracking retention).
+	trackingRetention, err := tracking.RetentionModeFromEnv(config.Value, trackingConfig)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid open and click tracking retention configuration")
+	}
+	trackingRetentionMaxRows, err := tracking.RetentionMaxRowsFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid open and click tracking retention configuration")
+	}
 	if migrationConfig.Mode == migrations.ModeApply {
 		// A stop signal ends a wait for another process's migrations, never
 		// a migration under way.
@@ -172,6 +182,8 @@ func main() {
 
 	log.Info().Str("mode", string(trackingConfig.Mode)).Str("base_url", trackingConfig.BaseURL).Str("core_url", trackingConfig.CoreURL).
 		Msg("open and click tracking (SKYMAIL_TRACKING)")
+	log.Info().Str("mode", string(trackingRetention)).Int("event_retention_days", tracking.EventRetentionDays).Int64("max_rows", trackingRetentionMaxRows).
+		Msg("open and click tracking retention (SKYMAIL_TRACKING_RETENTION)")
 	db := database.NewStore(conn)
 	mailerService := mailer.NewMailer(db, mailer.SMTPConfig{
 		FromEmail: cfg.SMTPFrom,
@@ -217,6 +229,7 @@ func main() {
 		UIURL:    config.Value("SKYMAIL_UI_URL"),
 	})
 	erasureHandler := handlers.NewAccountErasureHandler(db, erasuretoken.NewVerifier(erasureTokenConfig(cfg)), accountAccessGate)
+	withdrawalHandler := handlers.NewTrackingWithdrawalHandler(db, erasuretoken.NewVerifier(withdrawalTokenConfig(cfg)), accountAccessGate)
 
 	app := fiber.New(newFiberConfig(vld, trustedProxies))
 
@@ -234,7 +247,7 @@ func main() {
 
 	handlers.NewTrackingPublicHandler(db, trackingConfig).Register(app)
 	registerPublicRoutes(app, accountAccessGate, readiness)
-	registerInternalRoutes(app, erasureHandler)
+	registerInternalRoutes(app, erasureHandler, withdrawalHandler)
 
 	api := protectedAPI(app, authMiddleware, accountAccessGate)
 
@@ -274,6 +287,11 @@ func main() {
 		defer close(contentSweepStopped)
 		clearMailContent(workers, db, contentRetentionDays, viewRetentionDays, contentSweepInterval)
 	}()
+	trackingRetentionStopped := make(chan struct{})
+	go func() {
+		defer close(trackingRetentionStopped)
+		runTrackingRetention(workers, db, database.TrackingRetentionOptions{Mode: trackingRetention, BrakeMaxRows: trackingRetentionMaxRows, OnlyIfDue: true}, trackingRetentionCheckInterval)
+	}()
 
 	addr := fmt.Sprintf(":%d", 3000)
 	if cfg.AppPort != 0 {
@@ -299,6 +317,7 @@ func main() {
 		Wait: []stopping{
 			{name: "the mail approval expiry sweep", done: approvalsStopped},
 			{name: "the mail content sweep", done: contentSweepStopped},
+			{name: "the tracking retention run", done: trackingRetentionStopped},
 			{name: "the mailer's sends", done: mailerService.Stopped()},
 		},
 		Close: closers,
@@ -324,6 +343,16 @@ func erasureTokenConfig(cfg config.Config) erasuretoken.Config {
 		JWKSURL:        cfg.KeycloakRealmURL + "/protocol/openid-connect/certs",
 		ResourceClient: cfg.KeycloakClientID,
 	}
+}
+
+// withdrawalTokenConfig is how the tracking withdrawal route checks core's
+// token: as the erase route's, but core's own client with SkyMail's
+// withdraw role (ticket 17), never core-erasure's.
+func withdrawalTokenConfig(cfg config.Config) erasuretoken.Config {
+	tokens := erasureTokenConfig(cfg)
+	tokens.CallerClientID = erasuretoken.WithdrawCallerClientID
+	tokens.Role = erasuretoken.WithdrawRole
+	return tokens
 }
 
 func registerTemplateRoutes(api fiber.Router, auth middlewares.AuthMiddleware, template handlers.TemplateHandler) {
@@ -430,6 +459,63 @@ func clearMailContent(ctx context.Context, db *database.Store, retentionDays, vi
 		case <-ticker.C:
 		}
 	}
+}
+
+// trackingRetentionCheckInterval is how often the tracking retention run
+// checks whether it is due; it runs at most once a day (the receipts say).
+const trackingRetentionCheckInterval = time.Hour
+
+// runTrackingRetention runs open and click tracking's retention rules
+// (database.RunTrackingRetention) at startup and whenever a run of its mode
+// is due, checking every interval. Off, it does nothing. Each run writes its
+// receipt (tracking_retention_runs) and one log line of counts; the brake
+// and a failure log at error level. Nothing it logs names a person, a token
+// or a link.
+func runTrackingRetention(ctx context.Context, db *database.Store, opts database.TrackingRetentionOptions, interval time.Duration) {
+	if opts.Mode == tracking.RetentionOff {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		trackingRetentionOnce(ctx, db, opts)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// trackingRetentionOnce runs when due: the run checks that itself, holding
+// the lock, so two replicas never run it twice in a day.
+func trackingRetentionOnce(ctx context.Context, db *database.Store, opts database.TrackingRetentionOptions) {
+	report, err := db.RunTrackingRetention(ctx, opts)
+	if errors.Is(err, database.ErrTrackingRetentionNotDue) {
+		return
+	}
+	if errors.Is(err, database.ErrTrackingRetentionLocked) {
+		log.Info().Str("event", "tracking_retention_locked").Msg("tracking retention: another replica is running it")
+		return
+	}
+	if report == nil {
+		if ctx.Err() == nil {
+			log.Error().Err(err).Str("event", "tracking_retention_failed").Msg("tracking retention could not start")
+		}
+		return
+	}
+	line := log.Info()
+	switch {
+	case err != nil || report.Status == "failed":
+		line = log.Error().Err(err)
+	case report.Status == "refused_large" || report.Status == "would_refuse_large":
+		line = log.Error().Str("alarm", "tracking_retention_brake")
+	case report.Status == "partial":
+		line = log.Warn()
+	}
+	line.Str("event", "tracking_retention_run").Int64("run_id", report.RunID).Str("mode", string(report.Mode)).
+		Str("status", report.Status).Time("events_cutoff", report.EventsCutoff).Interface("counts", report.Counts).
+		Msg("tracking retention run (receipt in tracking_retention_runs)")
 }
 
 // registerMailApprovalRoutes serves Mail onayı. Anyone who can use SkyMail —
@@ -554,11 +640,12 @@ func registerPublicRoutes(app *fiber.App, gate accessgate.Reader, readiness *hea
 
 // registerInternalRoutes serves what other SkyLab services call over the
 // Docker network (ADR-0016), outside /v1 and its userinfo chain. The guard
-// answers 404 to anything that came through the public ingress; the erase
-// route then checks its token itself (account erasure spec §2.5).
-func registerInternalRoutes(app *fiber.App, erasure handlers.AccountErasureHandler) {
+// answers 404 to anything that came through the public ingress; each route
+// then checks its token itself (account erasure spec §2.5).
+func registerInternalRoutes(app *fiber.App, erasure handlers.AccountErasureHandler, withdrawal handlers.TrackingWithdrawalHandler) {
 	internal := app.Group("/internal", middlewares.InternalRouteGuard())
 	internal.Put("/v1/account-erasures/:request_id", erasure.Erase)
+	internal.Put("/v1/tracking-withdrawals/:sub", withdrawal.Withdraw)
 }
 
 func protectedAPI(app *fiber.App, auth middlewares.AuthMiddleware, gate accessgate.Reader) fiber.Router {
