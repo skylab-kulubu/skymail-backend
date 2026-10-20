@@ -20,11 +20,18 @@ var errServiceAccountRequired = apperrors.New(
 // token Authenticate accepted, so it runs after it.
 func RequireServiceAccount() fiber.Handler {
 	return func(c fiber.Ctx) error {
-		identity, ok := c.Locals(acceptedTokenIdentityKey).(acceptedTokenIdentity)
-		sub, _ := c.Locals("user_id").(string)
-		if !ok || sub == "" || identity.subject != sub || identity.clientID == "" || identity.clientID != identity.azp {
+		if !IsServiceAccount(c) {
 			return errServiceAccountRequired
 		}
 		return c.Next()
 	}
+}
+
+// IsServiceAccount says the request's token, as Authenticate accepted it, is
+// a service account's (RequireServiceAccount's test). A person's token, or a
+// request Authenticate did not see, is not.
+func IsServiceAccount(c fiber.Ctx) bool {
+	identity, ok := c.Locals(acceptedTokenIdentityKey).(acceptedTokenIdentity)
+	sub, _ := c.Locals("user_id").(string)
+	return ok && sub != "" && identity.subject == sub && identity.clientID != "" && identity.clientID == identity.azp
 }

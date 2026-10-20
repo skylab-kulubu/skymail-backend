@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
+	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
@@ -80,6 +81,16 @@ type approverDirectory struct {
 	lookupErr error
 	groups    map[string][]*gocloak.User
 	roleCalls []string
+	// users is Keycloak's exact e-mail search: the users it gives for an
+	// address (lower-cased); accountsErr fails every search; accountAsks
+	// counts them.
+	users       map[string][]*gocloak.User
+	accountsErr error
+	accountAsks int
+	// store, when set, counts the sessions sitting in an open transaction
+	// at each search (openTx): Keycloak must be asked before one begins.
+	store  *database.Store
+	openTx []int
 }
 
 func (d *approverDirectory) ListGroups(context.Context) ([]*gocloak.Group, error) { return nil, nil }
@@ -93,6 +104,25 @@ func (d *approverDirectory) GetGroup(_ context.Context, id string) (*gocloak.Gro
 }
 
 func (*approverDirectory) ServiceToken(context.Context) (string, error) { return "", nil }
+
+func (d *approverDirectory) VerifiedAccountByEmail(_ context.Context, address string) (*uuid.UUID, error) {
+	open := 0
+	if d.store != nil {
+		if err := d.store.Conn.QueryRow(context.Background(), `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND pid <> pg_backend_pid() AND state LIKE 'idle in transaction%'`).Scan(&open); err != nil {
+			return nil, err
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.accountAsks++
+	d.openTx = append(d.openTx, open)
+	if d.accountsErr != nil {
+		return nil, d.accountsErr
+	}
+	return keycloak.ExactVerifiedAccount(address, d.users[strings.ToLower(address)]), nil
+}
 
 func (*approverDirectory) GetUser(context.Context, string) (*gocloak.User, error) { return nil, nil }
 
@@ -155,6 +185,10 @@ func (m *recordingMailer) EnqueueSingle(ctx context.Context, arg database.Create
 	return recordingQueue{m: m, queue: m.Transactional}.EnqueueSingle(ctx, arg)
 }
 
+func (m *recordingMailer) EnqueueTrackedSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *mailer.TrackingPreferences) (uuid.UUID, error) {
+	return recordingQueue{m: m, queue: m.Transactional}.EnqueueTrackedSingle(ctx, arg, preferences)
+}
+
 func (m *recordingMailer) EnqueueWithRecipients(ctx context.Context, params mailer.EnqueueWithRecipientsParams) (uuid.UUID, error) {
 	return recordingQueue{m: m, queue: m.Transactional}.EnqueueWithRecipients(ctx, params)
 }
@@ -205,6 +239,16 @@ func (r recordingQueue) EnqueueSingle(ctx context.Context, arg database.CreateSi
 		}
 	}
 	id, err := r.queue.EnqueueSingle(ctx, arg)
+	if err == nil {
+		r.m.record(sentMail{kind: "single", templateID: *arg.TemplateID, sentBy: arg.SentBy, recipients: []string{arg.RecipientEmail},
+			variables: decodeVariables(arg.BodyVariables), taskID: id})
+	}
+	return id, err
+}
+
+func (r recordingQueue) EnqueueTrackedSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *mailer.TrackingPreferences) (uuid.UUID, error) {
+	r.hold()
+	id, err := r.queue.EnqueueTrackedSingle(ctx, arg, preferences)
 	if err == nil {
 		r.m.record(sentMail{kind: "single", templateID: *arg.TemplateID, sentBy: arg.SentBy, recipients: []string{arg.RecipientEmail},
 			variables: decodeVariables(arg.BodyVariables), taskID: id})

@@ -234,6 +234,34 @@ takes the person out of them:
   can name a person when a variable put them in a link of a send to them
   alone. `mail_task_tracking_totals` holds counts only, for sends with at
   least 10 tracked recipients.
+- Bounces and the suppression list (see [Bounces and suppression](#bounces-and-suppression)):
+  `mail_suppressions.address` and `recipient_sub` — an address a permanent
+  failure was reported for, and whose it is when SkyMail knew. `mail_bounces`
+  holds no address: it belongs to a queue row.
+  `mail_suppression_removals.actor_sub` — who removed an address from the
+  list (the address is not kept).
+
+## Bounces and suppression
+
+What a delivery status notification (an NDR, RFC 3464) or a relay's
+permanent refusal said about a queue row (README, "Geri dönen posta ve
+bastırma listesi"; hub spec skymail-bounce-isleme §5):
+
+| What | Kept | Then |
+|---|---|---|
+| the report itself (addresses, the returned headers) | never in SkyMail: read in memory and dropped; in the sender mailbox, 30 days (Exchange retention, not SkyMail's) | — |
+| `mail_bounces` (queue row, `source`, `kind`, `action`, enhanced code, SMTP code, Exchange's `AS(…)` token, `recipient_matched`, the SHA-256 of the report's id, `received_at`) — no address, no text | **one year** from `received_at` | deleted by the content sweep (every 5 minutes); with its queue row (`ON DELETE CASCADE`) |
+| `mail_suppressions` (lower-cased address, `recipient_sub`, `source`, `reason_code` — codes only —, first and last seen, count, last queue row, `exempt_flagged_at`) | until an operator removes it (`DELETE /v1/suppressions/{id}`) or the person is erased: nothing removes it by itself (Yusuf, 2026-10-20) | Account erasure deletes the person's |
+| `mail_suppression_removals` (who, when, the removed row's source, code, count and first seen) — no address | without end: the record of who removed what | Account erasure replaces the actor with Silinmiş kullanıcı |
+| `mail_queue.suppressed_but_sent` | with the row | — |
+
+A recipient at a suppressed address is written failed when the send is
+queued (`suppressed: <source> <code>`), never sent; account mail
+(`keycloak.*`, `account.*` system templates; the key alone is not enough) is
+sent and flagged.
+
+Logs carry the queue row's id, the outcome and the codes; never an address
+or a report's text.
 
 ## Open and click tracking
 
@@ -501,8 +529,16 @@ or link is still, for a while, in these places (#63 review, R5):
   was submitted with until Account erasure (see Mail approvals); the sweep
   does not mask it. Approved sends are to many, sensitive only when their
   template says so.
-- Not kept elsewhere: `mail_queue.error` holds the SMTP or render error, not
-  the mail; the logs carry ids and counts, never a subject or a body.
+- **The sender mailbox's Sent Items.** Exchange Online copies a mail sent
+  over SMTP into the sending mailbox's Sent Items: the off path (SMTP AUTH
+  from `SMTP_FROM`) and a lane sent with `xoauth2` (README, "Gönderen
+  şeritleri"; the duyuru mailbox keeps it one day by its Exchange retention
+  policy, hub ticket skymail-bounce-isleme 02). A lane sent through Graph
+  (`graph`, decided for hesap and bilgi: login codes, resets, transactional
+  mail) sets `saveToSentItems` false, and no copy is made.
+- Not kept elsewhere: `mail_queue.error` holds the SMTP, Graph or render
+  error (codes, not the relay's text), not the mail; the logs carry ids and
+  counts, never a subject or a body.
 
 **`sent_content_views` period (Yusuf, 2026-10-14: two years).** A record of
 who opened a masked mail is deleted `SENT_CONTENT_VIEWS_RETENTION_DAYS` after
@@ -578,6 +614,9 @@ person is cleared whole, never masked.
 | `mail_tracking_events` | of a `mail_queue` row to the person (address in E or `recipient_sub` = S) | deleted |
 | `mail_queue.tracking_disabled_at` | a tracked row to the person | set: an opening or a click of that mail records nothing from now on; its links still redirect |
 | `mail_task_links.url` | names E or N, as written or URL-decoded, or every row of the send is to the person | NULL, `url_cleared_reason` `erased`: the link says it was removed |
+| `mail_suppressions` | `address` in E, `recipient_sub` = S, or its last queue row is to the person | deleted, before that row's address is cleared |
+| `mail_bounces` | of a `mail_queue` row to the person | kept with the cleared row: it holds no address, codes only |
+| `mail_suppression_removals` | `actor_sub` = S | Silinmiş kullanıcı |
 
 Silinmiş kullanıcı is the subject `00000000-0000-4000-8000-000000000000`
 with the name `Silinmiş kullanıcı`, the same for everyone. A request's person
@@ -593,8 +632,11 @@ the person's addresses had a send there, that row goes with its
 
 Template and version content, list names and the club's mail history as a
 count stay (ADR-0051: editorial record). Pending Mail onayı requests are not
-cancelled; they expire in seven days. There is no suppression list: the
-address can be added to a list again.
+cancelled; they expire in seven days. The person's addresses leave the
+suppression list: mail to them is sent again if they are added to a list
+again. A report about their old mail that arrives later finds its row cleared
+and suppresses nothing (it locks the row first: README, "Geri dönen posta ve
+bastırma listesi").
 
 - **Order.** One transaction under an advisory lock on `request_id`. The steps
   that leave the names findable run first. If mail must be waited for, they
@@ -610,7 +652,8 @@ address can be added to a list again.
   `variables_cleared`, `actor_columns_replaced`, `notes_cleared`,
   `changes_cleared`, `approval_recipients_removed`,
   `approval_recipient_placeholders`, `approval_send_links_deleted`,
-  `tracking_events_deleted`, `tracking_links_cleared`. The counts
+  `tracking_events_deleted`, `tracking_links_cleared`,
+  `suppressions_deleted`. The counts
   are what the completing call did; work committed by an earlier `202` call
   is not in them. A repeat, or a concurrent duplicate, returns the stored
   body without doing the work again. Other answers: `202` (above),

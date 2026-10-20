@@ -1,0 +1,35 @@
+MIME-Version: 1.0
+From: Microsoft Outlook <postmaster@kulup.example>
+To: <bildirim@kulup.example>
+Date: Tue, 20 Oct 2026 14:00:00 +0000
+Content-Type: multipart/report; report-type=delivery-status; boundary="ndr-delay"
+Message-ID: <ndr-delay-0001@AM9PR01MB0005.eurprd01.prod.outlook.com>
+Subject: Delivery delayed: Toplanti
+Auto-Submitted: auto-replied
+
+--ndr-delay
+Content-Type: text/plain; charset="us-ascii"
+
+Delivery is delayed to these recipients or groups.
+
+--ndr-delay
+Content-Type: message/delivery-status
+
+Reporting-MTA: dns;AM9PR01MB0005.eurprd01.prod.outlook.com
+Arrival-Date: Tue, 20 Oct 2026 10:00:00 +0000
+
+Final-Recipient: rfc822;uye@uzak.example.net
+Action: delayed
+Status: 4.4.7
+Diagnostic-Code: smtp;400 4.4.7 Message delayed
+Will-Retry-Until: Thu, 22 Oct 2026 10:00:00 +0000
+
+--ndr-delay
+Content-Type: text/rfc822-headers
+
+Message-ID: <2a7f0e4c-91b3-4d6e-a5f8-3c2b1a0d9e87@mail.example.org>
+From: SKY LAB <bildirim@kulup.example>
+To: Uye <uye@uzak.example.net>
+Subject: Toplanti
+
+--ndr-delay--

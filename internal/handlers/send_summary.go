@@ -39,9 +39,9 @@ type SendStatus string
 
 const (
 	// SendStatusFailed: at least one recipient failed, whatever the others did,
-	// other than one skipped for a reserved domain (reserved_domain); or every
-	// recipient was skipped; or no recipient was queued and a minute has
-	// passed since the send.
+	// other than one skipped: a reserved domain (reserved_domain) or a
+	// suppressed address (suppressed); or every recipient was skipped; or no
+	// recipient was queued and a minute has passed since the send.
 	SendStatusFailed SendStatus = "failed"
 	// SendStatusSending: none failed and at least one is pending or processing;
 	// or no recipient is queued yet, within a minute of the send.
@@ -121,6 +121,22 @@ type QueueCounts struct {
 	Failed     int64 `json:"failed"`
 }
 
+// QueueTotals is a send's recipients by status, and how many of them the
+// suppression list touched: suppressed (written failed, never sent: their
+// address is suppressed; counted in failed too), suppressed_but_sent (account
+// mail sent to a suppressed address anyway, flagged; counted in their status)
+// and undelivered (sent, then a delivery status notification said the
+// address does not exist; counted in sent).
+type QueueTotals struct {
+	QueueCounts
+	// Written failed when queued, never sent: the address is suppressed (in failed too).
+	Suppressed int64 `json:"suppressed"`
+	// Account mail sent to a suppressed address anyway, flagged (in its status too).
+	SuppressedButSent int64 `json:"suppressed_but_sent"`
+	// Sent, then a delivery status notification said the address does not exist (in sent too).
+	Undelivered int64 `json:"undelivered"`
+}
+
 // SendCounts counts sends by their derived status. Each number equals the
 // X-Total-Count of the send list filtered by that status.
 type SendCounts struct {
@@ -181,7 +197,7 @@ type SendSummary struct {
 // GetSummary godoc
 //
 //	@Summary		Summarise mail sends
-//	@Description	Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, other than one skipped for a reserved domain (reserved_domain); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).
+//	@Description	Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			days	query		int	false	"Days in the daily series, ending today in Europe/Istanbul (1-90)"	default(30)
@@ -293,12 +309,17 @@ func (h *mailHandlerImpl) mailTaskItems(ctx context.Context, caller contentCalle
 	return items
 }
 
-func recipientCounts(send database.ListMailTaskSendsRow) QueueCounts {
-	return QueueCounts{
-		Pending:    send.Pending,
-		Processing: send.Processing,
-		Sent:       send.Sent,
-		Failed:     send.Failed,
+func recipientCounts(send database.ListMailTaskSendsRow) QueueTotals {
+	return QueueTotals{
+		QueueCounts: QueueCounts{
+			Pending:    send.Pending,
+			Processing: send.Processing,
+			Sent:       send.Sent,
+			Failed:     send.Failed,
+		},
+		Suppressed:        send.Suppressed,
+		SuppressedButSent: send.SuppressedButSent,
+		Undelivered:       send.Undelivered,
 	}
 }
 

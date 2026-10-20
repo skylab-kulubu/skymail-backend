@@ -45,6 +45,8 @@ const (
 	// them had, emptied.
 	AccountErasureTrackingEventsDeleted = "tracking_events_deleted"
 	AccountErasureTrackingLinksCleared  = "tracking_links_cleared"
+	// The suppression list: the person's suppressed addresses deleted.
+	AccountErasureSuppressionsDeleted = "suppressions_deleted"
 )
 
 // ErrAccountErasureInProgress says a send to the person, or another person's
@@ -276,7 +278,7 @@ func newEraser(ctx context.Context, tx pgx.Tx, erasure AccountErasure) (*eraser,
 		AccountErasureQueueRowsCleared, AccountErasureBodiesCleared, AccountErasureVariablesCleared,
 		AccountErasureActorColumnsReplaced, AccountErasureNotesCleared, AccountErasureChangesCleared,
 		AccountErasureApprovalRecipientsRemoved, AccountErasureApprovalPlaceholders, AccountErasureApprovalSendLinksDeleted,
-		AccountErasureTrackingEventsDeleted, AccountErasureTrackingLinksCleared,
+		AccountErasureTrackingEventsDeleted, AccountErasureTrackingLinksCleared, AccountErasureSuppressionsDeleted,
 	} {
 		counts[key] = 0
 	}
@@ -581,6 +583,13 @@ func (e *eraser) mailInFlight(ctx context.Context) (bool, error) {
 // dropNamesSteps replace the subject where it carries a name.
 var dropNamesSteps = []erasureStep{
 	{
+		name:  "suppression removers",
+		count: AccountErasureActorColumnsReplaced,
+		sql: `UPDATE mail_suppression_removals
+		      SET actor_sub = @deleted_sub
+		      WHERE actor_sub = @subject`,
+	},
+	{
 		name:  "approval actors",
 		count: AccountErasureActorColumnsReplaced,
 		sql: `UPDATE mail_approval_events
@@ -697,6 +706,18 @@ func (e *eraser) replaceApprovalRecipients(ctx context.Context) error {
 // dropAddressSteps remove the person's addresses, last: the names on these
 // rows are what the steps before them searched for.
 var dropAddressSteps = []erasureStep{
+	{
+		// The person's suppressed addresses: by address, by subject, and by
+		// the mail to them that was refused last — before that mail's
+		// address is cleared below. Their bounces stay with that mail, which
+		// keeps no address: codes only.
+		name:  "suppressions",
+		count: AccountErasureSuppressionsDeleted,
+		sql: `DELETE FROM mail_suppressions s
+		      WHERE s.address = ANY (@emails::text[])
+		         OR COALESCE(s.recipient_sub::text = @subject::text, false)
+		         OR s.last_queue_id IN (SELECT q.id FROM mail_queue q WHERE ` + toPerson + `)`,
+	},
 	{
 		// Sent and failed mail to the person stays as a row, so every count
 		// of a send stays; everything in it about them goes.

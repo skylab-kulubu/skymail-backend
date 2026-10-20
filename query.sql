@@ -899,8 +899,8 @@ FROM inserted_task it
 INSERT INTO mail_queue (
     task_id, recipient_full_name, recipient_email,
     subject, body, body_html, priority, recipient_sub,
-    tracking_token, tracking_skip_reason
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+    tracking_token, tracking_skip_reason, suppressed_but_sent
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
 
 -- A recipient whose mail did not render, say a template that slices an empty
 -- full name, is written failed, with the render error the send's page shows:
@@ -988,8 +988,17 @@ FROM mail_tasks;
 -- A send's recipients, newest first. A list send's rows come from one insert
 -- and share a created_at, so the id breaks the tie: pages neither repeat nor
 -- skip a recipient. A NULL status lists every recipient.
+-- suppressed_but_sent: account mail sent to a suppressed address, flagged.
+-- undelivered: a report said the address does not exist (a hard bounce of
+-- the row's own address) after the relay took the mail.
 -- name: GetMailQueueItemsByTaskId :many
-SELECT id, channel, recipient_full_name, recipient_email, status, error, attempts, next_attempt_at, created_at
+SELECT id, channel, recipient_full_name, recipient_email, status, error, attempts, next_attempt_at, created_at,
+       suppressed_but_sent,
+       EXISTS (SELECT 1
+               FROM mail_bounces b
+               WHERE b.queue_id = mail_queue.id
+                 AND b.kind = 'hard'
+                 AND b.recipient_matched)::boolean AS undelivered
 FROM mail_queue
 WHERE task_id = $1
   AND (sqlc.narg(status)::mail_queue_status IS NULL OR status = sqlc.narg(status)::mail_queue_status)
@@ -1370,6 +1379,9 @@ SELECT mt.id,
        rc.processing,
        rc.sent,
        rc.failed,
+       rc.suppressed,
+       rc.suppressed_but_sent,
+       rc.undelivered,
        single.recipient_full_name   AS single_recipient_full_name,
        single.recipient_email       AS single_recipient_email,
        mail_task_bulk(mt.id)::boolean              AS bulk,
@@ -1385,7 +1397,14 @@ FROM page
          CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE q.status = 'pending')    AS pending,
                                     count(*) FILTER (WHERE q.status = 'processing') AS processing,
                                     count(*) FILTER (WHERE q.status = 'sent')       AS sent,
-                                    count(*) FILTER (WHERE q.status = 'failed')     AS failed
+                                    count(*) FILTER (WHERE q.status = 'failed')     AS failed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error LIKE 'suppressed:%') AS suppressed,
+                                    count(*) FILTER (WHERE q.suppressed_but_sent) AS suppressed_but_sent,
+                                    count(*) FILTER (WHERE EXISTS (SELECT 1
+                                                                   FROM mail_bounces b
+                                                                   WHERE b.queue_id = q.id
+                                                                     AND b.kind = 'hard'
+                                                                     AND b.recipient_matched)) AS undelivered
                              FROM mail_queue q
                              WHERE q.task_id = mt.id) rc
          LEFT JOIN mail_queue single
@@ -1875,3 +1894,112 @@ SELECT count(*) FILTER (WHERE status <> 'failed') AS queued,
        count(*) FILTER (WHERE status = 'failed')  AS failed
 FROM mail_queue
 WHERE task_id = sqlc.arg(task_id);
+
+-- Bounces and the suppression list (hub spec skymail-bounce-isleme; README,
+-- "Geri dönen posta ve bastırma listesi").
+
+-- The queue row a delivery status notification names, locked FOR SHARE until
+-- the report is recorded: Account erasure locks the person's rows FOR UPDATE
+-- first, so a report either waits for it and finds the row cleared, or holds
+-- it off until the suppression it writes is there for erasure to delete.
+-- name: LockBounceQueueRow :one
+SELECT id, channel, status, recipient_email, sent_at
+FROM mail_queue
+WHERE id = sqlc.arg(id)
+    FOR SHARE;
+
+-- Records what a report or a relay's refusal said about a queue row. A report
+-- already recorded (its id's hash) records nothing: 0 rows.
+-- name: InsertMailBounce :execrows
+INSERT INTO mail_bounces (queue_id, source, kind, action, status, smtp_code, exo_as_code, recipient_matched,
+                          ndr_id_sha256, received_at)
+VALUES (sqlc.arg(queue_id), sqlc.arg(source)::text, sqlc.arg(kind)::text, sqlc.arg(action)::text,
+        sqlc.narg(status)::text, sqlc.narg(smtp_code)::int, sqlc.narg(exo_as_code)::text,
+        sqlc.arg(recipient_matched)::boolean, sqlc.narg(ndr_id_sha256)::text, sqlc.arg(received_at)::timestamptz)
+ON CONFLICT ON CONSTRAINT mail_bounces_ndr_once DO NOTHING;
+
+-- Suppresses the address of a queue row after a permanent failure: the
+-- row's own address, read under a lock (FOR SHARE: a row Account erasure is
+-- clearing is waited for and then found empty, and nothing is written). A
+-- suppressed address is counted again and keeps its first_seen.
+-- name: SuppressQueueRowAddress :execrows
+INSERT INTO mail_suppressions (address, recipient_sub, source, reason_code, last_queue_id)
+SELECT lower(btrim(q.recipient_email)), q.recipient_sub, sqlc.arg(source)::text, sqlc.arg(reason_code)::text, q.id
+FROM mail_queue q
+WHERE q.id = sqlc.arg(queue_id)
+  AND q.channel = 'email'
+  AND btrim(q.recipient_email) LIKE '_%@_%'
+    FOR SHARE OF q
+ON CONFLICT (address) DO UPDATE
+    SET last_seen     = now(),
+        count         = mail_suppressions.count + 1,
+        source        = EXCLUDED.source,
+        reason_code   = EXCLUDED.reason_code,
+        last_queue_id = EXCLUDED.last_queue_id,
+        recipient_sub = COALESCE(EXCLUDED.recipient_sub, mail_suppressions.recipient_sub);
+
+-- Deletes up to batch_size of the oldest bounces older than retention_days
+-- (a year): the content sweep's step.
+-- name: DeleteOldMailBounces :execrows
+DELETE
+FROM mail_bounces
+WHERE id IN (SELECT b.id
+             FROM mail_bounces b
+             WHERE b.received_at < now() - make_interval(days => sqlc.arg(retention_days)::int)
+             ORDER BY b.received_at
+             LIMIT sqlc.arg(batch_size)::int FOR UPDATE SKIP LOCKED);
+
+-- The suppressed among a send's recipients (lower-cased addresses): what
+-- queueing writes failed, or sends flagged when the send is account mail.
+-- name: GetSuppressedAddresses :many
+SELECT address, source, reason_code
+FROM mail_suppressions
+WHERE address = ANY (sqlc.arg(addresses)::text[]);
+
+-- The key of a send's template and whether it is a system template, which
+-- together say whether it is account mail (mailer.AccountMail).
+-- name: GetMailTaskTemplateKey :one
+SELECT t.key, coalesce(t.system, false)::boolean AS system
+FROM mail_tasks mt
+         LEFT JOIN templates t ON t.id = mt.template_id
+WHERE mt.id = sqlc.arg(task_id);
+
+-- Account mail went to these suppressed addresses anyway.
+-- name: FlagSuppressionsExempt :exec
+UPDATE mail_suppressions
+SET exempt_flagged_at = now()
+WHERE address = ANY (sqlc.arg(addresses)::text[]);
+
+-- Records a relay's permanent refusal of a queue row's address.
+-- name: InsertSMTPRefusalBounce :exec
+INSERT INTO mail_bounces (queue_id, source, kind, action, status, smtp_code)
+VALUES (sqlc.arg(queue_id), 'smtp', 'hard', 'failed', sqlc.narg(status)::text, sqlc.arg(smtp_code)::int);
+
+-- The suppression list, newest first, those whose address contains search
+-- (case-insensitively) when it is given.
+-- name: ListSuppressions :many
+SELECT id, address, recipient_sub, source, reason_code, first_seen, last_seen, count, last_queue_id, exempt_flagged_at
+FROM mail_suppressions
+WHERE sqlc.narg(search)::text IS NULL
+   OR strpos(address, lower(sqlc.narg(search)::text)) > 0
+ORDER BY last_seen DESC, address
+LIMIT sqlc.arg(row_limit)::int OFFSET sqlc.arg(row_offset)::int;
+
+-- name: CountSuppressions :one
+SELECT count(*)
+FROM mail_suppressions
+WHERE sqlc.narg(search)::text IS NULL
+   OR strpos(address, lower(sqlc.narg(search)::text)) > 0;
+
+-- Removes a suppression: the address is mailed again. What it said is
+-- returned for the removal's record, never the address.
+-- name: DeleteSuppression :one
+DELETE
+FROM mail_suppressions
+WHERE id = sqlc.arg(id)
+RETURNING source, reason_code, count, first_seen;
+
+-- name: InsertSuppressionRemoval :exec
+INSERT INTO mail_suppression_removals (actor_sub, source, reason_code, count, first_seen)
+VALUES (sqlc.arg(actor_sub)::text, sqlc.arg(source)::text, sqlc.arg(reason_code)::text, sqlc.arg(count)::int,
+        sqlc.arg(first_seen)::timestamptz);

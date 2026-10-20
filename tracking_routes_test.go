@@ -56,12 +56,23 @@ func trackedWorld(t *testing.T, on bool) (*approvalWorld, *routePreferences) {
 	if on {
 		mode = tracking.ModeOn
 	}
+	accounts := &laterAccounts{}
 	w := newApprovalWorldWithPool(t, 0, mailer.WithTracking(mailer.Tracking{
 		Config:      tracking.Config{Mode: mode, BaseURL: "https://api.example.test/api/skymail", CoreURL: "http://core.invalid"},
 		Preferences: prefs,
+		Accounts:    accounts,
 	}))
 	prefs.store = w.store
+	accounts.directory = w.directory
 	return w, prefs
+}
+
+// laterAccounts is the world's Keycloak finding accounts by address, which
+// exists only once the mailer does.
+type laterAccounts struct{ directory *approverDirectory }
+
+func (a *laterAccounts) VerifiedAccountByEmail(ctx context.Context, address string) (*uuid.UUID, error) {
+	return a.directory.VerifiedAccountByEmail(ctx, address)
 }
 
 type sendRow struct {

@@ -40,6 +40,10 @@ components:
           type: string
         status:
           $ref: '#/components/schemas/database.NullMailQueueStatus'
+        suppressed_but_sent:
+          type: boolean
+        undelivered:
+          type: boolean
       type: object
     database.MailQueueStatus:
       enum:
@@ -553,7 +557,7 @@ components:
         mail_list_name:
           type: string
         recipient_counts:
-          $ref: '#/components/schemas/handlers.QueueCounts'
+          $ref: '#/components/schemas/handlers.QueueTotals'
         sent_by:
           type: string
         status:
@@ -642,6 +646,29 @@ components:
         processing:
           type: integer
         sent:
+          type: integer
+      type: object
+    handlers.QueueTotals:
+      properties:
+        failed:
+          type: integer
+        pending:
+          type: integer
+        processing:
+          type: integer
+        sent:
+          type: integer
+        suppressed:
+          description: 'Written failed when queued, never sent: the address is suppressed
+            (in failed too).'
+          type: integer
+        suppressed_but_sent:
+          description: Account mail sent to a suppressed address anyway, flagged (in
+            its status too).
+          type: integer
+        undelivered:
+          description: Sent, then a delivery status notification said the address
+            does not exist (in sent too).
           type: integer
       type: object
     handlers.SeedOverride:
@@ -905,6 +932,48 @@ components:
           description: The subject as the recipient's inbox shows it.
           type: string
         task_id:
+          type: string
+      type: object
+    handlers.Suppression:
+      properties:
+        address:
+          description: Lower-case.
+          type: string
+        count:
+          description: How many permanent failures were recorded.
+          type: integer
+        exempt_flagged_at:
+          description: |-
+            When account mail (a login code, a verification, a password reset) was
+            last sent to the address anyway; null if never.
+          type: string
+        first_seen:
+          type: string
+        id:
+          description: What DELETE /suppressions/{id} names it by.
+          type: string
+        last_queue_id:
+          description: The queue row of the last one; null once that row is gone.
+          type: string
+        last_seen:
+          type: string
+        reason_code:
+          description: |-
+            The codes of the last permanent failure, never its text: 5.1.10,
+            5.4.1 AS(201806281), RCPT TO 550 5.1.1.
+          example: 5.1.10
+          type: string
+        recipient_sub:
+          description: The recipient's Keycloak subject, when the mail refused knew
+            it.
+          type: string
+        source:
+          description: |-
+            dsn: a delivery status notification said the address does not exist;
+            smtp: the relay refused it when the mail was sent.
+          enum:
+          - dsn
+          - smtp
           type: string
       type: object
     handlers.Template:
@@ -1335,7 +1404,7 @@ components:
             core lets be tracked gets a pixel and tracked links. Ignored (and answered
             false) while SkyMail''s tracking is off and for a System or sensitive
             template, which are never tracked; a mailing list''s address-only recipients
-            are not tracked.'
+            are not tracked (no_account).'
           type: boolean
       required:
       - mail_list_id
@@ -1603,6 +1672,17 @@ components:
           type: string
         template_key:
           type: string
+        tracking:
+          description: 'Open and click tracking for a mail a person sends (the compose
+            form''s people). Ignored (and answered false) for a service''s token —
+            account and transaction mail is never tracked — while SkyMail''s tracking
+            is off, and for a System template or a sensitive one (a template that
+            says nothing counts as sensitive for one person). The recipient''s account
+            is looked up in Keycloak by address before the send is queued: the one
+            enabled user whose primary e-mail equals it (case-insensitively) and is
+            verified; none such is no_account, Keycloak not answering is preference_unavailable,
+            and core decides for the account found.'
+          type: boolean
       required:
       - recipient_email
       type: object
@@ -1641,9 +1721,13 @@ components:
         template_id:
           type: string
         tracking:
-          description: Open and click tracking for the send once approved (as POST
-            /mail_tasks takes it). Ignored (and kept false) while SkyMail's tracking
-            is off and for a System or sensitive template.
+          description: 'Open and click tracking for the send once approved (as POST
+            /mail_tasks takes it). Ignored (and kept false) while SkyMail''s tracking
+            is off, for a System or sensitive template (to people, a template that
+            says nothing counts as sensitive) and for a Forms source. People named
+            here are looked up in Keycloak by address when the request is sent, as
+            POST /mail_tasks/single does: one enabled account with that verified primary
+            e-mail, or no_account.'
           type: boolean
       required:
       - template_id
@@ -2459,10 +2543,10 @@ paths:
         schema:
           type: integer
       - description: 'Derived send status: failed (a recipient failed, other than
-          one skipped for a reserved domain (reserved_domain); every recipient was
-          skipped; or none was queued a minute after the send), sending (none failed
-          and some pending or processing, or none queued yet within that minute),
-          sent (none failed or queued, some sent)'
+          one skipped: a reserved domain (reserved_domain) or a suppressed address
+          (suppressed); every recipient was skipped; or none was queued a minute after
+          the send), sending (none failed and some pending or processing, or none
+          queued yet within that minute), sent (none failed or queued, some sent)'
         in: query
         name: status
         schema:
@@ -2901,7 +2985,13 @@ paths:
       - Mail
   /mail_tasks/single:
     post:
-      description: Send a single email to a specific recipient using a template.
+      description: 'Send a single email to a specific recipient using a template.
+        A person''s send may ask for open and click tracking: it then goes in the
+        bulk lane, and the answer says whether it got it (never for a service''s token,
+        while SkyMail''s tracking is off, or for a System or sensitive template).
+        The recipient''s account is found in Keycloak by address before the send is
+        queued (exact primary e-mail, enabled, verified; none is no_account), and
+        core decides for it.'
       requestBody:
         content:
           application/json:
@@ -2918,7 +3008,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
+                $ref: '#/components/schemas/handlers.CreatedMailTask'
           description: Created
         "400":
           content:
@@ -2944,10 +3034,11 @@ paths:
         by derived status, each equal to the X-Total-Count of the send list filtered
         by it; mail sent per Europe/Istanbul day over the last days (zero-filled,
         oldest first, ending today); and the latest sends. Derived status: failed
-        (a recipient failed, other than one skipped for a reserved domain (reserved_domain);
-        every recipient was skipped; or none was queued a minute after the send),
-        sending (none failed and some pending or processing, or none queued yet within
-        that minute), sent (none failed or queued, some sent).'
+        (a recipient failed, other than one skipped: a reserved domain (reserved_domain)
+        or a suppressed address (suppressed); every recipient was skipped; or none
+        was queued a minute after the send), sending (none failed and some pending
+        or processing, or none queued yet within that minute), sent (none failed or
+        queued, some sent).'
       parameters:
       - description: Days in the daily series, ending today in Europe/Istanbul (1-90)
         in: query
@@ -3534,6 +3625,107 @@ paths:
       summary: Send a notification to people
       tags:
       - Notifications
+  /suppressions:
+    get:
+      description: 'Addresses mail is not sent to after one permanent failure (a relay''s
+        refusal of the address, or a delivery status notification saying it does not
+        exist), most recently failed first. Account mail (keycloak.*, account.* templates)
+        is still sent to them and flagged. Nothing leaves the list by itself: an operator
+        removes an address, or Account erasure does. q keeps the addresses that contain
+        it, case-insensitively; X-Total-Count counts them.'
+      parameters:
+      - description: Part of an address
+        in: query
+        name: q
+        schema:
+          type: string
+      - description: Start index
+        in: query
+        name: _start
+        schema:
+          type: integer
+      - description: End index (at most 100 rows a page)
+        in: query
+        name: _end
+        schema:
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/handlers.Suppression'
+                type: array
+          description: OK
+          headers:
+            X-Total-Count:
+              description: Number of suppressed addresses matching q
+              schema:
+                type: integer
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Internal Server Error
+      summary: List the suppression list
+      tags:
+      - Suppressions
+  /suppressions/{id}:
+    delete:
+      description: Mail is sent to the address again. The removal is recorded — who,
+        when, and the suppression's source, code, count and first failure — without
+        the address. The address is named by the list's id, so it is never in a URL.
+      parameters:
+      - description: Suppression ID
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Internal Server Error
+      summary: Remove an address from the suppression list
+      tags:
+      - Suppressions
   /templates:
     get:
       description: Get a list of all email templates with pagination.
