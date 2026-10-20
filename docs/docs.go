@@ -2026,7 +2026,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Open and click tracking for a mail a person sends (the compose form's people). Ignored (and answered false) for a service's token — account and transaction mail is never tracked — while SkyMail's tracking is off, and for a System template or a sensitive one (a template that says nothing counts as sensitive for one person). The recipient is known only by address, so the row is not tracked (no_account): the address is never looked up to find an account.",
+                        "description": "Open and click tracking for a mail a person sends (the compose form's people). Ignored (and answered false) for a service's token — account and transaction mail is never tracked — while SkyMail's tracking is off, and for a System template or a sensitive one (a template that says nothing counts as sensitive for one person). The recipient's account is looked up in Keycloak by address before the send is queued: the one enabled user whose primary e-mail equals it (case-insensitively) and is verified; none such is no_account, Keycloak not answering is preference_unavailable, and core decides for the account found.",
                         "type": "boolean"
                     }
                 },
@@ -2074,7 +2074,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Open and click tracking for the send once approved (as POST /mail_tasks takes it). Ignored (and kept false) while SkyMail's tracking is off, for a System or sensitive template (to people, a template that says nothing counts as sensitive) and for a Forms source. People named here are known by address only: their rows are not tracked (no_account); the address is never looked up to find an account.",
+                        "description": "Open and click tracking for the send once approved (as POST /mail_tasks takes it). Ignored (and kept false) while SkyMail's tracking is off, for a System or sensitive template (to people, a template that says nothing counts as sensitive) and for a Forms source. People named here are looked up in Keycloak by address when the request is sent, as POST /mail_tasks/single does: one enabled account with that verified primary e-mail, or no_account.",
                         "type": "boolean"
                     }
                 },
@@ -3507,7 +3507,7 @@ const docTemplate = `{
         },
         "/mail_tasks/single": {
             "post": {
-                "description": "Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never for a service's token, while SkyMail's tracking is off, or for a System or sensitive template). The recipient is known only by address, so the row says no_account and is not tracked; the address is never looked up to find an account.",
+                "description": "Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never for a service's token, while SkyMail's tracking is off, or for a System or sensitive template). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it.",
                 "requestBody": {
                     "content": {
                         "application/json": {

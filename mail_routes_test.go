@@ -36,7 +36,7 @@ func (idleMailer) EnqueueSingle(context.Context, database.CreateSingleMailTaskPa
 	return uuid.Nil, nil
 }
 
-func (idleMailer) EnqueueTrackedSingle(context.Context, database.CreateSingleMailTaskParams) (uuid.UUID, error) {
+func (idleMailer) EnqueueTrackedSingle(context.Context, database.CreateSingleMailTaskParams, *mailer.TrackingPreferences) (uuid.UUID, error) {
 	return uuid.Nil, nil
 }
 
@@ -53,6 +53,8 @@ func (noGroups) GetGroup(context.Context, string) (*gocloak.Group, error) { retu
 func (noGroups) GetGroupMembers(context.Context, string) ([]*gocloak.User, error) { return nil, nil }
 
 func (noGroups) ServiceToken(context.Context) (string, error) { return "", nil }
+
+func (noGroups) VerifiedAccountByEmail(context.Context, string) (*uuid.UUID, error) { return nil, nil }
 
 func (noGroups) GetUser(context.Context, string) (*gocloak.User, error) { return nil, nil }
 

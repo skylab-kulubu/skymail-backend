@@ -44,7 +44,7 @@ func (m *recordingMailerStub) EnqueueSingle(_ context.Context, arg database.Crea
 	return uuid.New(), nil
 }
 
-func (*recordingMailerStub) EnqueueTrackedSingle(context.Context, database.CreateSingleMailTaskParams) (uuid.UUID, error) {
+func (*recordingMailerStub) EnqueueTrackedSingle(context.Context, database.CreateSingleMailTaskParams, *mailer.TrackingPreferences) (uuid.UUID, error) {
 	return uuid.New(), nil
 }
 

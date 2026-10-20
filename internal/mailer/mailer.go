@@ -151,8 +151,10 @@ type Mailer interface {
 	// EnqueueTrackedSingle queues a mail a person sends one person and asks
 	// tracking for (POST /mail_tasks/single with tracking): an operator's
 	// mail, so in the bulk lane, where tracking is planned. The system lane
-	// is never tracked.
-	EnqueueTrackedSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
+	// is never tracked. preferences is what ResolveTracking said about the
+	// recipient; nil, and it asks itself before the transaction begins
+	// (finds their account by address, asks core).
+	EnqueueTrackedSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *TrackingPreferences) (uuid.UUID, error)
 	EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error)
 }
 
@@ -160,14 +162,19 @@ type Mailer interface {
 // EnqueueWithRecipients (a group) and EnqueueTrackedSingle the bulk lane,
 // EnqueueSingle the system lane.
 
-// Queue is the send path inside a caller's transaction: the same three ways
+// Queue is the send path inside a caller's transaction: the same ways
 // to queue a send as Mailer's, written through that transaction, so the send
 // and its queue rows exist only if it commits, and nothing is dispatched
-// before it has. All three queue in the lane the caller chose. The caller
+// before it has. All queue in the lane the caller chose. The caller
 // wakes the dispatcher once it has committed.
 type Queue interface {
 	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error)
 	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
+	// EnqueueTrackedSingle queues a mail to one person that asked for
+	// tracking, with what ResolveTracking said about them before the
+	// transaction (their account by address, core's answer). Keycloak and
+	// core are never asked here: nil tracks no one.
+	EnqueueTrackedSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *TrackingPreferences) (uuid.UUID, error)
 	EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error)
 }
 
@@ -557,13 +564,17 @@ func (m *mailerImpl) Enqueue(ctx context.Context, arg database.CreateMailTaskPar
 
 func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
 	return m.pooled(ctx, PrioritySystem, func(q *queue) (uuid.UUID, bool, error) {
-		return q.enqueueSingle(ctx, arg)
+		return q.enqueueSingle(ctx, arg, nil)
 	})
 }
 
-func (m *mailerImpl) EnqueueTrackedSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
+func (m *mailerImpl) EnqueueTrackedSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *TrackingPreferences) (uuid.UUID, error) {
+	// Keycloak and core are asked before the transaction begins.
+	if preferences == nil && arg.TrackingRequested && arg.TemplateID != nil {
+		preferences = m.ResolveTracking(ctx, *arg.TemplateID, nil, []RecipientInfo{{FullName: arg.RecipientFullName, Email: arg.RecipientEmail}})
+	}
 	return m.pooled(ctx, PriorityBulk, func(q *queue) (uuid.UUID, bool, error) {
-		return q.enqueueSingle(ctx, arg)
+		return q.enqueueSingle(ctx, arg, preferences)
 	})
 }
 
@@ -589,7 +600,12 @@ func (q *queue) Enqueue(ctx context.Context, arg database.CreateMailTaskParams) 
 }
 
 func (q *queue) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
-	id, _, err := q.enqueueSingle(ctx, arg)
+	id, _, err := q.enqueueSingle(ctx, arg, nil)
+	return id, err
+}
+
+func (q *queue) EnqueueTrackedSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *TrackingPreferences) (uuid.UUID, error) {
+	id, _, err := q.enqueueSingle(ctx, arg, preferences)
 	return id, err
 }
 
@@ -631,7 +647,10 @@ func (q *queue) enqueue(ctx context.Context, arg database.CreateMailTaskParams) 
 	return rows[0].TaskID, queued, err
 }
 
-func (q *queue) enqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, bool, error) {
+// enqueueSingle queues a mail to one person. preferences, when it asked
+// for tracking, is what ResolveTracking found: the person's account, if
+// Keycloak found one by address, becomes the row's recipient_sub.
+func (q *queue) enqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *TrackingPreferences) (uuid.UUID, bool, error) {
 	arg.TrackingRequested = arg.TrackingRequested && q.tracking.Config.On()
 	row, err := q.q.CreateSingleMailTask(ctx, arg)
 	if err != nil {
@@ -650,11 +669,14 @@ func (q *queue) enqueueSingle(ctx context.Context, arg database.CreateSingleMail
 			RecipientEmail:    row.RecipientEmail,
 		},
 	}
+	if arg.TrackingRequested {
+		commonRows[0].RecipientSub, _ = preferences.accountOf(row.RecipientEmail)
+	}
 
 	// A single mail has one recipient, and its caller (a login code, a Forms
 	// confirmation) is waiting for it: a mail that does not render is the
 	// send failing, and the caller is told.
-	queued, err := q.renderAndQueue(ctx, commonRows, true, arg.TrackingRequested, nil)
+	queued, err := q.renderAndQueue(ctx, commonRows, true, arg.TrackingRequested, preferences)
 	return row.TaskID, queued, err
 }
 

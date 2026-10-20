@@ -430,18 +430,8 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   sayılır). Bayrak kapalıyken ya da şablon System/hassasken alan yok
   sayılır: yanıt, gönderim ve onay isteği `tracking: false` der, satırlara
   neden yazılmaz. Sonra alıcının Keycloak `sub`'ı biliniyor
-  (`recipient_sub`: yalnız Keycloak grubu üyeleri) ve core izin veriyor.
-- **Kişilere tek tek gönderim (Yusuf, 2026-10-20):** gönderim formunun
-  kişileri (`/single`) ve kişilere Mail onayı isteği de takip isteyebilir;
-  her alıcı yukarıdaki kuralla tek tek değerlendirilir. Bu kişiler yalnız
-  adresleriyle bilinir: satır `no_account` alır, takip edilmez; adresle
-  hesap **aranmaz** (yanlış kişiyle eşleme riski). Takip isteyen ve alabilen
-  `/single` gönderimi toplu şeride girer (operatör postası); sistem şeridi
-  hiçbir zaman takip edilmez. Bir servisin token'ıyla gelen `/single`
-  (Keycloak, core, Forms: hesap ve işlem postaları) takip istese de
-  `tracking: false` alır, sistem şeridinde kalır. Forms kaynağının
-  yanıtlayanları da yalnız adresle bilinir (snapshot'ta `sub` yok): bu
-  kaynak sürümü takip istemez, `tracking: false` der.
+  (`recipient_sub`: Keycloak grubu üyeleri ve kişilere tek tek gönderimde
+  adresten bulunan hesap, aşağıda) ve core izin veriyor.
   core'a gönderimin veritabanı işlemi **başlamadan önce** sorulur (Mail
   onayında istek kilitlenmeden önce, grup üyeleriyle birlikte); SkyMail core'u
   hiçbir zaman işlem ya da kilit tutarken beklemez. O yanıtta olmayan kişi
@@ -452,6 +442,28 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   `inactive`, `not_allowed`, `preference_unavailable`, `flag_off`. Gönderim
   takip istemediyse ya da takip edilemezse (`tracking: false`) ikisi de
   boştur. (`transactional` kısıtta duruyor, yazılmıyor.)
+- **Kişilere tek tek gönderim (Yusuf, 2026-10-20):** gönderim formunun
+  kişileri (`/single`) ve kişilere Mail onayı isteği de takip isteyebilir;
+  her alıcı yukarıdaki kuralla tek tek değerlendirilir. Bu kişiler adresle
+  gelir; hesapları gönderimin veritabanı işlemi **başlamadan önce** (onayda
+  istek kilitlenmeden önce) Keycloak'ta aranır: realm'in tam e-posta araması
+  (`GET /admin/realms/<realm>/users?email=…&exact=true&max=2`), yalnız
+  birincil `email` alanı, büyük/küçük harf duyarsız tam eşitlik, kullanıcı
+  etkin ve `emailVerified=true`. Tam bir eşleşme yoksa (ya da birden fazla
+  varsa) `no_account`; okul adresi gibi ikincil öznitelikler okunmaz. Realm
+  `duplicateEmailsAllowed=false` (e-skylab-keycloak `account-center-realm.json`,
+  uzlaştırıcı doğrular). Arama en çok 5 eşzamanlı, gönderim başına toplam
+  5 saniye; Keycloak'ın yanıtlamadığı adres `preference_unavailable` alır,
+  gönderim durmaz (`"event":"tracking_accounts_unavailable"` satırı adres
+  yazmaz, yalnız sayar). Bulunan hesap satırın `recipient_sub`'ı olur ve core
+  ona grup üyeleri gibi sorulur; geri alma ve hesap silme bu satırları da
+  kapsar. Servis hesabı Keycloak'ta kullanıcı okuyabilmeli (`view-users`;
+  `GET /users/{id}` için zaten gerekiyor). Takip isteyen ve alabilen
+  `/single` gönderimi toplu şeride girer (operatör postası); sistem şeridi
+  hiçbir zaman takip edilmez. Bir servisin token'ıyla gelen `/single`
+  (Keycloak, core, Forms: hesap ve işlem postaları) takip istese de
+  `tracking: false` alır, sistem şeridinde kalır. Forms kaynağı gönderimi
+  değişmedi: takip istemez, `tracking: false` der.
 - **core'a ulaşılamazsa** (5 saniye, hata ya da sözleşme dışı yanıt) o
   gönderimde kimse takip edilmez (`preference_unavailable`), gönderim durmaz.
   Uyarı satırı `"event":"tracking_preferences_unavailable"` (`"cause":"core"`

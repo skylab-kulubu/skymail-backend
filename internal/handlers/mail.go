@@ -192,7 +192,7 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 // SendSingle godoc
 //
 //	@Summary		Send a single email
-//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never for a service's token, while SkyMail's tracking is off, or for a System or sensitive template). The recipient is known only by address, so the row says no_account and is not tracked; the address is never looked up to find an account.
+//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never for a service's token, while SkyMail's tracking is off, or for a System or sensitive template). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it.
 //	@Tags			Mail
 //	@Accept			json
 //	@Produce		json
@@ -236,7 +236,7 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	}
 	var taskID uuid.UUID
 	if tracking {
-		taskID, err = h.mailer.EnqueueTrackedSingle(c.Context(), arg)
+		taskID, err = h.mailer.EnqueueTrackedSingle(c.Context(), arg, nil)
 	} else {
 		taskID, err = h.mailer.EnqueueSingle(c.Context(), arg)
 	}

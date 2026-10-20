@@ -3,6 +3,8 @@ package mailer
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +26,9 @@ type Tracking struct {
 	Config tracking.Config
 	// Preferences says whom core lets be tracked.
 	Preferences tracking.Preferences
+	// Accounts finds the account of a person a send names by address only
+	// (Keycloak, exact verified primary e-mail).
+	Accounts tracking.Accounts
 }
 
 // WithTracking sets open and click tracking. Without it tracking is off.
@@ -71,44 +76,145 @@ func (m *mailerImpl) templateTrackable(ctx context.Context, templateID uuid.UUID
 // track; past it no one in the send is tracked and the send goes on.
 const preferencesBudget = 5 * time.Second
 
-// TrackingPreferences is what core said, before a send's transaction began,
-// about whom the send may track. Nil is core not asked: no one with a
-// Keycloak id is tracked.
+// accountsBudget is all the time a send gives Keycloak to find the accounts
+// of the people it names by address, accountLookups of them at once; an
+// address not answered within it is not tracked and the send goes on.
+const (
+	accountsBudget = 5 * time.Second
+	accountLookups = 5
+)
+
+// TrackingPreferences is what Keycloak and core said, before a send's
+// transaction began, about whom the send may track. Nil is no one asked:
+// no one is tracked.
 type TrackingPreferences struct {
 	decisions map[uuid.UUID]tracking.Decision
 	// err: core could not say (down, too slow, not the contract's answer).
 	err error
+	// lookedUp: the send's address-only recipients were looked up in
+	// Keycloak. accounts holds, by lower-cased address, each one Keycloak
+	// answered for: its account, or nil for none. An address not in it was
+	// not answered (Keycloak down or too slow).
+	lookedUp bool
+	accounts map[string]*uuid.UUID
 }
 
-// ResolveTracking asks core, within preferencesBudget and outside any
-// transaction, whom of recipients a send of templateID to mailListID may
-// track. It asks no one when tracking is off, when no recipient has a
-// Keycloak id, or when the template is never tracked (System or sensitive;
-// the send's transaction decides that again, and its answer stands). Core
-// failing is an answer too: the send tracks no one with an id and goes out.
+// lookedUpAny says the send's address-only recipients were looked up.
+func (p *TrackingPreferences) lookedUpAny() bool { return p != nil && p.lookedUp }
+
+// accountOf is the account found for address, and whether Keycloak was
+// asked and answered for it.
+func (p *TrackingPreferences) accountOf(address string) (*uuid.UUID, bool) {
+	if p == nil || !p.lookedUp {
+		return nil, false
+	}
+	sub, answered := p.accounts[strings.ToLower(strings.TrimSpace(address))]
+	return sub, answered
+}
+
+// ResolveTracking finds out, outside any transaction, whom of recipients a
+// send of templateID to mailListID may track. A recipient known only by
+// address — a person a send names one by one — is looked up in Keycloak
+// first (tracking.Accounts: one enabled account with that verified primary
+// e-mail), within accountsBudget, accountLookups at once. Then core is asked,
+// within preferencesBudget, about everyone with an account. No one is asked
+// when tracking is off or the template is never tracked (System or
+// sensitive; the send's transaction decides that again, and its answer
+// stands). Keycloak or core failing is an answer too: whom it leaves unknown
+// is not tracked, and the send goes out.
 func (m *mailerImpl) ResolveTracking(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID, recipients []RecipientInfo) *TrackingPreferences {
 	if !m.TrackingAvailable() {
 		return nil
 	}
 	var subs []uuid.UUID
+	var addresses []string
+	seen := map[string]bool{}
 	for _, r := range recipients {
 		if r.Sub != nil {
 			subs = append(subs, *r.Sub)
+			continue
+		}
+		address := strings.ToLower(strings.TrimSpace(r.Email))
+		if address != "" && !seen[address] {
+			seen[address] = true
+			addresses = append(addresses, address)
+		}
+	}
+	prefs := &TrackingPreferences{}
+	if len(subs) == 0 && len(addresses) == 0 {
+		return prefs
+	}
+	if trackable, err := m.templateTrackable(ctx, templateID, mailListID); err == nil && !trackable {
+		return prefs
+	}
+	if len(addresses) > 0 {
+		prefs.lookedUp, prefs.accounts = true, m.lookUpAccounts(ctx, addresses)
+		for _, sub := range prefs.accounts {
+			if sub != nil {
+				subs = append(subs, *sub)
+			}
 		}
 	}
 	if len(subs) == 0 {
-		return &TrackingPreferences{}
-	}
-	if trackable, err := m.templateTrackable(ctx, templateID, mailListID); err == nil && !trackable {
-		return &TrackingPreferences{}
+		return prefs
 	}
 	if m.tracking.Preferences == nil {
-		return &TrackingPreferences{err: errors.New("tracking preferences: no core client")}
+		prefs.err = errors.New("tracking preferences: no core client")
+		return prefs
 	}
 	ask, cancel := context.WithTimeout(ctx, preferencesBudget)
 	defer cancel()
-	decisions, err := m.tracking.Preferences.Resolve(ask, subs)
-	return &TrackingPreferences{decisions: decisions, err: err}
+	prefs.decisions, prefs.err = m.tracking.Preferences.Resolve(ask, subs)
+	return prefs
+}
+
+// lookUpAccounts asks Keycloak for the account of each address, at most
+// accountLookups at once and all within accountsBudget, and returns the
+// answers by address. An address Keycloak did not answer for is left out.
+// Addresses are counted in the log, never written.
+func (m *mailerImpl) lookUpAccounts(ctx context.Context, addresses []string) map[string]*uuid.UUID {
+	accounts := make(map[string]*uuid.UUID, len(addresses))
+	if m.tracking.Accounts == nil {
+		m.logger.Warn().Str("event", "tracking_accounts_unavailable").Str("cause", "no_keycloak").Int("addresses", len(addresses)).
+			Msg("No Keycloak to find the accounts of people named by address: they are not tracked, the send goes on")
+		return accounts
+	}
+	ask, cancel := context.WithTimeout(ctx, accountsBudget)
+	defer cancel()
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, accountLookups)
+	failed := 0
+	for _, address := range addresses {
+		wg.Add(1)
+		go func(address string) {
+			defer wg.Done()
+			select {
+			case slots <- struct{}{}:
+			case <-ask.Done():
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				return
+			}
+			defer func() { <-slots }()
+			sub, err := m.tracking.Accounts.VerifiedAccountByEmail(ask, address)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				failed++
+				return
+			}
+			accounts[address] = sub
+		}(address)
+	}
+	wg.Wait()
+	if failed > 0 {
+		m.logger.Warn().Str("event", "tracking_accounts_unavailable").Str("cause", "keycloak").
+			Int("addresses", len(addresses)).Int("unanswered", failed).
+			Msg("Keycloak did not say whose accounts some addresses are: they are not tracked, the send goes on")
+	}
+	return accounts
 }
 
 // planTracking decides, in the send's transaction, for a send that asked for
@@ -120,9 +226,10 @@ func (m *mailerImpl) ResolveTracking(ctx context.Context, templateID uuid.UUID, 
 //     or of one whose content is sensitive (mail_task_content_sensitive):
 //     the send is not tracked at all, tracking_requested false and no row
 //     reasons, as TrackingApplies told the caller;
-//   - a recipient SkyMail knows only by address — an internal list's, a
-//     person named by address in a single mail or a request for approval —
-//     no_account. An address is never looked up to find its account;
+//   - a recipient SkyMail knows only by address: no_account — an internal
+//     list's, or a person a send names one by one for whom Keycloak found no
+//     account (preferences.accounts). Such a person Keycloak did not answer
+//     for: preference_unavailable;
 //   - everyone else as core said before the transaction (preferences). Core
 //     not asked, failing, or not asked about this person (the recipients
 //     changed since): preference_unavailable. Core is never asked here.
@@ -163,7 +270,9 @@ func (q *queue) planTracking(ctx context.Context, taskID uuid.UUID, items []data
 	for i := range items {
 		reason := tracking.SkipPreferenceUnavailable
 		if items[i].RecipientSub == nil {
-			reason = tracking.SkipNoAccount
+			if _, answered := preferences.accountOf(items[i].RecipientEmail); answered || !preferences.lookedUpAny() {
+				reason = tracking.SkipNoAccount
+			}
 		} else if decision, known := decisions[*items[i].RecipientSub]; known {
 			if decision.Allowed {
 				token, err := tracking.NewRecipientToken()
