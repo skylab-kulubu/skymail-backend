@@ -52,6 +52,14 @@ func NewMailHandler(db *database.Store, mailer mailer.Mailer, kc keycloak.Client
 	return h
 }
 
+// errMailAudienceUnavailable: the send names neither an internal list nor a
+// Keycloak group Keycloak has. Refused, never queued to nobody.
+var errMailAudienceUnavailable = apperrors.New(
+	"mail.audience_unavailable",
+	"The mailing list is neither an internal list nor a Keycloak group: the group is unknown or gone.",
+	fiber.StatusUnprocessableEntity,
+)
+
 var errTemplateTargetMissing = apperrors.New(
 	"mail.template_target_missing",
 	"Either template_id or template_key is required.",
@@ -96,6 +104,7 @@ type CreatedMailTask struct {
 //	@Param			task	body		requests.CreateMailTask	true	"Mail task details"
 //	@Success		201		{object}	handlers.CreatedMailTask
 //	@Failure		400		{object}	apperrors.AppError	"Bad Request"
+//	@Failure		422		{object}	apperrors.AppError	"mail.audience_unavailable: the Keycloak group is unknown or gone"
 //	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/mail_tasks [post]
 func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
@@ -128,6 +137,9 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 		}
 
 		members, err := h.kc.GetGroupMembers(c.Context(), params.MailListID.String())
+		if errors.Is(err, keycloak.ErrGroupNotFound) {
+			return errMailAudienceUnavailable
+		}
 		if err != nil {
 			return err
 		}

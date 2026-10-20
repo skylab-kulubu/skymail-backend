@@ -402,6 +402,7 @@ func (h *listHandlerImpl) RemoveRecipient(c fiber.Ctx) error {
 //	@Param			_end	query		int		false	"End index"
 //	@Success		200		{array}		database.Recipient
 //	@Failure		400		{object}	apperrors.AppError	"Bad Request"
+//	@Failure		404		{object}	apperrors.AppError	"Neither an internal list nor a Keycloak group"
 //	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/mailing_lists/{id}/recipients [get]
 func (h *listHandlerImpl) GetRecipients(c fiber.Ctx) error {
@@ -443,6 +444,9 @@ func (h *listHandlerImpl) GetRecipients(c fiber.Ctx) error {
 
 func (h *listHandlerImpl) getKeycloakGroupRecipients(c fiber.Ctx, groupID string) error {
 	members, err := h.kc.GetGroupMembers(c.Context(), groupID)
+	if errors.Is(err, keycloak.ErrGroupNotFound) {
+		return fiber.ErrNotFound
+	}
 	if err != nil {
 		return err
 	}

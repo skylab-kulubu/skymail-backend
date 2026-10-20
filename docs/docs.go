@@ -3140,6 +3140,16 @@ const docTemplate = `{
                         },
                         "description": "Bad Request"
                     },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail.audience_unavailable: the Keycloak group is unknown or gone"
+                    },
                     "500": {
                         "content": {
                             "application/json": {
@@ -4180,6 +4190,16 @@ const docTemplate = `{
                             }
                         },
                         "description": "Bad Request"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Neither an internal list nor a Keycloak group"
                     },
                     "500": {
                         "content": {
