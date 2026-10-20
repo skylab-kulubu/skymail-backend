@@ -223,7 +223,8 @@ func (c *clientImpl) GetGroup(ctx context.Context, id string) (*gocloak.Group, e
 
 	group, err := c.gc.GetGroup(ctx, token, c.realm, id)
 	if err != nil {
-		var apiErr gocloak.APIError
+		// gocloak returns its errors as *APIError.
+		var apiErr *gocloak.APIError
 		if errors.As(err, &apiErr) && apiErr.Code == 404 {
 			return nil, nil
 		}
