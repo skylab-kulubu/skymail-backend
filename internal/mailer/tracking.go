@@ -112,17 +112,30 @@ func (p *TrackingPreferences) accountOf(address string) (*uuid.UUID, bool) {
 	return sub, answered
 }
 
-// ResolveTracking finds out, outside any transaction, whom of recipients a
-// send of templateID to mailListID may track. A recipient known only by
-// address — a person a send names one by one — is looked up in Keycloak
-// first (tracking.Accounts: one enabled account with that verified primary
-// e-mail), within accountsBudget, accountLookups at once. Then core is asked,
-// within preferencesBudget, about everyone with an account. No one is asked
-// when tracking is off or the template is never tracked (System or
-// sensitive; the send's transaction decides that again, and its answer
-// stands). Keycloak or core failing is an answer too: whom it leaves unknown
-// is not tracked, and the send goes out.
+// ResolveTracking asks core, within preferencesBudget and outside any
+// transaction, whom of recipients — a list's or a group's — a send of
+// templateID to mailListID may track. A recipient known only by address is
+// not looked up: no_account. No one is asked when tracking is off or the
+// template is never tracked (System or sensitive; the send's transaction
+// decides that again, and its answer stands). Core failing is an answer
+// too: the send tracks no one with an id and goes out.
 func (m *mailerImpl) ResolveTracking(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID, recipients []RecipientInfo) *TrackingPreferences {
+	return m.resolveTracking(ctx, templateID, mailListID, recipients, false)
+}
+
+// ResolvePeopleTracking is ResolveTracking for a send to people named one
+// by one (Yusuf, 2026-10-20): a recipient known only by address is looked up
+// in Keycloak first (tracking.Accounts: one enabled account with that
+// verified primary e-mail), within accountsBudget, accountLookups at once;
+// then core is asked
+// about everyone with an account. Keycloak failing is an answer too: whom it
+// leaves unknown is not tracked (preference_unavailable), and the send goes
+// out.
+func (m *mailerImpl) ResolvePeopleTracking(ctx context.Context, templateID uuid.UUID, recipients []RecipientInfo) *TrackingPreferences {
+	return m.resolveTracking(ctx, templateID, nil, recipients, true)
+}
+
+func (m *mailerImpl) resolveTracking(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID, recipients []RecipientInfo, lookUp bool) *TrackingPreferences {
 	if !m.TrackingAvailable() {
 		return nil
 	}
@@ -135,7 +148,7 @@ func (m *mailerImpl) ResolveTracking(ctx context.Context, templateID uuid.UUID, 
 			continue
 		}
 		address := strings.ToLower(strings.TrimSpace(r.Email))
-		if address != "" && !seen[address] {
+		if lookUp && address != "" && !seen[address] {
 			seen[address] = true
 			addresses = append(addresses, address)
 		}

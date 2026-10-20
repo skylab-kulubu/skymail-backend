@@ -490,7 +490,7 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	// People named one by one: their accounts are found by address, and core
 	// asked, before the lock too.
 	if action.sends && view.MailApproval.TrackingRequested && view.MailApproval.MailListID == nil && view.MailApproval.FormSourceID == nil {
-		prepared.tracking = h.mailer.ResolveTracking(ctx, view.MailApproval.TemplateID, nil, recipientsOfView(view))
+		prepared.tracking = h.mailer.ResolvePeopleTracking(ctx, view.MailApproval.TemplateID, recipientsOfView(view))
 	}
 	if action.check != nil {
 		if prepared.checked, err = action.check(ctx, view, caller); err != nil {

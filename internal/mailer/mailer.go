@@ -191,6 +191,11 @@ type Transactional interface {
 	// in and pass the answer as EnqueueWithRecipientsParams.Preferences:
 	// SkyMail never waits for core holding a transaction.
 	ResolveTracking(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID, recipients []RecipientInfo) *TrackingPreferences
+	// ResolvePeopleTracking is ResolveTracking for people a send names one
+	// by one: their accounts are first found in Keycloak by address. Call it
+	// before the transaction too, and pass the answer to
+	// Queue.EnqueueTrackedSingle.
+	ResolvePeopleTracking(ctx context.Context, templateID uuid.UUID, recipients []RecipientInfo) *TrackingPreferences
 	// Wake asks the dispatcher to look at the queue now. Call it after the
 	// transaction a Queue wrote in commits; the dispatcher's tick finds the
 	// rows anyway, only later.
@@ -571,7 +576,7 @@ func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingl
 func (m *mailerImpl) EnqueueTrackedSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *TrackingPreferences) (uuid.UUID, error) {
 	// Keycloak and core are asked before the transaction begins.
 	if preferences == nil && arg.TrackingRequested && arg.TemplateID != nil {
-		preferences = m.ResolveTracking(ctx, *arg.TemplateID, nil, []RecipientInfo{{FullName: arg.RecipientFullName, Email: arg.RecipientEmail}})
+		preferences = m.ResolvePeopleTracking(ctx, *arg.TemplateID, []RecipientInfo{{FullName: arg.RecipientFullName, Email: arg.RecipientEmail}})
 	}
 	return m.pooled(ctx, PriorityBulk, func(q *queue) (uuid.UUID, bool, error) {
 		return q.enqueueSingle(ctx, arg, preferences)

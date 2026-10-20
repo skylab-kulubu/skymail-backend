@@ -450,7 +450,8 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   (`GET /admin/realms/<realm>/users?email=…&exact=true&max=2`), yalnız
   birincil `email` alanı, büyük/küçük harf duyarsız tam eşitlik, kullanıcı
   etkin ve `emailVerified=true`. Tam bir eşleşme yoksa (ya da birden fazla
-  varsa) `no_account`; okul adresi gibi ikincil öznitelikler okunmaz. Realm
+  varsa) `no_account`; okul adresi gibi ikincil öznitelikler okunmaz. İnternal
+  listenin ve grubun adres-yalnız alıcıları aranmaz (`no_account`). Realm
   `duplicateEmailsAllowed=false` (e-skylab-keycloak `account-center-realm.json`,
   uzlaştırıcı doğrular). Arama en çok 5 eşzamanlı, gönderim başına toplam
   5 saniye; Keycloak'ın yanıtlamadığı adres `preference_unavailable` alır,
