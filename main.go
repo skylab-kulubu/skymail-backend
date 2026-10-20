@@ -107,6 +107,13 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid mail send budget configuration")
 	}
+	// Which mailbox each kind of mail goes out from and how: every lane off
+	// (SMTP_FROM over SMTP AUTH, as always) unless SKYMAIL_SEND_<LANE> says
+	// graph or xoauth2 (README, sender lanes).
+	sendLanes, err := mailer.SendLanesFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid sender lane configuration")
+	}
 	keycloakAdminURL, err := keycloak.ParseAdminURL(cfg.KeycloakAdminURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid Keycloak configuration")
@@ -185,6 +192,7 @@ func main() {
 		Msg("open and click tracking (SKYMAIL_TRACKING)")
 	log.Info().Str("mode", string(trackingRetention)).Int("event_retention_days", tracking.EventRetentionDays).Int64("max_rows", trackingRetentionMaxRows).
 		Msg("open and click tracking retention (SKYMAIL_TRACKING_RETENTION)")
+	logSendLanes(sendLanes)
 	db := database.NewStore(conn)
 	mailerService := mailer.NewMailer(db, mailer.SMTPConfig{
 		FromEmail: cfg.SMTPFrom,
@@ -196,6 +204,7 @@ func main() {
 		Plain:     cfg.SMTPPlain,
 	}, mailSender, mailer.WithQueueLease(queueLease), mailer.WithRateBudget(rateBudget),
 		mailer.WithReservedDomainsRefused(),
+		mailer.WithSendLanes(sendLanes),
 		mailer.WithTracking(mailer.Tracking{
 			Config:      trackingConfig,
 			Preferences: tracking.NewCoreClient(trackingConfig.CoreURL, kcClient, nil),
@@ -331,6 +340,31 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("error starting server")
 	}
+}
+
+// logSendLanes writes how each sender lane sends: its transport and From,
+// the Reply-To, and the certificate's thumbprint and expiry. Nothing secret.
+func logSendLanes(lanes mailer.SendLanes) {
+	line := log.Info()
+	for _, lane := range mailer.Lanes {
+		config := lanes.Lane(lane)
+		line = line.Str(string(lane), string(config.Transport))
+		if config.From != nil {
+			line = line.Str(string(lane)+"_from", config.From.Address)
+		}
+	}
+	if lanes.ReplyTo != nil {
+		line = line.Str("reply_to", lanes.ReplyTo.Address)
+	}
+	if creds := lanes.Credentials; creds != nil {
+		line = line.Str("graph_client_id", creds.ClientID).Str("certificate_x5t_s256", creds.Thumbprint()).
+			Time("certificate_not_after", creds.NotAfter())
+		if left := time.Until(creds.NotAfter()); left < 30*24*time.Hour {
+			log.Warn().Time("certificate_not_after", creds.NotAfter()).
+				Msg("sender lanes: the skymail-posta certificate expires within 30 days; renew it (ops/wizards/skymail-posta-app-kaydi.sh)")
+		}
+	}
+	line.Msg("sender lanes (SKYMAIL_SEND_HESAP, SKYMAIL_SEND_BILGI, SKYMAIL_SEND_DUYURU)")
 }
 
 // trackingConfigFromEnv validates tracking before any service starts. Routes
