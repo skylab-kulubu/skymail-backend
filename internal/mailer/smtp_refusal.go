@@ -31,30 +31,34 @@ func (r smtpReply) Error() string {
 	return reply
 }
 
-// permanent says the refusal is about this recipient, so the same mail to
-// them is refused again: a 5xx to RCPT TO, or a 5xx at the end of DATA whose
-// enhanced code is X.1.x, an address status (RFC 3463). Every other refusal is
-// tried again later, a 5xx included:
+// permanent says the refusal is about this recipient's address, so the same
+// mail to them is refused again: a 5xx whose enhanced code is 5.1.x, an
+// address status (RFC 3463), to RCPT TO or at the end of DATA; or, from a
+// relay that gives no enhanced code, a 550, 551 or 553 to RCPT TO (mailbox
+// unavailable, not local, name not allowed: RFC 5321 §4.2.2). Every other
+// refusal is tried again later, a 5xx included, so a refusal of the sender,
+// the account, the tenant or the relay's policy cannot fail every recipient
+// of a list at once:
 //
 //   - a 4xx (RFC 5321 §4.2.1: transient);
-//   - a 5xx to MAIL FROM: the sender, the account or the tenant (Exchange
-//     Online's 554 5.2.0 SubmissionQuotaExceeded, a 5.7.x sender refusal),
-//     which would refuse every recipient of a list at once;
-//   - a 5xx at the end of DATA that is not X.1.x (5.2.x mailbox or quota,
-//     5.3.x mail system, 5.7.x policy) or has no enhanced code;
+//   - a 5xx to MAIL FROM (Exchange Online's 554 5.2.0
+//     SubmissionQuotaExceeded, a 5.7.x sender refusal);
+//   - a 5xx to RCPT TO or at the end of DATA that is 5.2.x (mailbox or
+//     quota), 5.3.x (mail system), 5.7.x (policy, relay access denied) or of
+//     any other class than 5.1.x, or has no enhanced code and is not one of
+//     the three above;
 //   - a 5xx to anything else.
 func (r smtpReply) permanent() bool {
 	if r.code < 500 || r.code >= 600 {
 		return false
 	}
-	switch r.stage {
-	case stageRcptTo:
-		return true
-	case stageData:
-		return strings.HasPrefix(r.enhanced, "5.1.")
-	default:
+	if r.stage != stageRcptTo && r.stage != stageData {
 		return false
 	}
+	if r.enhanced != "" {
+		return strings.HasPrefix(r.enhanced, "5.1.")
+	}
+	return r.stage == stageRcptTo && (r.code == 550 || r.code == 551 || r.code == 553)
 }
 
 // enhancedCode finds an RFC 3463 code right after the reply code, for a relay

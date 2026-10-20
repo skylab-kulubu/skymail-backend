@@ -159,16 +159,17 @@ dakika). Göndericinin hatası sonucu söyler: hata yok gönderildi, kalıcı ha
 hemen düşer (`failed`), ötekiler yeniden denenir (en çok 5 deneme; 30 sn,
 1, 2, 4 dakika arayla).
 
-E-postada kalıcı hata yalnız alıcıya özgü olandır: go-mail'in ayrıştıramadığı
-adres ve relay'in alıcıyı reddi. Gönderene, hesaba ya da kiracıya ilişkin bir
-5xx (kota, gönderen reddi) bütün toplu gönderimi bir anda düşürmesin diye
-geçici sayılır (`internal/mailer/smtp_refusal.go`):
+E-postada kalıcı hata yalnız alıcının adresine özgü olandır: go-mail'in
+ayrıştıramadığı adres ve relay'in adresi reddi. Gönderene, hesaba, kiracıya ya
+da relay politikasına ilişkin bir 5xx (kota, gönderen reddi, relay erişim
+reddi) bütün toplu gönderimi bir anda düşürmesin diye geçici sayılır (`internal/mailer/smtp_refusal.go`):
 
 | Yanıt | Adım | Sonuç |
 |---|---|---|
-| 5xx | `RCPT TO` | kalıcı (`failed`, ilk denemede) |
-| 5xx, ek kod 5.1.x (adres durumu) | `DATA` sonu | kalıcı |
-| 5xx, ek kod 5.2.x / 5.3.x / 5.7.x ya da ek kodsuz | `DATA` sonu | geçici |
+| 5xx, ek kod 5.1.x (adres durumu) | `RCPT TO`, `DATA` sonu | kalıcı (`failed`, ilk denemede) |
+| ek kodsuz 550 / 551 / 553 | `RCPT TO` | kalıcı |
+| 5xx, ek kod 5.2.x / 5.3.x / 5.7.x (ör. relay erişim reddi) ya da 5.1.x dışı başka sınıf | `RCPT TO`, `DATA` sonu | geçici |
+| ek kodsuz başka 5xx (ör. 554, 501) | `RCPT TO`, `DATA` sonu | geçici |
 | 5xx (ör. `554 5.2.0` SubmissionQuotaExceeded, 5.7.x gönderen reddi) | `MAIL FROM` | geçici |
 | 4xx (greylisting, dolu kutu, kısma) | her adım | geçici |
 | yanıtsız hata (bağlantı kopması, 1 dakikalık sınır) | her adım | geçici |
