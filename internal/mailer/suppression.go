@@ -35,8 +35,12 @@ func suppressedError(s database.GetSuppressedAddressesRow) string {
 // person needs to reach their account (keycloak.*, account.*). It goes to a
 // suppressed address anyway, flagged (Yusuf, 2026-10-20: hub spec §0 K3).
 // Everything else — Forms, Mail onayı, lists — is suppressed.
-func AccountMail(key *string) bool {
-	return key != nil && (strings.HasPrefix(*key, "keycloak.") || strings.HasPrefix(*key, "account."))
+// The key alone is not enough: the template must also be a system template
+// (the Template seed's; the keys are not reserved, so anyone with
+// skymail:templates:write could otherwise send past the list with an
+// account.* key).
+func AccountMail(key *string, system bool) bool {
+	return system && key != nil && (strings.HasPrefix(*key, "keycloak.") || strings.HasPrefix(*key, "account."))
 }
 
 // suppressionAddress is how an address is looked up in mail_suppressions.
@@ -62,11 +66,11 @@ func (q *queue) suppressionsOf(ctx context.Context, rows []commonMailRow) (map[s
 	for _, s := range found {
 		suppressed[s.Address] = s
 	}
-	key, err := q.q.GetMailTaskTemplateKey(ctx, rows[0].TaskID)
+	template, err := q.q.GetMailTaskTemplateKey(ctx, rows[0].TaskID)
 	if err != nil {
 		return nil, false, fmt.Errorf("read the send's template: %w", err)
 	}
-	return suppressed, AccountMail(key), nil
+	return suppressed, AccountMail(template.Key, template.System), nil
 }
 
 // suppressRefused suppresses the address a relay refused for good, and

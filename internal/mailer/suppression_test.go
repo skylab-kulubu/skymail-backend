@@ -11,23 +11,29 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 )
 
-// Templates whose key says what a send is: account mail (exempt) and a
-// Forms confirmation (suppressed).
+// Templates whose key says what a send is: account mail (a system template,
+// exempt), a Forms confirmation (suppressed) and a template an operator keyed
+// account.* that is not a system template (suppressed: the key alone exempts
+// nothing).
 var (
-	accountTemplate = uuid.MustParse("61000000-0000-4000-8000-000000000001")
-	formsTemplate   = uuid.MustParse("61000000-0000-4000-8000-000000000002")
+	accountTemplate       = uuid.MustParse("61000000-0000-4000-8000-000000000001")
+	formsTemplate         = uuid.MustParse("61000000-0000-4000-8000-000000000002")
+	operatorAccountKeyed  = uuid.MustParse("61000000-0000-4000-8000-000000000003")
+	operatorKeycloakKeyed = uuid.MustParse("61000000-0000-4000-8000-000000000004")
 )
 
-// suppressionQueue is initialQueue with the two keyed templates and Mehmet's
+// suppressionQueue is initialQueue with the keyed templates and Mehmet's
 // address suppressed by a report (5.1.10).
 func suppressionQueue(t *testing.T) *database.Store {
 	t.Helper()
 	db := initialQueue(t)
 	if _, err := db.Conn.Exec(context.Background(), `
-		INSERT INTO templates (id, key, name, subject, html_content, plain_text_content, react_email_content) VALUES
-		    ($1, 'keycloak.login-code', 'Giriş kodu', 'Kod', '<p>{{.code}}</p>', '{{.code}}', ''),
-		    ($2, 'forms.response-received', 'Yanıt alındı', 'Yanıt', '<p>Alındı</p>', 'Alındı', '')`,
-		accountTemplate, formsTemplate); err != nil {
+		INSERT INTO templates (id, key, system, name, subject, html_content, plain_text_content, react_email_content) VALUES
+		    ($1, 'keycloak.login-code', true, 'Giriş kodu', 'Kod', '<p>{{.code}}</p>', '{{.code}}', ''),
+		    ($2, 'forms.response-received', false, 'Yanıt alındı', 'Yanıt', '<p>Alındı</p>', 'Alındı', ''),
+		    ($3, 'account.x', false, 'Hesap', 'Hesap', '<p>Hesap</p>', 'Hesap', ''),
+		    ($4, 'keycloak.x', false, 'Hesap', 'Hesap', '<p>Hesap</p>', 'Hesap', '')`,
+		accountTemplate, formsTemplate, operatorAccountKeyed, operatorKeycloakKeyed); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Conn.Exec(context.Background(),
@@ -135,6 +141,55 @@ func TestOnlyAccountMailGoesToASuppressedAddress(t *testing.T) {
 	}
 	if status := sendStatus(t, db, task); status != "failed" {
 		t.Errorf("send status = %q, want failed: nothing went out", status)
+	}
+}
+
+// The key alone exempts nothing: a template keyed account.* or keycloak.* that
+// is not a system template (an operator's, made with skymail:templates:write)
+// is suppressed like any other, so the key cannot be used to send past the
+// list (review of skymail-backend #87).
+func TestAnAccountKeyWithoutSystemIsSuppressed(t *testing.T) {
+	db := suppressionQueue(t)
+	m := mailer.NewMailer(db, startFakeSMTP(t).config(), mailer.SenderOn)
+	ctx := context.Background()
+
+	for _, template := range []uuid.UUID{operatorAccountKeyed, operatorKeycloakKeyed} {
+		task, err := m.EnqueueSingle(ctx, database.CreateSingleMailTaskParams{
+			SentBy: laneSender, TemplateID: &template, BodyVariables: []byte(`{}`),
+			RecipientFullName: "Mehmet", RecipientEmail: "mehmet@example.com",
+		})
+		if err != nil {
+			t.Fatalf("template %s: %v", template, err)
+		}
+		if got := rowTo(t, db, task, "mehmet@example.com"); got.status != "failed" || got.error != "suppressed: dsn 5.1.10" || got.flagged {
+			t.Errorf("template %s: %+v, want failed, suppressed, not flagged", template, got)
+		}
+	}
+	if n := count(t, db, `SELECT count(*) FROM mail_suppressions WHERE exempt_flagged_at IS NOT NULL`); n != 0 {
+		t.Errorf("suppressions flagged = %d, want 0", n)
+	}
+}
+
+func TestAccountMailIsASystemTemplateWithAnAccountKey(t *testing.T) {
+	for _, c := range []struct {
+		key    string
+		system bool
+		want   bool
+	}{
+		{"keycloak.login-code", true, true},
+		{"account.security-alert", true, true},
+		{"account.x", false, false},
+		{"keycloak.x", false, false},
+		{"core.welcome", true, false},
+		{"forms.response-received", false, false},
+	} {
+		key := c.key
+		if got := mailer.AccountMail(&key, c.system); got != c.want {
+			t.Errorf("AccountMail(%q, system %v) = %v, want %v", c.key, c.system, got, c.want)
+		}
+	}
+	if mailer.AccountMail(nil, true) {
+		t.Error("AccountMail(no template, system) = true, want false")
 	}
 }
 

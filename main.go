@@ -551,10 +551,6 @@ func registerMailApprovalRoutes(api fiber.Router, auth middlewares.AuthMiddlewar
 	requests.Post("/:id/resubmit", approvals.Resubmit)
 }
 
-// registerNotificationRoutes serves POST /notifications to services (hub
-// ticket iletisim-servisi 03): a service account's token with
-// skymail:notifications:send, never a person's. The notification types are
-// read as templates are and written by the Template seed.
 // registerSuppressionRoutes serves the suppression list to operators with
 // skymail:suppressions:manage (README, "Geri dönen posta ve bastırma
 // listesi").
@@ -564,6 +560,10 @@ func registerSuppressionRoutes(api fiber.Router, auth middlewares.AuthMiddleware
 	group.Delete("/:id", auth.RequireAnyPermission(handlers.SuppressionsManageRole), suppressions.Delete)
 }
 
+// registerNotificationRoutes serves POST /notifications to services (hub
+// ticket iletisim-servisi 03): a service account's token with
+// skymail:notifications:send, never a person's. The notification types are
+// read as templates are and written by the Template seed.
 func registerNotificationRoutes(api fiber.Router, auth middlewares.AuthMiddleware, notifications handlers.NotificationHandler) {
 	api.Post("/notifications", auth.RequireAnyPermission(handlers.NotificationsSendRole), middlewares.RequireServiceAccount(), notifications.Send)
 	types := api.Group("/notification_types")
