@@ -242,6 +242,23 @@ type AccountErasureReceipt struct {
 	Counts      []byte    `json:"counts"`
 }
 
+// One item in one person's in-app inbox: the type's inbox variant rendered for one notification, the person's seen/read/archived marks; gone at expires_at (at most 90 days) or with the person's account erasure.
+type InboxItem struct {
+	ID uuid.UUID `json:"id"`
+	// The person's Keycloak subject. Only that person reads or marks the item.
+	UserID           uuid.UUID  `json:"user_id"`
+	NotificationID   uuid.UUID  `json:"notification_id"`
+	NotificationType string     `json:"notification_type"`
+	Title            string     `json:"title"`
+	Summary          string     `json:"summary"`
+	Link             *string    `json:"link"`
+	CreatedAt        time.Time  `json:"created_at"`
+	SeenAt           *time.Time `json:"seen_at"`
+	ReadAt           *time.Time `json:"read_at"`
+	ArchivedAt       *time.Time `json:"archived_at"`
+	ExpiresAt        time.Time  `json:"expires_at"`
+}
+
 type MailApproval struct {
 	ID                       uuid.UUID         `json:"id"`
 	SubmitterSub             string            `json:"submitter_sub"`
@@ -457,6 +474,16 @@ type NotificationType struct {
 	ArchivedAt      *time.Time `json:"archived_at"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+// A notification type's text on a channel other than e-mail (inbox: title, summary, in-app link; Go text/template over the variables). The e-mail variant is the template of the type's key.
+type NotificationVariant struct {
+	Type      string    `json:"type"`
+	Channel   string    `json:"channel"`
+	Title     string    `json:"title"`
+	Summary   string    `json:"summary"`
+	Link      string    `json:"link"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type Recipient struct {

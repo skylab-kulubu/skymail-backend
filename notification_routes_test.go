@@ -137,6 +137,8 @@ func newNotificationWorld(t *testing.T) *notificationWorld {
 
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
 	auth := middlewares.NewAuthMiddleware("skymail", claimsUserinfo(t), middlewares.AudienceOff)
+	// As main registers them: the person's own routes before /v1's chain.
+	registerInboxRoutes(app, auth, nil, handlers.NewInboxHandler(store))
 	api := protectedAPI(app, auth, nil)
 	registerNotificationRoutes(api, auth, handlers.NewNotificationHandler(store, mailer.NewMailer(store, mailer.SMTPConfig{}, mailer.SenderOn), directory))
 	return &notificationWorld{t: t, store: store, app: app, people: directory}

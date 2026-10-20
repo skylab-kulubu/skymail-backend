@@ -1875,3 +1875,105 @@ SELECT count(*) FILTER (WHERE status <> 'failed') AS queued,
        count(*) FILTER (WHERE status = 'failed')  AS failed
 FROM mail_queue
 WHERE task_id = sqlc.arg(task_id);
+
+-- A notification type's text on a channel other than e-mail (hub ticket
+-- iletisim-servisi 05: inbox), as the Template seed states it with the type.
+-- name: UpsertNotificationVariant :one
+INSERT INTO notification_variants (type, channel, title, summary, link)
+VALUES (sqlc.arg(type)::text, sqlc.arg(channel)::text, sqlc.arg(title)::text,
+        sqlc.arg(summary)::text, sqlc.arg(link)::text)
+ON CONFLICT (type, channel) DO UPDATE
+    SET title      = EXCLUDED.title,
+        summary    = EXCLUDED.summary,
+        link       = EXCLUDED.link,
+        updated_at = now()
+RETURNING *;
+
+-- name: DeleteNotificationVariant :exec
+DELETE FROM notification_variants
+WHERE type = sqlc.arg(type)::text
+  AND channel = sqlc.arg(channel)::text;
+
+-- name: GetNotificationVariant :one
+SELECT *
+FROM notification_variants
+WHERE type = sqlc.arg(type)::text
+  AND channel = sqlc.arg(channel)::text;
+
+-- name: ListNotificationVariants :many
+SELECT *
+FROM notification_variants
+ORDER BY type, channel;
+
+-- One notification's inbox item for each person, its text rendered once:
+-- gone in 90 days, or at expires_at when that is sooner. A person already
+-- holding the notification's item is left as they are.
+-- name: InsertInboxItems :execrows
+INSERT INTO inbox_items (user_id, notification_id, notification_type, title, summary, link, expires_at)
+SELECT person, sqlc.arg(notification_id)::uuid, sqlc.arg(notification_type)::text, sqlc.arg(title)::text,
+       sqlc.arg(summary)::text, sqlc.narg(link)::text,
+       LEAST(now() + interval '90 days', COALESCE(sqlc.narg(expires_at)::timestamptz, 'infinity'::timestamptz))
+FROM unnest(sqlc.arg(user_ids)::uuid[]) AS person
+ON CONFLICT (notification_id, user_id) DO NOTHING;
+
+-- A page of one person's inbox, newest first: the items after the cursor
+-- (created_at, id), archived ones as archived says (exclude, include, only),
+-- none past its expiry.
+-- name: ListInboxItems :many
+SELECT *
+FROM inbox_items
+WHERE user_id = sqlc.arg(user_id)::uuid
+  AND expires_at > now()
+  AND CASE sqlc.arg(archived)::text
+          WHEN 'include' THEN true
+          WHEN 'only' THEN archived_at IS NOT NULL
+          ELSE archived_at IS NULL END
+  AND (sqlc.narg(before_created_at)::timestamptz IS NULL
+      OR (created_at, id) < (sqlc.narg(before_created_at)::timestamptz, sqlc.narg(before_id)::uuid))
+ORDER BY created_at DESC, id DESC
+LIMIT sqlc.arg(page_size)::int;
+
+-- A person's unseen and unread items, archived and expired ones left out.
+-- name: CountInboxItems :one
+SELECT count(*) FILTER (WHERE seen_at IS NULL) AS unseen,
+       count(*) FILTER (WHERE read_at IS NULL) AS unread
+FROM inbox_items
+WHERE user_id = sqlc.arg(user_id)::uuid
+  AND archived_at IS NULL
+  AND expires_at > now();
+
+-- One of the person's own items, marked: seen; read (seen too); unread;
+-- archived. A mark already there keeps its time. Nothing when the item is not
+-- theirs, does not exist or has expired.
+-- name: MarkInboxItem :one
+UPDATE inbox_items
+SET seen_at     = CASE WHEN sqlc.arg(mark)::text IN ('seen', 'read') THEN COALESCE(seen_at, now()) ELSE seen_at END,
+    read_at     = CASE sqlc.arg(mark)::text
+                      WHEN 'read' THEN COALESCE(read_at, now())
+                      WHEN 'unread' THEN NULL
+                      ELSE read_at END,
+    archived_at = CASE WHEN sqlc.arg(mark)::text = 'archived' THEN COALESCE(archived_at, now()) ELSE archived_at END
+WHERE id = sqlc.arg(id)::uuid
+  AND user_id = sqlc.arg(user_id)::uuid
+  AND expires_at > now()
+RETURNING *;
+
+-- Every item of the person's inbox (archived ones left out) not yet seen, or
+-- with read not yet read, marked so.
+-- name: MarkAllInboxItems :execrows
+UPDATE inbox_items
+SET seen_at = COALESCE(seen_at, now()),
+    read_at = CASE WHEN sqlc.arg(read)::boolean THEN COALESCE(read_at, now()) ELSE read_at END
+WHERE user_id = sqlc.arg(user_id)::uuid
+  AND archived_at IS NULL
+  AND expires_at > now()
+  AND (seen_at IS NULL OR (sqlc.arg(read)::boolean AND read_at IS NULL));
+
+-- The inbox sweep: at most batch_size items past their expiry.
+-- name: DeleteExpiredInboxItems :execrows
+DELETE FROM inbox_items
+WHERE id IN (SELECT i.id
+             FROM inbox_items i
+             WHERE i.expires_at <= sqlc.arg(at)::timestamptz
+             ORDER BY i.expires_at, i.id
+             LIMIT sqlc.arg(batch_size)::int FOR UPDATE SKIP LOCKED);

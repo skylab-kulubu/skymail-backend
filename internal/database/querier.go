@@ -67,6 +67,8 @@ type Querier interface {
 	CountAllTemplatesIncludingArchived(ctx context.Context) (int64, error)
 	CountArchivedMailingLists(ctx context.Context) (int64, error)
 	CountArchivedTemplates(ctx context.Context) (int64, error)
+	// A person's unseen and unread items, archived and expired ones left out.
+	CountInboxItems(ctx context.Context, userID uuid.UUID) (CountInboxItemsRow, error)
 	CountMailApprovals(ctx context.Context, arg CountMailApprovalsParams) (int64, error)
 	CountMailQueueByStatus(ctx context.Context) (CountMailQueueByStatusRow, error)
 	CountMailQueueItemsByTaskId(ctx context.Context, arg CountMailQueueItemsByTaskIdParams) (int64, error)
@@ -142,7 +144,10 @@ type Querier interface {
 	// base_seconds doubled for each failure it has had (a day at most). The first
 	// failure since the send was last masked starts its deadline.
 	DeferMaskFailure(ctx context.Context, arg DeferMaskFailureParams) error
+	// The inbox sweep: at most batch_size items past their expiry.
+	DeleteExpiredInboxItems(ctx context.Context, arg DeleteExpiredInboxItemsParams) (int64, error)
 	DeleteExpiredMailFormSources(ctx context.Context, arg DeleteExpiredMailFormSourcesParams) (int64, error)
+	DeleteNotificationVariant(ctx context.Context, arg DeleteNotificationVariantParams) error
 	// Deletes up to batch_size of the oldest records of who opened a masked mail
 	// that are older than retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
 	DeleteOldSentContentViews(ctx context.Context, arg DeleteOldSentContentViewsParams) (int64, error)
@@ -191,6 +196,7 @@ type Querier interface {
 	GetMailingListByIdIncludingArchived(ctx context.Context, id uuid.UUID) (MailingList, error)
 	GetNotificationByIdempotencyKey(ctx context.Context, arg GetNotificationByIdempotencyKeyParams) (GetNotificationByIdempotencyKeyRow, error)
 	GetNotificationType(ctx context.Context, key string) (NotificationType, error)
+	GetNotificationVariant(ctx context.Context, arg GetNotificationVariantParams) (NotificationVariant, error)
 	GetOwnedMailFormSource(ctx context.Context, arg GetOwnedMailFormSourceParams) (MailFormSource, error)
 	GetRecipientByEmail(ctx context.Context, email string) (Recipient, error)
 	GetRecipients(ctx context.Context, arg GetRecipientsParams) ([]Recipient, error)
@@ -213,6 +219,10 @@ type Querier interface {
 	// people into the HTTP process. Link URLs are omitted: one-recipient sends
 	// can have personal URLs and the summary only requires mails:read.
 	GetTrackingReport(ctx context.Context, arg GetTrackingReportParams) ([]byte, error)
+	// One notification's inbox item for each person, its text rendered once:
+	// gone in 90 days, or at expires_at when that is sooner. A person already
+	// holding the notification's item is left as they are.
+	InsertInboxItems(ctx context.Context, arg InsertInboxItemsParams) (int64, error)
 	// content_sensitive_at_send is whether the send is sensitive as it is
 	// queued: 'true' when its template's key is locked sensitive
 	// (template_key_content_locked) whatever the template says, else the
@@ -233,6 +243,10 @@ type Querier interface {
 	// The last version a Template seed wrote of a template. Seed versions are
 	// always published, so this is the seed's last word on the template.
 	LastTemplateSeedVersion(ctx context.Context, templateID uuid.UUID) (TemplateVersionSummary, error)
+	// A page of one person's inbox, newest first: the items after the cursor
+	// (created_at, id), archived ones as archived says (exclude, include, only),
+	// none past its expiry.
+	ListInboxItems(ctx context.Context, arg ListInboxItemsParams) ([]InboxItem, error)
 	// The last event of each of the requests, for the list.
 	ListLastMailApprovalEvents(ctx context.Context, approvalIds []uuid.UUID) ([]MailApprovalEvent, error)
 	ListMailApprovalEvents(ctx context.Context, approvalID uuid.UUID) ([]MailApprovalEvent, error)
@@ -253,6 +267,7 @@ type Querier interface {
 	// only its rows are counted.
 	ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error)
 	ListNotificationTypes(ctx context.Context) ([]NotificationType, error)
+	ListNotificationVariants(ctx context.Context) ([]NotificationVariant, error)
 	// An operator's versions of a template numbered after the given one, oldest
 	// first, drafts included and discarded drafts left out: operator work a seed
 	// written after them would pass over.
@@ -318,6 +333,13 @@ type Querier interface {
 	// statements after the lock take a fresh READ COMMITTED snapshot, so two
 	// replicas cannot both pass the per-recipient caps on a stale snapshot.
 	LockTrackingRecipient(ctx context.Context, trackingToken []byte) (LockTrackingRecipientRow, error)
+	// Every item of the person's inbox (archived ones left out) not yet seen, or
+	// with read not yet read, marked so.
+	MarkAllInboxItems(ctx context.Context, arg MarkAllInboxItemsParams) (int64, error)
+	// One of the person's own items, marked: seen; read (seen too); unread;
+	// archived. A mark already there keeps its time. Nothing when the item is not
+	// theirs, does not exist or has expired.
+	MarkInboxItem(ctx context.Context, arg MarkInboxItemParams) (InboxItem, error)
 	// Marks a send masked and puts its masked variables in place of its own.
 	MarkSendMasked(ctx context.Context, arg MarkSendMaskedParams) error
 	// A send found not sensitive: not looked at again until its template changes.
@@ -489,6 +511,9 @@ type Querier interface {
 	// (PUT /v1/notification_types/{key}): written over, its archive left as it
 	// is.
 	UpsertNotificationType(ctx context.Context, arg UpsertNotificationTypeParams) (NotificationType, error)
+	// A notification type's text on a channel other than e-mail (hub ticket
+	// iletisim-servisi 05: inbox), as the Template seed states it with the type.
+	UpsertNotificationVariant(ctx context.Context, arg UpsertNotificationVariantParams) (NotificationVariant, error)
 	// The seed writes everything it sends, the subject included. It is the
 	// caller that keeps an operator's change — the subject too — from being
 	// overwritten: it refuses the seed before it gets here unless it is forced

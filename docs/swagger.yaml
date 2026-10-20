@@ -125,11 +125,11 @@ components:
     handlers.ChannelResult:
       properties:
         failed:
-          description: 'Recipients whose message did not render: written failed on
-            the send.'
+          description: 'Recipients whose message did not render: for e-mail written
+            failed on the send, for inbox no item.'
           type: integer
         queued:
-          description: Recipients queued on the channel.
+          description: Recipients queued on the channel; for inbox, the items written.
           type: integer
         skipped:
           additionalProperties:
@@ -239,6 +239,66 @@ components:
           type: integer
         skipped_count:
           type: integer
+      type: object
+    handlers.InboxCounts:
+      properties:
+        unread:
+          description: Items not yet read (archived ones left out).
+          type: integer
+        unseen:
+          description: Items not yet seen (archived ones left out).
+          type: integer
+      type: object
+    handlers.InboxItem:
+      properties:
+        archived_at:
+          type: string
+        created_at:
+          type: string
+        id:
+          type: string
+        link:
+          description: The in-app path the item opens; null when none.
+          example: /events/6f1c2d3e
+          type: string
+        read_at:
+          type: string
+        seen_at:
+          type: string
+        summary:
+          type: string
+        title:
+          type: string
+        type:
+          description: The notification type's key.
+          example: event.cancelled
+          type: string
+      type: object
+    handlers.InboxPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/handlers.InboxItem'
+          type: array
+          uniqueItems: false
+        next_cursor:
+          description: The next page's cursor; null on the last page.
+          type: string
+      type: object
+    handlers.InboxUpdated:
+      properties:
+        updated:
+          type: integer
+      type: object
+    handlers.InboxVariant:
+      description: The type's inbox text; null when the type does not go to the inbox.
+      properties:
+        link:
+          type: string
+        summary:
+          type: string
+        title:
+          type: string
       type: object
     handlers.MailApproval:
       properties:
@@ -622,6 +682,8 @@ components:
             type: string
           type: array
           uniqueItems: false
+        inbox:
+          $ref: '#/components/schemas/handlers.InboxVariant'
         key:
           type: string
         lane:
@@ -1376,6 +1438,27 @@ components:
           maxLength: 2000
           type: string
       type: object
+    requests.InboxVariant:
+      description: 'The type''s inbox text: required when default_channels holds inbox,
+        refused otherwise.'
+      properties:
+        link:
+          description: 'The in-app path the item opens (/events/..., /news/...): starts
+            with one /, no scheme or host. Empty: no link.'
+          maxLength: 2048
+          type: string
+        summary:
+          description: A line or two under it; at most 1000 characters rendered.
+          maxLength: 4000
+          type: string
+        title:
+          description: The item's title; must not render empty, at most 200 characters
+            rendered.
+          maxLength: 1000
+          type: string
+      required:
+      - title
+      type: object
     requests.MailApprovalRecipient:
       properties:
         email:
@@ -1456,14 +1539,18 @@ components:
           maxLength: 64
           type: string
         default_channels:
-          description: The channels the type goes by. Today only email.
+          description: 'The channels the type goes by: email, inbox. inbox goes whatever
+            the person''s preferences say.'
           example:
           - email
+          - inbox
           items:
             type: string
           minItems: 1
           type: array
-          uniqueItems: false
+          uniqueItems: true
+        inbox:
+          $ref: '#/components/schemas/requests.InboxVariant'
         lane:
           description: 'The queue lane: system (never waits behind a bulk send) or
             bulk.'
@@ -1565,6 +1652,12 @@ components:
       type: object
     requests.SendNotification:
       properties:
+        expires_at:
+          description: 'When what the notification is about ends (an event that is
+            over): its inbox items go then rather than after 90 days. Must be in the
+            future; left out, 90 days.'
+          example: "2026-11-01T18:00:00Z"
+          type: string
         recipients:
           description: The people, each once (a sub named again is counted in duplicates
             and left out).
@@ -3354,6 +3447,293 @@ paths:
       summary: Restore an archived mailing list
       tags:
       - Lists
+  /me/inbox:
+    get:
+      description: 'The caller''s own inbox items, newest first, a page at a time:
+        next_cursor goes into cursor for the next page, null on the last. Archived
+        items are left out unless archived says include or only; an item past its
+        expiry (90 days, or sooner) is never served. Only a person''s own token issued
+        for SkyMail (aud skymail) may call it; no role is needed.'
+      parameters:
+      - description: The next_cursor of the page before
+        in: query
+        name: cursor
+        schema:
+          type: string
+      - description: Items per page, 1 to 100
+        in: query
+        name: limit
+        schema:
+          default: 50
+          type: integer
+      - description: exclude, include or only
+        in: query
+        name: archived
+        schema:
+          default: exclude
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.InboxPage'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: inbox.invalid_query; inbox.invalid_cursor
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'server.unauthorized: no live token, or one not issued for
+            SkyMail'
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'auth.person_required: a service''s token'
+      summary: List my inbox
+      tags:
+      - Inbox
+  /me/inbox/{id}/archive:
+    post:
+      description: The item leaves the inbox's default list and its counts (archived=only
+        lists it). It still goes at its expiry.
+      parameters:
+      - description: The item
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.InboxItem'
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: server.unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: auth.person_required
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'server.not_found: not the caller''s, not there, or expired'
+      summary: Archive one of my items
+      tags:
+      - Inbox
+  /me/inbox/{id}/read:
+    post:
+      description: The caller opened the item; read is seen too. A mark already there
+        keeps its time.
+      parameters:
+      - description: The item
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.InboxItem'
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: server.unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: auth.person_required
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'server.not_found: not the caller''s, not there, or expired'
+      summary: Mark one of my items read
+      tags:
+      - Inbox
+  /me/inbox/{id}/seen:
+    post:
+      description: The item was shown to the caller. A mark already there keeps its
+        time.
+      parameters:
+      - description: The item
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.InboxItem'
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: server.unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: auth.person_required
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'server.not_found: not the caller''s, not there, or expired'
+      summary: Mark one of my items seen
+      tags:
+      - Inbox
+  /me/inbox/{id}/unread:
+    post:
+      description: Takes the read mark off; seen stays.
+      parameters:
+      - description: The item
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.InboxItem'
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: server.unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: auth.person_required
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'server.not_found: not the caller''s, not there, or expired'
+      summary: Mark one of my items unread
+      tags:
+      - Inbox
+  /me/inbox/counts:
+    get:
+      description: 'What the caller''s badge shows: their items not yet seen and not
+        yet read, archived and expired ones left out.'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.InboxCounts'
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: server.unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: auth.person_required
+      summary: Count my unseen and unread items
+      tags:
+      - Inbox
+  /me/inbox/read-all:
+    post:
+      description: Every item of the caller's inbox not yet read (archived ones left
+        out) is marked read, and seen. Nobody else's item changes.
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.InboxUpdated'
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: server.unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: auth.person_required
+      summary: Mark all my items read
+      tags:
+      - Inbox
+  /me/inbox/seen-all:
+    post:
+      description: 'Every item of the caller''s inbox not yet seen (archived ones
+        left out) is marked seen: the badge goes to 0. Nobody else''s item changes.'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.InboxUpdated'
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: server.unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: auth.person_required
+      summary: Mark all my items seen
+      tags:
+      - Inbox
   /notification_types:
     get:
       description: 'Every notification type, archived ones included, by key: its preference
@@ -3410,9 +3790,12 @@ paths:
     put:
       description: 'Writes the type of the key as the Template seed states it: its
         preference category (null: none), whether it is required (preferences not
-        looked at), its default channels (today only email) and its queue lane. A
-        type that exists is written over; its archive stays as it is. The type''s
-        e-mail variant is the template of the same key (PUT /templates/by-key/{key}).'
+        looked at), its default channels (email, inbox), its queue lane and, when
+        it goes to the inbox, its inbox text (title, summary, link: Go text/template
+        over the notification''s variables; the link an in-app path starting with
+        one /). A type that exists is written over, its inbox text with it; its archive
+        stays as it is. The type''s e-mail variant is the template of the same key
+        (PUT /templates/by-key/{key}).'
       parameters:
       - description: The type's key, the Template key's alphabet
         in: path
@@ -3443,7 +3826,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/apperrors.AppError'
-          description: validation.error; notification_type.invalid_category
+          description: validation.error; notification_type.invalid_category; notification_type.inbox_variant_required;
+            notification_type.inbox_variant_unused; notification_type.inbox_variant_invalid
+            (params.part)
         "403":
           content:
             application/json:
@@ -3462,8 +3847,10 @@ paths:
         to the request''s address or, without one, to the person''s primary e-mail
         in Keycloak; a person Keycloak does not know, a disabled account and an unverified
         address are skipped and counted. The e-mail is the template of the type''s
-        key, queued in the type''s lane. The Idempotency-Key header is required: the
-        same key from the same caller answers the first answer again (Idempotent-Replayed:
+        key, queued in the type''s lane. The inbox does not look at allowed_channels:
+        every recipient gets an item, the type''s inbox text rendered with the variables,
+        kept 90 days or until expires_at. The Idempotency-Key header is required:
+        the same key from the same caller answers the first answer again (Idempotent-Replayed:
         true) and queues nothing; a different request with it is 422. Only a service
         account''s token with skymail:notifications:send may call it.'
       parameters:
@@ -3503,7 +3890,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/apperrors.AppError'
           description: 'validation.error; notification.idempotency_key_required; notification.allowed_channels_required
-            (params.recipient: its index)'
+            (params.recipient: its index); notification.expires_at_past'
         "403":
           content:
             application/json:
@@ -3517,7 +3904,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/apperrors.AppError'
           description: 'notification.email_variant_missing: the type goes by e-mail
-            and has no template of its key'
+            and has no template of its key; notification.inbox_variant_missing'
         "422":
           content:
             application/json:

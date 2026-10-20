@@ -30,8 +30,8 @@ const NotificationsSendRole = "skymail:notifications:send"
 // IdempotencyKeyHeader names the header every POST /v1/notifications carries.
 const IdempotencyKeyHeader = "Idempotency-Key"
 
-// The channels a notification type may go by. Only e-mail works today; the
-// others come with their tickets (05 inbox, 12 push, 13 sms).
+// The channels a notification type may go by: e-mail and the in-app inbox
+// (ChannelInbox, inbox.go). Push and SMS come with their tickets (12, 13).
 const (
 	ChannelEmail = "email"
 )
@@ -74,6 +74,11 @@ var (
 	errEmailVariantMissing = apperrors.New(
 		"notification.email_variant_missing",
 		"The type goes by e-mail but has no template of its key in use.",
+		fiber.StatusConflict,
+	)
+	errInboxVariantMissing = apperrors.New(
+		"notification.inbox_variant_missing",
+		"The type goes to the inbox but has no inbox text (PUT /notification_types/{key} with inbox).",
 		fiber.StatusConflict,
 	)
 	errDirectoryUnavailable = apperrors.New(
@@ -124,10 +129,12 @@ type NotificationType struct {
 	Lane            string   `json:"lane" enums:"system,bulk"`
 	// Set when the type is out of use: POST /notifications refuses it.
 	ArchivedAt *time.Time `json:"archived_at"`
+	// The type's inbox text; null when the type does not go to the inbox.
+	Inbox *InboxVariant `json:"inbox"`
 }
 
-func notificationTypeOf(row database.NotificationType) NotificationType {
-	t := NotificationType{Key: row.Key, Category: row.Category, Required: row.Required, DefaultChannels: row.DefaultChannels, Lane: row.Lane, ArchivedAt: row.ArchivedAt}
+func notificationTypeOf(row database.NotificationType, inbox *InboxVariant) NotificationType {
+	t := NotificationType{Key: row.Key, Category: row.Category, Required: row.Required, DefaultChannels: row.DefaultChannels, Lane: row.Lane, ArchivedAt: row.ArchivedAt, Inbox: inbox}
 	if t.DefaultChannels == nil {
 		t.DefaultChannels = []string{}
 	}
@@ -138,9 +145,9 @@ func notificationTypeOf(row database.NotificationType) NotificationType {
 type ChannelResult struct {
 	// The send its deliveries on this channel belong to (GET /mail_tasks/{id} for e-mail); null when nobody was queued.
 	TaskID *uuid.UUID `json:"task_id"`
-	// Recipients queued on the channel.
+	// Recipients queued on the channel; for inbox, the items written.
 	Queued int `json:"queued"`
-	// Recipients whose message did not render: written failed on the send.
+	// Recipients whose message did not render: for e-mail written failed on the send, for inbox no item.
 	Failed int `json:"failed"`
 	// Recipients left out, by reason: not_allowed, unknown_person, disabled, no_address, unverified.
 	Skipped map[string]int `json:"skipped"`
@@ -206,9 +213,10 @@ func (h *notificationHandlerImpl) emailOf(ctx context.Context, p *person) (maile
 
 // channelAllowed is the rule (hub ticket iletisim-servisi 03): a required
 // type goes on its channels whatever the person allows; an optional one only
-// on those core says the person allows.
+// on those core says the person allows. The inbox does not look at
+// preferences (ticket 05, S4): it is written for an optional type too.
 func channelAllowed(required bool, allowed *[]string, channel string) bool {
-	if required {
+	if required || channel == ChannelInbox {
 		return true
 	}
 	return allowed != nil && slices.Contains(*allowed, channel)
@@ -242,7 +250,7 @@ var errNotificationReplay = errors.New("idempotency key already used")
 // Send godoc
 //
 //	@Summary		Send a notification to people
-//	@Description	core says what happened (type) and to whom (recipients, by Keycloak sub); SkyMail picks each person's channels: the type's default channels, for an optional type only those in the person's allowed_channels (a required type ignores them), and only where the person has an address. E-mail goes to the request's address or, without one, to the person's primary e-mail in Keycloak; a person Keycloak does not know, a disabled account and an unverified address are skipped and counted. The e-mail is the template of the type's key, queued in the type's lane. The Idempotency-Key header is required: the same key from the same caller answers the first answer again (Idempotent-Replayed: true) and queues nothing; a different request with it is 422. Only a service account's token with skymail:notifications:send may call it.
+//	@Description	core says what happened (type) and to whom (recipients, by Keycloak sub); SkyMail picks each person's channels: the type's default channels, for an optional type only those in the person's allowed_channels (a required type ignores them), and only where the person has an address. E-mail goes to the request's address or, without one, to the person's primary e-mail in Keycloak; a person Keycloak does not know, a disabled account and an unverified address are skipped and counted. The e-mail is the template of the type's key, queued in the type's lane. The inbox does not look at allowed_channels: every recipient gets an item, the type's inbox text rendered with the variables, kept 90 days or until expires_at. The Idempotency-Key header is required: the same key from the same caller answers the first answer again (Idempotent-Replayed: true) and queues nothing; a different request with it is 422. Only a service account's token with skymail:notifications:send may call it.
 //	@Tags			Notifications
 //	@Accept			json
 //	@Produce		json
@@ -250,9 +258,9 @@ var errNotificationReplay = errors.New("idempotency key already used")
 //	@Param			notification	body		requests.SendNotification	true	"The notification"
 //	@Success		201				{object}	handlers.NotificationResult
 //	@Header			201				{string}	Idempotent-Replayed	"true when the answer is the first answer to this Idempotency-Key"
-//	@Failure		400				{object}	apperrors.AppError	"validation.error; notification.idempotency_key_required; notification.allowed_channels_required (params.recipient: its index)"
+//	@Failure		400				{object}	apperrors.AppError	"validation.error; notification.idempotency_key_required; notification.allowed_channels_required (params.recipient: its index); notification.expires_at_past"
 //	@Failure		403				{object}	apperrors.AppError	"server.forbidden: no skymail:notifications:send; auth.service_account_required: a person's token"
-//	@Failure		409				{object}	apperrors.AppError	"notification.email_variant_missing: the type goes by e-mail and has no template of its key"
+//	@Failure		409				{object}	apperrors.AppError	"notification.email_variant_missing: the type goes by e-mail and has no template of its key; notification.inbox_variant_missing"
 //	@Failure		422				{object}	apperrors.AppError	"notification.type_unknown; notification.idempotency_key_reused"
 //	@Failure		503				{object}	apperrors.AppError	"notification.directory_unavailable: Keycloak did not answer; nothing was queued"
 //	@Router			/notifications [post]
@@ -280,6 +288,10 @@ func (h *notificationHandlerImpl) Send(c fiber.Ctx) error {
 		return err
 	}
 
+	if params.ExpiresAt != nil && !params.ExpiresAt.After(time.Now()) {
+		return errExpiresAtPast
+	}
+
 	kind, err := h.db.GetNotificationType(ctx, params.Type)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && kind.ArchivedAt != nil) {
 		return errNotificationTypeUnknown.WithParams(map[string]interface{}{"type": params.Type})
@@ -305,6 +317,19 @@ func (h *notificationHandlerImpl) Send(c fiber.Ctx) error {
 			return err
 		}
 	}
+	var inbox inboxTemplates
+	if slices.Contains(kind.DefaultChannels, ChannelInbox) {
+		variant, err := h.db.GetNotificationVariant(ctx, database.GetNotificationVariantParams{Type: kind.Key, Channel: ChannelInbox})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errInboxVariantMissing.WithParams(map[string]interface{}{"type": kind.Key})
+		}
+		if err != nil {
+			return err
+		}
+		if inbox, _, err = parseInboxVariant(variant.Title, variant.Summary, variant.Link); err != nil {
+			return err
+		}
+	}
 
 	// Each person once, in the order named.
 	people := make([]*person, 0, len(params.Recipients))
@@ -321,14 +346,35 @@ func (h *notificationHandlerImpl) Send(c fiber.Ctx) error {
 	result.Recipients = len(people)
 
 	var emails []mailer.RecipientInfo
+	var inboxPeople []uuid.UUID
+	var inboxText renderedInbox
 	for _, channel := range kind.DefaultChannels {
 		outcome := ChannelResult{Skipped: map[string]int{}}
+		if channel == ChannelInbox {
+			// The inbox needs no address: the sub is the person's inbox. The
+			// text is the same for everyone, so it renders once; when it does
+			// not, nobody gets an item and every recipient is counted failed.
+			for _, p := range people {
+				if !channelAllowed(kind.Required, p.recipient.AllowedChannels, channel) {
+					outcome.Skipped[SkipNotAllowed]++
+					continue
+				}
+				inboxPeople = append(inboxPeople, p.recipient.Sub)
+			}
+			var failure string
+			if inboxText, failure = inbox.render(params.Variables); failure != "" {
+				log.Error().Str("type", kind.Key).Str("part", failure).Msg("notification: the inbox text did not render; no item was written")
+				outcome.Failed, inboxPeople = len(inboxPeople), nil
+			}
+			result.Channels[channel] = outcome
+			continue
+		}
 		for _, p := range people {
 			if !channelAllowed(kind.Required, p.recipient.AllowedChannels, channel) {
 				outcome.Skipped[SkipNotAllowed]++
 				continue
 			}
-			// Only e-mail is a channel today (the CHECK on default_channels).
+			// E-mail: the CHECK on default_channels lets only email and inbox in.
 			info, skip, err := h.emailOf(ctx, p)
 			if err != nil {
 				log.Error().Err(err).Str("type", kind.Key).Msg("notification: Keycloak did not answer a recipient's lookup")
@@ -400,6 +446,19 @@ func (h *notificationHandlerImpl) Send(c fiber.Ctx) error {
 			email.Failed = int(rows.Failed)
 			result.Channels[ChannelEmail] = email
 			queued = rows.Queued > 0
+		}
+		if len(inboxPeople) > 0 {
+			written, err := q.InsertInboxItems(ctx, database.InsertInboxItemsParams{
+				NotificationID: id, NotificationType: kind.Key,
+				Title: inboxText.title, Summary: inboxText.summary, Link: inboxText.link,
+				ExpiresAt: params.ExpiresAt, UserIds: inboxPeople,
+			})
+			if err != nil {
+				return err
+			}
+			outcome := result.Channels[ChannelInbox]
+			outcome.Queued = int(written)
+			result.Channels[ChannelInbox] = outcome
 		}
 		answer, err := json.Marshal(result)
 		if err != nil {
@@ -480,9 +539,19 @@ func (h *notificationHandlerImpl) ListTypes(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	variants, err := h.db.ListNotificationVariants(c.Context())
+	if err != nil {
+		return err
+	}
+	inbox := make(map[string]*InboxVariant, len(variants))
+	for _, v := range variants {
+		if v.Channel == ChannelInbox {
+			inbox[v.Type] = inboxVariantOf(v)
+		}
+	}
 	types := make([]NotificationType, len(rows))
 	for i, row := range rows {
-		types[i] = notificationTypeOf(row)
+		types[i] = notificationTypeOf(row, inbox[row.Key])
 	}
 	return c.JSON(types)
 }
@@ -502,20 +571,28 @@ func (h *notificationHandlerImpl) GetType(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(notificationTypeOf(row))
+	var inbox *InboxVariant
+	variant, err := h.db.GetNotificationVariant(c.Context(), database.GetNotificationVariantParams{Type: row.Key, Channel: ChannelInbox})
+	switch {
+	case err == nil:
+		inbox = inboxVariantOf(variant)
+	case !errors.Is(err, pgx.ErrNoRows):
+		return err
+	}
+	return c.JSON(notificationTypeOf(row, inbox))
 }
 
 // PutType godoc
 //
 //	@Summary		State a notification type (Template seed)
-//	@Description	Writes the type of the key as the Template seed states it: its preference category (null: none), whether it is required (preferences not looked at), its default channels (today only email) and its queue lane. A type that exists is written over; its archive stays as it is. The type's e-mail variant is the template of the same key (PUT /templates/by-key/{key}).
+//	@Description	Writes the type of the key as the Template seed states it: its preference category (null: none), whether it is required (preferences not looked at), its default channels (email, inbox), its queue lane and, when it goes to the inbox, its inbox text (title, summary, link: Go text/template over the notification's variables; the link an in-app path starting with one /). A type that exists is written over, its inbox text with it; its archive stays as it is. The type's e-mail variant is the template of the same key (PUT /templates/by-key/{key}).
 //	@Tags			Notifications
 //	@Accept			json
 //	@Produce		json
 //	@Param			key		path		string							true	"The type's key, the Template key's alphabet"
 //	@Param			body	body		requests.PutNotificationType	true	"The type"
 //	@Success		200		{object}	handlers.NotificationType
-//	@Failure		400		{object}	apperrors.AppError	"validation.error; notification_type.invalid_category"
+//	@Failure		400		{object}	apperrors.AppError	"validation.error; notification_type.invalid_category; notification_type.inbox_variant_required; notification_type.inbox_variant_unused; notification_type.inbox_variant_invalid (params.part)"
 //	@Failure		403		{object}	apperrors.AppError	"Forbidden"
 //	@Router			/notification_types/{key} [put]
 func (h *notificationHandlerImpl) PutType(c fiber.Ctx) error {
@@ -530,15 +607,37 @@ func (h *notificationHandlerImpl) PutType(c fiber.Ctx) error {
 	if params.Category != nil && !notificationCategory.MatchString(*params.Category) {
 		return errNotificationCategory
 	}
-	row, err := h.db.UpsertNotificationType(c.Context(), database.UpsertNotificationTypeParams{
-		Key:             key,
-		Category:        params.Category,
-		Required:        params.Required,
-		DefaultChannels: params.DefaultChannels,
-		Lane:            params.Lane,
+	if err := checkInboxVariant(params.DefaultChannels, params.Inbox); err != nil {
+		return err
+	}
+	var row database.NotificationType
+	var inbox *InboxVariant
+	err := h.db.InTx(c.Context(), func(q *database.Queries) error {
+		var err error
+		row, err = q.UpsertNotificationType(c.Context(), database.UpsertNotificationTypeParams{
+			Key:             key,
+			Category:        params.Category,
+			Required:        params.Required,
+			DefaultChannels: params.DefaultChannels,
+			Lane:            params.Lane,
+		})
+		if err != nil {
+			return err
+		}
+		if params.Inbox == nil {
+			return q.DeleteNotificationVariant(c.Context(), database.DeleteNotificationVariantParams{Type: key, Channel: ChannelInbox})
+		}
+		variant, err := q.UpsertNotificationVariant(c.Context(), database.UpsertNotificationVariantParams{
+			Type: key, Channel: ChannelInbox, Title: params.Inbox.Title, Summary: params.Inbox.Summary, Link: params.Inbox.Link,
+		})
+		if err != nil {
+			return err
+		}
+		inbox = inboxVariantOf(variant)
+		return nil
 	})
 	if err != nil {
 		return err
 	}
-	return c.JSON(notificationTypeOf(row))
+	return c.JSON(notificationTypeOf(row, inbox))
 }

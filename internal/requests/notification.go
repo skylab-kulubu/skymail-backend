@@ -1,6 +1,10 @@
 package requests
 
-import "github.com/google/uuid"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // MaxNotificationRecipients is how many people one POST /v1/notifications
 // may name.
@@ -18,6 +22,8 @@ type SendNotification struct {
 	Variables map[string]interface{} `json:"variables"`
 	// Where the notification came from, kept with it.
 	Source *NotificationSource `json:"source"`
+	// When what the notification is about ends (an event that is over): its inbox items go then rather than after 90 days. Must be in the future; left out, 90 days.
+	ExpiresAt *time.Time `json:"expires_at,omitempty" example:"2026-11-01T18:00:00Z"`
 }
 
 // NotificationRecipient is one person a notification goes to.
@@ -44,8 +50,23 @@ type PutNotificationType struct {
 	Category *string `json:"category" validate:"omitempty,max=64" example:"events"`
 	// A required type does not look at preferences (a login code, a ticket, a certificate).
 	Required bool `json:"required"`
-	// The channels the type goes by. Today only email.
-	DefaultChannels []string `json:"default_channels" validate:"required,min=1,dive,oneof=email" example:"email"`
+	// The channels the type goes by: email, inbox. inbox goes whatever the person's preferences say.
+	DefaultChannels []string `json:"default_channels" validate:"required,min=1,unique,dive,oneof=email inbox" example:"email,inbox"`
 	// The queue lane: system (never waits behind a bulk send) or bulk.
 	Lane string `json:"lane" validate:"required,oneof=system bulk" example:"bulk"`
+	// The type's inbox text: required when default_channels holds inbox, refused otherwise.
+	Inbox *InboxVariant `json:"inbox,omitempty"`
+}
+
+// InboxVariant is a notification type's text in the in-app inbox: Go
+// text/template over the notification's variables (not the person's name or
+// address), rendered once per notification. Plain text; clients never read
+// it as HTML.
+type InboxVariant struct {
+	// The item's title; must not render empty, at most 200 characters rendered.
+	Title string `json:"title" validate:"required,max=1000"`
+	// A line or two under it; at most 1000 characters rendered.
+	Summary string `json:"summary" validate:"max=4000"`
+	// The in-app path the item opens (/events/..., /news/...): starts with one /, no scheme or host. Empty: no link.
+	Link string `json:"link" validate:"max=2048"`
 }
