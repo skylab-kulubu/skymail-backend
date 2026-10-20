@@ -56,6 +56,11 @@ type Report struct {
 	// message/rfc822 or text/rfc822-headers part), as written, or empty when
 	// the report returned no headers or the headers carry none.
 	OriginalMessageID string
+	// OriginalQueueHeader is the returned message's X-SkyMail-Queue-Id
+	// (QueueIDHeader), as written, or empty. A mail sent through Microsoft
+	// Graph carries Exchange's own Message-ID, not SkyMail's: this header is
+	// what names its queue row.
+	OriginalQueueHeader string
 	// InReplyTo and References are the report's own headers, as written.
 	// Exchange Online sets them to the returned message's Message-ID.
 	InReplyTo  string
@@ -137,8 +142,8 @@ func Parse(r io.Reader) (*Report, error) {
 			}
 			report.Recipients = recipients
 		case "message/rfc822", "text/rfc822-headers", "message/global", "message/global-headers":
-			if report.OriginalMessageID == "" {
-				report.OriginalMessageID = originalMessageID(body)
+			if report.OriginalMessageID == "" && report.OriginalQueueHeader == "" {
+				report.OriginalMessageID, report.OriginalQueueHeader = originalHeaders(body)
 			}
 		}
 	}
@@ -308,35 +313,47 @@ func firstWord(s string) string {
 	return fields[0]
 }
 
-// originalMessageID reads the Message-ID of a returned message's headers.
-func originalMessageID(body io.Reader) string {
+// QueueIDHeader is the header SkyMail's sender lanes write the queue row in,
+// as <id@SMTP_FQDN> like the Message-ID (mailer, hub ticket
+// skymail-bounce-isleme 10). Microsoft Graph sets a mail's Message-ID itself
+// (internetMessageId can be set on a draft only, and a draft is saved to Sent
+// Items when sent), but keeps a custom X- header, which comes back with the
+// returned headers.
+const QueueIDHeader = "X-SkyMail-Queue-Id"
+
+// originalHeaders reads the Message-ID and the X-SkyMail-Queue-Id of a
+// returned message's headers.
+func originalHeaders(body io.Reader) (messageID, queueHeader string) {
 	header, err := textproto.NewReader(bufio.NewReader(io.LimitReader(body, maxHeaderPart))).ReadMIMEHeader()
 	if err != nil && len(header) == 0 {
-		return ""
+		return "", ""
 	}
-	return strings.TrimSpace(header.Get("Message-Id"))
+	return strings.TrimSpace(header.Get("Message-Id")), strings.TrimSpace(header.Get(QueueIDHeader))
 }
 
-// QueueID is the queue row the report is about: the id in the returned
-// message's Message-ID, <id@fqdn>, as SkyMail writes it (mailer emailSender).
-// The returned headers decide when they carry a Message-ID; without one, the
-// report's own In-Reply-To, then References. The domain must be fqdn
+// QueueID is the queue row the report is about: the id in <id@fqdn>, as
+// SkyMail writes it (mailer emailSender). The returned headers decide when
+// there are any: their Message-ID, then their X-SkyMail-Queue-Id (a mail sent
+// through Graph, whose Message-ID is Exchange's). Without returned headers,
+// the report's own In-Reply-To, then References. The domain must be fqdn
 // (case-insensitively) and the id a UUID in its canonical form. ok is false
-// when the deciding header names another message: a mail SkyMail did not
+// when the deciding headers name another message: a mail SkyMail did not
 // send (the rotator's alarm mail, Keycloak's own SMTP), or none at all.
 func (r *Report) QueueID(fqdn string) (id uuid.UUID, ok bool) {
-	var source string
+	var sources []string
 	switch {
-	case r.OriginalMessageID != "":
-		source = r.OriginalMessageID
+	case r.OriginalMessageID != "" || r.OriginalQueueHeader != "":
+		sources = []string{r.OriginalMessageID, r.OriginalQueueHeader}
 	case r.InReplyTo != "":
-		source = r.InReplyTo
+		sources = []string{r.InReplyTo}
 	default:
-		source = r.References
+		sources = []string{r.References}
 	}
-	for _, msgID := range messageIDs(source) {
-		if id, ok := queueID(msgID, fqdn); ok {
-			return id, true
+	for _, source := range sources {
+		for _, msgID := range messageIDs(source) {
+			if id, ok := queueID(msgID, fqdn); ok {
+				return id, true
+			}
 		}
 	}
 	return uuid.Nil, false

@@ -79,6 +79,19 @@ func TestParseReadsTheMachinePartOfAReport(t *testing.T) {
 			kinds: []dsn.Kind{dsn.KindSoft},
 		},
 		{
+			// A mail sent through Microsoft Graph (hub ticket 10): its
+			// Message-ID, the report's In-Reply-To and References are
+			// Exchange's own; the returned headers' X-SkyMail-Queue-Id names
+			// the row.
+			file:    "exchange-graph-sent.eml",
+			queueID: "7e2d1c0b-3a49-4f5e-8d6c-1b2a3c4d5e6f",
+			recipients: []dsn.Recipient{{
+				FinalRecipient: "yok@std.example.org", OriginalRecipient: "yok@std.example.org",
+				Action: "failed", Status: "5.1.10", SMTPCode: 550,
+			}},
+			kinds: []dsn.Kind{dsn.KindHard},
+		},
+		{
 			// No headers returned: the report's In-Reply-To names the row.
 			// Status only says the class; the Diagnostic-Code's 5.1.1 is the
 			// code. A delivered recipient is in the report too.
@@ -176,6 +189,32 @@ func TestQueueIDNeedsSkyMailsMessageID(t *testing.T) {
 	}
 	if _, ok := (&dsn.Report{InReplyTo: "<6f1d2c3b-4a59-4e8f-9b7a-0c1d2e3f4a5b@mail.example.org>"}).QueueID(""); ok {
 		t.Error("an empty SMTP_FQDN matched")
+	}
+}
+
+// The returned headers' X-SkyMail-Queue-Id names the row as their
+// Message-ID does, under the same rules (<uuid@SMTP_FQDN>); the returned
+// headers still decide over the report's own In-Reply-To.
+func TestQueueIDReadsTheQueueHeader(t *testing.T) {
+	const ours = "<6f1d2c3b-4a59-4e8f-9b7a-0c1d2e3f4a5b@mail.example.org>"
+	const exchanges = "<DB9PR01MB0003F1E2D3C4B5A69788EXCH0001@DB9PR01MB0003.eurprd01.prod.outlook.com>"
+	for _, tc := range []struct {
+		name   string
+		report dsn.Report
+		ok     bool
+	}{
+		{"header alone", dsn.Report{OriginalQueueHeader: ours}, true},
+		{"Exchange's Message-ID and the header", dsn.Report{OriginalMessageID: exchanges, OriginalQueueHeader: ours}, true},
+		{"the header in another domain", dsn.Report{OriginalMessageID: exchanges, OriginalQueueHeader: "<6f1d2c3b-4a59-4e8f-9b7a-0c1d2e3f4a5b@evil.example>"}, false},
+		{"the header without brackets", dsn.Report{OriginalQueueHeader: "6f1d2c3b-4a59-4e8f-9b7a-0c1d2e3f4a5b@mail.example.org"}, false},
+		{"returned headers decide over In-Reply-To", dsn.Report{OriginalMessageID: exchanges, InReplyTo: ours}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id, ok := tc.report.QueueID(fqdn)
+			if ok != tc.ok || (ok && id != uuid.MustParse("6f1d2c3b-4a59-4e8f-9b7a-0c1d2e3f4a5b")) {
+				t.Errorf("queue id %v %v, want ok %v", id, ok, tc.ok)
+			}
+		})
 	}
 }
 

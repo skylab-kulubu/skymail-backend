@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	htmlt "html/template"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	textt "text/template"
@@ -254,6 +255,16 @@ type mailerImpl struct {
 	// refuseReserved writes a recipient in a reserved domain failed when a
 	// send is queued (WithReservedDomainsRefused); off by default.
 	refuseReserved bool
+	// lanes are the sender lanes (WithSendLanes; lanes.go): every lane off
+	// by default. templateKey reads a send's template for a mail's lane;
+	// graphTokens and exchangeTokens are the application's tokens, shared
+	// by the workers; graphURL and graphClient are where Graph is.
+	lanes          SendLanes
+	templateKey    templateKeyOf
+	graphTokens    tokenSource
+	exchangeTokens tokenSource
+	graphURL       string
+	graphClient    *http.Client
 
 	// stop closes when Stop is called; stopOnce closes it. dispatching,
 	// sending and reaping are the dispatcher, the workers and the reaper,
@@ -297,7 +308,11 @@ func NewMailer(db *database.Store, smtpConfig SMTPConfig, sender Sender, opts ..
 		sendBudget: SendBudget,
 		stop:       make(chan struct{}),
 		stopped:    make(chan struct{}),
+		graphURL:   DefaultGraphURL,
+		// Each request is bounded by the send's own context (sendBudget).
+		graphClient: &http.Client{},
 	}
+	m.templateKey = m.databaseTemplateKey
 	m.channels = map[string]newChannelSender{ChannelEmail: m.newEmailSender}
 	for _, opt := range opts {
 		opt(m)
@@ -1219,6 +1234,12 @@ func (m *mailerImpl) recordSendFailure(ctx context.Context, logger *zerolog.Logg
 	}
 
 	delay := retryDelay(job.Attempts)
+	// A relay that said when to come back (Graph's Retry-After on a 429 or
+	// a 503) is not tried sooner.
+	var later interface{ RetryAfter() time.Duration }
+	if errors.As(sendErr, &later) && later.RetryAfter() > delay {
+		delay = later.RetryAfter()
+	}
 	attempts, err := m.db.RescheduleMailQueueItem(ctx, database.RescheduleMailQueueItemParams{
 		ID:           job.ID,
 		ClaimedBy:    m.claimant,

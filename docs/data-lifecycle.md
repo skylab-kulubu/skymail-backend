@@ -529,8 +529,16 @@ or link is still, for a while, in these places (#63 review, R5):
   was submitted with until Account erasure (see Mail approvals); the sweep
   does not mask it. Approved sends are to many, sensitive only when their
   template says so.
-- Not kept elsewhere: `mail_queue.error` holds the SMTP or render error, not
-  the mail; the logs carry ids and counts, never a subject or a body.
+- **The sender mailbox's Sent Items.** Exchange Online copies a mail sent
+  over SMTP into the sending mailbox's Sent Items: the off path (SMTP AUTH
+  from `SMTP_FROM`) and a lane sent with `xoauth2` (README, "Gönderen
+  şeritleri"; the duyuru mailbox keeps it one day by its Exchange retention
+  policy, hub ticket skymail-bounce-isleme 02). A lane sent through Graph
+  (`graph`, decided for hesap and bilgi: login codes, resets, transactional
+  mail) sets `saveToSentItems` false, and no copy is made.
+- Not kept elsewhere: `mail_queue.error` holds the SMTP, Graph or render
+  error (codes, not the relay's text), not the mail; the logs carry ids and
+  counts, never a subject or a body.
 
 **`sent_content_views` period (Yusuf, 2026-10-14: two years).** A record of
 who opened a masked mail is deleted `SENT_CONTENT_VIEWS_RETENTION_DAYS` after

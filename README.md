@@ -155,7 +155,8 @@ Bir kuyruk satırı bir kişiye bir kanaldan bir teslimdir. Motor (kira, deneme,
 göndericisine verir (`internal/mailer/channel.go`, `ChannelSender`). Her işçi
 açılışta her kanalın kendi göndericisini kurar; e-postada bu işçinin SMTP
 istemcisidir (go-mail, STARTTLS zorunlu, `Message-ID`, gönderim başına 1
-dakika). Göndericinin hatası sonucu söyler: hata yok gönderildi, kalıcı hata
+dakika); hangi kutudan ve nasıl gideceğini gönderen şeridi seçer (aşağıda,
+"Gönderen şeritleri"). Göndericinin hatası sonucu söyler: hata yok gönderildi, kalıcı hata
 hemen düşer (`failed`), ötekiler yeniden denenir (en çok 5 deneme; 30 sn,
 1, 2, 4 dakika arayla).
 
@@ -210,6 +211,87 @@ boştur. Hesap silme kişinin satırlarını adresleriyle ve `sub`'ıyla bulur;
 silinen satırda `recipient_sub` da boşalır. `GET /v1/mail_tasks/{id}/queue`
 her satırın `channel`'ını döner.
 
+## Gönderen şeritleri (`SKYMAIL_SEND_HESAP`, `SKYMAIL_SEND_BILGI`, `SKYMAIL_SEND_DUYURU`)
+
+Her posta türüne göre üç paylaşılan kutudan birinden çıkar (hub bileti
+skymail-bounce-isleme 10; Yusuf, 2026-10-20). Kural `internal/mailer/lanes.go`
+`LaneOf`'tadır, gönderimin şablonuna ve satırın şeridine bakar:
+
+| Şerit | Ne | Kural | Kararlaştırılan yol |
+|---|---|---|---|
+| `hesap` | giriş/kayıt kodu, e-posta doğrulama, şifre sıfırlama | şablon **sistem** şablonu ve anahtarı `keycloak.*` ya da `account.*` (`AccountMail`, bastırma muafiyetiyle aynı kural); hangi öncelik şeridinde olursa olsun | `graph` |
+| `duyuru` | operatörün kitleye postası | toplu şerit (`priority = 0`): liste, Keycloak grubu, Forms formunun yanıtlayanları, onaylı gönderim, toplu bildirim türü, takip isteyen tekil posta | `xoauth2` |
+| `bilgi` | geri kalan işlem postası | sistem şeridi (`priority = 1`): Forms onayı, Mail onayı bildirimi, etkinlik ve öteki sistem bildirimleri | `graph` |
+
+Her şeridin kendi anahtarı vardır; üçü de varsayılan olarak `off`'tur:
+
+| Değer | Nasıl gider |
+|---|---|
+| `off` (ya da boş) | bugünkü gibi: `SMTP_FROM`'dan, `SMTP_USER`/`SMTP_PASS` ile SMTP AUTH (LOGIN, `SMTP_PLAIN=true` ise PLAIN). Gönderimin şablonu okunmaz, `X-SkyMail-Queue-Id` yazılmaz |
+| `graph` | Microsoft Graph `POST /users/{kutu}/sendMail`, `saveToSentItems: false`: kutunun Gönderilmiş Öğeler'ine kopya düşmez |
+| `xoauth2` | `SMTP_HOST:SMTP_PORT` (`smtp.office365.com:587`, STARTTLS), `AUTH XOAUTH2` kutu adına, uygulamanın token'ıyla. Exchange kopyayı Gönderilmiş Öğeler'e koyar (duyuru kutusunda MRM 1 gün) |
+
+Başka bir değer açılışı durdurur. Şerit açıkken:
+
+- `SKYMAIL_FROM_<ŞERİT>` zorunlu: görünen ad ve kutu, ör.
+  `SKY LAB Hesap <hesap@bildirim.yildizskylab.com>`. Graph'ta `from` bu
+  kutudur (gönderim de bu kutunun adına yapılır), SMTP'de `From` ve zarf
+  göndericisi.
+- Uygulamanın (Entra `skymail-posta`, yalnız sertifika) kimliği zorunlu:
+  `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_KEY` (özel anahtar,
+  PKCS#8 PEM'in tek satır base64'ü; OpenBao'da, Dokploy'da `${{vault…}}`) ve
+  `GRAPH_CLIENT_CERT` (açık sertifika; PEM ya da `.cer`'in base64'ü, sır değil).
+  Açılışta anahtarın sertifikaya ait olduğu denetlenir; bozuk ya da eksik değer
+  açılışı durdurur, hata değeri yazmaz. Bu paket (`internal/msauth`) NDR
+  okuyucusuyla (bilet 04) ortaktır.
+- Token: client credentials, sertifikalı client assertion (RFC 7523): PS256 +
+  `x5t#S256`; token ucu reddederse RS256 + `x5t`. Kapsam Graph için
+  `https://graph.microsoft.com/.default`, XOAUTH2 için
+  `https://outlook.office365.com/.default`. Token kapsam başına bütün işçilerce
+  paylaşılır, süresi bitmeden 5 dakika önce yenilenir; yenileme olmazsa eskisi
+  son 30 saniyesine kadar kullanılır. Graph 401 ya da başarısız SMTP AUTH
+  token'ı düşürür, sonraki deneme yenisini alır. Token, anahtar ve token ucunun
+  açıklama metni hiçbir yere yazılmaz; hata yalnız HTTP durumu, OAuth kodu ve
+  AADSTS numaralarıdır.
+- Açılış logu her şeridin yolunu ve kutusunu, Reply-To'yu, sertifikanın
+  `x5t#S256`'sını ve bitişini yazar; bitişe 30 günden az kaldıysa uyarır.
+
+`SMTP_REPLY_TO` (isteğe bağlı, ör. `info@yildizskylab.com`) her postaya,
+kapalı şeritlerinkine de, `Reply-To` koyar; yoksa `Reply-To` yazılmaz.
+
+**Bounce eşlemesi.** Şeritler her postaya `X-SkyMail-Queue-Id:
+<kuyruk id@SMTP_FQDN>` yazar (`Message-ID` ile aynı değer). Graph `sendMail`
+`202` döner, gövdesi yoktur: postanın kimliğini ya da `Message-ID`'sini
+vermez. `internetMessageId` yalnız taslakta yazılabilir, taslak gönderilince
+Gönderilmiş Öğeler'e düşer; bu yüzden Graph'la giden postanın `Message-ID`'si
+Exchange'in kendisinindir. NDR geri dönen başlıkları ekler; `internal/dsn`
+önce onların `Message-ID`'sine, sonra `X-SkyMail-Queue-Id`'sine bakar
+(aynı `<uuid@SMTP_FQDN>` kuralı). Graph yanıtının `request-id`'si satırın
+kimliğiyle debug loguna yazılır (Microsoft desteği için); istek
+`client-request-id` olarak satırın kimliğini taşır.
+
+**Graph'ın yanıtı** (`internal/mailer/graph.go`), SMTP'deki gibi yalnız
+alıcıya özgü ret kalıcıdır: `400 ErrorInvalidRecipients` (adres Exchange'in
+gönderebileceği bir adres değil; hiçbir şey gitmediği için bastırılmaz) ve
+`413` (posta istek sınırını aşıyor) satırı hemen düşürür. Öteki her yanıt
+(`401`, `403` ör. Mail.Send henüz verilmemiş ya da RBAC kapsamı yayılıyor,
+`404`, başka `400`, `429`, `5xx`) yeniden denenir; `429`/`503`'ün `Retry-After`'ı
+beklenir (en çok 1 saat; ilk denemelerin 30 sn'si yerine). Satırın hatası yalnız
+durum ve koddur, ör. `graph_rejected: 400 ErrorInvalidRecipients`,
+`graph_deferred: 429 ApplicationThrottled retry-after 30s`; Graph'ın mesaj
+metni adresi tekrarlayabildiği için yazılmaz.
+
+**JSON gövde.** Graph'ın JSON postasında tek gövde vardır: HTML'i olan posta
+HTML gider (düz metin alternatifini Exchange kendisi üretir), olmayan düz
+metin. Takip pikseli ve bağlantıları SMTP'deki gibi yerleştirilir.
+
+**`List-Unsubscribe`.** SkyMail bugün bu başlığı yazmaz (bilet 11). `xoauth2`
+yolu postayı SMTP yoluyla aynı kodla kurar; başlık eklendiğinde duyuru
+kutusundan da gider. Graph JSON'u yalnız `X-` önekli başlık taşır.
+
+Gönderim bütçesi (`SKYMAIL_RATE_PER_MINUTE`) şeritlerden bağımsız, hepsi için
+ortaktır; Exchange'in dakikada 30 ileti sınırı kutu başınadır.
+
 ## Geri dönen posta ve bastırma listesi (`mail_bounces`, `mail_suppressions`)
 
 Exchange Online dış alıcıyı `RCPT TO`'da reddetmez, postayı alır ve sonra
@@ -226,8 +308,9 @@ relay'in senkron kalıcı reddidir (aşağıda).
   otomatik yanıt `dsn_degil` sayılır. `Diagnostic-Code`'dan yalnız yanıt kodu,
   ek kod ve Exchange'in `AS(…)` belirteci alınır, metin saklanmaz.
 - **Eşleme** (beşi birden; sahte rapora karşı): geri dönen başlıklardaki
-  `Message-ID` (yoksa raporun `In-Reply-To`'su, sonra `References`)
-  `<kuyruk id@SMTP_FQDN>` olmalı; satır var, `email`, `sent` ve rapor
+  `Message-ID`, o değilse `X-SkyMail-Queue-Id` (Graph'la giden posta;
+  Gönderen şeritleri) (geri dönen başlık yoksa raporun `In-Reply-To`'su, sonra
+  `References`) `<kuyruk id@SMTP_FQDN>` olmalı; satır var, `email`, `sent` ve rapor
   `sent_at`'ten sonra gelmiş olmalı (iki saat arasındaki fark için 2 dakika
   pay); rapor satırın adresini (`Final-Recipient` ya da `Original-Recipient`)
   adlandırmalı; rapor daha önce kaydedilmemiş olmalı (kimliğinin SHA-256'sı
