@@ -268,6 +268,7 @@ func main() {
 	registerFormMailSourceRoutes(api, authMiddleware, mailHandler, formsSourceConfig)
 	registerMailTaskRoutes(api, authMiddleware, mailHandler)
 	registerMailApprovalRoutes(api, authMiddleware, approvalHandler)
+	registerNotificationRoutes(api, authMiddleware, handlers.NewNotificationHandler(db, mailerService, kcClient))
 
 	// The background work's context: shutdown cancels it only after the
 	// mailer has stopped (or its time ran out), which cuts off a send still
@@ -537,6 +538,18 @@ func registerMailApprovalRoutes(api fiber.Router, auth middlewares.AuthMiddlewar
 	requests.Post("/:id/accept", approvals.Accept)
 	requests.Post("/:id/decline", approvals.Decline)
 	requests.Post("/:id/resubmit", approvals.Resubmit)
+}
+
+// registerNotificationRoutes serves POST /notifications to services (hub
+// ticket iletisim-servisi 03): a service account's token with
+// skymail:notifications:send, never a person's. The notification types are
+// read as templates are and written by the Template seed.
+func registerNotificationRoutes(api fiber.Router, auth middlewares.AuthMiddleware, notifications handlers.NotificationHandler) {
+	api.Post("/notifications", auth.RequireAnyPermission(handlers.NotificationsSendRole), middlewares.RequireServiceAccount(), notifications.Send)
+	types := api.Group("/notification_types")
+	types.Get("/", auth.RequireAnyPermission("skymail:templates:read"), notifications.ListTypes)
+	types.Get("/:key", auth.RequireAnyPermission("skymail:templates:read"), notifications.GetType)
+	types.Put("/:key", auth.RequireAnyPermission("skymail:templates:write"), notifications.PutType)
 }
 
 // expireMailApprovals expires the requests left undecided past their deadline

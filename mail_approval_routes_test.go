@@ -94,6 +94,8 @@ func (d *approverDirectory) GetGroup(_ context.Context, id string) (*gocloak.Gro
 
 func (*approverDirectory) ServiceToken(context.Context) (string, error) { return "", nil }
 
+func (*approverDirectory) GetUser(context.Context, string) (*gocloak.User, error) { return nil, nil }
+
 func (d *approverDirectory) GetGroupMembers(_ context.Context, id string) ([]*gocloak.User, error) {
 	return d.groups[id], nil
 }

@@ -50,6 +50,8 @@ func (noGroups) GetGroupMembers(context.Context, string) ([]*gocloak.User, error
 
 func (noGroups) ServiceToken(context.Context) (string, error) { return "", nil }
 
+func (noGroups) GetUser(context.Context, string) (*gocloak.User, error) { return nil, nil }
+
 // mailRoutesApp serves the mail task routes as production registers them —
 // the real permission middleware, handler, error handler and database — with
 // only Keycloak's token check replaced by the roles under test.

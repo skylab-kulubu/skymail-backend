@@ -37,6 +37,10 @@ func (failingLifecycleKeycloakStub) GetGroup(context.Context, string) (*gocloak.
 
 func (failingLifecycleKeycloakStub) ServiceToken(context.Context) (string, error) { return "", nil }
 
+func (failingLifecycleKeycloakStub) GetUser(context.Context, string) (*gocloak.User, error) {
+	return nil, nil
+}
+
 func (failingLifecycleKeycloakStub) GetGroupMembers(context.Context, string) ([]*gocloak.User, error) {
 	return nil, errors.New("unexpected Keycloak member lookup")
 }
@@ -78,6 +82,8 @@ func (lifecycleKeycloakStub) GetGroup(context.Context, string) (*gocloak.Group, 
 }
 
 func (lifecycleKeycloakStub) ServiceToken(context.Context) (string, error) { return "", nil }
+
+func (lifecycleKeycloakStub) GetUser(context.Context, string) (*gocloak.User, error) { return nil, nil }
 
 func (lifecycleKeycloakStub) GetGroupMembers(context.Context, string) ([]*gocloak.User, error) {
 	return []*gocloak.User{}, nil
