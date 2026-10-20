@@ -257,7 +257,8 @@ bastırma listesi"; hub spec skymail-bounce-isleme §5):
 
 A recipient at a suppressed address is written failed when the send is
 queued (`suppressed: <source> <code>`), never sent; account mail
-(`keycloak.*`, `account.*` templates) is sent and flagged.
+(`keycloak.*`, `account.*` system templates; the key alone is not enough) is
+sent and flagged.
 
 Logs carry the queue row's id, the outcome and the codes; never an address
 or a report's text.

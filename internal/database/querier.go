@@ -193,8 +193,9 @@ type Querier interface {
 	// the row's own address) after the relay took the mail.
 	GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueueItemsByTaskIdParams) ([]GetMailQueueItemsByTaskIdRow, error)
 	GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTaskByIdRow, error)
-	// The key of a send's template, which says whether it is account mail.
-	GetMailTaskTemplateKey(ctx context.Context, taskID uuid.UUID) (*string, error)
+	// The key of a send's template and whether it is a system template, which
+	// together say whether it is account mail (mailer.AccountMail).
+	GetMailTaskTemplateKey(ctx context.Context, taskID uuid.UUID) (GetMailTaskTemplateKeyRow, error)
 	// Whether a send is never tracked, whatever was asked: its template is a
 	// System template, or its content is sensitive by the one definition the
 	// content panel and the masking sweep use (mail_task_content_sensitive: the

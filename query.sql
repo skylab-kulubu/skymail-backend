@@ -1956,9 +1956,10 @@ SELECT address, source, reason_code
 FROM mail_suppressions
 WHERE address = ANY (sqlc.arg(addresses)::text[]);
 
--- The key of a send's template, which says whether it is account mail.
+-- The key of a send's template and whether it is a system template, which
+-- together say whether it is account mail (mailer.AccountMail).
 -- name: GetMailTaskTemplateKey :one
-SELECT t.key
+SELECT t.key, coalesce(t.system, false)::boolean AS system
 FROM mail_tasks mt
          LEFT JOIN templates t ON t.id = mt.template_id
 WHERE mt.id = sqlc.arg(task_id);

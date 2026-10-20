@@ -266,8 +266,10 @@ relay'in senkron kalıcı reddidir (aşağıda).
   `20261021090100`); bütün alıcıları atlanan gönderim (bastırılmış adrese tek
   posta) "Başarısız"dır. Tek posta (`/single`) reddedilmez, kabul edilir.
 - **Muafiyet (yalnız hesap postaları)**: şablon anahtarı `keycloak.*` ya da
-  `account.*` olan gönderim (giriş/kayıt kodu, e-posta doğrulama, şifre
-  sıfırlama) bastırılmış adrese yine gider; satır `suppressed_but_sent = true`,
+  `account.*` olan **ve** sistem şablonu (`system = true`, Template seed'inki)
+  olan gönderim (giriş/kayıt kodu, e-posta doğrulama, şifre sıfırlama)
+  bastırılmış adrese yine gider; anahtar tek başına yetmez (önekler ayrılmış
+  değil, sistem olmayan bir `account.x` şablonu bastırılır); satır `suppressed_but_sent = true`,
   bastırma satırı `exempt_flagged_at` alır. Forms, Mail onayı, listeler ve
   öteki her şey bastırılır. Muafiyet şeritle değil anahtarla: sistem
   şeridinde Forms ve Mail onayı bildirimleri de var.

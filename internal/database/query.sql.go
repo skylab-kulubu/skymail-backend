@@ -2183,18 +2183,24 @@ func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTas
 }
 
 const getMailTaskTemplateKey = `-- name: GetMailTaskTemplateKey :one
-SELECT t.key
+SELECT t.key, coalesce(t.system, false)::boolean AS system
 FROM mail_tasks mt
          LEFT JOIN templates t ON t.id = mt.template_id
 WHERE mt.id = $1
 `
 
-// The key of a send's template, which says whether it is account mail.
-func (q *Queries) GetMailTaskTemplateKey(ctx context.Context, taskID uuid.UUID) (*string, error) {
+type GetMailTaskTemplateKeyRow struct {
+	Key    *string `json:"key"`
+	System bool    `json:"system"`
+}
+
+// The key of a send's template and whether it is a system template, which
+// together say whether it is account mail (mailer.AccountMail).
+func (q *Queries) GetMailTaskTemplateKey(ctx context.Context, taskID uuid.UUID) (GetMailTaskTemplateKeyRow, error) {
 	row := q.db.QueryRow(ctx, getMailTaskTemplateKey, taskID)
-	var key *string
-	err := row.Scan(&key)
-	return key, err
+	var i GetMailTaskTemplateKeyRow
+	err := row.Scan(&i.Key, &i.System)
+	return i, err
 }
 
 const getMailTaskTrackingExclusion = `-- name: GetMailTaskTrackingExclusion :one
