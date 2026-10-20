@@ -792,7 +792,8 @@ queued at or after --before, left alone: 2
 
 Each closed send shows as failed (`Başarısız`) in the send list, on the home
 screen and in `GET /v1/mail_tasks/summary`. `mail_task_status()` makes a send
-failed as soon as one of its rows is. On a send's page, each closed recipient
+failed as soon as one of its rows is (a row skipped for a reserved domain,
+`reserved_domain: …`, aside). On a send's page, each closed recipient
 is failed with the error `restore: gönderilmedi`. A list send that was partly
 out when the dump was taken shows its sent count beside it.
 
