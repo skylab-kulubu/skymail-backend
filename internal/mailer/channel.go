@@ -2,6 +2,7 @@ package mailer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/rs/zerolog"
@@ -16,13 +17,18 @@ import (
 // channel yet; recipient_email is its address.
 const ChannelEmail = "email"
 
+// invalidRecipientError is the error a row whose name and address go-mail
+// cannot parse into a To header fails with: the class alone, as with
+// reservedDomainError; the row holds the name and the address.
+const invalidRecipientError = "invalid_recipient: not sent, the recipient's name and address could not be parsed"
+
 // ChannelSender sends the rows of one channel. Each worker makes its own of
 // every channel at startup and sends one row at a time with it, so what a
 // channel keeps between sends (the SMTP client) is the worker's alone.
 //
 // Send's error is how the send went: nil, sent; a permanentError, failed for
-// good at once (retrying cannot fix it); any other, tried again later, up to
-// maxSendAttempts. An error while ctx has ended is the process going away,
+// good at once (retrying cannot fix it: an address go-mail cannot parse, a
+// relay's 5xx); any other, tried again later, up to maxSendAttempts. An error while ctx has ended is the process going away,
 // not a failed attempt: the row is sent again after its lease runs out.
 type ChannelSender interface {
 	Send(ctx context.Context, job database.MailQueue) error
@@ -106,7 +112,10 @@ func (s *emailSender) Send(ctx context.Context, job database.MailQueue) error {
 		return permanentError{fmt.Errorf("invalid from email: %w", err)}
 	}
 	if err := msg.To(fmt.Sprintf("%s <%s>", job.RecipientFullName, job.RecipientEmail)); err != nil {
-		return permanentError{fmt.Errorf("invalid recipient: %w", err)}
+		// Only the class: go-mail's error quotes the name and the address it
+		// could not parse, and net/mail's may echo part of them, while the
+		// row's error is logged and shown on the send's page.
+		return permanentError{errors.New(invalidRecipientError)}
 	}
 
 	msg.SetGenHeader(mail.HeaderMessageID, fmt.Sprintf("<%s@%s>", job.ID.String(), s.config.FQDN))
@@ -130,7 +139,9 @@ func (s *emailSender) Send(ctx context.Context, job database.MailQueue) error {
 	defer func() { _ = s.client.CloseWithSMTPClient(smtpClient) }()
 	if err := s.client.SendWithSMTPClient(smtpClient, msg); err != nil {
 		if !msg.IsDelivered() {
-			return fmt.Errorf("send failed: %w", err)
+			// A 5xx fails the row at once, anything else is tried again
+			// (smtpFailure).
+			return smtpFailure(err)
 		}
 		// The relay took the mail with the 250 after DATA; what failed is
 		// the RSET go-mail says after it (the relay hung up, or the

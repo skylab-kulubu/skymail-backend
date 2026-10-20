@@ -156,7 +156,44 @@ göndericisine verir (`internal/mailer/channel.go`, `ChannelSender`). Her işçi
 açılışta her kanalın kendi göndericisini kurar; e-postada bu işçinin SMTP
 istemcisidir (go-mail, STARTTLS zorunlu, `Message-ID`, gönderim başına 1
 dakika). Göndericinin hatası sonucu söyler: hata yok gönderildi, kalıcı hata
-(geçersiz adres) hemen düşer, ötekiler yeniden denenir.
+hemen düşer (`failed`), ötekiler yeniden denenir (en çok 5 deneme; 30 sn,
+1, 2, 4 dakika arayla).
+
+E-postada kalıcı hata yalnız alıcının adresine özgü olandır: go-mail'in
+ayrıştıramadığı adres ve relay'in adresi reddi. Gönderene, hesaba, kiracıya ya
+da relay politikasına ilişkin bir 5xx (kota, gönderen reddi, relay erişim
+reddi) bütün toplu gönderimi bir anda düşürmesin diye geçici sayılır (`internal/mailer/smtp_refusal.go`):
+
+| Yanıt | Adım | Sonuç |
+|---|---|---|
+| 5xx, ek kod 5.1.0–5.1.6 ya da 5.1.10 (alıcı adresinin durumu; 5.1.10 Exchange Online'da `RecipientNotFound`) | `RCPT TO`, `DATA` sonu | kalıcı (`failed`, ilk denemede) |
+| ek kodsuz 550 / 551 / 553 | `RCPT TO` | kalıcı |
+| 5xx, ek kod 5.1.7 / 5.1.8 (gönderen adresi ve sistemi; Postfix bunu `RCPT TO`'da verir, Exchange Online engelli hesaba 5.1.8 verir), 5.1.9, 5.1.90 (Exchange Online günlük alıcı sınırı) ve listede olmayan başka 5.1.x | `RCPT TO`, `DATA` sonu | geçici |
+| 5xx, ek kod 5.2.x / 5.3.x / 5.7.x (ör. relay erişim reddi) ya da 5.1.x dışı başka sınıf | `RCPT TO`, `DATA` sonu | geçici |
+| ek kodsuz başka 5xx (ör. 554, 501) | `RCPT TO`, `DATA` sonu | geçici |
+| 5xx (ör. `554 5.2.0` SubmissionQuotaExceeded, 5.7.x gönderen reddi) | `MAIL FROM` | geçici |
+| 4xx (greylisting, dolu kutu, kısma) | her adım | geçici |
+| yanıtsız hata (bağlantı kopması, 1 dakikalık sınır) | her adım | geçici |
+
+Geçici hata en çok 5 denemeye kadar yeniden denenir, sonra `failed` olur.
+Satırın `error`'ı yalnız adım ve kodlardır, ör. `smtp_rejected: RCPT TO 550
+5.1.1` (kalıcı) ya da `smtp_deferred: MAIL FROM 554 5.2.0` (geçici). Relay'in
+metni yazılmaz, çünkü adresi tekrarlayabilir; bu hata hem loglanır hem
+gönderimin sayfasında görünür. Bir alıcının kalıcı reddi öteki alıcıları
+beklemez, bütçeden de yalnız o tek denemeyi yer.
+
+RFC 2606/6761'in ayrılmış alan adlarındaki alıcı (`example.com`, `example.net`,
+`example.org` ve altları; `.example`, `.test`, `.invalid`, `.localhost`;
+sandbox'taki seed hesapları gibi) gönderim kuyruğa alınırken `failed` yazılır
+(`reserved_domain: …`, deneme 0). Relay'e hiç gitmez, bütçeye sayılmaz.
+Gönderimin öteki alıcıları kuyruğa girer. Bu alıcı atlanmış sayılır,
+gönderimin durumunu "Başarısız" yapmaz: gönderim öteki alıcıları neyse onu
+gösterir (`mail_task_status()`, `20261020150000`). Bütün alıcıları atlanan
+gönderim (hiçbir posta gitmedi) "Başarısız"dır. Alıcı sayımlarında satır yine
+`failed` sayılır. Tek posta (`/single`) da reddedilmez,
+kabul edilir ve alıcısı `failed` olur. Bu kuralı `main.go`
+(`WithReservedDomainsRefused`) açar. Testler sahte relay ile `example.com`'a
+gönderdiği için kural varsayılan olarak kapalıdır.
 
 Bugün tek kanal `email`'dir: `recipient_email` kanalın adresidir. Var olan ve
 eski imajın yazdığı satırlar varsayılanla `email` olur; `CHECK` başka kanalı
@@ -170,6 +207,15 @@ bilinen gönderimlerde (liste, adla yazılan kişiler, `POST /mail_tasks/single`
 boştur. Hesap silme kişinin satırlarını adresleriyle ve `sub`'ıyla bulur;
 silinen satırda `recipient_sub` da boşalır. `GET /v1/mail_tasks/{id}/queue`
 her satırın `channel`'ını döner.
+
+## Bildirimler (`POST /v1/notifications`)
+
+core kişiye (Keycloak `sub`) bir Bildirim türüyle yazar; SkyMail kişi başına
+kanalı seçer (tür varsayılanı ∩ core'un izin verdiği kanallar ∩ adres) ve
+kuyruğa alır. `Idempotency-Key` zorunlu; yalnız servis hesabı ve
+`skymail:notifications:send`. Türleri Template seed yazar
+(`PUT /v1/notification_types/{key}`). Bugün tek kanal e-posta. Sözleşme:
+[`docs/notifications.md`](docs/notifications.md).
 
 ## Mail kuyruğu kirası (`MAIL_QUEUE_LEASE`)
 
@@ -252,6 +298,8 @@ günde 10.000 alıcı. Varsayılanlar bunların altında kalır.
   11 dakika sürer.
 - Bir satır alındığında sayılır. Yeniden deneme yeniden sayılır. Kapanışta
   geri verilen satırın sayısı düşülmez. İki günden eski pencereler silinir.
+  Ayrılmış alan adlı alıcı hiç alınmadığı için sayılmaz; kalıcı olarak
+  reddedilen alıcı yalnız tek denemesiyle sayılır (Kanallar).
 
 ## Gönderilen içerik (`MAIL_CONTENT_RETENTION_DAYS`)
 
@@ -282,9 +330,11 @@ yalnız `available` ya da `masked` iken doludur:
   yazılamazsa içerik dönmez. Ayrıntı:
   [`docs/data-lifecycle.md`](docs/data-lifecycle.md#sent-mail-content).
 - Hassaslık gönderim anında `mail_tasks.content_sensitive_at_send`'e
-  kopyalanır; gönderim, bu kopya **ya da** şablonun şimdiki değeri ya da
-  kilitli anahtar hassas diyorsa hassastır. Şablonu sonradan `false` yapmak
-  eski gönderimi açmaz.
+  kopyalanır; anahtarı o anda kilitliyse şablon ne derse desin `true`
+  yazılır. Gönderim, bu kopya **ya da** şablonun şimdiki değeri ya da
+  kilitli anahtar hassas diyorsa hassastır; okuma ve süpürücü önce kopyaya
+  bakar. Şablonu sonradan `false` yapmak da anahtarını değiştirmek de eski
+  gönderimi açmaz.
 - **Kilitli hassas:** `keycloak.*`, `account.*`, `auth.*`, `login.*`,
   `otp.*`, `core.contact-consent-confirm`, `event.ticket-created`,
   `event.reminder` ve anahtarında `login`, `code`, `otp`, `reset`, `verify`,

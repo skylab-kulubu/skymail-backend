@@ -232,6 +232,9 @@ type mailerImpl struct {
 	clientOptions []mail.Option
 	// tracking is open and click tracking (WithTracking); off by default.
 	tracking Tracking
+	// refuseReserved writes a recipient in a reserved domain failed when a
+	// send is queued (WithReservedDomainsRefused); off by default.
+	refuseReserved bool
 
 	// stop closes when Stop is called; stopOnce closes it. dispatching,
 	// sending and reaping are the dispatcher, the workers and the reaper,
@@ -510,10 +513,12 @@ type queue struct {
 	logger   *zerolog.Logger
 	priority Priority
 	tracking *Tracking
+	// refuseReserved is the mailer's (WithReservedDomainsRefused).
+	refuseReserved bool
 }
 
 func (m *mailerImpl) Queue(q *database.Queries, priority Priority) Queue {
-	return &queue{q: q, logger: m.logger, priority: priority, tracking: &m.tracking}
+	return &queue{q: q, logger: m.logger, priority: priority, tracking: &m.tracking, refuseReserved: m.refuseReserved}
 }
 
 func (m *mailerImpl) Wake() { m.wake() }
@@ -527,7 +532,7 @@ func (m *mailerImpl) pooled(ctx context.Context, priority Priority, write func(*
 	var queued bool
 	err := m.db.InTx(ctx, func(q *database.Queries) error {
 		var err error
-		id, queued, err = write(&queue{q: q, logger: m.logger, priority: priority, tracking: &m.tracking})
+		id, queued, err = write(&queue{q: q, logger: m.logger, priority: priority, tracking: &m.tracking, refuseReserved: m.refuseReserved})
 		return err
 	})
 	if err != nil {
@@ -796,7 +801,9 @@ func (t mailTemplates) renderWith(textVars, htmlVars map[string]interface{}, rec
 // that slices an empty name) is written failed with the render error, and the
 // others are queued: one recipient never holds back a send to the rest. With
 // strict, a mail that does not render is returned as the error and nothing is
-// written. tracked says the send asked for open and click tracking with the
+// written. With refuseReserved, a recipient in a reserved domain (a seed
+// account at example.com) is written failed with reservedDomainError, strict
+// or not, and never reaches the relay. tracked says the send asked for open and click tracking with the
 // flag on: each queued row gets a token or why not, as preferences — what
 // core said before the transaction — allows, and the send's shared links are
 // registered (tracking.go).
@@ -818,6 +825,19 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 	queueItems := make([]database.CreateMailQueueItemsParams, 0, len(rows))
 	var failed []database.CreateFailedMailQueueItemParams
 	for _, row := range rows {
+		if q.refuseReserved && reservedDomain(row.RecipientEmail) {
+			q.logger.Warn().Str("task_id", row.TaskID.String()).
+				Msg("A recipient is in a reserved domain: written failed, never sent; the others are queued")
+			failed = append(failed, database.CreateFailedMailQueueItemParams{
+				TaskID:            row.TaskID,
+				RecipientFullName: row.RecipientFullName,
+				RecipientEmail:    row.RecipientEmail,
+				Priority:          int16(q.priority),
+				Error:             reservedDomainError,
+				RecipientSub:      row.RecipientSub,
+			})
+			continue
+		}
 		rendered, err := parsed.render(taskVars, RecipientInfo{FullName: row.RecipientFullName, Email: row.RecipientEmail})
 		if err != nil {
 			if strict {

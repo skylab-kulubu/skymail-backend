@@ -144,15 +144,21 @@ func TestAnEmailCarriesTheRowsMessageID(t *testing.T) {
 	t.Fatalf("the mail has no %q header:\n%s", want, mails[0])
 }
 
-// A relay that refuses the mail (a 5xx to RCPT TO, or to the end of DATA) is
-// a failed attempt that is tried again, as every relay error is today: the
-// row goes back to pending with the attempt counted and the relay's answer
-// as its error. Only an address go-mail cannot parse fails for good at once.
-// Making a refusal permanent is a decision of its own (iletişim 02).
-func TestARelaysRefusalIsTriedAgain(t *testing.T) {
-	for _, refusal := range []struct{ name, verb, reply string }{
-		{"RCPT", "RCPT", "550 5.1.1 no such user"},
-		{"end of DATA", ".", "554 5.7.1 message refused"},
+// A relay's refusal is written as the worker meets it: a refusal of the
+// recipient's address (a 5.1.x to RCPT TO or at the end of DATA) fails the row
+// for good after that one attempt, with the stage and the reply's codes as its
+// error; a 4xx, or a 5xx that is not about the address (MAIL FROM, a 5.7.x to
+// RCPT TO or at the end of DATA), puts it back to pending with the attempt
+// counted, to be tried again.
+func TestARelaysRefusalIsWrittenByItsReply(t *testing.T) {
+	for _, refusal := range []struct{ name, verb, reply, status, error string }{
+		{"RCPT 5xx", "RCPT", "550 5.1.1 no such user", "failed", "smtp_rejected: RCPT TO 550 5.1.1"},
+		{"reserved domain at RCPT", "RCPT", "501 5.1.5 Recipient address reserved by RFC 2606", "failed", "smtp_rejected: RCPT TO 501 5.1.5"},
+		{"end of DATA 5.1.x", ".", "550 5.1.1 no such user", "failed", "smtp_rejected: DATA 550 5.1.1"},
+		{"RCPT 4xx", "RCPT", "450 4.2.1 greylisted", "pending", "smtp_deferred: RCPT TO 450 4.2.1"},
+		{"RCPT 5.7.x", "RCPT", "554 5.7.1 relay access denied", "pending", "smtp_deferred: RCPT TO 554 5.7.1"},
+		{"MAIL FROM 5xx", "MAIL", "554 5.2.0 submission quota exceeded", "pending", "smtp_deferred: MAIL FROM 554 5.2.0"},
+		{"end of DATA 5.7.x", ".", "554 5.7.1 message refused", "pending", "smtp_deferred: DATA 554 5.7.1"},
 	} {
 		t.Run(refusal.name, func(t *testing.T) {
 			captureMailerLogs(t)
@@ -168,9 +174,8 @@ func TestARelaysRefusalIsTriedAgain(t *testing.T) {
 				row = channelRowOf(t, db, ids[0])
 				return row.attempts > 0
 			})
-			code := strings.Fields(refusal.reply)[0]
-			if row.status != "pending" || row.attempts != 1 || !strings.Contains(row.error, code) {
-				t.Fatalf("the refused row = %+v, want pending again after one attempt, with the relay's %s", row, code)
+			if row.status != refusal.status || row.attempts != 1 || row.error != refusal.error {
+				t.Fatalf("the refused row = %+v, want %s after one attempt, with %q", row, refusal.status, refusal.error)
 			}
 		})
 	}
