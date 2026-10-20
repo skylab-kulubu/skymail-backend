@@ -883,6 +883,20 @@ func (q *Queries) CountSends(ctx context.Context, arg CountSendsParams) error {
 	return err
 }
 
+const countSuppressions = `-- name: CountSuppressions :one
+SELECT count(*)
+FROM mail_suppressions
+WHERE $1::text IS NULL
+   OR strpos(address, lower($1::text)) > 0
+`
+
+func (q *Queries) CountSuppressions(ctx context.Context, search *string) (int64, error) {
+	row := q.db.QueryRow(ctx, countSuppressions, search)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countTemplateContentSensitiveEvents = `-- name: CountTemplateContentSensitiveEvents :one
 SELECT count(*)
 FROM template_content_sensitive_events
@@ -1104,6 +1118,7 @@ type CreateMailQueueItemsParams struct {
 	RecipientSub       *uuid.UUID `json:"recipient_sub"`
 	TrackingToken      []byte     `json:"-"`
 	TrackingSkipReason *string    `json:"tracking_skip_reason"`
+	SuppressedButSent  bool       `json:"suppressed_but_sent"`
 }
 
 const createMailTask = `-- name: CreateMailTask :many
@@ -1456,6 +1471,34 @@ func (q *Queries) DeleteOldSentContentViews(ctx context.Context, arg DeleteOldSe
 	return result.RowsAffected(), nil
 }
 
+const deleteSuppression = `-- name: DeleteSuppression :one
+DELETE
+FROM mail_suppressions
+WHERE id = $1
+RETURNING source, reason_code, count, first_seen
+`
+
+type DeleteSuppressionRow struct {
+	Source     string    `json:"source"`
+	ReasonCode string    `json:"reason_code"`
+	Count      int       `json:"count"`
+	FirstSeen  time.Time `json:"first_seen"`
+}
+
+// Removes a suppression: the address is mailed again. What it said is
+// returned for the removal's record, never the address.
+func (q *Queries) DeleteSuppression(ctx context.Context, id uuid.UUID) (DeleteSuppressionRow, error) {
+	row := q.db.QueryRow(ctx, deleteSuppression, id)
+	var i DeleteSuppressionRow
+	err := row.Scan(
+		&i.Source,
+		&i.ReasonCode,
+		&i.Count,
+		&i.FirstSeen,
+	)
+	return i, err
+}
+
 const discardTemplateDraft = `-- name: DiscardTemplateDraft :exec
 UPDATE template_versions
 SET discarded_at = COALESCE(discarded_at, NOW())
@@ -1475,6 +1518,18 @@ type DiscardTemplateDraftParams struct {
 // checked that the version is a draft of this template.
 func (q *Queries) DiscardTemplateDraft(ctx context.Context, arg DiscardTemplateDraftParams) error {
 	_, err := q.db.Exec(ctx, discardTemplateDraft, arg.TemplateID, arg.ID)
+	return err
+}
+
+const flagSuppressionsExempt = `-- name: FlagSuppressionsExempt :exec
+UPDATE mail_suppressions
+SET exempt_flagged_at = now()
+WHERE address = ANY ($1::text[])
+`
+
+// Account mail went to these suppressed addresses anyway.
+func (q *Queries) FlagSuppressionsExempt(ctx context.Context, addresses []string) error {
+	_, err := q.db.Exec(ctx, flagSuppressionsExempt, addresses)
 	return err
 }
 
@@ -1984,7 +2039,13 @@ func (q *Queries) GetMailQueueItemContent(ctx context.Context, arg GetMailQueueI
 }
 
 const getMailQueueItemsByTaskId = `-- name: GetMailQueueItemsByTaskId :many
-SELECT id, channel, recipient_full_name, recipient_email, status, error, attempts, next_attempt_at, created_at
+SELECT id, channel, recipient_full_name, recipient_email, status, error, attempts, next_attempt_at, created_at,
+       suppressed_but_sent,
+       EXISTS (SELECT 1
+               FROM mail_bounces b
+               WHERE b.queue_id = mail_queue.id
+                 AND b.kind = 'hard'
+                 AND b.recipient_matched)::boolean AS undelivered
 FROM mail_queue
 WHERE task_id = $1
   AND ($4::mail_queue_status IS NULL OR status = $4::mail_queue_status)
@@ -2009,11 +2070,16 @@ type GetMailQueueItemsByTaskIdRow struct {
 	Attempts          int                 `json:"attempts"`
 	NextAttemptAt     time.Time           `json:"next_attempt_at"`
 	CreatedAt         *time.Time          `json:"created_at"`
+	SuppressedButSent bool                `json:"suppressed_but_sent"`
+	Undelivered       bool                `json:"undelivered"`
 }
 
 // A send's recipients, newest first. A list send's rows come from one insert
 // and share a created_at, so the id breaks the tie: pages neither repeat nor
 // skip a recipient. A NULL status lists every recipient.
+// suppressed_but_sent: account mail sent to a suppressed address, flagged.
+// undelivered: a report said the address does not exist (a hard bounce of
+// the row's own address) after the relay took the mail.
 func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueueItemsByTaskIdParams) ([]GetMailQueueItemsByTaskIdRow, error) {
 	rows, err := q.db.Query(ctx, getMailQueueItemsByTaskId,
 		arg.TaskID,
@@ -2038,6 +2104,8 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 			&i.Attempts,
 			&i.NextAttemptAt,
 			&i.CreatedAt,
+			&i.SuppressedButSent,
+			&i.Undelivered,
 		); err != nil {
 			return nil, err
 		}
@@ -2112,6 +2180,21 @@ func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTas
 		&i.MailListName,
 	)
 	return i, err
+}
+
+const getMailTaskTemplateKey = `-- name: GetMailTaskTemplateKey :one
+SELECT t.key
+FROM mail_tasks mt
+         LEFT JOIN templates t ON t.id = mt.template_id
+WHERE mt.id = $1
+`
+
+// The key of a send's template, which says whether it is account mail.
+func (q *Queries) GetMailTaskTemplateKey(ctx context.Context, taskID uuid.UUID) (*string, error) {
+	row := q.db.QueryRow(ctx, getMailTaskTemplateKey, taskID)
+	var key *string
+	err := row.Scan(&key)
+	return key, err
 }
 
 const getMailTaskTrackingExclusion = `-- name: GetMailTaskTrackingExclusion :one
@@ -2380,6 +2463,40 @@ func (q *Queries) GetRetainedTrackingReport(ctx context.Context, taskID uuid.UUI
 	var report []byte
 	err := row.Scan(&report)
 	return report, err
+}
+
+const getSuppressedAddresses = `-- name: GetSuppressedAddresses :many
+SELECT address, source, reason_code
+FROM mail_suppressions
+WHERE address = ANY ($1::text[])
+`
+
+type GetSuppressedAddressesRow struct {
+	Address    string `json:"address"`
+	Source     string `json:"source"`
+	ReasonCode string `json:"reason_code"`
+}
+
+// The suppressed among a send's recipients (lower-cased addresses): what
+// queueing writes failed, or sends flagged when the send is account mail.
+func (q *Queries) GetSuppressedAddresses(ctx context.Context, addresses []string) ([]GetSuppressedAddressesRow, error) {
+	rows, err := q.db.Query(ctx, getSuppressedAddresses, addresses)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetSuppressedAddressesRow
+	for rows.Next() {
+		var i GetSuppressedAddressesRow
+		if err := rows.Scan(&i.Address, &i.Source, &i.ReasonCode); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getTemplateById = `-- name: GetTemplateById :one
@@ -2792,6 +2909,48 @@ func (q *Queries) InsertNotification(ctx context.Context, arg InsertNotification
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const insertSMTPRefusalBounce = `-- name: InsertSMTPRefusalBounce :exec
+INSERT INTO mail_bounces (queue_id, source, kind, action, status, smtp_code)
+VALUES ($1, 'smtp', 'hard', 'failed', $2::text, $3::int)
+`
+
+type InsertSMTPRefusalBounceParams struct {
+	QueueID  uuid.UUID `json:"queue_id"`
+	Status   *string   `json:"status"`
+	SmtpCode int       `json:"smtp_code"`
+}
+
+// Records a relay's permanent refusal of a queue row's address.
+func (q *Queries) InsertSMTPRefusalBounce(ctx context.Context, arg InsertSMTPRefusalBounceParams) error {
+	_, err := q.db.Exec(ctx, insertSMTPRefusalBounce, arg.QueueID, arg.Status, arg.SmtpCode)
+	return err
+}
+
+const insertSuppressionRemoval = `-- name: InsertSuppressionRemoval :exec
+INSERT INTO mail_suppression_removals (actor_sub, source, reason_code, count, first_seen)
+VALUES ($1::text, $2::text, $3::text, $4::int,
+        $5::timestamptz)
+`
+
+type InsertSuppressionRemovalParams struct {
+	ActorSub   string    `json:"actor_sub"`
+	Source     string    `json:"source"`
+	ReasonCode string    `json:"reason_code"`
+	Count      int       `json:"count"`
+	FirstSeen  time.Time `json:"first_seen"`
+}
+
+func (q *Queries) InsertSuppressionRemoval(ctx context.Context, arg InsertSuppressionRemovalParams) error {
+	_, err := q.db.Exec(ctx, insertSuppressionRemoval,
+		arg.ActorSub,
+		arg.Source,
+		arg.ReasonCode,
+		arg.Count,
+		arg.FirstSeen,
+	)
+	return err
 }
 
 const insertTrackingEvent = `-- name: InsertTrackingEvent :execrows
@@ -3209,6 +3368,9 @@ SELECT mt.id,
        rc.processing,
        rc.sent,
        rc.failed,
+       rc.suppressed,
+       rc.suppressed_but_sent,
+       rc.undelivered,
        single.recipient_full_name   AS single_recipient_full_name,
        single.recipient_email       AS single_recipient_email,
        mail_task_bulk(mt.id)::boolean              AS bulk,
@@ -3224,7 +3386,14 @@ FROM page
          CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE q.status = 'pending')    AS pending,
                                     count(*) FILTER (WHERE q.status = 'processing') AS processing,
                                     count(*) FILTER (WHERE q.status = 'sent')       AS sent,
-                                    count(*) FILTER (WHERE q.status = 'failed')     AS failed
+                                    count(*) FILTER (WHERE q.status = 'failed')     AS failed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error LIKE 'suppressed:%') AS suppressed,
+                                    count(*) FILTER (WHERE q.suppressed_but_sent) AS suppressed_but_sent,
+                                    count(*) FILTER (WHERE EXISTS (SELECT 1
+                                                                   FROM mail_bounces b
+                                                                   WHERE b.queue_id = q.id
+                                                                     AND b.kind = 'hard'
+                                                                     AND b.recipient_matched)) AS undelivered
                              FROM mail_queue q
                              WHERE q.task_id = mt.id) rc
          LEFT JOIN mail_queue single
@@ -3265,6 +3434,9 @@ type ListMailTaskSendsRow struct {
 	Processing              int64      `json:"processing"`
 	Sent                    int64      `json:"sent"`
 	Failed                  int64      `json:"failed"`
+	Suppressed              int64      `json:"suppressed"`
+	SuppressedButSent       int64      `json:"suppressed_but_sent"`
+	Undelivered             int64      `json:"undelivered"`
 	SingleRecipientFullName *string    `json:"single_recipient_full_name"`
 	SingleRecipientEmail    *string    `json:"single_recipient_email"`
 	Bulk                    bool       `json:"bulk"`
@@ -3314,6 +3486,9 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 			&i.Processing,
 			&i.Sent,
 			&i.Failed,
+			&i.Suppressed,
+			&i.SuppressedButSent,
+			&i.Undelivered,
 			&i.SingleRecipientFullName,
 			&i.SingleRecipientEmail,
 			&i.Bulk,
@@ -3500,6 +3675,67 @@ func (q *Queries) ListQueueRowsToMask(ctx context.Context, arg ListQueueRowsToMa
 			&i.Subject,
 			&i.Body,
 			&i.BodyHtml,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSuppressions = `-- name: ListSuppressions :many
+SELECT id, address, recipient_sub, source, reason_code, first_seen, last_seen, count, last_queue_id, exempt_flagged_at
+FROM mail_suppressions
+WHERE $1::text IS NULL
+   OR strpos(address, lower($1::text)) > 0
+ORDER BY last_seen DESC, address
+LIMIT $3::int OFFSET $2::int
+`
+
+type ListSuppressionsParams struct {
+	Search    *string `json:"search"`
+	RowOffset int     `json:"row_offset"`
+	RowLimit  int     `json:"row_limit"`
+}
+
+type ListSuppressionsRow struct {
+	ID              uuid.UUID  `json:"id"`
+	Address         string     `json:"address"`
+	RecipientSub    *uuid.UUID `json:"recipient_sub"`
+	Source          string     `json:"source"`
+	ReasonCode      string     `json:"reason_code"`
+	FirstSeen       time.Time  `json:"first_seen"`
+	LastSeen        time.Time  `json:"last_seen"`
+	Count           int        `json:"count"`
+	LastQueueID     *uuid.UUID `json:"last_queue_id"`
+	ExemptFlaggedAt *time.Time `json:"exempt_flagged_at"`
+}
+
+// The suppression list, newest first, those whose address contains search
+// (case-insensitively) when it is given.
+func (q *Queries) ListSuppressions(ctx context.Context, arg ListSuppressionsParams) ([]ListSuppressionsRow, error) {
+	rows, err := q.db.Query(ctx, listSuppressions, arg.Search, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSuppressionsRow
+	for rows.Next() {
+		var i ListSuppressionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Address,
+			&i.RecipientSub,
+			&i.Source,
+			&i.ReasonCode,
+			&i.FirstSeen,
+			&i.LastSeen,
+			&i.Count,
+			&i.LastQueueID,
+			&i.ExemptFlaggedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -4165,7 +4401,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent
 `
 
 type ProcessBulkQueueItemsParams struct {
@@ -4207,6 +4443,7 @@ func (q *Queries) ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueu
 			&i.TrackingDisabledAt,
 			&i.TrackingSkipReason,
 			&i.SentAt,
+			&i.SuppressedButSent,
 		); err != nil {
 			return nil, err
 		}
@@ -4230,7 +4467,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent
 `
 
 type ProcessSystemQueueItemsParams struct {
@@ -4276,6 +4513,7 @@ func (q *Queries) ProcessSystemQueueItems(ctx context.Context, arg ProcessSystem
 			&i.TrackingDisabledAt,
 			&i.TrackingSkipReason,
 			&i.SentAt,
+			&i.SuppressedButSent,
 		); err != nil {
 			return nil, err
 		}

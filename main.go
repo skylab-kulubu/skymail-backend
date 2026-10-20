@@ -271,6 +271,7 @@ func main() {
 	registerMailTaskRoutes(api, authMiddleware, mailHandler)
 	registerMailApprovalRoutes(api, authMiddleware, approvalHandler)
 	registerNotificationRoutes(api, authMiddleware, handlers.NewNotificationHandler(db, mailerService, kcClient))
+	registerSuppressionRoutes(api, authMiddleware, handlers.NewSuppressionHandler(db))
 
 	// The background work's context: shutdown cancels it only after the
 	// mailer has stopped (or its time ran out), which cuts off a send still
@@ -554,6 +555,15 @@ func registerMailApprovalRoutes(api fiber.Router, auth middlewares.AuthMiddlewar
 // ticket iletisim-servisi 03): a service account's token with
 // skymail:notifications:send, never a person's. The notification types are
 // read as templates are and written by the Template seed.
+// registerSuppressionRoutes serves the suppression list to operators with
+// skymail:suppressions:manage (README, "Geri dönen posta ve bastırma
+// listesi").
+func registerSuppressionRoutes(api fiber.Router, auth middlewares.AuthMiddleware, suppressions handlers.SuppressionHandler) {
+	group := api.Group("/suppressions")
+	group.Get("/", auth.RequireAnyPermission(handlers.SuppressionsManageRole), suppressions.List)
+	group.Delete("/:id", auth.RequireAnyPermission(handlers.SuppressionsManageRole), suppressions.Delete)
+}
+
 func registerNotificationRoutes(api fiber.Router, auth middlewares.AuthMiddleware, notifications handlers.NotificationHandler) {
 	api.Post("/notifications", auth.RequireAnyPermission(handlers.NotificationsSendRole), middlewares.RequireServiceAccount(), notifications.Send)
 	types := api.Group("/notification_types")

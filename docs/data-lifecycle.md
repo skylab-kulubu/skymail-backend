@@ -238,6 +238,8 @@ takes the person out of them:
   `mail_suppressions.address` and `recipient_sub` — an address a permanent
   failure was reported for, and whose it is when SkyMail knew. `mail_bounces`
   holds no address: it belongs to a queue row.
+  `mail_suppression_removals.actor_sub` — who removed an address from the
+  list (the address is not kept).
 
 ## Bounces and suppression
 
@@ -249,7 +251,13 @@ bastırma listesi"; hub spec skymail-bounce-isleme §5):
 |---|---|---|
 | the report itself (addresses, the returned headers) | never in SkyMail: read in memory and dropped; in the sender mailbox, 30 days (Exchange retention, not SkyMail's) | — |
 | `mail_bounces` (queue row, `source`, `kind`, `action`, enhanced code, SMTP code, Exchange's `AS(…)` token, `recipient_matched`, the SHA-256 of the report's id, `received_at`) — no address, no text | **one year** from `received_at` | deleted by the content sweep (every 5 minutes); with its queue row (`ON DELETE CASCADE`) |
-| `mail_suppressions` (lower-cased address, `recipient_sub`, `source`, `reason_code` — codes only —, first and last seen, count, last queue row, `exempt_flagged_at`) | until an operator removes it or the person is erased: nothing removes it by itself (Yusuf, 2026-10-20) | Account erasure deletes the person's |
+| `mail_suppressions` (lower-cased address, `recipient_sub`, `source`, `reason_code` — codes only —, first and last seen, count, last queue row, `exempt_flagged_at`) | until an operator removes it (`DELETE /v1/suppressions/{id}`) or the person is erased: nothing removes it by itself (Yusuf, 2026-10-20) | Account erasure deletes the person's |
+| `mail_suppression_removals` (who, when, the removed row's source, code, count and first seen) — no address | without end: the record of who removed what | Account erasure replaces the actor with Silinmiş kullanıcı |
+| `mail_queue.suppressed_but_sent` | with the row | — |
+
+A recipient at a suppressed address is written failed when the send is
+queued (`suppressed: <source> <code>`), never sent; account mail
+(`keycloak.*`, `account.*` templates) is sent and flagged.
 
 Logs carry the queue row's id, the outcome and the codes; never an address
 or a report's text.
@@ -599,6 +607,7 @@ person is cleared whole, never masked.
 | `mail_task_links.url` | names E or N, as written or URL-decoded, or every row of the send is to the person | NULL, `url_cleared_reason` `erased`: the link says it was removed |
 | `mail_suppressions` | `address` in E, `recipient_sub` = S, or its last queue row is to the person | deleted, before that row's address is cleared |
 | `mail_bounces` | of a `mail_queue` row to the person | kept with the cleared row: it holds no address, codes only |
+| `mail_suppression_removals` | `actor_sub` = S | Silinmiş kullanıcı |
 
 Silinmiş kullanıcı is the subject `00000000-0000-4000-8000-000000000000`
 with the name `Silinmiş kullanıcı`, the same for everyone. A request's person

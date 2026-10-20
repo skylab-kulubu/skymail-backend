@@ -180,7 +180,9 @@ Satırın `error`'ı yalnız adım ve kodlardır, ör. `smtp_rejected: RCPT TO 5
 5.1.1` (kalıcı) ya da `smtp_deferred: MAIL FROM 554 5.2.0` (geçici). Relay'in
 metni yazılmaz, çünkü adresi tekrarlayabilir; bu hata hem loglanır hem
 gönderimin sayfasında görünür. Bir alıcının kalıcı reddi öteki alıcıları
-beklemez, bütçeden de yalnız o tek denemeyi yer.
+beklemez, bütçeden de yalnız o tek denemeyi yer. Kalıcı ret adresi bastırma
+listesine de alır: aynı adrese sonraki gönderim relay'e gitmez (Geri dönen
+posta ve bastırma listesi).
 
 RFC 2606/6761'in ayrılmış alan adlarındaki alıcı (`example.com`, `example.net`,
 `example.org` ve altları; `.example`, `.test`, `.invalid`, `.localhost`;
@@ -214,7 +216,8 @@ Exchange Online dış alıcıyı `RCPT TO`'da reddetmez, postayı alır ve sonra
 gönderen kutusuna bir teslim raporu (NDR, RFC 3464) yollar. Bu raporları
 okuyan `internal/bounce` (`Process`) bir raporu kuyruk satırına bağlar ve
 kaydeder; raporu kutudan çeken okuyucu ayrı iştir (hub bileti
-skymail-bounce-isleme 04), bu sürümde yoktur.
+skymail-bounce-isleme 04), bu sürümde yoktur. Bugün listeyi dolduran yol
+relay'in senkron kalıcı reddidir (aşağıda).
 
 - **Ayrıştırma** (`internal/dsn`, yalnız stdlib): üst tür `multipart/report;
   report-type=delivery-status` olmalı; yalnız `message/delivery-status`
@@ -251,7 +254,39 @@ skymail-bounce-isleme 04), bu sürümde yoktur.
   Kayıt satırı kilitleyerek (`FOR SHARE`) yazar: silme ile aynı anda gelen
   rapor ya onu bekler ve satırı boş bulur ya da silme onu bekler ve yazdığı
   bastırmayı siler.
-- **Loglar**: adres ve rapor metni yazılmaz.
+- **Senkron ret**: relay'in adrese özgü kalıcı reddi (`smtp_rejected`,
+  Kanallar tablosu) satırı `failed` yazdıktan sonra adresi de bastırır
+  (`source = smtp`, kod `RCPT TO 550 5.1.1` biçiminde) ve `mail_bounces`'a
+  `smtp` kaydı düşer. Geçici retler (`smtp_deferred`) bastırmaz.
+- **Kuyruğa alırken**: bastırılmış adresteki alıcı (büyük/küçük harf ve baştaki
+  boşluk fark etmez) `failed` yazılır, `error = suppressed: <kaynak> <kod>`
+  (ör. `suppressed: dsn 5.1.10`), deneme 0; relay'e ve bütçeye gitmez,
+  gönderimin öteki alıcıları kuyruğa girer. Ayrılmış alan adı gibi atlanmış
+  sayılır: gönderimin durumunu "Başarısız" yapmaz (`mail_task_status()`,
+  `20261021090100`); bütün alıcıları atlanan gönderim (bastırılmış adrese tek
+  posta) "Başarısız"dır. Tek posta (`/single`) reddedilmez, kabul edilir.
+- **Muafiyet (yalnız hesap postaları)**: şablon anahtarı `keycloak.*` ya da
+  `account.*` olan gönderim (giriş/kayıt kodu, e-posta doğrulama, şifre
+  sıfırlama) bastırılmış adrese yine gider; satır `suppressed_but_sent = true`,
+  bastırma satırı `exempt_flagged_at` alır. Forms, Mail onayı, listeler ve
+  öteki her şey bastırılır. Muafiyet şeritle değil anahtarla: sistem
+  şeridinde Forms ve Mail onayı bildirimleri de var.
+- **Sayılar**: `GET /v1/mail_tasks` ve `/{id}` `recipient_counts`'ta
+  `suppressed` (kuyruğa alırken bastırılan, `failed` içinde de),
+  `suppressed_but_sent` ve `undelivered` (gönderildi, sonra rapor adresin
+  olmadığını söyledi; `sent` içinde de) döner. `GET
+  /v1/mail_tasks/{id}/queue` her satırda `suppressed_but_sent` ve
+  `undelivered` döner.
+- **Operatör uçları** (`skymail:suppressions:manage`, `skymail` istemci
+  rolü, gruba verilir): `GET /v1/suppressions?q=&_start=&_end=` (son
+  ret en yeni önce, `q` adresin bir parçası, sayfa en çok 100, `X-Total-Count`)
+  ve `DELETE /v1/suppressions/{id}` (`204`; yoksa `404`). Satır listenin opak
+  `id`'siyle adlandırılır, adres hiçbir URL'de olmaz (hata logu yolu yazar).
+  Kaldırma `mail_suppression_removals`'a kim, ne zaman, kaynak, kod, sayı ve
+  ilk görülme olarak yazılır; adres yazılmaz. Kaldırılan adrese yeniden
+  gönderilir. Kendiliğinden düşme yoktur.
+- **Loglar**: adres ve rapor metni yazılmaz; kuyruk id'si, kaynak ve kod
+  yazılır.
 
 ## Bildirimler (`POST /v1/notifications`)
 

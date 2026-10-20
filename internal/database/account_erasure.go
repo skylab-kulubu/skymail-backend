@@ -583,6 +583,13 @@ func (e *eraser) mailInFlight(ctx context.Context) (bool, error) {
 // dropNamesSteps replace the subject where it carries a name.
 var dropNamesSteps = []erasureStep{
 	{
+		name:  "suppression removers",
+		count: AccountErasureActorColumnsReplaced,
+		sql: `UPDATE mail_suppression_removals
+		      SET actor_sub = @deleted_sub
+		      WHERE actor_sub = @subject`,
+	},
+	{
 		name:  "approval actors",
 		count: AccountErasureActorColumnsReplaced,
 		sql: `UPDATE mail_approval_events
