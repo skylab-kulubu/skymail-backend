@@ -113,11 +113,21 @@ type Querier interface {
 	// tracking_token is the recipient's token when the row is tracked, and
 	// tracking_skip_reason why not when the send asked for tracking.
 	CreateMailQueueItems(ctx context.Context, arg []CreateMailQueueItemsParams) (int64, error)
+	// content_sensitive_at_send is whether the send is sensitive as it is
+	// queued: 'true' when its template's key is locked sensitive
+	// (template_key_content_locked) whatever the template says, else the
+	// template's content_sensitive ('unset' for NULL). It never changes after:
+	// mail_task_content_sensitive() reads it first (20261020120000).
 	CreateMailTask(ctx context.Context, arg CreateMailTaskParams) ([]CreateMailTaskRow, error)
 	// A tracked send's links that are the same for every recipient, each with
 	// its own token (open and click tracking).
 	CreateMailTaskLinks(ctx context.Context, arg []CreateMailTaskLinksParams) (int64, error)
 	CreateMailingList(ctx context.Context, name string) (MailingList, error)
+	// content_sensitive_at_send is whether the send is sensitive as it is
+	// queued: 'true' when its template's key is locked sensitive
+	// (template_key_content_locked) whatever the template says, else the
+	// template's content_sensitive ('unset' for NULL). It never changes after:
+	// mail_task_content_sensitive() reads it first (20261020120000).
 	CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error)
 	CreateTemplate(ctx context.Context, arg CreateTemplateParams) (Template, error)
 	// The database's clock: the one clock every process's send budget reads, so
@@ -198,6 +208,11 @@ type Querier interface {
 	// people into the HTTP process. Link URLs are omitted: one-recipient sends
 	// can have personal URLs and the summary only requires mails:read.
 	GetTrackingReport(ctx context.Context, arg GetTrackingReportParams) ([]byte, error)
+	// content_sensitive_at_send is whether the send is sensitive as it is
+	// queued: 'true' when its template's key is locked sensitive
+	// (template_key_content_locked) whatever the template says, else the
+	// template's content_sensitive ('unset' for NULL). It never changes after:
+	// mail_task_content_sensitive() reads it first (20261020120000).
 	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (InsertMailTaskRow, error)
 	// Limits live in SQL as well as the process-wide recording budget. There
 	// are at most 20 opens and 50 clicks per recipient across every replica.

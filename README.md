@@ -282,9 +282,11 @@ yalnız `available` ya da `masked` iken doludur:
   yazılamazsa içerik dönmez. Ayrıntı:
   [`docs/data-lifecycle.md`](docs/data-lifecycle.md#sent-mail-content).
 - Hassaslık gönderim anında `mail_tasks.content_sensitive_at_send`'e
-  kopyalanır; gönderim, bu kopya **ya da** şablonun şimdiki değeri ya da
-  kilitli anahtar hassas diyorsa hassastır. Şablonu sonradan `false` yapmak
-  eski gönderimi açmaz.
+  kopyalanır; anahtarı o anda kilitliyse şablon ne derse desin `true`
+  yazılır. Gönderim, bu kopya **ya da** şablonun şimdiki değeri ya da
+  kilitli anahtar hassas diyorsa hassastır; okuma ve süpürücü önce kopyaya
+  bakar. Şablonu sonradan `false` yapmak da anahtarını değiştirmek de eski
+  gönderimi açmaz.
 - **Kilitli hassas:** `keycloak.*`, `account.*`, `auth.*`, `login.*`,
   `otp.*`, `core.contact-consent-confirm`, `event.ticket-created`,
   `event.reminder` ve anahtarında `login`, `code`, `otp`, `reset`, `verify`,

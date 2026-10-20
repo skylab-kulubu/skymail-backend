@@ -287,10 +287,15 @@ sent, and `null`, the default, leaves it to the kind of send: a single mail
 (`POST /mail_tasks/single`) is sensitive, a send to a list, a Keycloak group
 or an approved Mail onayı request is not. The value is copied onto the send
 when it is queued (`mail_tasks.content_sensitive_at_send`: `true`, `false`,
-`unset`), and a send is sensitive if that copy **or** its template now says
-so, or its template's key is locked: changing a template to `false` after a
-send never shows that send as sent. `mail_task_content_sensitive()` is the
-one definition. The Template seed sets the flag (`content_sensitive` in
+`unset`); a template whose key is locked (below) is copied `true` whatever
+its row says (`20261020120000`). A send is sensitive if that copy **or** its
+template now says so, or its template's key is locked now: changing a
+template to `false` after a send never shows that send as sent, and neither
+does taking the lock off its key. `mail_task_content_sensitive()` is the one
+definition and reads the copy first; the lock on the key as it is now stays
+behind it as a defence (the sends an image from before `20261020120000`
+queues during a rollout copy the template's value alone). That migration
+wrote `true` into the copy of every kept send sensitive at the time. The Template seed sets the flag (`content_sensitive` in
 `PUT /v1/templates/by-key/{key}`), the panel either way
 (`PUT /v1/templates/{id}/content-sensitive`, `skymail:templates:write`).
 
