@@ -232,3 +232,38 @@ func TestClientRoleMembersReadsEveryPageOfGroups(t *testing.T) {
 		t.Fatalf("role members = %v, want the last page's group's member", members)
 	}
 }
+
+// GetUser reads a user by id; one that is not there is nil without an error,
+// and any other failure is an error.
+func TestGetUserReadsOneUserAndANotFoundIsNil(t *testing.T) {
+	t.Parallel()
+	const known, missing, broken = "33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444", "55555555-5555-4555-8555-555555555555"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/protocol/openid-connect/token"):
+			_, _ = w.Write([]byte(`{"access_token":"tok","expires_in":300,"token_type":"Bearer"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/admin/realms/e-skylab/users/"+known:
+			_, _ = w.Write([]byte(`{"id":"` + known + `","enabled":true,"email":"ayse@example.com","emailVerified":true,"firstName":"Ayşe"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/admin/realms/e-skylab/users/"+broken:
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"User not found"}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skymail", "secret")
+
+	user, err := kc.GetUser(context.Background(), known)
+	if err != nil || user == nil || user.Email == nil || *user.Email != "ayse@example.com" ||
+		user.EmailVerified == nil || !*user.EmailVerified || user.Enabled == nil || !*user.Enabled {
+		t.Fatalf("GetUser(known) = %+v, %v", user, err)
+	}
+	if user, err := kc.GetUser(context.Background(), missing); user != nil || err != nil {
+		t.Fatalf("GetUser(missing) = %+v, %v; want nil, nil", user, err)
+	}
+	if user, err := kc.GetUser(context.Background(), broken); user != nil || err == nil {
+		t.Fatalf("GetUser(broken) = %+v, %v; want an error", user, err)
+	}
+}

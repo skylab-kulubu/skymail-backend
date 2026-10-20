@@ -76,7 +76,7 @@ SET operator_required_variables = CASE
     END
 WHERE id = $2
   AND archived_at IS NULL
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 `
 
 type AddOperatorRequiredVariableParams struct {
@@ -108,6 +108,7 @@ func (q *Queries) AddOperatorRequiredVariable(ctx context.Context, arg AddOperat
 		&i.SeedRefusedPayloadSha256,
 		&i.ContentSensitive,
 		&i.SensitiveVariables,
+		&i.Channel,
 	)
 	return i, err
 }
@@ -200,7 +201,7 @@ SET archived_by = CASE
     updated_at = CASE WHEN archived_at IS NULL THEN NOW() ELSE updated_at END
 WHERE id = $2
   AND system = false
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 `
 
 type ArchiveTemplateParams struct {
@@ -232,6 +233,7 @@ func (q *Queries) ArchiveTemplate(ctx context.Context, arg ArchiveTemplateParams
 		&i.SeedRefusedPayloadSha256,
 		&i.ContentSensitive,
 		&i.SensitiveVariables,
+		&i.Channel,
 	)
 	return i, err
 }
@@ -695,6 +697,27 @@ func (q *Queries) CountMailQueueItemsByTaskId(ctx context.Context, arg CountMail
 	return count, err
 }
 
+const countMailTaskRows = `-- name: CountMailTaskRows :one
+SELECT count(*) FILTER (WHERE status <> 'failed') AS queued,
+       count(*) FILTER (WHERE status = 'failed')  AS failed
+FROM mail_queue
+WHERE task_id = $1
+`
+
+type CountMailTaskRowsRow struct {
+	Queued int64 `json:"queued"`
+	Failed int64 `json:"failed"`
+}
+
+// A send's queue rows as POST /v1/notifications answers them: queued (any row
+// not failed) and failed (a recipient whose mail did not render).
+func (q *Queries) CountMailTaskRows(ctx context.Context, taskID uuid.UUID) (CountMailTaskRowsRow, error) {
+	row := q.db.QueryRow(ctx, countMailTaskRows, taskID)
+	var i CountMailTaskRowsRow
+	err := row.Scan(&i.Queued, &i.Failed)
+	return i, err
+}
+
 const countMailTaskSends = `-- name: CountMailTaskSends :one
 SELECT count(*)
 FROM mail_tasks mt
@@ -1098,7 +1121,7 @@ WITH active_source AS (
         SELECT $3, template_id, mail_list_id, $4, content_sensitive,
                $5::boolean
         FROM active_source
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1212,7 +1235,7 @@ WITH active_template AS (
     INSERT INTO mail_tasks (sent_by, template_id, body_variables, content_sensitive_at_send, tracking_requested)
         SELECT $4, id, $5, content_sensitive, $6::boolean
         FROM active_template
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1277,7 +1300,7 @@ func (q *Queries) CreateSingleMailTask(ctx context.Context, arg CreateSingleMail
 const createTemplate = `-- name: CreateTemplate :one
 INSERT INTO templates (name, subject, html_content, plain_text_content, react_email_content, key)
 VALUES ($1, $2, $3, $4, $5, $6::text)
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 `
 
 type CreateTemplateParams struct {
@@ -1320,6 +1343,7 @@ func (q *Queries) CreateTemplate(ctx context.Context, arg CreateTemplateParams) 
 		&i.SeedRefusedPayloadSha256,
 		&i.ContentSensitive,
 		&i.SensitiveVariables,
+		&i.Channel,
 	)
 	return i, err
 }
@@ -1511,7 +1535,7 @@ func (q *Queries) GetAllMailingListsIncludingArchived(ctx context.Context, arg G
 }
 
 const getAllTemplates = `-- name: GetAllTemplates :many
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 FROM templates
 WHERE archived_at IS NULL
 ORDER BY created_at DESC
@@ -1553,6 +1577,7 @@ func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams
 			&i.SeedRefusedPayloadSha256,
 			&i.ContentSensitive,
 			&i.SensitiveVariables,
+			&i.Channel,
 		); err != nil {
 			return nil, err
 		}
@@ -1565,7 +1590,7 @@ func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams
 }
 
 const getAllTemplatesIncludingArchived = `-- name: GetAllTemplatesIncludingArchived :many
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 FROM templates
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
@@ -1606,6 +1631,7 @@ func (q *Queries) GetAllTemplatesIncludingArchived(ctx context.Context, arg GetA
 			&i.SeedRefusedPayloadSha256,
 			&i.ContentSensitive,
 			&i.SensitiveVariables,
+			&i.Channel,
 		); err != nil {
 			return nil, err
 		}
@@ -1659,7 +1685,7 @@ func (q *Queries) GetArchivedMailingLists(ctx context.Context, arg GetArchivedMa
 }
 
 const getArchivedTemplates = `-- name: GetArchivedTemplates :many
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 FROM templates
 WHERE archived_at IS NOT NULL
 ORDER BY archived_at DESC
@@ -1701,6 +1727,7 @@ func (q *Queries) GetArchivedTemplates(ctx context.Context, arg GetArchivedTempl
 			&i.SeedRefusedPayloadSha256,
 			&i.ContentSensitive,
 			&i.SensitiveVariables,
+			&i.Channel,
 		); err != nil {
 			return nil, err
 		}
@@ -1998,7 +2025,7 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 }
 
 const getMailTaskById = `-- name: GetMailTaskById :one
-SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id,
+SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id, mt.notification_id,
        t.name  AS template_name,
        ml.name AS mail_list_name
 FROM mail_tasks mt
@@ -2027,6 +2054,7 @@ type GetMailTaskByIdRow struct {
 	TrackingRequested       bool       `json:"tracking_requested"`
 	TrackingClosedAt        *time.Time `json:"tracking_closed_at"`
 	FormSourceID            *uuid.UUID `json:"form_source_id"`
+	NotificationID          *uuid.UUID `json:"notification_id"`
 	TemplateName            *string    `json:"template_name"`
 	MailListName            *string    `json:"mail_list_name"`
 }
@@ -2054,6 +2082,7 @@ func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTas
 		&i.TrackingRequested,
 		&i.TrackingClosedAt,
 		&i.FormSourceID,
+		&i.NotificationID,
 		&i.TemplateName,
 		&i.MailListName,
 	)
@@ -2124,6 +2153,59 @@ func (q *Queries) GetMailingListByIdIncludingArchived(ctx context.Context, id uu
 		&i.UpdatedAt,
 		&i.ArchivedAt,
 		&i.ArchivedBy,
+	)
+	return i, err
+}
+
+const getNotificationByIdempotencyKey = `-- name: GetNotificationByIdempotencyKey :one
+SELECT id, type, request_sha256, result
+FROM notifications
+WHERE sent_by = $1::text
+  AND idempotency_key = $2::text
+`
+
+type GetNotificationByIdempotencyKeyParams struct {
+	SentBy         string `json:"sent_by"`
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
+type GetNotificationByIdempotencyKeyRow struct {
+	ID            uuid.UUID `json:"id"`
+	Type          string    `json:"type"`
+	RequestSha256 string    `json:"request_sha256"`
+	Result        []byte    `json:"result"`
+}
+
+func (q *Queries) GetNotificationByIdempotencyKey(ctx context.Context, arg GetNotificationByIdempotencyKeyParams) (GetNotificationByIdempotencyKeyRow, error) {
+	row := q.db.QueryRow(ctx, getNotificationByIdempotencyKey, arg.SentBy, arg.IdempotencyKey)
+	var i GetNotificationByIdempotencyKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.Type,
+		&i.RequestSha256,
+		&i.Result,
+	)
+	return i, err
+}
+
+const getNotificationType = `-- name: GetNotificationType :one
+SELECT key, category, required, default_channels, lane, archived_at, created_at, updated_at
+FROM notification_types
+WHERE key = $1
+`
+
+func (q *Queries) GetNotificationType(ctx context.Context, key string) (NotificationType, error) {
+	row := q.db.QueryRow(ctx, getNotificationType, key)
+	var i NotificationType
+	err := row.Scan(
+		&i.Key,
+		&i.Category,
+		&i.Required,
+		&i.DefaultChannels,
+		&i.Lane,
+		&i.ArchivedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -2276,7 +2358,7 @@ func (q *Queries) GetRetainedTrackingReport(ctx context.Context, taskID uuid.UUI
 }
 
 const getTemplateById = `-- name: GetTemplateById :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 FROM templates
 WHERE id = $1
   AND archived_at IS NULL
@@ -2306,12 +2388,13 @@ func (q *Queries) GetTemplateById(ctx context.Context, id uuid.UUID) (Template, 
 		&i.SeedRefusedPayloadSha256,
 		&i.ContentSensitive,
 		&i.SensitiveVariables,
+		&i.Channel,
 	)
 	return i, err
 }
 
 const getTemplateByIdIncludingArchived = `-- name: GetTemplateByIdIncludingArchived :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 FROM templates
 WHERE id = $1
 `
@@ -2340,12 +2423,13 @@ func (q *Queries) GetTemplateByIdIncludingArchived(ctx context.Context, id uuid.
 		&i.SeedRefusedPayloadSha256,
 		&i.ContentSensitive,
 		&i.SensitiveVariables,
+		&i.Channel,
 	)
 	return i, err
 }
 
 const getTemplateByKey = `-- name: GetTemplateByKey :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 FROM templates
 WHERE key = $1
   AND archived_at IS NULL
@@ -2375,6 +2459,7 @@ func (q *Queries) GetTemplateByKey(ctx context.Context, key *string) (Template, 
 		&i.SeedRefusedPayloadSha256,
 		&i.ContentSensitive,
 		&i.SensitiveVariables,
+		&i.Channel,
 	)
 	return i, err
 }
@@ -2605,6 +2690,40 @@ func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) 
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const insertNotification = `-- name: InsertNotification :one
+INSERT INTO notifications (type, sent_by, idempotency_key, request_sha256, source_kind, source_ref)
+VALUES ($1::text, $2::text, $3::text,
+        $4::text, $5::text, $6::text)
+ON CONFLICT (sent_by, idempotency_key) DO NOTHING
+RETURNING id
+`
+
+type InsertNotificationParams struct {
+	Type           string  `json:"type"`
+	SentBy         string  `json:"sent_by"`
+	IdempotencyKey string  `json:"idempotency_key"`
+	RequestSha256  string  `json:"request_sha256"`
+	SourceKind     *string `json:"source_kind"`
+	SourceRef      *string `json:"source_ref"`
+}
+
+// A notification accepted under its caller's Idempotency-Key; nothing when
+// the caller already used the key (a concurrent request with it waits here
+// for the first to commit or roll back).
+func (q *Queries) InsertNotification(ctx context.Context, arg InsertNotificationParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, insertNotification,
+		arg.Type,
+		arg.SentBy,
+		arg.IdempotencyKey,
+		arg.RequestSha256,
+		arg.SourceKind,
+		arg.SourceRef,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const insertTrackingEvent = `-- name: InsertTrackingEvent :execrows
@@ -3134,6 +3253,41 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 			&i.ContentClearedAt,
 			&i.ContentMaskedAt,
 			&i.TrackingRequested,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotificationTypes = `-- name: ListNotificationTypes :many
+SELECT key, category, required, default_channels, lane, archived_at, created_at, updated_at
+FROM notification_types
+ORDER BY key
+`
+
+func (q *Queries) ListNotificationTypes(ctx context.Context) ([]NotificationType, error) {
+	rows, err := q.db.Query(ctx, listNotificationTypes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NotificationType
+	for rows.Next() {
+		var i NotificationType
+		if err := rows.Scan(
+			&i.Key,
+			&i.Category,
+			&i.Required,
+			&i.DefaultChannels,
+			&i.Lane,
+			&i.ArchivedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -3708,7 +3862,7 @@ func (q *Queries) LockSendBudget(ctx context.Context) (bool, error) {
 }
 
 const lockTemplate = `-- name: LockTemplate :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 FROM templates
 WHERE id = $1
   AND archived_at IS NULL
@@ -3745,12 +3899,13 @@ func (q *Queries) LockTemplate(ctx context.Context, id uuid.UUID) (Template, err
 		&i.SeedRefusedPayloadSha256,
 		&i.ContentSensitive,
 		&i.SensitiveVariables,
+		&i.Channel,
 	)
 	return i, err
 }
 
 const lockTemplateByKey = `-- name: LockTemplateByKey :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 FROM templates
 WHERE key = $1
     FOR UPDATE
@@ -3783,6 +3938,7 @@ func (q *Queries) LockTemplateByKey(ctx context.Context, key *string) (Template,
 		&i.SeedRefusedPayloadSha256,
 		&i.ContentSensitive,
 		&i.SensitiveVariables,
+		&i.Channel,
 	)
 	return i, err
 }
@@ -4063,7 +4219,7 @@ SET name                 = p.name,
     updated_at           = NOW()
 FROM published p
 WHERE t.id = p.template_id
-RETURNING t.id, t.name, t.html_content, t.plain_text_content, t.react_email_content, t.created_at, t.updated_at, t.subject, t.archived_at, t.archived_by, t.key, t.system, t.published_version_id, t.contract_required_variables, t.operator_required_variables, t.seed_refused_at, t.seed_refused_rules, t.seed_refused_payload_sha256, t.content_sensitive, t.sensitive_variables
+RETURNING t.id, t.name, t.html_content, t.plain_text_content, t.react_email_content, t.created_at, t.updated_at, t.subject, t.archived_at, t.archived_by, t.key, t.system, t.published_version_id, t.contract_required_variables, t.operator_required_variables, t.seed_refused_at, t.seed_refused_rules, t.seed_refused_payload_sha256, t.content_sensitive, t.sensitive_variables, t.channel
 `
 
 type PublishTemplateDraftParams struct {
@@ -4106,6 +4262,7 @@ func (q *Queries) PublishTemplateDraft(ctx context.Context, arg PublishTemplateD
 		&i.SeedRefusedPayloadSha256,
 		&i.ContentSensitive,
 		&i.SensitiveVariables,
+		&i.Channel,
 	)
 	return i, err
 }
@@ -4486,7 +4643,7 @@ UPDATE templates
 SET operator_required_variables = array_remove(operator_required_variables, $1::text)
 WHERE id = $2
   AND archived_at IS NULL
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 `
 
 type RemoveOperatorRequiredVariableParams struct {
@@ -4521,6 +4678,7 @@ func (q *Queries) RemoveOperatorRequiredVariable(ctx context.Context, arg Remove
 		&i.SeedRefusedPayloadSha256,
 		&i.ContentSensitive,
 		&i.SensitiveVariables,
+		&i.Channel,
 	)
 	return i, err
 }
@@ -4656,7 +4814,7 @@ SET archived_at = NULL,
     archived_by = NULL,
     updated_at = CASE WHEN archived_at IS NULL THEN updated_at ELSE NOW() END
 WHERE id = $1
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 `
 
 func (q *Queries) RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, error) {
@@ -4683,6 +4841,7 @@ func (q *Queries) RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, 
 		&i.SeedRefusedPayloadSha256,
 		&i.ContentSensitive,
 		&i.SensitiveVariables,
+		&i.Channel,
 	)
 	return i, err
 }
@@ -4939,6 +5098,22 @@ func (q *Queries) SetMailQueueItemSent(ctx context.Context, arg SetMailQueueItem
 	return result.RowsAffected(), nil
 }
 
+const setMailTaskNotification = `-- name: SetMailTaskNotification :exec
+UPDATE mail_tasks
+SET notification_id = $1::uuid
+WHERE id = $2
+`
+
+type SetMailTaskNotificationParams struct {
+	NotificationID uuid.UUID `json:"notification_id"`
+	ID             uuid.UUID `json:"id"`
+}
+
+func (q *Queries) SetMailTaskNotification(ctx context.Context, arg SetMailTaskNotificationParams) error {
+	_, err := q.db.Exec(ctx, setMailTaskNotification, arg.NotificationID, arg.ID)
+	return err
+}
+
 const setMaskedQueueContent = `-- name: SetMaskedQueueContent :exec
 UPDATE mail_queue q
 SET subject   = u.subject,
@@ -4980,12 +5155,28 @@ func (q *Queries) SetMaskedQueueContent(ctx context.Context, arg SetMaskedQueueC
 	return err
 }
 
+const setNotificationResult = `-- name: SetNotificationResult :exec
+UPDATE notifications
+SET result = $1::jsonb
+WHERE id = $2
+`
+
+type SetNotificationResultParams struct {
+	Result []byte    `json:"result"`
+	ID     uuid.UUID `json:"id"`
+}
+
+func (q *Queries) SetNotificationResult(ctx context.Context, arg SetNotificationResultParams) error {
+	_, err := q.db.Exec(ctx, setNotificationResult, arg.Result, arg.ID)
+	return err
+}
+
 const setTemplateContentSensitive = `-- name: SetTemplateContentSensitive :one
 UPDATE templates
 SET content_sensitive = $1::boolean
 WHERE id = $2
   AND archived_at IS NULL
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 `
 
 type SetTemplateContentSensitiveParams struct {
@@ -5028,6 +5219,7 @@ func (q *Queries) SetTemplateContentSensitive(ctx context.Context, arg SetTempla
 		&i.SeedRefusedPayloadSha256,
 		&i.ContentSensitive,
 		&i.SensitiveVariables,
+		&i.Channel,
 	)
 	return i, err
 }
@@ -5057,7 +5249,7 @@ func (q *Queries) ShareLockMailingList(ctx context.Context, id uuid.UUID) (Maili
 }
 
 const shareLockTemplate = `-- name: ShareLockTemplate :one
-SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 FROM templates
 WHERE id = $1
     FOR SHARE
@@ -5089,6 +5281,7 @@ func (q *Queries) ShareLockTemplate(ctx context.Context, id uuid.UUID) (Template
 		&i.SeedRefusedPayloadSha256,
 		&i.ContentSensitive,
 		&i.SensitiveVariables,
+		&i.Channel,
 	)
 	return i, err
 }
@@ -5290,7 +5483,7 @@ SET name                = $2,
     updated_at          = NOW()
 WHERE id = $1
   AND archived_at IS NULL
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 `
 
 type UpdateTemplateParams struct {
@@ -5335,6 +5528,53 @@ func (q *Queries) UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) 
 		&i.SeedRefusedPayloadSha256,
 		&i.ContentSensitive,
 		&i.SensitiveVariables,
+		&i.Channel,
+	)
+	return i, err
+}
+
+const upsertNotificationType = `-- name: UpsertNotificationType :one
+INSERT INTO notification_types (key, category, required, default_channels, lane)
+VALUES ($1::text, $2::text, $3::boolean,
+        $4::text[], $5::text)
+ON CONFLICT (key) DO UPDATE
+    SET category         = EXCLUDED.category,
+        required         = EXCLUDED.required,
+        default_channels = EXCLUDED.default_channels,
+        lane             = EXCLUDED.lane,
+        updated_at       = now()
+RETURNING key, category, required, default_channels, lane, archived_at, created_at, updated_at
+`
+
+type UpsertNotificationTypeParams struct {
+	Key             string   `json:"key"`
+	Category        *string  `json:"category"`
+	Required        bool     `json:"required"`
+	DefaultChannels []string `json:"default_channels"`
+	Lane            string   `json:"lane"`
+}
+
+// A notification type as the Template seed states it
+// (PUT /v1/notification_types/{key}): written over, its archive left as it
+// is.
+func (q *Queries) UpsertNotificationType(ctx context.Context, arg UpsertNotificationTypeParams) (NotificationType, error) {
+	row := q.db.QueryRow(ctx, upsertNotificationType,
+		arg.Key,
+		arg.Category,
+		arg.Required,
+		arg.DefaultChannels,
+		arg.Lane,
+	)
+	var i NotificationType
+	err := row.Scan(
+		&i.Key,
+		&i.Category,
+		&i.Required,
+		&i.DefaultChannels,
+		&i.Lane,
+		&i.ArchivedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -5386,7 +5626,7 @@ ON CONFLICT (key) DO UPDATE
         seed_refused_rules          = NULL,
         seed_refused_payload_sha256 = NULL,
         updated_at          = NOW()
-RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables
+RETURNING id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 `
 
 type UpsertTemplateByKeyParams struct {
@@ -5441,6 +5681,7 @@ func (q *Queries) UpsertTemplateByKey(ctx context.Context, arg UpsertTemplateByK
 		&i.SeedRefusedPayloadSha256,
 		&i.ContentSensitive,
 		&i.SensitiveVariables,
+		&i.Channel,
 	)
 	return i, err
 }

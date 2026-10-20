@@ -1816,3 +1816,62 @@ DELETE FROM mail_form_sources WHERE id IN (
  SELECT fs.id FROM mail_form_sources fs WHERE fs.consumed_at IS NULL AND fs.expires_at <= sqlc.arg(at)
  ORDER BY fs.expires_at,fs.id LIMIT sqlc.arg(batch_size) FOR UPDATE SKIP LOCKED
 );
+
+-- A notification type as the Template seed states it
+-- (PUT /v1/notification_types/{key}): written over, its archive left as it
+-- is.
+-- name: UpsertNotificationType :one
+INSERT INTO notification_types (key, category, required, default_channels, lane)
+VALUES (sqlc.arg(key)::text, sqlc.narg(category)::text, sqlc.arg(required)::boolean,
+        sqlc.arg(default_channels)::text[], sqlc.arg(lane)::text)
+ON CONFLICT (key) DO UPDATE
+    SET category         = EXCLUDED.category,
+        required         = EXCLUDED.required,
+        default_channels = EXCLUDED.default_channels,
+        lane             = EXCLUDED.lane,
+        updated_at       = now()
+RETURNING *;
+
+-- name: GetNotificationType :one
+SELECT *
+FROM notification_types
+WHERE key = $1;
+
+-- name: ListNotificationTypes :many
+SELECT *
+FROM notification_types
+ORDER BY key;
+
+-- A notification accepted under its caller's Idempotency-Key; nothing when
+-- the caller already used the key (a concurrent request with it waits here
+-- for the first to commit or roll back).
+-- name: InsertNotification :one
+INSERT INTO notifications (type, sent_by, idempotency_key, request_sha256, source_kind, source_ref)
+VALUES (sqlc.arg(type)::text, sqlc.arg(sent_by)::text, sqlc.arg(idempotency_key)::text,
+        sqlc.arg(request_sha256)::text, sqlc.narg(source_kind)::text, sqlc.narg(source_ref)::text)
+ON CONFLICT (sent_by, idempotency_key) DO NOTHING
+RETURNING id;
+
+-- name: GetNotificationByIdempotencyKey :one
+SELECT id, type, request_sha256, result
+FROM notifications
+WHERE sent_by = sqlc.arg(sent_by)::text
+  AND idempotency_key = sqlc.arg(idempotency_key)::text;
+
+-- name: SetNotificationResult :exec
+UPDATE notifications
+SET result = sqlc.arg(result)::jsonb
+WHERE id = sqlc.arg(id);
+
+-- name: SetMailTaskNotification :exec
+UPDATE mail_tasks
+SET notification_id = sqlc.arg(notification_id)::uuid
+WHERE id = sqlc.arg(id);
+
+-- A send's queue rows as POST /v1/notifications answers them: queued (any row
+-- not failed) and failed (a recipient whose mail did not render).
+-- name: CountMailTaskRows :one
+SELECT count(*) FILTER (WHERE status <> 'failed') AS queued,
+       count(*) FILTER (WHERE status = 'failed')  AS failed
+FROM mail_queue
+WHERE task_id = sqlc.arg(task_id);
