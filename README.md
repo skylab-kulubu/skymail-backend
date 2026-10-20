@@ -166,8 +166,9 @@ reddi) bütün toplu gönderimi bir anda düşürmesin diye geçici sayılır (`
 
 | Yanıt | Adım | Sonuç |
 |---|---|---|
-| 5xx, ek kod 5.1.x (adres durumu) | `RCPT TO`, `DATA` sonu | kalıcı (`failed`, ilk denemede) |
+| 5xx, ek kod 5.1.0–5.1.6 ya da 5.1.10 (alıcı adresinin durumu; 5.1.10 Exchange Online'da `RecipientNotFound`) | `RCPT TO`, `DATA` sonu | kalıcı (`failed`, ilk denemede) |
 | ek kodsuz 550 / 551 / 553 | `RCPT TO` | kalıcı |
+| 5xx, ek kod 5.1.7 / 5.1.8 (gönderen adresi ve sistemi; Postfix bunu `RCPT TO`'da verir, Exchange Online engelli hesaba 5.1.8 verir), 5.1.9, 5.1.90 (Exchange Online günlük alıcı sınırı) ve listede olmayan başka 5.1.x | `RCPT TO`, `DATA` sonu | geçici |
 | 5xx, ek kod 5.2.x / 5.3.x / 5.7.x (ör. relay erişim reddi) ya da 5.1.x dışı başka sınıf | `RCPT TO`, `DATA` sonu | geçici |
 | ek kodsuz başka 5xx (ör. 554, 501) | `RCPT TO`, `DATA` sonu | geçici |
 | 5xx (ör. `554 5.2.0` SubmissionQuotaExceeded, 5.7.x gönderen reddi) | `MAIL FROM` | geçici |
@@ -185,7 +186,11 @@ RFC 2606/6761'in ayrılmış alan adlarındaki alıcı (`example.com`, `example.
 `example.org` ve altları; `.example`, `.test`, `.invalid`, `.localhost`;
 sandbox'taki seed hesapları gibi) gönderim kuyruğa alınırken `failed` yazılır
 (`reserved_domain: …`, deneme 0). Relay'e hiç gitmez, bütçeye sayılmaz.
-Gönderimin öteki alıcıları kuyruğa girer. Tek posta (`/single`) da reddedilmez,
+Gönderimin öteki alıcıları kuyruğa girer. Bu alıcı atlanmış sayılır,
+gönderimin durumunu "Başarısız" yapmaz: gönderim öteki alıcıları neyse onu
+gösterir (`mail_task_status()`, `20261020150000`). Bütün alıcıları atlanan
+gönderim (hiçbir posta gitmedi) "Başarısız"dır. Alıcı sayımlarında satır yine
+`failed` sayılır. Tek posta (`/single`) da reddedilmez,
 kabul edilir ve alıcısı `failed` olur. Bu kuralı `main.go`
 (`WithReservedDomainsRefused`) açar. Testler sahte relay ile `example.com`'a
 gönderdiği için kural varsayılan olarak kapalıdır.

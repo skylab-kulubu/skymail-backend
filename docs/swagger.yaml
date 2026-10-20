@@ -2458,10 +2458,11 @@ paths:
         name: _end
         schema:
           type: integer
-      - description: 'Derived send status: failed (a recipient failed, or none was
-          queued a minute after the send), sending (none failed and some pending or
-          processing, or none queued yet within that minute), sent (none failed or
-          queued, some sent)'
+      - description: 'Derived send status: failed (a recipient failed, other than
+          one skipped for a reserved domain (reserved_domain); every recipient was
+          skipped; or none was queued a minute after the send), sending (none failed
+          and some pending or processing, or none queued yet within that minute),
+          sent (none failed or queued, some sent)'
         in: query
         name: status
         schema:
@@ -2943,9 +2944,10 @@ paths:
         by derived status, each equal to the X-Total-Count of the send list filtered
         by it; mail sent per Europe/Istanbul day over the last days (zero-filled,
         oldest first, ending today); and the latest sends. Derived status: failed
-        (a recipient failed, or none was queued a minute after the send), sending
-        (none failed and some pending or processing, or none queued yet within that
-        minute), sent (none failed or queued, some sent).'
+        (a recipient failed, other than one skipped for a reserved domain (reserved_domain);
+        every recipient was skipped; or none was queued a minute after the send),
+        sending (none failed and some pending or processing, or none queued yet within
+        that minute), sent (none failed or queued, some sent).'
       parameters:
       - description: Days in the daily series, ending today in Europe/Istanbul (1-90)
         in: query

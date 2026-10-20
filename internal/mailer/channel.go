@@ -2,6 +2,7 @@ package mailer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/rs/zerolog"
@@ -15,6 +16,11 @@ import (
 // each row it takes to the sender of the row's channel. E-mail is the only
 // channel yet; recipient_email is its address.
 const ChannelEmail = "email"
+
+// invalidRecipientError is the error a row whose name and address go-mail
+// cannot parse into a To header fails with: the class alone, as with
+// reservedDomainError; the row holds the name and the address.
+const invalidRecipientError = "invalid_recipient: not sent, the recipient's name and address could not be parsed"
 
 // ChannelSender sends the rows of one channel. Each worker makes its own of
 // every channel at startup and sends one row at a time with it, so what a
@@ -106,7 +112,10 @@ func (s *emailSender) Send(ctx context.Context, job database.MailQueue) error {
 		return permanentError{fmt.Errorf("invalid from email: %w", err)}
 	}
 	if err := msg.To(fmt.Sprintf("%s <%s>", job.RecipientFullName, job.RecipientEmail)); err != nil {
-		return permanentError{fmt.Errorf("invalid recipient: %w", err)}
+		// Only the class: go-mail's error quotes the name and the address it
+		// could not parse, and net/mail's may echo part of them, while the
+		// row's error is logged and shown on the send's page.
+		return permanentError{errors.New(invalidRecipientError)}
 	}
 
 	msg.SetGenHeader(mail.HeaderMessageID, fmt.Sprintf("<%s@%s>", job.ID.String(), s.config.FQDN))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 )
@@ -13,8 +14,9 @@ const reservedDomainError = "reserved_domain: not sent, the address is in a doma
 // A recipient in a reserved domain (a sandbox seed account at example.com) is
 // written failed when the send is queued, with nothing tried: it never
 // reaches the relay, which can only refuse it, nor the send budget. The
-// send's other recipients are queued; the send reads failed, as with any
-// failed recipient.
+// send's other recipients are queued, and the send reads as they do: the
+// reserved recipient is skipped, not failed (mail_task_status). A send to no
+// one but reserved recipients reads failed: nothing went out.
 func TestARecipientInAReservedDomainIsFailedWhenQueued(t *testing.T) {
 	captureMailerLogs(t)
 	db := initialQueue(t)
@@ -46,6 +48,9 @@ func TestARecipientInAReservedDomainIsFailedWhenQueued(t *testing.T) {
 			t.Fatalf("EnqueueWithRecipients: %v", err)
 		}
 		check(t, rowsOf(t, db, task))
+		if got := sendStatus(t, db, task); got != "sending" {
+			t.Errorf("send status = %q, want sending: the reserved recipient is skipped, Ayşe is still pending", got)
+		}
 		if n := count(t, db, `SELECT count(*) FROM mail_queue WHERE recipient_email = 'seed-bot@example.com' AND attempts <> 0`); n != 0 {
 			t.Errorf("%d reserved rows with an attempt, want none: nothing was tried", n)
 		}
@@ -82,6 +87,9 @@ func TestARecipientInAReservedDomainIsFailedWhenQueued(t *testing.T) {
 		if got := rows["seed-bot@example.com"]; len(rows) != 1 || got.status != "failed" || got.error != reservedDomainError {
 			t.Errorf("single mail rows = %+v, want one failed with %q", rows, reservedDomainError)
 		}
+		if got := sendStatus(t, db, task); got != "failed" {
+			t.Errorf("send status = %q, want failed: its one recipient was skipped, nothing went out", got)
+		}
 	})
 
 	t.Run("the send budget counts only the deliverable rows", func(t *testing.T) {
@@ -117,4 +125,14 @@ func TestReservedDomainsAreQueuedWithoutTheOption(t *testing.T) {
 	if got := rowsOf(t, db, task)["seed-bot@example.com"]; got.status != "pending" {
 		t.Errorf("reserved recipient without the option: %+v, want pending", got)
 	}
+}
+
+// sendStatus is a send's status as mail_task_status derives it.
+func sendStatus(t *testing.T, db *database.Store, task uuid.UUID) string {
+	t.Helper()
+	var status string
+	if err := db.Conn.QueryRow(context.Background(), `SELECT mail_task_status($1)`, task).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	return status
 }

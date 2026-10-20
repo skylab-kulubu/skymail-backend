@@ -5,10 +5,13 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
+	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
 )
 
 // sendThrough sends one mail to the address through a relay that answers verb
@@ -39,6 +42,8 @@ func TestARelaysPermanentRefusalFailsAtOnce(t *testing.T) {
 		{"551 without enhanced code", "RCPT", "551 user not local", "smtp_rejected: RCPT TO 551"},
 		{"553 without enhanced code", "RCPT", "553 mailbox name not allowed", "smtp_rejected: RCPT TO 553"},
 		{"address status at end of DATA", ".", "550 5.1.1 no such user", "smtp_rejected: DATA 550 5.1.1"},
+		{"other address status", "RCPT", "550 5.1.0 address rejected", "smtp_rejected: RCPT TO 550 5.1.0"},
+		{"recipient not found (Exchange Online)", "RCPT", "550 5.1.10 RESOLVER.ADR.RecipientNotFound; Recipient not found by SMTP address lookup", "smtp_rejected: RCPT TO 550 5.1.10"},
 	} {
 		t.Run(refusal.name, func(t *testing.T) {
 			err := sendThrough(t, refusal.verb, refusal.reply, "alici@example.com")
@@ -61,7 +66,8 @@ func TestARelaysPermanentRefusalFailsAtOnce(t *testing.T) {
 // A 4xx reply is a transient failure (greylisting, a full mailbox, a rate
 // limit), and so is a 5xx that is not about the recipient's address: one to
 // MAIL FROM, one to RCPT TO or at the end of DATA that is 5.2.x, 5.3.x or
-// 5.7.x (relay access denied, policy), or one without an enhanced code other
+// 5.7.x (relay access denied, policy) or a 5.1.x about the sender or the
+// account (5.1.7, 5.1.8, 5.1.90), or one without an enhanced code other
 // than a 550, 551 or 553 to RCPT TO. Failing those at once would fail a whole list at once;
 // the row is tried again later, as before. Its error too is the stage and the
 // codes only.
@@ -84,6 +90,12 @@ func TestARelaysTransientRefusalIsTriedAgain(t *testing.T) {
 		{"mail system at end of DATA", ".", "554 5.3.4 message too big", "smtp_deferred: DATA 554 5.3.4"},
 		{"policy at end of DATA", ".", "554 5.7.1 message refused", "smtp_deferred: DATA 554 5.7.1"},
 		{"no enhanced code at end of DATA", ".", "554 transaction failed", "smtp_deferred: DATA 554"},
+		{"sender syntax at RCPT", "RCPT", "553 5.1.7 <skymail@example.com>: Sender address rejected: bad syntax", "smtp_deferred: RCPT TO 553 5.1.7"},
+		{"sender domain at RCPT (Postfix smtpd_delay_reject)", "RCPT", "550 5.1.8 <skymail@example.com>: Sender address rejected: Domain not found", "smtp_deferred: RCPT TO 550 5.1.8"},
+		{"bad outbound sender at end of DATA", ".", "550 5.1.8 Access denied, bad outbound sender", "smtp_deferred: DATA 550 5.1.8"},
+		{"non-compliant mailer at RCPT", "RCPT", "550 5.1.9 message relayed to non-compliant mailer", "smtp_deferred: RCPT TO 550 5.1.9"},
+		{"daily recipient limit at RCPT", "RCPT", "550 5.1.90 Your message can't be sent because you've reached your daily limit for message recipients", "smtp_deferred: RCPT TO 550 5.1.90"},
+		{"daily recipient limit at end of DATA", ".", "550 5.1.90 daily recipient limit reached", "smtp_deferred: DATA 550 5.1.90"},
 	} {
 		t.Run(refusal.name, func(t *testing.T) {
 			err := sendThrough(t, refusal.verb, refusal.reply, "alici@example.com")
@@ -148,6 +160,74 @@ func TestReservedDomain(t *testing.T) {
 	} {
 		if got := mailer.ReservedDomain(address); got != want {
 			t.Errorf("ReservedDomain(%q) = %v, want %v", address, got, want)
+		}
+	}
+}
+
+const invalidRecipientError = "invalid_recipient: not sent, the recipient's name and address could not be parsed"
+
+// A recipient go-mail cannot parse into a To header fails for good with the
+// class alone: go-mail's own error quotes the name and the address.
+func TestAnUnparsableRecipientFailsWithItsClassOnly(t *testing.T) {
+	m := mailer.NewMailer(nil, mailer.SMTPConfig{FromEmail: "skymail@example.com", Host: "127.0.0.1", Port: 1, FQDN: "example.com"}, mailer.SenderOn)
+	err := mailer.SendOnce(context.Background(), m, database.MailQueue{
+		ID: uuid.New(), Channel: mailer.ChannelEmail, RecipientFullName: "Ayşe Kaya", RecipientEmail: "ayse.kaya",
+		Subject: "Konu", Body: "Gövde",
+	})
+	if err == nil {
+		t.Fatal("the send to an unparsable address succeeded")
+	}
+	if !mailer.IsPermanent(err) {
+		t.Errorf("error %q is retried, want it permanent: the address stays unparsable", err)
+	}
+	if err.Error() != invalidRecipientError {
+		t.Errorf("error = %q, want %q", err, invalidRecipientError)
+	}
+}
+
+// A worker writes that row failed with the class alone, and logs no more: the
+// row's error and the log line carry neither the name nor the address.
+func TestAnUnparsableRecipientsRowAndLogCarryNoAddress(t *testing.T) {
+	logs := captureMailerLogs(t)
+	ctx := context.Background()
+	postgres := testpostgres.StartDatabase(t)
+	if _, err := migrations.Run(ctx, postgres.URL, 0); err != nil {
+		t.Fatal(err)
+	}
+	var row uuid.UUID
+	if err := postgres.Pool.QueryRow(ctx, `
+		WITH task AS (INSERT INTO mail_tasks (sent_by, body_variables) VALUES ('31ef736f-72da-4a40-8791-d523199cf9f0', '{}') RETURNING id)
+		INSERT INTO mail_queue (task_id, recipient_full_name, recipient_email, subject, body, next_attempt_at)
+		SELECT id, 'Ayşe Kaya', 'ayse.kaya', 'Konu', 'Gövde', NOW() - INTERVAL '1 minute' FROM task
+		RETURNING id`).Scan(&row); err != nil {
+		t.Fatal(err)
+	}
+	db := database.NewStore(postgres.Pool)
+	m := mailer.NewMailer(db, startFakeSMTP(t).config(), mailer.SenderOn)
+	startMailer(t, m, 1)
+	m.Wake()
+
+	var status, rowError string
+	var attempts int
+	waitFor(t, "the row to fail", 10*time.Second, func() bool {
+		if err := postgres.Pool.QueryRow(ctx, `SELECT status::text, coalesce(error, ''), attempts FROM mail_queue WHERE id = $1`, row).
+			Scan(&status, &rowError, &attempts); err != nil {
+			t.Fatal(err)
+		}
+		return status == "failed"
+	})
+	if rowError != invalidRecipientError || attempts != 1 {
+		t.Errorf("row error = %q after %d attempts, want %q after 1", rowError, attempts, invalidRecipientError)
+	}
+	logs.mu.Lock()
+	logged := logs.buf.String()
+	logs.mu.Unlock()
+	if !strings.Contains(logged, invalidRecipientError) {
+		t.Errorf("the log does not name the failure %q:\n%s", invalidRecipientError, logged)
+	}
+	for _, personal := range []string{"ayse", "Ayşe", "Kaya", "kaya"} {
+		if strings.Contains(rowError, personal) || strings.Contains(logged, personal) {
+			t.Errorf("the row's error or the log carries %q:\nerror: %s\nlog: %s", personal, rowError, logged)
 		}
 	}
 }

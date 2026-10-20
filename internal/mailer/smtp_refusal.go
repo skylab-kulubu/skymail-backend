@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/wneessen/go-mail"
@@ -32,21 +33,22 @@ func (r smtpReply) Error() string {
 }
 
 // permanent says the refusal is about this recipient's address, so the same
-// mail to them is refused again: a 5xx whose enhanced code is 5.1.x, an
-// address status (RFC 3463), to RCPT TO or at the end of DATA; or, from a
-// relay that gives no enhanced code, a 550, 551 or 553 to RCPT TO (mailbox
-// unavailable, not local, name not allowed: RFC 5321 §4.2.2). Every other
-// refusal is tried again later, a 5xx included, so a refusal of the sender,
-// the account, the tenant or the relay's policy cannot fail every recipient
-// of a list at once:
+// mail to them is refused again: a 5xx whose enhanced code is a status of the
+// recipient's address (recipientAddressStatus), to RCPT TO or at the end of
+// DATA; or, from a relay that gives no enhanced code, a 550, 551 or 553 to
+// RCPT TO (mailbox unavailable, not local, name not allowed: RFC 5321
+// §4.2.2). Every other refusal is tried again later, a 5xx included, so a
+// refusal of the sender, the account, the tenant or the relay's policy cannot
+// fail every recipient of a list at once:
 //
 //   - a 4xx (RFC 5321 §4.2.1: transient);
 //   - a 5xx to MAIL FROM (Exchange Online's 554 5.2.0
 //     SubmissionQuotaExceeded, a 5.7.x sender refusal);
 //   - a 5xx to RCPT TO or at the end of DATA that is 5.2.x (mailbox or
-//     quota), 5.3.x (mail system), 5.7.x (policy, relay access denied) or of
-//     any other class than 5.1.x, or has no enhanced code and is not one of
-//     the three above;
+//     quota), 5.3.x (mail system), 5.7.x (policy, relay access denied), a
+//     5.1.x about the sender or the account (5.1.7, 5.1.8, Exchange Online's
+//     5.1.90 daily recipient limit), of any other class, or has no enhanced
+//     code and is not one of the three above;
 //   - a 5xx to anything else.
 func (r smtpReply) permanent() bool {
 	if r.code < 500 || r.code >= 600 {
@@ -56,9 +58,30 @@ func (r smtpReply) permanent() bool {
 		return false
 	}
 	if r.enhanced != "" {
-		return strings.HasPrefix(r.enhanced, "5.1.")
+		return recipientAddressStatus(r.enhanced)
 	}
 	return r.stage == stageRcptTo && (r.code == 550 || r.code == 551 || r.code == 553)
+}
+
+// recipientAddressStatus says an enhanced code is a permanent status of the
+// recipient's address: 5.1.0 to 5.1.6 (RFC 3463: other, bad mailbox, bad
+// system, bad syntax, ambiguous, valid, moved) or 5.1.10 (null MX, RFC 7505;
+// Exchange Online's RecipientNotFound). The rest of 5.1.x is not: 5.1.7 and
+// 5.1.8 are the sender's mailbox and system (RFC 3463), which Postfix
+// answers at RCPT TO by default (smtpd_delay_reject), and Exchange Online
+// gives 5.1.8 to a blocked sending account and 5.1.90 when it has reached its
+// daily recipient limit; 5.1.9 and any code not listed are unknown here.
+// Each would fail every recipient of a list at once.
+func recipientAddressStatus(enhanced string) bool {
+	detail, ok := strings.CutPrefix(enhanced, "5.1.")
+	if !ok {
+		return false
+	}
+	n, err := strconv.Atoi(detail)
+	if err != nil || n < 0 {
+		return false
+	}
+	return n <= 6 || n == 10
 }
 
 // enhancedCode finds an RFC 3463 code right after the reply code, for a relay
@@ -119,7 +142,8 @@ const (
 )
 
 // reservedDomainError is the error a recipient in a reserved domain is
-// written failed with: it was never sent.
+// written failed with: it was never sent. mail_task_status() counts such a
+// row skipped, not failed (20261020150000), by this prefix.
 const reservedDomainError = "reserved_domain: not sent, the address is in a domain reserved by RFC 2606/6761"
 
 // reservedDomains are the names RFC 2606 and RFC 6761 reserve for examples
