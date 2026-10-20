@@ -194,6 +194,7 @@ func main() {
 		FQDN:      cfg.SMTPFQDN,
 		Plain:     cfg.SMTPPlain,
 	}, mailSender, mailer.WithQueueLease(queueLease), mailer.WithRateBudget(rateBudget),
+		mailer.WithReservedDomainsRefused(),
 		mailer.WithTracking(mailer.Tracking{
 			Config:      trackingConfig,
 			Preferences: tracking.NewCoreClient(trackingConfig.CoreURL, kcClient, nil),
