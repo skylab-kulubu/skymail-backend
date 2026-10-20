@@ -208,6 +208,51 @@ boştur. Hesap silme kişinin satırlarını adresleriyle ve `sub`'ıyla bulur;
 silinen satırda `recipient_sub` da boşalır. `GET /v1/mail_tasks/{id}/queue`
 her satırın `channel`'ını döner.
 
+## Geri dönen posta ve bastırma listesi (`mail_bounces`, `mail_suppressions`)
+
+Exchange Online dış alıcıyı `RCPT TO`'da reddetmez, postayı alır ve sonra
+gönderen kutusuna bir teslim raporu (NDR, RFC 3464) yollar. Bu raporları
+okuyan `internal/bounce` (`Process`) bir raporu kuyruk satırına bağlar ve
+kaydeder; raporu kutudan çeken okuyucu ayrı iştir (hub bileti
+skymail-bounce-isleme 04), bu sürümde yoktur.
+
+- **Ayrıştırma** (`internal/dsn`, yalnız stdlib): üst tür `multipart/report;
+  report-type=delivery-status` olmalı; yalnız `message/delivery-status`
+  bölümü ve geri dönen postanın başlıkları okunur. Konu, insan metni ve HTML
+  hiç okunmaz (Exchange bunları dile göre yazar). Düz metin bounce ve
+  otomatik yanıt `dsn_degil` sayılır. `Diagnostic-Code`'dan yalnız yanıt kodu,
+  ek kod ve Exchange'in `AS(…)` belirteci alınır, metin saklanmaz.
+- **Eşleme** (beşi birden; sahte rapora karşı): geri dönen başlıklardaki
+  `Message-ID` (yoksa raporun `In-Reply-To`'su, sonra `References`)
+  `<kuyruk id@SMTP_FQDN>` olmalı; satır var, `email`, `sent` ve rapor
+  `sent_at`'ten sonra gelmiş olmalı (iki saat arasındaki fark için 2 dakika
+  pay); rapor satırın adresini (`Final-Recipient` ya da `Original-Recipient`)
+  adlandırmalı; rapor daha önce kaydedilmemiş olmalı (kimliğinin SHA-256'sı
+  tekil). Kuyruk id'si rastgele UUID olduğu için dışarıdan atılan bir rapor
+  satırın id'sini ve alıcısını birlikte bilmeden bir şey bastıramaz. Başka bir
+  adresi adlandıran rapor (yönlendirme, takma ad) kaydedilir
+  (`recipient_matched = false`), bastırmaz.
+- **Sınıf**: `Action: failed` ve ek kod 5.1.0–5.1.6 ya da 5.1.10 (SMTP
+  yolundaki kalıcı retle aynı liste) ya da `5.4.1` + `AS(201806281)`
+  (Exchange'in Directory-Based Edge Blocking'i: alıcı yok) **kalıcıdır**:
+  adres tek seferde `mail_suppressions`'a girer. Öteki her ret (5.2.x dolu
+  kutu, 5.7.x politika, 4.x.x süre aşımı) yumuşaktır, `delayed` gecikmedir:
+  ikisi de yalnız `mail_bounces`'a yazılır. Kendiliğinden düşme yoktur.
+- **Kayıt**: `mail_bounces` kuyruk satırına bağlıdır (`ON DELETE CASCADE`),
+  adres ve metin tutmaz: tür, `Action`, ek kod, SMTP kodu, `AS` belirteci,
+  zaman, rapor kimliğinin SHA-256'sı. Bir yıl saklanır (içerik süpürmesi her
+  5 dakikada eskileri siler). `mail_suppressions` küçük harfli adres (anahtar),
+  biliniyorsa `recipient_sub`, kaynak (`dsn` ya da `smtp`), kod, ilk/son
+  görülme, sayı ve son kuyruk satırıdır. Adres satırın kendi adresidir,
+  raporunki değil.
+- **Hesap silme**: kişinin bastırılmış adresleri (adresle, `sub`'la ya da son
+  reddedilen postası kişinin olanla) silinir, sayaç `suppressions_deleted`.
+  Bounce satırı kişinin temizlenen kuyruk satırıyla kalır, adres tutmaz.
+  Kayıt satırı kilitleyerek (`FOR SHARE`) yazar: silme ile aynı anda gelen
+  rapor ya onu bekler ve satırı boş bulur ya da silme onu bekler ve yazdığı
+  bastırmayı siler.
+- **Loglar**: adres ve rapor metni yazılmaz.
+
 ## Bildirimler (`POST /v1/notifications`)
 
 core kişiye (Keycloak `sub`) bir Bildirim türüyle yazar; SkyMail kişi başına

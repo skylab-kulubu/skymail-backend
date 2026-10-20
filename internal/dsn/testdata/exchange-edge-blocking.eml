@@ -1,0 +1,41 @@
+MIME-Version: 1.0
+From: Microsoft Outlook <postmaster@kulup.example>
+To: <bildirim@kulup.example>
+Date: Tue, 20 Oct 2026 11:00:05 +0000
+Content-Type: multipart/report; report-type="delivery-status";
+	boundary="ndr-edge-0001"
+Message-ID: <ndr-edge-0001@AM9PR01MB0003.eurprd01.prod.outlook.com>
+Subject: Undeliverable: Etkinlik duyurusu
+Auto-Submitted: auto-replied
+
+--ndr-edge-0001
+Content-Type: text/plain; charset="us-ascii"
+
+Delivery has failed to these recipients or groups.
+
+--ndr-edge-0001
+Content-Type: message/delivery-status
+Content-Transfer-Encoding: base64
+
+UmVwb3J0aW5nLU1UQTogZG5zO0FNOVBSMDFNQjAwMDMuZXVycHJkMDEucHJvZC5vdXRsb29rLmNv
+bQ0KQXJyaXZhbC1EYXRlOiBUdWUsIDIwIE9jdCAyMDI2IDExOjAwOjAwICswMDAwDQoNCkZpbmFs
+LVJlY2lwaWVudDogcmZjODIyO21lenVuQHN0ZC5leGFtcGxlLm9yZw0KQWN0aW9uOiBmYWlsZWQN
+ClN0YXR1czogNS40LjENCkRpYWdub3N0aWMtQ29kZTogc210cDs1NTAgNS40LjEgUmVjaXBpZW50
+IGFkZHJlc3MgcmVqZWN0ZWQ6IEFjY2VzcyBkZW5pZWQuIEFTKDIwMTgwNjI4MSkgW0RCNVBSMDFN
+QjAwMDQuZXVycHJkMDEucHJvZC5vdXRsb29rLmNvbSAyMDI2LTEwLTIwVDExOjAwOjAwLjAwMFpd
+DQpSZW1vdGUtTVRBOiBkbnM7c3RkLWV4YW1wbGUtb3JnLm1haWwucHJvdGVjdGlvbi5vdXRsb29r
+LmNvbQ0K
+
+--ndr-edge-0001
+Content-Type: message/rfc822
+
+Message-ID: <0b3e6c1a-2d4f-4a7b-8c9d-e0f1a2b3c4d5@MAIL.EXAMPLE.ORG>
+From: SKY LAB <bildirim@kulup.example>
+To: Mezun <mezun@std.example.org>
+Subject: Etkinlik duyurusu
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Merhaba, etkinligimiz cumartesi.
+
+--ndr-edge-0001--
