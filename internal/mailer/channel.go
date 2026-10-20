@@ -21,8 +21,8 @@ const ChannelEmail = "email"
 // channel keeps between sends (the SMTP client) is the worker's alone.
 //
 // Send's error is how the send went: nil, sent; a permanentError, failed for
-// good at once (retrying cannot fix it); any other, tried again later, up to
-// maxSendAttempts. An error while ctx has ended is the process going away,
+// good at once (retrying cannot fix it: an address go-mail cannot parse, a
+// relay's 5xx); any other, tried again later, up to maxSendAttempts. An error while ctx has ended is the process going away,
 // not a failed attempt: the row is sent again after its lease runs out.
 type ChannelSender interface {
 	Send(ctx context.Context, job database.MailQueue) error
@@ -130,7 +130,9 @@ func (s *emailSender) Send(ctx context.Context, job database.MailQueue) error {
 	defer func() { _ = s.client.CloseWithSMTPClient(smtpClient) }()
 	if err := s.client.SendWithSMTPClient(smtpClient, msg); err != nil {
 		if !msg.IsDelivered() {
-			return fmt.Errorf("send failed: %w", err)
+			// A 5xx fails the row at once, anything else is tried again
+			// (smtpFailure).
+			return smtpFailure(err)
 		}
 		// The relay took the mail with the 250 after DATA; what failed is
 		// the RSET go-mail says after it (the relay hung up, or the
