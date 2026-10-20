@@ -122,6 +122,26 @@ components:
             versions were kept.'
           type: string
       type: object
+    handlers.ChannelResult:
+      properties:
+        failed:
+          description: 'Recipients whose message did not render: written failed on
+            the send.'
+          type: integer
+        queued:
+          description: Recipients queued on the channel.
+          type: integer
+        skipped:
+          additionalProperties:
+            type: integer
+          description: 'Recipients left out, by reason: not_allowed, unknown_person,
+            disabled, no_address, unverified.'
+          type: object
+        task_id:
+          description: The send its deliveries on this channel belong to (GET /mail_tasks/{id}
+            for e-mail); null when nobody was queued.
+          type: string
+      type: object
     handlers.ContentAccess:
       description: |-
         Whether the caller may open the send's content (GET /mail_tasks/{id}/queue/{itemId}/content), and if not why.
@@ -569,6 +589,50 @@ components:
         updated_at:
           type: string
       type: object
+    handlers.NotificationResult:
+      properties:
+        channels:
+          additionalProperties:
+            $ref: '#/components/schemas/handlers.ChannelResult'
+          description: By channel, each of the type's default channels.
+          type: object
+        duplicates:
+          description: Recipients named again (the same sub), left out.
+          type: integer
+        id:
+          description: The notification.
+          type: string
+        recipients:
+          description: The distinct people named.
+          type: integer
+        type:
+          type: string
+      type: object
+    handlers.NotificationType:
+      properties:
+        archived_at:
+          description: 'Set when the type is out of use: POST /notifications refuses
+            it.'
+          type: string
+        category:
+          description: The preference category; null when none.
+          type: string
+        default_channels:
+          items:
+            type: string
+          type: array
+          uniqueItems: false
+        key:
+          type: string
+        lane:
+          enum:
+          - system
+          - bulk
+          type: string
+        required:
+          description: A required type does not look at preferences.
+          type: boolean
+      type: object
     handlers.QueueCounts:
       properties:
         failed:
@@ -630,6 +694,10 @@ components:
         archived_at:
           type: string
         archived_by:
+          type: string
+        channel:
+          description: 'The channel variant the template is: email (subject, HTML,
+            plain text). Other channels'' variants come with their channel.'
           type: string
         content_sensitive:
           description: 'Whether the content of a send of this template is never shown:
@@ -844,6 +912,10 @@ components:
         archived_at:
           type: string
         archived_by:
+          type: string
+        channel:
+          description: 'The channel variant the template is: email (subject, HTML,
+            plain text). Other channels'' variants come with their channel.'
           type: string
         content_sensitive:
           description: 'Whether the content of a send of this template is never shown:
@@ -1314,6 +1386,50 @@ components:
       required:
       - email
       type: object
+    requests.NotificationRecipient:
+      properties:
+        allowed_channels:
+          description: The channels the person's preferences allow for this notification,
+            as core resolved them. Required for an optional type (a person with []
+            gets nothing); a required type ignores it.
+          example:
+          - email
+          items:
+            type: string
+          type: array
+          uniqueItems: false
+        email:
+          description: The address to e-mail, when the caller knows it; left out,
+            SkyMail reads the person's primary e-mail from Keycloak.
+          example: ayse@example.com
+          maxLength: 254
+          type: string
+        name:
+          description: The name the mail greets; left out, the name in Keycloak.
+          example: Ayşe Kaya
+          maxLength: 200
+          type: string
+        sub:
+          description: The person's Keycloak subject.
+          example: 31ef736f-72da-4a40-8791-d523199cf9f0
+          type: string
+      required:
+      - sub
+      type: object
+    requests.NotificationSource:
+      description: Where the notification came from, kept with it.
+      properties:
+        kind:
+          example: event
+          maxLength: 64
+          type: string
+        ref:
+          example: 6f1c2d3e-0000-4000-8000-000000000000
+          maxLength: 200
+          type: string
+      required:
+      - kind
+      type: object
     requests.PublishOver:
       description: 'Publish a stale draft anyway, replacing the version named. Left
         out: a stale draft is refused.'
@@ -1331,6 +1447,38 @@ components:
       properties:
         force:
           $ref: '#/components/schemas/requests.PublishOver'
+      type: object
+    requests.PutNotificationType:
+      properties:
+        category:
+          description: The preference category the type belongs to; null when none.
+          example: events
+          maxLength: 64
+          type: string
+        default_channels:
+          description: The channels the type goes by. Today only email.
+          example:
+          - email
+          items:
+            type: string
+          minItems: 1
+          type: array
+          uniqueItems: false
+        lane:
+          description: 'The queue lane: system (never waits behind a bulk send) or
+            bulk.'
+          enum:
+          - system
+          - bulk
+          example: bulk
+          type: string
+        required:
+          description: A required type does not look at preferences (a login code,
+            a ticket, a certificate).
+          type: boolean
+      required:
+      - default_channels
+      - lane
       type: object
     requests.RejectMailApproval:
       properties:
@@ -1414,6 +1562,33 @@ components:
       required:
       - form_source_id
       - template_id
+      type: object
+    requests.SendNotification:
+      properties:
+        recipients:
+          description: The people, each once (a sub named again is counted in duplicates
+            and left out).
+          items:
+            $ref: '#/components/schemas/requests.NotificationRecipient'
+          maxItems: 1000
+          minItems: 1
+          type: array
+          uniqueItems: false
+        source:
+          $ref: '#/components/schemas/requests.NotificationSource'
+        type:
+          description: The notification type's key (GET /notification_types), the
+            Template key's alphabet.
+          example: event.cancelled
+          type: string
+        variables:
+          additionalProperties: {}
+          description: The variables the type's texts read, the same for every recipient;
+            each recipient's own name and address are .FullName and .Email.
+          type: object
+      required:
+      - recipients
+      - type
       type: object
     requests.SendSingleMail:
       properties:
@@ -3177,6 +3352,186 @@ paths:
       summary: Restore an archived mailing list
       tags:
       - Lists
+  /notification_types:
+    get:
+      description: 'Every notification type, archived ones included, by key: its preference
+        category, whether it is required, its default channels and its lane.'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/handlers.NotificationType'
+                type: array
+          description: OK
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
+      summary: List the notification types
+      tags:
+      - Notifications
+  /notification_types/{key}:
+    get:
+      parameters:
+      - description: The type's key
+        in: path
+        name: key
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.NotificationType'
+          description: OK
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Not Found
+      summary: Get a notification type
+      tags:
+      - Notifications
+    put:
+      description: 'Writes the type of the key as the Template seed states it: its
+        preference category (null: none), whether it is required (preferences not
+        looked at), its default channels (today only email) and its queue lane. A
+        type that exists is written over; its archive stays as it is. The type''s
+        e-mail variant is the template of the same key (PUT /templates/by-key/{key}).'
+      parameters:
+      - description: The type's key, the Template key's alphabet
+        in: path
+        name: key
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/requests.PutNotificationType'
+                description: The type
+                summary: body
+        description: The type
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.NotificationType'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: validation.error; notification_type.invalid_category
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
+      summary: State a notification type (Template seed)
+      tags:
+      - Notifications
+  /notifications:
+    post:
+      description: 'core says what happened (type) and to whom (recipients, by Keycloak
+        sub); SkyMail picks each person''s channels: the type''s default channels,
+        for an optional type only those in the person''s allowed_channels (a required
+        type ignores them), and only where the person has an address. E-mail goes
+        to the request''s address or, without one, to the person''s primary e-mail
+        in Keycloak; a person Keycloak does not know, a disabled account and an unverified
+        address are skipped and counted. The e-mail is the template of the type''s
+        key, queued in the type''s lane. The Idempotency-Key header is required: the
+        same key from the same caller answers the first answer again (Idempotent-Replayed:
+        true) and queues nothing; a different request with it is 422. Only a service
+        account''s token with skymail:notifications:send may call it.'
+      parameters:
+      - description: 'The notification''s own key: 1 to 255 visible ASCII characters,
+          the same on every retry'
+        in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/requests.SendNotification'
+                description: The notification
+                summary: notification
+        description: The notification
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/handlers.NotificationResult'
+          description: Created
+          headers:
+            Idempotent-Replayed:
+              description: true when the answer is the first answer to this Idempotency-Key
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'validation.error; notification.idempotency_key_required; notification.allowed_channels_required
+            (params.recipient: its index)'
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'server.forbidden: no skymail:notifications:send; auth.service_account_required:
+            a person''s token'
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'notification.email_variant_missing: the type goes by e-mail
+            and has no template of its key'
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: notification.type_unknown; notification.idempotency_key_reused
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'notification.directory_unavailable: Keycloak did not answer;
+            nothing was queued'
+      summary: Send a notification to people
+      tags:
+      - Notifications
   /templates:
     get:
       description: Get a list of all email templates with pagination.

@@ -70,6 +70,9 @@ type Querier interface {
 	CountMailApprovals(ctx context.Context, arg CountMailApprovalsParams) (int64, error)
 	CountMailQueueByStatus(ctx context.Context) (CountMailQueueByStatusRow, error)
 	CountMailQueueItemsByTaskId(ctx context.Context, arg CountMailQueueItemsByTaskIdParams) (int64, error)
+	// A send's queue rows as POST /v1/notifications answers them: queued (any row
+	// not failed) and failed (a recipient whose mail did not render).
+	CountMailTaskRows(ctx context.Context, taskID uuid.UUID) (CountMailTaskRowsRow, error)
 	CountMailTaskSends(ctx context.Context, status *string) (int64, error)
 	CountMailTasks(ctx context.Context) (int64, error)
 	// Sends by the status mail_task_status derives, over every send: the same
@@ -113,11 +116,21 @@ type Querier interface {
 	// tracking_token is the recipient's token when the row is tracked, and
 	// tracking_skip_reason why not when the send asked for tracking.
 	CreateMailQueueItems(ctx context.Context, arg []CreateMailQueueItemsParams) (int64, error)
+	// content_sensitive_at_send is whether the send is sensitive as it is
+	// queued: 'true' when its template's key is locked sensitive
+	// (template_key_content_locked) whatever the template says, else the
+	// template's content_sensitive ('unset' for NULL). It never changes after:
+	// mail_task_content_sensitive() reads it first (20261020120000).
 	CreateMailTask(ctx context.Context, arg CreateMailTaskParams) ([]CreateMailTaskRow, error)
 	// A tracked send's links that are the same for every recipient, each with
 	// its own token (open and click tracking).
 	CreateMailTaskLinks(ctx context.Context, arg []CreateMailTaskLinksParams) (int64, error)
 	CreateMailingList(ctx context.Context, name string) (MailingList, error)
+	// content_sensitive_at_send is whether the send is sensitive as it is
+	// queued: 'true' when its template's key is locked sensitive
+	// (template_key_content_locked) whatever the template says, else the
+	// template's content_sensitive ('unset' for NULL). It never changes after:
+	// mail_task_content_sensitive() reads it first (20261020120000).
 	CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error)
 	CreateTemplate(ctx context.Context, arg CreateTemplateParams) (Template, error)
 	// The database's clock: the one clock every process's send budget reads, so
@@ -176,6 +189,8 @@ type Querier interface {
 	GetMailTaskTrackingExclusion(ctx context.Context, taskID uuid.UUID) (GetMailTaskTrackingExclusionRow, error)
 	GetMailingListById(ctx context.Context, id uuid.UUID) (MailingList, error)
 	GetMailingListByIdIncludingArchived(ctx context.Context, id uuid.UUID) (MailingList, error)
+	GetNotificationByIdempotencyKey(ctx context.Context, arg GetNotificationByIdempotencyKeyParams) (GetNotificationByIdempotencyKeyRow, error)
+	GetNotificationType(ctx context.Context, key string) (NotificationType, error)
 	GetOwnedMailFormSource(ctx context.Context, arg GetOwnedMailFormSourceParams) (MailFormSource, error)
 	GetRecipientByEmail(ctx context.Context, email string) (Recipient, error)
 	GetRecipients(ctx context.Context, arg GetRecipientsParams) ([]Recipient, error)
@@ -198,7 +213,16 @@ type Querier interface {
 	// people into the HTTP process. Link URLs are omitted: one-recipient sends
 	// can have personal URLs and the summary only requires mails:read.
 	GetTrackingReport(ctx context.Context, arg GetTrackingReportParams) ([]byte, error)
+	// content_sensitive_at_send is whether the send is sensitive as it is
+	// queued: 'true' when its template's key is locked sensitive
+	// (template_key_content_locked) whatever the template says, else the
+	// template's content_sensitive ('unset' for NULL). It never changes after:
+	// mail_task_content_sensitive() reads it first (20261020120000).
 	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (InsertMailTaskRow, error)
+	// A notification accepted under its caller's Idempotency-Key; nothing when
+	// the caller already used the key (a concurrent request with it waits here
+	// for the first to commit or roll back).
+	InsertNotification(ctx context.Context, arg InsertNotificationParams) (uuid.UUID, error)
 	// Limits live in SQL as well as the process-wide recording budget. There
 	// are at most 20 opens and 50 clicks per recipient across every replica.
 	InsertTrackingEvent(ctx context.Context, arg InsertTrackingEventParams) (int64, error)
@@ -228,6 +252,7 @@ type Querier interface {
 	// lists every send and a NULL status every status. The page is cut first so
 	// only its rows are counted.
 	ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error)
+	ListNotificationTypes(ctx context.Context) ([]NotificationType, error)
 	// An operator's versions of a template numbered after the given one, oldest
 	// first, drafts included and discarded drafts left out: operator work a seed
 	// written after them would pass over.
@@ -418,10 +443,12 @@ type Querier interface {
 	// then); zero rows says so. A sent or failed row keeps its claim: the process
 	// that finished it.
 	SetMailQueueItemSent(ctx context.Context, arg SetMailQueueItemSentParams) (int64, error)
+	SetMailTaskNotification(ctx context.Context, arg SetMailTaskNotificationParams) error
 	// Puts each row's masked mail in place of what was sent; an empty HTML is
 	// none. Only a row of the send that still holds a mail, of a send not masked
 	// or emptied yet: never one Account erasure emptied.
 	SetMaskedQueueContent(ctx context.Context, arg SetMaskedQueueContentParams) error
+	SetNotificationResult(ctx context.Context, arg SetNotificationResultParams) error
 	// Required variable sets are sorted byte by byte (COLLATE "C"), the order the
 	// handler sorts a contract set in and a missing list comes in, whatever the
 	// database's collation.
@@ -458,6 +485,10 @@ type Querier interface {
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
 	UpdateRecipient(ctx context.Context, arg UpdateRecipientParams) (Recipient, error)
 	UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) (Template, error)
+	// A notification type as the Template seed states it
+	// (PUT /v1/notification_types/{key}): written over, its archive left as it
+	// is.
+	UpsertNotificationType(ctx context.Context, arg UpsertNotificationTypeParams) (NotificationType, error)
 	// The seed writes everything it sends, the subject included. It is the
 	// caller that keeps an operator's change — the subject too — from being
 	// overwritten: it refuses the seed before it gets here unless it is forced

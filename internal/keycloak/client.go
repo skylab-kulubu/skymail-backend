@@ -31,6 +31,9 @@ type Client interface {
 	// ServiceToken is the service account's access token, as Admin REST
 	// gets it: what SkyMail shows core when it asks whom it may track.
 	ServiceToken(ctx context.Context) (string, error)
+	// GetUser reads one user by id (the Keycloak sub): enabled, e-mail and
+	// whether it is verified, names. A user that is not there is nil, nil.
+	GetUser(ctx context.Context, id string) (*gocloak.User, error)
 }
 
 type clientImpl struct {
@@ -242,6 +245,22 @@ func (c *clientImpl) GetGroup(ctx context.Context, id string) (*gocloak.Group, e
 func notFound(err error) bool {
 	var apiErr *gocloak.APIError
 	return errors.As(err, &apiErr) && apiErr.Code == 404
+}
+
+func (c *clientImpl) GetUser(ctx context.Context, id string) (*gocloak.User, error) {
+	token, err := c.getToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	user, err := c.gc.GetUserByID(ctx, token, c.realm, id)
+	if err != nil {
+		var apiErr *gocloak.APIError
+		if errors.As(err, &apiErr) && apiErr.Code == 404 {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return user, nil
 }
 
 func (c *clientImpl) GetGroupMembers(ctx context.Context, id string) ([]*gocloak.User, error) {

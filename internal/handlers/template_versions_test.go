@@ -182,9 +182,11 @@ func storedVersions(t *testing.T, db *database.Store, templateID uuid.UUID) ([]s
 // editor starts a draft from — main_mode, the Authoring mode of the Main
 // source it sends, drafts, each operator's draft in progress, and the two
 // Required variable sets, which the editor's panel shows, and seed_refusal, a
-// Template seed refused because an operator changed the template.
+// Template seed refused because an operator changed the template, and
+// channel, the channel variant the template is (email; hub ticket
+// iletisim-servisi 03).
 var templateFields = []string{
-	"archived_at", "archived_by", "content_sensitive", "content_sensitive_locked", "contract_required_variables", "created_at", "drafts", "html_content", "id", "key",
+	"archived_at", "archived_by", "channel", "content_sensitive", "content_sensitive_locked", "contract_required_variables", "created_at", "drafts", "html_content", "id", "key",
 	"main_mode", "name", "operator_required_variables", "plain_text_content", "published_version_id",
 	"react_email_content", "seed_refusal", "sensitive_variables", "subject", "system", "updated_at",
 }
