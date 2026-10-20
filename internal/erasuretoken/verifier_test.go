@@ -294,3 +294,53 @@ func TestErasureTokenKeysAreRefreshedWhenOld(t *testing.T) {
 		t.Fatalf("dropped key: err = %v", err)
 	}
 }
+
+// The tracking withdrawal's verifier takes core's own token with SkyMail's
+// withdraw role, and only that: core-erasure's erase grant is not it, and
+// the withdraw role on another caller is not it either (ticket 17).
+func TestWithdrawalTokenNeedsCoreAndTheWithdrawRole(t *testing.T) {
+	w := newTokenWorld(t)
+	withdrawal := NewVerifier(Config{
+		Issuer:         testIssuer,
+		JWKSURL:        w.verifier.keys.url,
+		ResourceClient: "skymail",
+		CallerClientID: WithdrawCallerClientID,
+		Role:           WithdrawRole,
+		Now:            func() time.Time { return w.now },
+	})
+	coreClaims := func() jwt.MapClaims {
+		claims := w.coreErasureClaims()
+		claims["azp"] = "core"
+		claims["resource_access"] = map[string]any{"skymail": map[string]any{"roles": []any{"skymail:tracking:withdraw"}}}
+		return claims
+	}
+	if _, err := withdrawal.Verify(context.Background(), w.bearer(coreClaims())); err != nil {
+		t.Fatalf("core's withdraw token: %v", err)
+	}
+	for name, claims := range map[string]jwt.MapClaims{
+		"core-erasure's erase token": w.coreErasureClaims(),
+		"the withdraw role on core-erasure": func() jwt.MapClaims {
+			c := coreClaims()
+			c["azp"] = "core-erasure"
+			return c
+		}(),
+		"core with the erase role": func() jwt.MapClaims {
+			c := coreClaims()
+			c["resource_access"] = map[string]any{"skymail": map[string]any{"roles": []any{"skymail:account:erase"}}}
+			return c
+		}(),
+		"core, not for SkyMail": func() jwt.MapClaims {
+			c := coreClaims()
+			c["aud"] = []any{"core"}
+			return c
+		}(),
+	} {
+		if _, err := withdrawal.Verify(context.Background(), w.bearer(claims)); !errors.Is(err, ErrForbidden) {
+			t.Errorf("%s: %v, want forbidden", name, err)
+		}
+	}
+	// And the erase route's verifier does not take core's withdraw token.
+	if _, err := w.verify(w.bearer(coreClaims())); !errors.Is(err, ErrForbidden) {
+		t.Errorf("erase verifier with core's withdraw token: %v, want forbidden", err)
+	}
+}

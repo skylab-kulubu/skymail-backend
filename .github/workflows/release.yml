@@ -1,5 +1,9 @@
 name: Release
 
+# main: builds the image (latest, sandbox, sha-<sha7>) and deploys the sandbox.
+# production: when a push to main has tested this tree green (checks.yml's gate) and that commit's
+# image exists, its tags are copied to production and sha-<sha7>: no rebuild, production runs the
+# bytes main built. Otherwise (a hotfix straight on production) the image is built as before.
 on:
   push:
     branches: [main, production]
@@ -14,6 +18,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      actions: read
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
 
     steps:
       - name: Checkout code
@@ -29,8 +36,49 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Find the tested main image of this tree
+        id: tested
+        if: github.ref == 'refs/heads/production'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tree=$(git rev-parse 'HEAD^{tree}')
+          while read -r run_id head_sha; do
+            [[ $run_id =~ ^[0-9]+$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || continue
+            [[ $(gh api "repos/$GITHUB_REPOSITORY/git/commits/$head_sha" --jq .tree.sha) == "$tree" ]] || continue
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" \
+              --jq '.jobs[] | "\(.conclusion) \(.name)"' | grep -qxF 'success gate' || continue
+            source="$IMAGE:sha-${head_sha::7}"
+            if docker buildx imagetools inspect "$source" >/dev/null 2>&1; then
+              echo "checks.yml run $run_id tested this tree on main $head_sha; promoting $source"
+              echo "source=$source" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done < <(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/checks.yml/runs" \
+            -f branch=main -f event=push -f status=success -f per_page=50 \
+            --jq '.workflow_runs[] | "\(.id) \(.head_sha)"')
+          echo "No green main run with an image tested this tree; building it."
+
+      - name: Promote the tested main image to production
+        if: steps.tested.outputs.source != ''
+        env:
+          SOURCE: ${{ steps.tested.outputs.source }}
+        run: |
+          set -euo pipefail
+          digest() { docker buildx imagetools inspect --raw "$1" | sha256sum | cut -d' ' -f1; }
+          source_digest=$(digest "$SOURCE")
+          targets=("$IMAGE:production" "$IMAGE:sha-${GITHUB_SHA::7}")
+          docker buildx imagetools create --prefer-index=false \
+            --tag "${targets[0]}" --tag "${targets[1]}" "$SOURCE"
+          for target in "${targets[@]}"; do
+            test "$(digest "$target")" = "$source_digest"
+          done
+          echo "Promoted, not rebuilt: \`$SOURCE\` (sha256:$source_digest) → \`production\`, \`sha-${GITHUB_SHA::7}\`" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Extract metadata (tags, labels) for Docker
         id: meta
+        if: steps.tested.outputs.source == ''
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
@@ -43,6 +91,7 @@ jobs:
             type=sha
 
       - name: Build and push Docker image
+        if: steps.tested.outputs.source == ''
         uses: docker/build-push-action@v5
         with:
           context: .

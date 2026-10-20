@@ -530,3 +530,14 @@ type TemplateVersionSummary struct {
 	DiscardedAt      *time.Time         `json:"discarded_at"`
 	Name             string             `json:"name"`
 }
+
+// Receipts of the open and click tracking retention run: mode, times, status, counts. No person, token or link.
+type TrackingRetentionRun struct {
+	ID           int64      `json:"id"`
+	Mode         string     `json:"mode"`
+	Status       string     `json:"status"`
+	StartedAt    time.Time  `json:"started_at"`
+	FinishedAt   *time.Time `json:"finished_at"`
+	EventsCutoff time.Time  `json:"events_cutoff"`
+	Counts       []byte     `json:"counts"`
+}

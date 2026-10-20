@@ -29,7 +29,8 @@ func TestStartDatabaseLeavesNoVolumeBehind(t *testing.T) {
 	})
 
 	if len(volumes) == 0 {
-		t.Skip("container reported no anonymous volume; nothing to leak")
+		// A tmpfs-backed fixture creates no anonymous volume at all.
+		return
 	}
 
 	for _, volume := range volumes {

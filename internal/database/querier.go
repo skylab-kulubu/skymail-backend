@@ -180,6 +180,7 @@ type Querier interface {
 	GetRecipientByEmail(ctx context.Context, email string) (Recipient, error)
 	GetRecipients(ctx context.Context, arg GetRecipientsParams) ([]Recipient, error)
 	GetRecipientsByMailingListId(ctx context.Context, arg GetRecipientsByMailingListIdParams) ([]Recipient, error)
+	GetRetainedTrackingReport(ctx context.Context, taskID uuid.UUID) ([]byte, error)
 	GetTemplateById(ctx context.Context, id uuid.UUID) (Template, error)
 	GetTemplateByIdIncludingArchived(ctx context.Context, id uuid.UUID) (Template, error)
 	GetTemplateByKey(ctx context.Context, key *string) (Template, error)
@@ -193,7 +194,14 @@ type Querier interface {
 	// found here.
 	GetTemplateVersion(ctx context.Context, arg GetTemplateVersionParams) (GetTemplateVersionRow, error)
 	GetTemplateVersionSummary(ctx context.Context, arg GetTemplateVersionSummaryParams) (TemplateVersionSummary, error)
+	// Aggregates remain inside PostgreSQL: a report never loads raw events or
+	// people into the HTTP process. Link URLs are omitted: one-recipient sends
+	// can have personal URLs and the summary only requires mails:read.
+	GetTrackingReport(ctx context.Context, arg GetTrackingReportParams) ([]byte, error)
 	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (InsertMailTaskRow, error)
+	// Limits live in SQL as well as the process-wide recording budget. There
+	// are at most 20 opens and 50 clicks per recipient across every replica.
+	InsertTrackingEvent(ctx context.Context, arg InsertTrackingEventParams) (int64, error)
 	// Whether text is a JSX source by the rule the migration and the old panel's
 	// writes read react_email_content with: something other than whitespace and
 	// comments is left in it.
@@ -249,6 +257,10 @@ type Querier interface {
 	// render. A NULL published lists every version; true only published ones,
 	// false only drafts, discarded ones included.
 	ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]TemplateVersionSummary, error)
+	// One aggregate per recipient, then filtering and pagination. Events older
+	// than their recipient's one-year window (tracking.EventRetentionDays) never
+	// reappear while retention is disabled or catching up. No tracking token or link target is selected.
+	ListTrackingRecipients(ctx context.Context, arg ListTrackingRecipientsParams) ([]byte, error)
 	// The next undecided request past its deadline that no one is deciding right
 	// now, locked for the expiry sweep.
 	LockDueMailApproval(ctx context.Context, asOf time.Time) (MailApproval, error)
@@ -277,12 +289,20 @@ type Querier interface {
 	// the seed's upsert can judge the template before it writes: every other
 	// writer of the template waits until it has. No row: the key is new.
 	LockTemplateByKey(ctx context.Context, key *string) (Template, error)
+	// All writers lock the recipient before observing its event counts. Separate
+	// statements after the lock take a fresh READ COMMITTED snapshot, so two
+	// replicas cannot both pass the per-recipient caps on a stale snapshot.
+	LockTrackingRecipient(ctx context.Context, trackingToken []byte) (LockTrackingRecipientRow, error)
 	// Marks a send masked and puts its masked variables in place of its own.
 	MarkSendMasked(ctx context.Context, arg MarkSendMaskedParams) error
 	// A send found not sensitive: not looked at again until its template changes.
 	// Its failures from when it was sensitive go: made sensitive again, it starts
 	// afresh, its deadline too (#65 review, K2).
 	MarkSendNotDueForMasking(ctx context.Context, id uuid.UUID) error
+	// The third distinct link in five seconds identifies the whole burst, not
+	// just its last click. Only this classifier version's contemporaneous events
+	// change; newer rules never reinterpret historical events.
+	MarkTrackingScannerBurst(ctx context.Context, arg MarkTrackingScannerBurstParams) error
 	// The same for the bulk lane (lists, groups, approved sends), which reads
 	// idx_mail_queue_pending_bulk. The process asks for no more rows than the
 	// send budget leaves room for (SendWindowCounts), under LockSendBudget.
@@ -373,6 +393,9 @@ type Querier interface {
 	// process that took them is gone, or a restored dump holds them so. A row
 	// another process took within the lease is left to it.
 	ResetDeadJobs(ctx context.Context, leaseSeconds int) (int64, error)
+	// Public click resolution is independent of the recipient and the flag: old
+	// mail keeps working after withdrawal. No request data becomes a target.
+	ResolveTrackingLink(ctx context.Context, linkToken []byte) (ResolveTrackingLinkRow, error)
 	RestoreMailingList(ctx context.Context, id uuid.UUID) (MailingList, error)
 	RestoreTemplate(ctx context.Context, id uuid.UUID) (Template, error)
 	// A resubmission: what would be sent, as the submitter now fills it in,
@@ -430,6 +453,8 @@ type Querier interface {
 	// (empty: none listed). SKIP LOCKED lets a second replica's sweep take
 	// another.
 	TakeSendToMask(ctx context.Context, tried []uuid.UUID) ([]TakeSendToMaskRow, error)
+	TrackingHasOpen(ctx context.Context, queueID uuid.UUID) (bool, error)
+	TrackingTaskAccess(ctx context.Context, id uuid.UUID) (TrackingTaskAccessRow, error)
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
 	UpdateRecipient(ctx context.Context, arg UpdateRecipientParams) (Recipient, error)
 	UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) (Template, error)

@@ -7,10 +7,9 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
 )
 
-// This build has no /t/ routes (ticket 14b): SKYMAIL_TRACKING=on would send
-// mail whose pixel and links lead nowhere, so startup refuses it. Off, and
-// unset, start as before; a malformed value still names its variable.
-func TestThisBuildRefusesToStartWithTrackingOn(t *testing.T) {
+// Routes are available: valid on starts, off/unset stay off, and malformed
+// configuration still stops startup.
+func TestTrackingStartupKeepsEnvironmentValidation(t *testing.T) {
 	env := func(values map[string]string) func(string) string {
 		return func(name string) string { return values[name] }
 	}
@@ -19,9 +18,8 @@ func TestThisBuildRefusesToStartWithTrackingOn(t *testing.T) {
 		"SKYMAIL_TRACKING_BASE_URL": "https://api.yildizskylab.com/api/skymail",
 		"CORE_URL":                  "http://core-backend:8080",
 	}
-	if _, err := trackingConfigFromEnv(env(on)); err == nil || !strings.Contains(err.Error(), "14b") ||
-		!strings.Contains(err.Error(), "SKYMAIL_TRACKING") {
-		t.Fatalf("SKYMAIL_TRACKING=on: %v, want startup refused until the /t/ routes (ticket 14b)", err)
+	if cfg, err := trackingConfigFromEnv(env(on)); err != nil || !cfg.On() {
+		t.Fatalf("valid on configuration: %+v, %v", cfg, err)
 	}
 	for _, values := range []map[string]string{{}, {"SKYMAIL_TRACKING": "off"}} {
 		cfg, err := trackingConfigFromEnv(env(values))
