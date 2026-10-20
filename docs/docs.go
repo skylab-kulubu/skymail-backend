@@ -345,7 +345,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "link": {
-                        "description": "The in-app path the item opens; null when none.",
+                        "description": "What the item opens: an in-app path, or an https address on yildizskylab.com or a subdomain; null when none.",
                         "example": "/events/6f1c2d3e",
                         "type": "string"
                     },
@@ -1836,7 +1836,7 @@ const docTemplate = `{
                 "description": "The type's inbox text: required when default_channels holds inbox, refused otherwise.",
                 "properties": {
                     "link": {
-                        "description": "The in-app path the item opens (/events/..., /news/...): starts with one /, no scheme or host. Empty: no link.",
+                        "description": "What the item opens: an in-app path (/events/..., /news/...; one / first) or an https address on yildizskylab.com or a subdomain, its host written out (a variable may fill the path, never the host). Empty: no link.",
                         "maxLength": 2048,
                         "type": "string"
                     },

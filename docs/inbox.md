@@ -14,11 +14,15 @@ sözleşmeyi okur.
   Keycloak'ın hesap postaları, `/single`) kutuya hiçbir şey düşmez.
 - Kutu adres istemez: kişinin `sub`'ı kutusudur, Keycloak'a sorulmaz.
 - Öğe asıl kaydın (bilet, sertifika, duyuru) kopyası değildir: türün kutu
-  metninden render edilen kısa bir başlık, özet ve uygulama içi bağlantı.
+  metninden render edilen kısa bir başlık, özet ve bağlantı.
 - Öğe bildirimin kendi işleminde yazılır, kuyruğa (`mail_queue`) girmez: veri
   veritabanından çıkmadığı için deneme, şerit ve gönderim bütçesinin
   yapacağı bir şey yoktur. Aynı `Idempotency-Key` ile tekrar ikinci öğe
-  yazmaz; bir bildirim bir kişiye en çok bir öğe yazar.
+  yazmaz; bir bildirim bir kişiye en çok bir öğe yazar. Bu, hub bilet 05'in
+  "teslim satırı işlenince yazar" önerisinden bilinçli bir sapmadır
+  (orkestratör kararı, 2026-10-20): idempotency ile atomik, e-posta bütçesini
+  yemez, `mail_queue` CHECK'ine `inbox` girmediği için eski imaja dönüşte kutu
+  satırı e-posta olarak gidemez.
 
 ## Türün kutu metni
 
@@ -45,9 +49,15 @@ sözleşmeyi okur.
 - Üç alan Go `text/template`'tir; yalnız bildirimin `variables`'ını okur
   (kişinin adı ve adresi yoktur, `.FullName`/`.Email` kullanılmaz). Bildirimde
   olmayan bir değişken render hatasıdır (`missingkey=error`), boş yazılmaz.
-- `link` boş (bağlantı yok) ya da tek `/` ile başlayan uygulama içi yoldur
-  (`/events/…`, `/news/…`); şema, host, `//` ve değişkenle başlayan bağlantı
-  reddedilir (`400 notification_type.inbox_variant_invalid`, `params.part`).
+- `link` boş (bağlantı yok), tek `/` ile başlayan uygulama içi yol
+  (`/events/…`, `/news/…`) ya da `yildizskylab.com` veya bir alt alan adında
+  `https://` adresidir (`https://my.yildizskylab.com/…`, Hesap Merkezi web).
+  Host metinde açıkça yazılır; değişken yalnız yolu, sorguyu ya da parçayı
+  doldurabilir. Başka alan adı, `http://`, kullanıcı bilgisi, port, `//`, ters
+  bölü ve değişkenle başlayan bağlantı reddedilir
+  (`400 notification_type.inbox_variant_invalid`, `params.part`): öğe açık
+  yönlendirme olamaz. Render edilen bağlantı aynı kuralla yeniden denetlenir
+  (boşluk ve kontrol karakteri de yok); tutmazsa öğe yazılmaz.
 - Metin düz metindir; istemciler HTML olarak yorumlamaz.
 - Okuma: `GET /v1/notification_types[/{key}]` her türde `inbox` döner (`null`:
   kutuya gitmez).
@@ -111,8 +121,11 @@ kapısıdır, kutunun değil. Hesap erişim kapısı (`ACCOUNT_ACCESS_GATE_MODE`
 - **İşaretler** sunucudadır ve kişinin bütün cihazlarında ortaktır. Var olan
   işaret ilk zamanını korur (`read` iki kez çağrılırsa `read_at` değişmez).
 - **Sayılar:** `unseen` görülmemiş, `unread` okunmamış; ikisi de arşivliler
-  ve süresi dolanlar hariç. Rozet için önerilen `unseen` (Knock'un
-  varsayılanı); sky-app#45'in okunmamış sayısı `unread`.
+  ve süresi dolanlar hariç, `/counts` ikisini her zaman birlikte döner.
+  **Rozetin varsayılanı `unseen`'dir** (Knock'un varsayılanı; Hesap Merkezi
+  bunu gösterir, liste açılınca `seen-all` ile sıfırlanır). sky-app#45
+  "okunmamış sayısı" istiyor: sky-app isterse `unread`'i gösterir, iki sayı
+  da aynı uçtadır.
 - **Başkasının öğesi** — ve var olmayan, süresi dolmuş, biçimsiz kimlik —
   `404 server.not_found`: öğenin varlığı sahibinden başkasına söylenmez.
 - Yanıtlar `Cache-Control: no-store`.
@@ -120,7 +133,7 @@ kapısıdır, kutunun değil. Hesap erişim kapısı (`ACCOUNT_ACCESS_GATE_MODE`
   Hesap Merkezi sayfa açılışında çeker.
 
 sky-app#45'teki istekler: liste → `GET /v1/me/inbox`, okunmamış sayısı →
-`GET /v1/me/inbox/counts` (`unread`), okundu → `POST /v1/me/inbox/{id}/read`,
+`GET /v1/me/inbox/counts` (`unread`; rozet varsayılanı `unseen`), okundu → `POST /v1/me/inbox/{id}/read`,
 hepsini okundu → `POST /v1/me/inbox/read-all`. Cihaz kaydı (`/v1/me/devices`)
 push biletinde (12) gelir.
 

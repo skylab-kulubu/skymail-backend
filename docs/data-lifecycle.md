@@ -284,7 +284,8 @@ Hub ticket iletisim-servisi 05; ADR 0070. Contract: [`inbox.md`](inbox.md).
 
 - **What is kept.** One row per person per notification whose type goes to
   the inbox: the type's inbox text rendered once for the notification (a
-  title, a summary, an in-app path), not a copy of the ticket, certificate or
+  title, a summary, and a link: an in-app path or an https address on
+  yildizskylab.com), not a copy of the ticket, certificate or
   news it points to. `notifications` keeps the request's counts only, no
   person.
 - **Who sees it.** Only its owner, through `/v1/me/inbox` with their own

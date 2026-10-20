@@ -588,6 +588,33 @@ func TestTheSeedStatesATypesInboxText(t *testing.T) {
 		}
 	}
 
+	// An https address on the club's domain (Account center on the web) is
+	// a link too; the variables fill its path, never its host.
+	web := map[string]any{"title": "{{.Team}} ekibinden ayrıldın", "link": "https://my.yildizskylab.com/ekipler/{{.TeamID}}"}
+	if status, got, raw := put(map[string]any{"required": true, "default_channels": []string{"inbox"}, "lane": "system", "inbox": web}); status != fiber.StatusOK || got.Inbox == nil || got.Inbox.Link != web["link"] {
+		t.Fatalf("PUT with an absolute link: %d %s", status, raw)
+	}
+	for _, link := range []string{"https://evil.example/", "https://yildizskylab.com.evil.example/", "https://{{.Host}}/x", "http://my.yildizskylab.com/", "https://user@my.yildizskylab.com/"} {
+		body := map[string]any{"required": true, "default_channels": []string{"inbox"}, "lane": "system", "inbox": map[string]any{"title": "x", "link": link}}
+		if status, _, raw := put(body); status != fiber.StatusBadRequest || !strings.Contains(raw, `"code":"notification_type.inbox_variant_invalid"`) {
+			t.Errorf("PUT link %q: %d %s, want 400", link, status, raw)
+		}
+	}
+	result := w.send("left-1", map[string]any{"type": "team.left", "recipients": []map[string]any{recipient(personAyse, "")},
+		"variables": map[string]any{"Team": "SKY SEC", "TeamID": "sky-sec"}})
+	if result.Channels["inbox"].Queued != 1 {
+		t.Fatalf("send: %+v", result)
+	}
+	if items := w.inbox(personAyse, "").Items; len(items) != 1 || items[0].Link == nil || *items[0].Link != "https://my.yildizskylab.com/ekipler/sky-sec" {
+		t.Fatalf("item %+v", items)
+	}
+	// A variable that would carry the link off the host does not render.
+	result = w.send("left-2", map[string]any{"type": "team.left", "recipients": []map[string]any{recipient(personAyse, "")},
+		"variables": map[string]any{"Team": "SKY SEC", "TeamID": "x y"}})
+	if inbox := result.Channels["inbox"]; inbox.Queued != 0 || inbox.Failed != 1 {
+		t.Errorf("a link with a space: %+v", inbox)
+	}
+
 	// Without inbox the text goes with the channel.
 	status, got, raw = put(map[string]any{"required": true, "default_channels": []string{"email"}, "lane": "system"})
 	if status != fiber.StatusOK || got.Inbox != nil {

@@ -67,6 +67,6 @@ type InboxVariant struct {
 	Title string `json:"title" validate:"required,max=1000"`
 	// A line or two under it; at most 1000 characters rendered.
 	Summary string `json:"summary" validate:"max=4000"`
-	// The in-app path the item opens (/events/..., /news/...): starts with one /, no scheme or host. Empty: no link.
+	// What the item opens: an in-app path (/events/..., /news/...; one / first) or an https address on yildizskylab.com or a subdomain, its host written out (a variable may fill the path, never the host). Empty: no link.
 	Link string `json:"link" validate:"max=2048"`
 }

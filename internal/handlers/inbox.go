@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	textt "text/template"
@@ -57,7 +59,7 @@ var (
 	)
 	errInboxVariantInvalid = apperrors.New(
 		"notification_type.inbox_variant_invalid",
-		"The inbox text does not parse as a Go text/template, or its link does not start with a single / (an in-app path; no scheme or host).",
+		"The inbox text does not parse as a Go text/template, or its link is neither an in-app path (one / first) nor an https address on yildizskylab.com or one of its subdomains, written out in full (no variable in the scheme or host).",
 		fiber.StatusBadRequest,
 	)
 	errExpiresAtPast = apperrors.New(
@@ -108,16 +110,49 @@ func parseInboxVariant(title, summary, link string) (inboxTemplates, string, err
 	return t, "", nil
 }
 
-// inAppLinkPrefix reports whether a link stays in the app: empty, or a path
-// that starts with exactly one slash (/events/..., never //host or a scheme).
-func inAppLinkPrefix(link string) bool {
-	return link == "" || (strings.HasPrefix(link, "/") && !strings.HasPrefix(link, "//") && !strings.HasPrefix(link, `/\`))
+// clubDomain is the one domain an inbox link may name: yildizskylab.com and
+// its subdomains (Account center on the web). Any other host is refused, so
+// an item can never send its reader somewhere else (no open redirect).
+const clubDomain = "yildizskylab.com"
+
+// linkHost is the alphabet of a host an inbox link may name: lower-case
+// letters, digits, dots and dashes, nothing a variable or a userinfo could
+// hide behind.
+var linkHost = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
+
+func clubHost(host string) bool {
+	return linkHost.MatchString(host) && !strings.Contains(host, "..") &&
+		(host == clubDomain || strings.HasSuffix(host, "."+clubDomain))
 }
 
-// validInAppLink is inAppLinkPrefix for a rendered link, which also holds no
-// space, control character or backslash.
-func validInAppLink(link string) bool {
-	if !inAppLinkPrefix(link) || len(link) > inboxLinkMax {
+// allowedLinkPrefix reports whether a link, as written in the type's text or
+// as rendered, stays on the club's ground: empty; an in-app path, starting
+// with exactly one slash (/events/..., never //host); or an https address
+// whose host, written out in full before the first / ? or #, is
+// yildizskylab.com or one of its subdomains. A host made of a variable is
+// refused: the text, not the notification's variables, fixes where it leads.
+func allowedLinkPrefix(link string) bool {
+	switch {
+	case link == "":
+		return true
+	case strings.HasPrefix(link, "/"):
+		return !strings.HasPrefix(link, "//") && !strings.HasPrefix(link, `/\`)
+	case strings.HasPrefix(link, "https://"):
+		rest := link[len("https://"):]
+		host := rest
+		if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+			host = rest[:i]
+		}
+		return clubHost(host)
+	}
+	return false
+}
+
+// validLink is allowedLinkPrefix for a rendered link, which also holds no
+// space, control character or backslash and, when absolute, parses as an
+// https URL on the club's domain with no userinfo or port.
+func validLink(link string) bool {
+	if !allowedLinkPrefix(link) || len(link) > inboxLinkMax {
 		return false
 	}
 	for _, r := range link {
@@ -125,12 +160,16 @@ func validInAppLink(link string) bool {
 			return false
 		}
 	}
-	return true
+	if !strings.HasPrefix(link, "https://") {
+		return true
+	}
+	u, err := url.Parse(link)
+	return err == nil && u.Scheme == "https" && u.User == nil && u.Port() == "" && u.Opaque == "" && clubHost(u.Hostname())
 }
 
 // checkInboxVariant is PUT /notification_types/{key}'s rule for the inbox
 // text: there exactly when the channels hold inbox, parsing, its link an
-// in-app path.
+// in-app path or an https address on the club's domain.
 func checkInboxVariant(channels []string, variant *requests.InboxVariant) error {
 	hasInbox := false
 	for _, channel := range channels {
@@ -147,7 +186,7 @@ func checkInboxVariant(channels []string, variant *requests.InboxVariant) error 
 	if _, part, err := parseInboxVariant(variant.Title, variant.Summary, variant.Link); err != nil {
 		return errInboxVariantInvalid.WithParams(map[string]interface{}{"part": part})
 	}
-	if !inAppLinkPrefix(variant.Link) {
+	if !allowedLinkPrefix(variant.Link) {
 		return errInboxVariantInvalid.WithParams(map[string]interface{}{"part": "link"})
 	}
 	return nil
@@ -179,7 +218,7 @@ func (t inboxTemplates) render(vars map[string]interface{}) (renderedInbox, stri
 		return renderedInbox{}, "title"
 	case utf8.RuneCountInString(out["summary"]) > inboxSummaryMax || !utf8.ValidString(out["summary"]):
 		return renderedInbox{}, "summary"
-	case !validInAppLink(out["link"]):
+	case !validLink(out["link"]):
 		return renderedInbox{}, "link"
 	}
 	r := renderedInbox{title: out["title"], summary: out["summary"]}
@@ -197,7 +236,7 @@ type InboxItem struct {
 	Type    string `json:"type" example:"event.cancelled"`
 	Title   string `json:"title"`
 	Summary string `json:"summary"`
-	// The in-app path the item opens; null when none.
+	// What the item opens: an in-app path, or an https address on yildizskylab.com or a subdomain; null when none.
 	Link       *string    `json:"link" example:"/events/6f1c2d3e"`
 	CreatedAt  time.Time  `json:"created_at"`
 	SeenAt     *time.Time `json:"seen_at"`
