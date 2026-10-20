@@ -37,7 +37,9 @@ func (r smtpReply) permanent() bool { return r.code >= 500 && r.code < 600 }
 
 // enhancedCode finds an RFC 3463 code right after the reply code, for a relay
 // that does not announce ENHANCEDSTATUSCODES (go-mail reads it only then).
-var enhancedCode = regexp.MustCompile(`\b[45]\d\d[ -]([245]\.\d{1,3}\.\d{1,3})\b`)
+// Newer Go releases quote the reply's text in net/textproto's error
+// (`550 "5.1.1 …"`), older ones do not.
+var enhancedCode = regexp.MustCompile(`\b[45]\d\d[ -]"?([245]\.\d{1,3}\.\d{1,3})\b`)
 
 // smtpFailure is how a send the relay did not take fails. A 5xx reply fails
 // the row for good at once (permanentError): a refused address or a refused
