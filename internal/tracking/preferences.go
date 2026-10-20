@@ -75,8 +75,8 @@ const (
 // CoreClient asks core's tracking:resolve whom it lets be tracked: its
 // account is enabled, it is a Member, and its communication preference (the
 // account center's setting, opt-out by default, T1) does not say no. It sends
-// SkyMail's service account token; core checks its audience and the role
-// core:communication-preferences:read (ticket 17).
+// SkyMail's service account token; core checks its audience and its core
+// client role communication-preferences:read (ticket 17).
 type CoreClient struct {
 	endpoint string
 	tokens   TokenSource

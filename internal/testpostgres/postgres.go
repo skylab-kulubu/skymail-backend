@@ -39,6 +39,7 @@ func StartDatabase(t testing.TB) Database {
 	name := fmt.Sprintf("skymail-postgres-test-%d", time.Now().UnixNano())
 	out, err := exec.Command(
 		"docker", "run", "-d", "--rm", "--name", name,
+		"--memory", "512m", "--tmpfs", "/var/lib/postgresql/data:rw,size=256m",
 		"-e", "POSTGRES_PASSWORD=postgres",
 		"-e", "POSTGRES_DB=skymailtest",
 		"-p", "127.0.0.1::5432",
