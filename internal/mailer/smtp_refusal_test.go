@@ -24,8 +24,8 @@ func sendThrough(t *testing.T, verb, reply, address string) error {
 	})
 }
 
-// A 5xx reply is the relay's final answer (RFC 5321 §4.2.1): the row fails
-// for good at once, whatever the stage, and is not tried again. Its error is
+// A refusal of the recipient (a 5xx to RCPT TO, or a 5.1.x at the end of DATA)
+// fails the row for good at once: the address is refused again. Its error is
 // the stage and the reply's codes only: the relay's own text may echo the
 // address, and the error is logged and shown.
 func TestARelaysPermanentRefusalFailsAtOnce(t *testing.T) {
@@ -35,8 +35,8 @@ func TestARelaysPermanentRefusalFailsAtOnce(t *testing.T) {
 		{"user not local", "RCPT", "551 5.1.6 user not local", "smtp_rejected: RCPT TO 551 5.1.6"},
 		{"mailbox name not allowed", "RCPT", "553 5.1.3 bad address syntax", "smtp_rejected: RCPT TO 553 5.1.3"},
 		{"no enhanced code", "RCPT", "550 mailbox unavailable", "smtp_rejected: RCPT TO 550"},
-		{"sender refused", "MAIL", "550 5.7.1 sender refused", "smtp_rejected: MAIL FROM 550 5.7.1"},
-		{"end of DATA", ".", "554 5.7.1 message refused", "smtp_rejected: DATA 554 5.7.1"},
+		{"policy at RCPT", "RCPT", "554 5.7.1 recipient refused", "smtp_rejected: RCPT TO 554 5.7.1"},
+		{"address status at end of DATA", ".", "550 5.1.1 no such user", "smtp_rejected: DATA 550 5.1.1"},
 	} {
 		t.Run(refusal.name, func(t *testing.T) {
 			err := sendThrough(t, refusal.verb, refusal.reply, "alici@example.com")
@@ -57,13 +57,23 @@ func TestARelaysPermanentRefusalFailsAtOnce(t *testing.T) {
 }
 
 // A 4xx reply is a transient failure (greylisting, a full mailbox, a rate
-// limit): the row is tried again later, as before. Its error too is the stage
-// and the codes only.
+// limit), and so is a 5xx that is about the sender, the account or the tenant
+// rather than the recipient: a 5xx to MAIL FROM, or one at the end of DATA
+// that is not 5.1.x. Failing those at once would fail a whole list at once;
+// the row is tried again later, as before. Its error too is the stage and the
+// codes only.
 func TestARelaysTransientRefusalIsTriedAgain(t *testing.T) {
 	for _, refusal := range []struct{ name, verb, reply, want string }{
 		{"greylisted", "RCPT", "450 4.2.1 <alici@example.com>: greylisted", "smtp_deferred: RCPT TO 450 4.2.1"},
 		{"service closing", "RCPT", "421 4.7.0 try again later", "smtp_deferred: RCPT TO 421 4.7.0"},
-		{"end of DATA", ".", "451 4.3.0 local error", "smtp_deferred: DATA 451 4.3.0"},
+		{"end of DATA 4xx", ".", "451 4.3.0 local error", "smtp_deferred: DATA 451 4.3.0"},
+		{"submission quota at MAIL FROM", "MAIL", "554 5.2.0 STOREDRV.Submission.Exception:SubmissionQuotaExceededException", "smtp_deferred: MAIL FROM 554 5.2.0"},
+		{"sender refused at MAIL FROM", "MAIL", "550 5.7.1 sender refused", "smtp_deferred: MAIL FROM 550 5.7.1"},
+		{"no enhanced code at MAIL FROM", "MAIL", "550 not allowed", "smtp_deferred: MAIL FROM 550"},
+		{"quota at end of DATA", ".", "552 5.2.2 mailbox full", "smtp_deferred: DATA 552 5.2.2"},
+		{"mail system at end of DATA", ".", "554 5.3.4 message too big", "smtp_deferred: DATA 554 5.3.4"},
+		{"policy at end of DATA", ".", "554 5.7.1 message refused", "smtp_deferred: DATA 554 5.7.1"},
+		{"no enhanced code at end of DATA", ".", "554 transaction failed", "smtp_deferred: DATA 554"},
 	} {
 		t.Run(refusal.name, func(t *testing.T) {
 			err := sendThrough(t, refusal.verb, refusal.reply, "alici@example.com")

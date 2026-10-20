@@ -159,14 +159,26 @@ dakika). Göndericinin hatası sonucu söyler: hata yok gönderildi, kalıcı ha
 hemen düşer (`failed`), ötekiler yeniden denenir (en çok 5 deneme; 30 sn,
 1, 2, 4 dakika arayla).
 
-E-postada kalıcı hata: go-mail'in ayrıştıramadığı adres ve relay'in 5xx
-yanıtı (RFC 5321 §4.2.1; hangi adımda gelirse: `MAIL FROM`, `RCPT TO`, `DATA`).
-4xx yanıt (greylisting, dolu kutu, kısma) ve yanıtsız hata (bağlantı kopması,
-1 dakikalık sınır) geçicidir. Satırın `error`'ı yalnız adım ve kodlardır, ör.
-`smtp_rejected: RCPT TO 550 5.1.1` (kalıcı) ya da `smtp_deferred: RCPT TO 450
-4.2.1` (geçici). Relay'in metni yazılmaz, çünkü adresi tekrarlayabilir; bu
-hata hem loglanır hem gönderimin sayfasında görünür. Bir alıcının kalıcı reddi
-öteki alıcıları beklemez, bütçeden de yalnız o tek denemeyi yer.
+E-postada kalıcı hata yalnız alıcıya özgü olandır: go-mail'in ayrıştıramadığı
+adres ve relay'in alıcıyı reddi. Gönderene, hesaba ya da kiracıya ilişkin bir
+5xx (kota, gönderen reddi) bütün toplu gönderimi bir anda düşürmesin diye
+geçici sayılır (`internal/mailer/smtp_refusal.go`):
+
+| Yanıt | Adım | Sonuç |
+|---|---|---|
+| 5xx | `RCPT TO` | kalıcı (`failed`, ilk denemede) |
+| 5xx, ek kod 5.1.x (adres durumu) | `DATA` sonu | kalıcı |
+| 5xx, ek kod 5.2.x / 5.3.x / 5.7.x ya da ek kodsuz | `DATA` sonu | geçici |
+| 5xx (ör. `554 5.2.0` SubmissionQuotaExceeded, 5.7.x gönderen reddi) | `MAIL FROM` | geçici |
+| 4xx (greylisting, dolu kutu, kısma) | her adım | geçici |
+| yanıtsız hata (bağlantı kopması, 1 dakikalık sınır) | her adım | geçici |
+
+Geçici hata en çok 5 denemeye kadar yeniden denenir, sonra `failed` olur.
+Satırın `error`'ı yalnız adım ve kodlardır, ör. `smtp_rejected: RCPT TO 550
+5.1.1` (kalıcı) ya da `smtp_deferred: MAIL FROM 554 5.2.0` (geçici). Relay'in
+metni yazılmaz, çünkü adresi tekrarlayabilir; bu hata hem loglanır hem
+gönderimin sayfasında görünür. Bir alıcının kalıcı reddi öteki alıcıları
+beklemez, bütçeden de yalnız o tek denemeyi yer.
 
 RFC 2606/6761'in ayrılmış alan adlarındaki alıcı (`example.com`, `example.net`,
 `example.org` ve altları; `.example`, `.test`, `.invalid`, `.localhost`;
@@ -271,8 +283,8 @@ günde 10.000 alıcı. Varsayılanlar bunların altında kalır.
   11 dakika sürer.
 - Bir satır alındığında sayılır. Yeniden deneme yeniden sayılır. Kapanışta
   geri verilen satırın sayısı düşülmez. İki günden eski pencereler silinir.
-  Ayrılmış alan adlı alıcı hiç alınmadığı için sayılmaz; 5xx ile reddedilen
-  alıcı yalnız tek denemesiyle sayılır (Kanallar).
+  Ayrılmış alan adlı alıcı hiç alınmadığı için sayılmaz; kalıcı olarak
+  reddedilen alıcı yalnız tek denemesiyle sayılır (Kanallar).
 
 ## Gönderilen içerik (`MAIL_CONTENT_RETENTION_DAYS`)
 

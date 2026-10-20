@@ -31,9 +31,31 @@ func (r smtpReply) Error() string {
 	return reply
 }
 
-// permanent says the reply is a 5xx: the relay's final answer (RFC 5321
-// §4.2.1), which the same mail will get again. A 4xx is transient.
-func (r smtpReply) permanent() bool { return r.code >= 500 && r.code < 600 }
+// permanent says the refusal is about this recipient, so the same mail to
+// them is refused again: a 5xx to RCPT TO, or a 5xx at the end of DATA whose
+// enhanced code is X.1.x, an address status (RFC 3463). Every other refusal is
+// tried again later, a 5xx included:
+//
+//   - a 4xx (RFC 5321 §4.2.1: transient);
+//   - a 5xx to MAIL FROM: the sender, the account or the tenant (Exchange
+//     Online's 554 5.2.0 SubmissionQuotaExceeded, a 5.7.x sender refusal),
+//     which would refuse every recipient of a list at once;
+//   - a 5xx at the end of DATA that is not X.1.x (5.2.x mailbox or quota,
+//     5.3.x mail system, 5.7.x policy) or has no enhanced code;
+//   - a 5xx to anything else.
+func (r smtpReply) permanent() bool {
+	if r.code < 500 || r.code >= 600 {
+		return false
+	}
+	switch r.stage {
+	case stageRcptTo:
+		return true
+	case stageData:
+		return strings.HasPrefix(r.enhanced, "5.1.")
+	default:
+		return false
+	}
+}
 
 // enhancedCode finds an RFC 3463 code right after the reply code, for a relay
 // that does not announce ENHANCEDSTATUSCODES (go-mail reads it only then).
@@ -41,11 +63,11 @@ func (r smtpReply) permanent() bool { return r.code >= 500 && r.code < 600 }
 // (`550 "5.1.1 …"`), older ones do not.
 var enhancedCode = regexp.MustCompile(`\b[45]\d\d[ -]"?([245]\.\d{1,3}\.\d{1,3})\b`)
 
-// smtpFailure is how a send the relay did not take fails. A 5xx reply fails
-// the row for good at once (permanentError): a refused address or a refused
-// mail is refused again in four minutes. A 4xx reply, or a failure with no
-// reply (the connection dropped, the send budget ran out), is tried again
-// later, up to maxSendAttempts.
+// smtpFailure is how a send the relay did not take fails. A refusal of the
+// recipient (smtpReply.permanent) fails the row for good at once
+// (permanentError): the address is refused again in four minutes. Any other
+// reply, or a failure with no reply (the connection dropped, the send budget
+// ran out), is tried again later, up to maxSendAttempts.
 func smtpFailure(err error) error {
 	var sendErr *mail.SendError
 	if !errors.As(err, &sendErr) {
@@ -75,15 +97,22 @@ func smtpFailure(err error) error {
 func smtpStage(reason mail.SendErrReason) string {
 	switch reason {
 	case mail.ErrSMTPMailFrom:
-		return "MAIL FROM"
+		return stageMailFrom
 	case mail.ErrSMTPRcptTo:
-		return "RCPT TO"
+		return stageRcptTo
 	case mail.ErrSMTPData, mail.ErrSMTPDataClose, mail.ErrWriteContent:
-		return "DATA"
+		return stageData
 	default:
 		return "SMTP"
 	}
 }
+
+// The stages a refusal is classified by.
+const (
+	stageMailFrom = "MAIL FROM"
+	stageRcptTo   = "RCPT TO"
+	stageData     = "DATA"
+)
 
 // reservedDomainError is the error a recipient in a reserved domain is
 // written failed with: it was never sent.

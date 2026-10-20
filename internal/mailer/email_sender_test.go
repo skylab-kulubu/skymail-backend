@@ -144,16 +144,20 @@ func TestAnEmailCarriesTheRowsMessageID(t *testing.T) {
 	t.Fatalf("the mail has no %q header:\n%s", want, mails[0])
 }
 
-// A relay's refusal is written as the worker meets it: a 5xx to RCPT TO or to
-// the end of DATA fails the row for good after that one attempt, with the
-// stage and the reply's codes as its error; a 4xx puts it back to pending with
-// the attempt counted, to be tried again.
+// A relay's refusal is written as the worker meets it: a refusal of the
+// recipient (a 5xx to RCPT TO, a 5.1.x at the end of DATA) fails the row for
+// good after that one attempt, with the stage and the reply's codes as its
+// error; a 4xx, or a 5xx about the sender or the mail (MAIL FROM, a 5.7.x at
+// the end of DATA), puts it back to pending with the attempt counted, to be
+// tried again.
 func TestARelaysRefusalIsWrittenByItsReply(t *testing.T) {
 	for _, refusal := range []struct{ name, verb, reply, status, error string }{
 		{"RCPT 5xx", "RCPT", "550 5.1.1 no such user", "failed", "smtp_rejected: RCPT TO 550 5.1.1"},
 		{"reserved domain at RCPT", "RCPT", "501 5.1.5 Recipient address reserved by RFC 2606", "failed", "smtp_rejected: RCPT TO 501 5.1.5"},
-		{"end of DATA 5xx", ".", "554 5.7.1 message refused", "failed", "smtp_rejected: DATA 554 5.7.1"},
+		{"end of DATA 5.1.x", ".", "550 5.1.1 no such user", "failed", "smtp_rejected: DATA 550 5.1.1"},
 		{"RCPT 4xx", "RCPT", "450 4.2.1 greylisted", "pending", "smtp_deferred: RCPT TO 450 4.2.1"},
+		{"MAIL FROM 5xx", "MAIL", "554 5.2.0 submission quota exceeded", "pending", "smtp_deferred: MAIL FROM 554 5.2.0"},
+		{"end of DATA 5.7.x", ".", "554 5.7.1 message refused", "pending", "smtp_deferred: DATA 554 5.7.1"},
 	} {
 		t.Run(refusal.name, func(t *testing.T) {
 			captureMailerLogs(t)
