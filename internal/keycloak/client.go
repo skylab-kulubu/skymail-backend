@@ -13,9 +13,15 @@ import (
 	"github.com/Nerzal/gocloak/v13"
 )
 
+// ErrGroupNotFound is GetGroupMembers' answer for a group Keycloak does not
+// have (404): unknown, not empty.
+var ErrGroupNotFound = errors.New("keycloak: group not found")
+
 type Client interface {
 	ListGroups(ctx context.Context) ([]*gocloak.Group, error)
 	GetGroup(ctx context.Context, id string) (*gocloak.Group, error)
+	// GetGroupMembers lists the members of a group and of every group below
+	// it; a group Keycloak does not have is ErrGroupNotFound.
 	GetGroupMembers(ctx context.Context, id string) ([]*gocloak.User, error)
 	// ClientRoleMembers lists the enabled users who hold role on the client
 	// whose clientId is clientID: directly, or through a group they or a
@@ -226,13 +232,19 @@ func (c *clientImpl) GetGroup(ctx context.Context, id string) (*gocloak.Group, e
 
 	group, err := c.gc.GetGroup(ctx, token, c.realm, id)
 	if err != nil {
-		var apiErr gocloak.APIError
-		if errors.As(err, &apiErr) && apiErr.Code == 404 {
+		if notFound(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
 	return group, nil
+}
+
+// notFound is whether Keycloak answered 404. gocloak returns its errors as
+// *APIError.
+func notFound(err error) bool {
+	var apiErr *gocloak.APIError
+	return errors.As(err, &apiErr) && apiErr.Code == 404
 }
 
 func (c *clientImpl) GetUser(ctx context.Context, id string) (*gocloak.User, error) {
@@ -265,6 +277,9 @@ func (c *clientImpl) GetGroupMembers(ctx context.Context, id string) ([]*gocloak
 func (c *clientImpl) groupMembers(ctx context.Context, token, id string, seen map[string]struct{}) ([]*gocloak.User, error) {
 	root, err := c.gc.GetGroup(ctx, token, c.realm, id)
 	if err != nil {
+		if notFound(err) {
+			return nil, ErrGroupNotFound
+		}
 		return nil, err
 	}
 	groups, err := c.collectGroups(ctx, token, []*gocloak.Group{root})
