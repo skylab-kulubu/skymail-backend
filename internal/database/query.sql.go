@@ -1108,7 +1108,8 @@ type CreateMailQueueItemsParams struct {
 
 const createMailTask = `-- name: CreateMailTask :many
 WITH active_source AS (
-    SELECT t.id AS template_id, ml.id AS mail_list_id, COALESCE(t.content_sensitive::text, 'unset') AS content_sensitive
+    SELECT t.id AS template_id, ml.id AS mail_list_id,
+           CASE WHEN template_key_content_locked(t.key) THEN 'true' ELSE COALESCE(t.content_sensitive::text, 'unset') END AS content_sensitive
     FROM templates t
              JOIN mailing_lists ml ON ml.id = $1::uuid
     WHERE t.id = $2::uuid
@@ -1155,6 +1156,11 @@ type CreateMailTaskRow struct {
 	RecipientEmail    string    `json:"recipient_email"`
 }
 
+// content_sensitive_at_send is whether the send is sensitive as it is
+// queued: 'true' when its template's key is locked sensitive
+// (template_key_content_locked) whatever the template says, else the
+// template's content_sensitive ('unset' for NULL). It never changes after:
+// mail_task_content_sensitive() reads it first (20261020120000).
 func (q *Queries) CreateMailTask(ctx context.Context, arg CreateMailTaskParams) ([]CreateMailTaskRow, error) {
 	rows, err := q.db.Query(ctx, createMailTask,
 		arg.MailListID,
@@ -1220,7 +1226,8 @@ func (q *Queries) CreateMailingList(ctx context.Context, name string) (MailingLi
 
 const createSingleMailTask = `-- name: CreateSingleMailTask :one
 WITH active_template AS (
-    SELECT templates.id, COALESCE(templates.content_sensitive::text, 'unset') AS content_sensitive
+    SELECT templates.id,
+           CASE WHEN template_key_content_locked(templates.key) THEN 'true' ELSE COALESCE(templates.content_sensitive::text, 'unset') END AS content_sensitive
     FROM templates
     WHERE templates.id = $3::uuid
       AND archived_at IS NULL
@@ -1262,6 +1269,11 @@ type CreateSingleMailTaskRow struct {
 	RecipientEmail    string    `json:"recipient_email"`
 }
 
+// content_sensitive_at_send is whether the send is sensitive as it is
+// queued: 'true' when its template's key is locked sensitive
+// (template_key_content_locked) whatever the template says, else the
+// template's content_sensitive ('unset' for NULL). It never changes after:
+// mail_task_content_sensitive() reads it first (20261020120000).
 func (q *Queries) CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error) {
 	row := q.db.QueryRow(ctx, createSingleMailTask,
 		arg.RecipientFullName,
@@ -2628,7 +2640,8 @@ const insertMailTask = `-- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, form_source_id, body_variables, content_sensitive_at_send,
                         tracking_requested)
 SELECT $1, $2, $3, $4, $5,
-       COALESCE(templates.content_sensitive::text, 'unset'), $6::boolean
+       CASE WHEN template_key_content_locked(templates.key) THEN 'true' ELSE COALESCE(templates.content_sensitive::text, 'unset') END,
+       $6::boolean
 FROM templates
 WHERE templates.id = $2
   AND archived_at IS NULL
@@ -2653,6 +2666,11 @@ type InsertMailTaskRow struct {
 	CreatedAt     time.Time  `json:"created_at"`
 }
 
+// content_sensitive_at_send is whether the send is sensitive as it is
+// queued: 'true' when its template's key is locked sensitive
+// (template_key_content_locked) whatever the template says, else the
+// template's content_sensitive ('unset' for NULL). It never changes after:
+// mail_task_content_sensitive() reads it first (20261020120000).
 func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (InsertMailTaskRow, error) {
 	row := q.db.QueryRow(ctx, insertMailTask,
 		arg.SentBy,

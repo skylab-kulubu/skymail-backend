@@ -855,9 +855,15 @@ WHERE id = sqlc.arg(id)
   AND claimed_at = sqlc.arg(claimed_at)::timestamptz
 RETURNING attempts;
 
+-- content_sensitive_at_send is whether the send is sensitive as it is
+-- queued: 'true' when its template's key is locked sensitive
+-- (template_key_content_locked) whatever the template says, else the
+-- template's content_sensitive ('unset' for NULL). It never changes after:
+-- mail_task_content_sensitive() reads it first (20261020120000).
 -- name: CreateMailTask :many
 WITH active_source AS (
-    SELECT t.id AS template_id, ml.id AS mail_list_id, COALESCE(t.content_sensitive::text, 'unset') AS content_sensitive
+    SELECT t.id AS template_id, ml.id AS mail_list_id,
+           CASE WHEN template_key_content_locked(t.key) THEN 'true' ELSE COALESCE(t.content_sensitive::text, 'unset') END AS content_sensitive
     FROM templates t
              JOIN mailing_lists ml ON ml.id = sqlc.narg(mail_list_id)::uuid
     WHERE t.id = sqlc.narg(template_id)::uuid
@@ -1262,19 +1268,31 @@ FROM due
 WHERE mt.id = due.id
 RETURNING mt.id, (SELECT count(*) FROM rows WHERE rows.task_id = mt.id) AS rows_cleared;
 
+-- content_sensitive_at_send is whether the send is sensitive as it is
+-- queued: 'true' when its template's key is locked sensitive
+-- (template_key_content_locked) whatever the template says, else the
+-- template's content_sensitive ('unset' for NULL). It never changes after:
+-- mail_task_content_sensitive() reads it first (20261020120000).
 -- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, form_source_id, body_variables, content_sensitive_at_send,
                         tracking_requested)
 SELECT sqlc.arg(sent_by), sqlc.arg(template_id), sqlc.narg(mail_list_id), sqlc.narg(form_source_id), sqlc.arg(body_variables),
-       COALESCE(templates.content_sensitive::text, 'unset'), sqlc.arg(tracking_requested)::boolean
+       CASE WHEN template_key_content_locked(templates.key) THEN 'true' ELSE COALESCE(templates.content_sensitive::text, 'unset') END,
+       sqlc.arg(tracking_requested)::boolean
 FROM templates
 WHERE templates.id = sqlc.arg(template_id)
   AND archived_at IS NULL
 RETURNING mail_tasks.id, sent_by, template_id, mail_list_id, body_variables, created_at;
 
+-- content_sensitive_at_send is whether the send is sensitive as it is
+-- queued: 'true' when its template's key is locked sensitive
+-- (template_key_content_locked) whatever the template says, else the
+-- template's content_sensitive ('unset' for NULL). It never changes after:
+-- mail_task_content_sensitive() reads it first (20261020120000).
 -- name: CreateSingleMailTask :one
 WITH active_template AS (
-    SELECT templates.id, COALESCE(templates.content_sensitive::text, 'unset') AS content_sensitive
+    SELECT templates.id,
+           CASE WHEN template_key_content_locked(templates.key) THEN 'true' ELSE COALESCE(templates.content_sensitive::text, 'unset') END AS content_sensitive
     FROM templates
     WHERE templates.id = sqlc.narg(template_id)::uuid
       AND archived_at IS NULL
