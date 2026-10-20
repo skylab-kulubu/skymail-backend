@@ -248,13 +248,18 @@ Başka bir değer açılışı durdurur. Şerit açıkken:
   `x5t#S256`; token ucu reddederse RS256 + `x5t`. Kapsam Graph için
   `https://graph.microsoft.com/.default`, XOAUTH2 için
   `https://outlook.office365.com/.default`. Token kapsam başına bütün işçilerce
-  paylaşılır, süresi bitmeden 5 dakika önce yenilenir; yenileme olmazsa eskisi
-  son 30 saniyesine kadar kullanılır. Graph 401 ya da başarısız SMTP AUTH
-  token'ı düşürür, sonraki deneme yenisini alır. Token, anahtar ve token ucunun
+  paylaşılır, süresi bitmeden 5 dakika önce yenilenir (yanıtta `expires_in`
+  yoksa 10 dakikalık sayılır). Yenileme sürerken öteki işçiler beklemez,
+  eski token'ı alır; yenileme başarısızsa 30 saniye yeniden denenmez, eski
+  token son 30 saniyesine kadar kullanılır. XOAUTH2'de token beklemesi de
+  Graph'taki gibi gönderim bütçesiyle (1 dakika) sınırlıdır. Graph 401 ya da
+  başarısız SMTP AUTH token'ı düşürür, sonraki deneme yenisini alır. Token, anahtar ve token ucunun
   açıklama metni hiçbir yere yazılmaz; hata yalnız HTTP durumu, OAuth kodu ve
   AADSTS numaralarıdır.
 - Açılış logu her şeridin yolunu ve kutusunu, Reply-To'yu, sertifikanın
-  `x5t#S256`'sını ve bitişini yazar; bitişe 30 günden az kaldıysa uyarır.
+  `x5t#S256`'sını ve bitişini yazar; bitişe 30 günden az kaldıysa ya da
+  sertifikanın süresi geçtiyse uyarır (açılışı durdurmaz: kapalı şeritler
+  etkilenmesin).
 
 `SMTP_REPLY_TO` (isteğe bağlı, ör. `info@yildizskylab.com`) her postaya,
 kapalı şeritlerinkine de, `Reply-To` koyar; yoksa `Reply-To` yazılmaz.
@@ -270,10 +275,12 @@ Exchange'in kendisinindir. NDR geri dönen başlıkları ekler; `internal/dsn`
 kimliğiyle debug loguna yazılır (Microsoft desteği için); istek
 `client-request-id` olarak satırın kimliğini taşır.
 
-**Graph'ın yanıtı** (`internal/mailer/graph.go`), SMTP'deki gibi yalnız
-alıcıya özgü ret kalıcıdır: `400 ErrorInvalidRecipients` (adres Exchange'in
+**Graph'ın yanıtı** (`internal/mailer/graph.go`): her `2xx` gönderildi
+sayılır (Graph `202` döner; başka bir `2xx`'i yeniden denemek postayı iki kez
+gönderirdi). SMTP'deki gibi yalnız alıcıya özgü ret kalıcıdır: `400 ErrorInvalidRecipients` (adres Exchange'in
 gönderebileceği bir adres değil; hiçbir şey gitmediği için bastırılmaz) ve
-`413` (posta istek sınırını aşıyor) satırı hemen düşürür. Öteki her yanıt
+`413` (posta istek sınırını aşıyor; 4 MB'ı aşan istek Graph'a hiç
+gönderilmez, aynı kalıcı hatayla düşer) satırı hemen düşürür. Öteki her yanıt
 (`401`, `403` ör. Mail.Send henüz verilmemiş ya da RBAC kapsamı yayılıyor,
 `404`, başka `400`, `429`, `5xx`) yeniden denenir; `429`/`503`'ün `Retry-After`'ı
 beklenir (en çok 1 saat; ilk denemelerin 30 sn'si yerine). Satırın hatası yalnız
@@ -283,11 +290,17 @@ metni adresi tekrarlayabildiği için yazılmaz.
 
 **JSON gövde.** Graph'ın JSON postasında tek gövde vardır: HTML'i olan posta
 HTML gider (düz metin alternatifini Exchange kendisi üretir), olmayan düz
-metin. Takip pikseli ve bağlantıları SMTP'deki gibi yerleştirilir.
+metin. Takip pikseli ve bağlantıları SMTP'deki gibi yerleştirilir. HTML
+JSON'da kaçırılmaz (`<` olduğu gibi). Exchange `from`'un görünen adını
+kutunun dizindeki adıyla ezebilir: kutuların `DisplayName`'i
+`SKYMAIL_FROM_*` adlarıyla aynı tutulur.
 
 **`List-Unsubscribe`.** SkyMail bugün bu başlığı yazmaz (bilet 11). `xoauth2`
 yolu postayı SMTP yoluyla aynı kodla kurar; başlık eklendiğinde duyuru
-kutusundan da gider. Graph JSON'u yalnız `X-` önekli başlık taşır.
+kutusundan da gider. Graph JSON'u yalnız `X-` önekli başlık taşır. Şerit
+kuyruk önceliğinden türer: bilet 11 başlığı şeride değil gönderim türüne
+(liste, grup, onaylı gönderim, toplu bildirim) bağlamalı; duyuru@'dan giden
+takipli tekil postaya abonelik başlığı anlamsızdır.
 
 Gönderim bütçesi (`SKYMAIL_RATE_PER_MINUTE`) şeritlerden bağımsız, hepsi için
 ortaktır; Exchange'in dakikada 30 ileti sınırı kutu başınadır.

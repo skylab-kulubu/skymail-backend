@@ -99,7 +99,7 @@ func TestLaneOfAMail(t *testing.T) {
 		{"a single mail without a template", nil, false, mailer.PrioritySystem, mailer.LaneBilgi},
 		{"a send to a list", ptr("duyuru-ekim"), false, mailer.PriorityBulk, mailer.LaneDuyuru},
 		{"a bulk notification type", ptr("event.announcement"), true, mailer.PriorityBulk, mailer.LaneDuyuru},
-		{"a row from before the lanes", nil, false, mailer.Priority(-1), mailer.LaneDuyuru},
+		{"a priority below the bulk lane's", nil, false, mailer.Priority(-1), mailer.LaneDuyuru},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := mailer.LaneOf(tc.key, tc.system, tc.priority); got != tc.want {

@@ -433,3 +433,110 @@ func TestTokenRequestCarriesTheAssertionInTheForm(t *testing.T) {
 		t.Errorf("a string expires_in read as %v", left)
 	}
 }
+
+// A token endpoint that gives no expires_in still has its token reused: it is
+// taken to last ten minutes, past the five-minute refresh.
+func TestATokenWithoutExpiresInIsReused(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "t"})
+	}))
+	t.Cleanup(server.Close)
+	c := &clock{now: time.Now()}
+	source := NewTokenSource(testCredentials(t), ScopeGraph, WithAuthority(server.URL), WithClock(c.Now))
+	for range 2 {
+		if token, err := source.Token(context.Background()); err != nil || token != "t" {
+			t.Fatalf("%q %v", token, err)
+		}
+	}
+	if n := requests.Load(); n != 1 {
+		t.Fatalf("%d requests for two calls, want 1", n)
+	}
+	c.Add(5*time.Minute + time.Second)
+	if _, err := source.Token(context.Background()); err != nil || requests.Load() != 2 {
+		t.Fatalf("with under five minutes left: %v after %d requests, want a new one", err, requests.Load())
+	}
+}
+
+// While a refresh is in flight, a caller whose context is short gets the
+// cached token at once instead of waiting for it.
+func TestARefreshInFlightDoesNotHoldBackTheCachedToken(t *testing.T) {
+	var requests atomic.Int32
+	started, release := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := requests.Add(1)
+		if n == 2 {
+			close(started)
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "token-" + string(rune('0'+n)), "expires_in": 3599})
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	c := &clock{now: time.Now()}
+	source := NewTokenSource(testCredentials(t), ScopeGraph, WithAuthority(server.URL), WithClock(c.Now))
+	if token, err := source.Token(context.Background()); err != nil || token != "token-1" {
+		t.Fatalf("%q %v", token, err)
+	}
+	c.Add(56 * time.Minute) // under five minutes left: refresh
+
+	refreshed := make(chan string, 1)
+	go func() {
+		token, _ := source.Token(context.Background())
+		refreshed <- token
+	}()
+	<-started
+	short, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	begun := time.Now()
+	token, err := source.Token(short)
+	if err != nil || token != "token-1" || time.Since(begun) > 100*time.Millisecond {
+		t.Fatalf("during the refresh: %q %v after %v, want the cached token at once", token, err, time.Since(begun))
+	}
+	close(release)
+	if got := <-refreshed; got != "token-2" {
+		t.Fatalf("the refresh got %q", got)
+	}
+	if n := requests.Load(); n != 2 {
+		t.Fatalf("%d requests, want 2", n)
+	}
+}
+
+// After a failed refresh the cached token serves for 30 seconds without a
+// request per caller; then the refresh is tried again.
+func TestAFailedRefreshBacksOff(t *testing.T) {
+	endpoint := startEndpoint(t)
+	c := &clock{now: time.Now()}
+	endpoint.now = c.Now
+	source := NewTokenSource(testCredentials(t), ScopeGraph, WithAuthority(endpoint.server.URL), WithClock(c.Now))
+	first, err := source.Token(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint.status.Store(http.StatusServiceUnavailable)
+	c.Add(56 * time.Minute)
+	for range 3 {
+		if got, err := source.Token(context.Background()); got != first || err != nil {
+			t.Fatalf("%q %v, want the cached token", got, err)
+		}
+	}
+	if n := endpoint.requests.Load(); n != 2 {
+		t.Fatalf("%d requests during the backoff, want 2", n)
+	}
+	c.Add(31 * time.Second)
+	endpoint.status.Store(0)
+	if got, err := source.Token(context.Background()); err != nil || got == first || endpoint.requests.Load() != 3 {
+		t.Fatalf("after the backoff: %q %v, %d requests", got, err, endpoint.requests.Load())
+	}
+}
