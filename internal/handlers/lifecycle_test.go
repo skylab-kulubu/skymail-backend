@@ -69,6 +69,10 @@ func (*lifecycleMailerStub) EnqueueSingle(context.Context, database.CreateSingle
 	return uuid.New(), nil
 }
 
+func (*lifecycleMailerStub) EnqueueTrackedSingle(context.Context, database.CreateSingleMailTaskParams) (uuid.UUID, error) {
+	return uuid.New(), nil
+}
+
 func (*lifecycleMailerStub) EnqueueWithRecipients(context.Context, mailer.EnqueueWithRecipientsParams) (uuid.UUID, error) {
 	return uuid.New(), nil
 }

@@ -422,13 +422,26 @@ Hatalı adres, değeri değil değişkeni söyleyerek açılışı durdurur. Aç
 saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
 
 - **Kim takip edilir (gönderim kuyruğa yazılırken sabitlenir):** bayrak açık;
-  gönderim `tracking: true` istedi (`POST /v1/mail_tasks`, Mail onayı isteği);
-  satır toplu şeritte; şablon System değil ve hassas değil
-  (`mail_task_content_sensitive()`, içerik panelinin tek tanımı). Bayrak
-  kapalıyken ya da şablon System/hassasken alan yok sayılır: yanıt, gönderim
-  ve onay isteği `tracking: false` der, satırlara neden yazılmaz. Sonra
-  alıcının Keycloak `sub`'ı biliniyor
+  gönderim `tracking: true` istedi (`POST /v1/mail_tasks`, bir kişinin
+  `POST /v1/mail_tasks/single` gönderimi, listeye ya da kişilere Mail onayı
+  isteği); satır toplu şeritte; şablon System değil ve hassas değil
+  (`mail_task_content_sensitive()`, içerik panelinin tek tanımı; kişilere
+  giden gönderimde içeriği hakkında bir şey söylemeyen şablon hassas
+  sayılır). Bayrak kapalıyken ya da şablon System/hassasken alan yok
+  sayılır: yanıt, gönderim ve onay isteği `tracking: false` der, satırlara
+  neden yazılmaz. Sonra alıcının Keycloak `sub`'ı biliniyor
   (`recipient_sub`: yalnız Keycloak grubu üyeleri) ve core izin veriyor.
+- **Kişilere tek tek gönderim (Yusuf, 2026-10-20):** gönderim formunun
+  kişileri (`/single`) ve kişilere Mail onayı isteği de takip isteyebilir;
+  her alıcı yukarıdaki kuralla tek tek değerlendirilir. Bu kişiler yalnız
+  adresleriyle bilinir: satır `no_account` alır, takip edilmez; adresle
+  hesap **aranmaz** (yanlış kişiyle eşleme riski). Takip isteyen ve alabilen
+  `/single` gönderimi toplu şeride girer (operatör postası); sistem şeridi
+  hiçbir zaman takip edilmez. Bir servisin token'ıyla gelen `/single`
+  (Keycloak, core, Forms: hesap ve işlem postaları) takip istese de
+  `tracking: false` alır, sistem şeridinde kalır. Forms kaynağının
+  yanıtlayanları da yalnız adresle bilinir (snapshot'ta `sub` yok): bu
+  kaynak sürümü takip istemez, `tracking: false` der.
   core'a gönderimin veritabanı işlemi **başlamadan önce** sorulur (Mail
   onayında istek kilitlenmeden önce, grup üyeleriyle birlikte); SkyMail core'u
   hiçbir zaman işlem ya da kilit tutarken beklemez. O yanıtta olmayan kişi
@@ -469,8 +482,8 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   sonra kapatıldıysa posta temiz gider ve belirteç `flag_off` ile kapanır.
   `mail_queue.sent_at` relay'in postayı aldığı an.
 - **Okuma:** `GET /v1/mail_tasks/summary` → `tracking_available` (gönderim
-  formu kutuyu yalnız bu `true` iken gösterir); gönderim satırları ve Mail
-  onayı isteği `tracking` alanı taşır.
+  formu kutuyu yalnız bu `true` iken gösterir); gönderim satırları, Mail
+  onayı isteği ve `POST /v1/mail_tasks/single` yanıtı `tracking` alanı taşır.
 - **Hesap silme** kişiye giden satırların olaylarını siler, belirteçlerini
   kapatır, kişiyi adlandıran (yazıldığı gibi ya da URL çözülmüş) ya da yalnız
   ona giden gönderimin bağlantılarının adresini boşaltır; sayaçlar

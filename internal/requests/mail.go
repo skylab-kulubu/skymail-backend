@@ -8,7 +8,7 @@ type CreateMailTask struct {
 	TemplateID    uuid.UUID              `json:"template_id" validate:"required"`
 	MailListID    uuid.UUID              `json:"mail_list_id" validate:"required"`
 	BodyVariables map[string]interface{} `json:"body_variables"`
-	// Open and click tracking: each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links. Ignored (and answered false) while SkyMail's tracking is off and for a System or sensitive template, which are never tracked; a mailing list's address-only recipients are not tracked.
+	// Open and click tracking: each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links. Ignored (and answered false) while SkyMail's tracking is off and for a System or sensitive template, which are never tracked; a mailing list's address-only recipients are not tracked (no_account).
 	Tracking bool `json:"tracking"`
 }
 
@@ -21,6 +21,8 @@ type SendSingleMail struct {
 	RecipientEmail    string                 `json:"recipient_email" validate:"required,email"`
 	RecipientFullName string                 `json:"recipient_full_name"`
 	BodyVariables     map[string]interface{} `json:"body_variables"`
+	// Open and click tracking for a mail a person sends (the compose form's people). Ignored (and answered false) for a service's token — account and transaction mail is never tracked — while SkyMail's tracking is off, and for a System template or a sensitive one (a template that says nothing counts as sensitive for one person). The recipient is known only by address, so the row is not tracked (no_account): the address is never looked up to find an account.
+	Tracking bool `json:"tracking"`
 }
 
 // CreateFormMailSource is accepted only from the configured Forms service.

@@ -74,11 +74,13 @@ func retryDelay(attempts int) time.Duration {
 type Priority int16
 
 const (
-	// PriorityBulk is a send to a mailing list or a Keycloak group, and an
-	// approved send: an operator's mail, which can wait a moment.
+	// PriorityBulk is a send to a mailing list or a Keycloak group, an
+	// approved send, and a single mail a person sends asking for tracking:
+	// an operator's mail, which can wait a moment.
 	PriorityBulk Priority = 0
 	// PrioritySystem is a single mail (POST /mail_tasks/single): a login
-	// code, a certificate, a Forms confirmation, a notification.
+	// code, a certificate, a Forms confirmation, a notification. It is never
+	// tracked.
 	PrioritySystem Priority = 1
 )
 
@@ -146,12 +148,17 @@ type Mailer interface {
 	TrackingApplies(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID) bool
 	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error)
 	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
+	// EnqueueTrackedSingle queues a mail a person sends one person and asks
+	// tracking for (POST /mail_tasks/single with tracking): an operator's
+	// mail, so in the bulk lane, where tracking is planned. The system lane
+	// is never tracked.
+	EnqueueTrackedSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
 	EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error)
 }
 
-// Mailer's three ways to queue a send pick the lane: Enqueue (a list) and
-// EnqueueWithRecipients (a group) the bulk lane, EnqueueSingle the system
-// lane.
+// Mailer's ways to queue a send pick the lane: Enqueue (a list),
+// EnqueueWithRecipients (a group) and EnqueueTrackedSingle the bulk lane,
+// EnqueueSingle the system lane.
 
 // Queue is the send path inside a caller's transaction: the same three ways
 // to queue a send as Mailer's, written through that transaction, so the send
@@ -550,6 +557,12 @@ func (m *mailerImpl) Enqueue(ctx context.Context, arg database.CreateMailTaskPar
 
 func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
 	return m.pooled(ctx, PrioritySystem, func(q *queue) (uuid.UUID, bool, error) {
+		return q.enqueueSingle(ctx, arg)
+	})
+}
+
+func (m *mailerImpl) EnqueueTrackedSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
+	return m.pooled(ctx, PriorityBulk, func(q *queue) (uuid.UUID, bool, error) {
 		return q.enqueueSingle(ctx, arg)
 	})
 }

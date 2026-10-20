@@ -16,6 +16,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
 )
 
@@ -191,12 +192,12 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 // SendSingle godoc
 //
 //	@Summary		Send a single email
-//	@Description	Send a single email to a specific recipient using a template.
+//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never for a service's token, while SkyMail's tracking is off, or for a System or sensitive template). The recipient is known only by address, so the row says no_account and is not tracked; the address is never looked up to find an account.
 //	@Tags			Mail
 //	@Accept			json
 //	@Produce		json
-//	@Param			mail	body	requests.SendSingleMail	true	"Mail details"
-//	@Success		201		"Created"
+//	@Param			mail	body		requests.SendSingleMail	true	"Mail details"
+//	@Success		201		{object}	handlers.CreatedMailTask
 //	@Failure		400		{object}	apperrors.AppError	"Bad Request"
 //	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/mail_tasks/single [post]
@@ -221,18 +222,29 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 		return apperrors.ErrForbidden
 	}
 
-	taskID, err := h.mailer.EnqueueSingle(c.Context(), database.CreateSingleMailTaskParams{
+	// Account and transaction mail, which services send here, is never
+	// tracked: only a person's own send may ask, and it then goes in the bulk
+	// lane, an operator's mail; the system lane stays untracked.
+	tracking := params.Tracking && !middlewares.IsServiceAccount(c) && h.mailer.TrackingApplies(c.Context(), templateID, nil)
+	arg := database.CreateSingleMailTaskParams{
 		SentBy:            sentBy,
 		TemplateID:        &templateID,
 		BodyVariables:     bodyVarsJson,
 		RecipientFullName: params.RecipientFullName,
 		RecipientEmail:    params.RecipientEmail,
-	})
+		TrackingRequested: tracking,
+	}
+	var taskID uuid.UUID
+	if tracking {
+		taskID, err = h.mailer.EnqueueTrackedSingle(c.Context(), arg)
+	} else {
+		taskID, err = h.mailer.EnqueueSingle(c.Context(), arg)
+	}
 	if err != nil {
 		return err
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": taskID})
+	return c.Status(fiber.StatusCreated).JSON(CreatedMailTask{ID: taskID, Tracking: tracking})
 }
 
 // MailTaskItem is a send as the send list, a send's own page and the home

@@ -37,8 +37,10 @@ func (m *mailerImpl) TrackingAvailable() bool { return m.tracking.Config.On() }
 
 // TrackingApplies reports whether a send of templateID to mailListID that
 // asks for tracking gets it: tracking is on and the template is neither a
-// System template nor sensitive (GetTemplateTrackingExclusion). It says
-// false when that cannot be read. The send's transaction decides again
+// System template nor sensitive (GetTemplateTrackingExclusion). For a send
+// to people (mailListID nil) a template that says nothing of its content
+// counts as sensitive, as it does for single mail everywhere. It says false
+// when that cannot be read. The send's transaction decides again
 // (GetMailTaskTrackingExclusion) and, should the template have changed in
 // between, says not tracked.
 func (m *mailerImpl) TrackingApplies(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID) bool {
@@ -113,11 +115,14 @@ func (m *mailerImpl) ResolveTracking(ctx context.Context, templateID uuid.UUID, 
 // tracking, each queued row's token or why it has none (design note 07
 // §4.1):
 //
-//   - a single mail (the system lane), or a send of a System template or of
-//     one whose content is sensitive (mail_task_content_sensitive): the send
-//     is not tracked at all, tracking_requested false and no row reasons, as
-//     TrackingApplies told the caller;
-//   - a recipient SkyMail knows only by address: no_account;
+//   - a mail in the system lane (a single mail a service sends: a login
+//     code, a certificate, a notification), or a send of a System template
+//     or of one whose content is sensitive (mail_task_content_sensitive):
+//     the send is not tracked at all, tracking_requested false and no row
+//     reasons, as TrackingApplies told the caller;
+//   - a recipient SkyMail knows only by address — an internal list's, a
+//     person named by address in a single mail or a request for approval —
+//     no_account. An address is never looked up to find its account;
 //   - everyone else as core said before the transaction (preferences). Core
 //     not asked, failing, or not asked about this person (the recipients
 //     changed since): preference_unavailable. Core is never asked here.
