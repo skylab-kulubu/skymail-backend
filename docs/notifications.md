@@ -1,0 +1,157 @@
+# Bildirimler (`POST /v1/notifications`) ve Bildirim türleri
+
+Hub bileti iletişim-servisi 03; ADR 0069 taslağı (önerilen: core ne oldu ve
+kime, SkyMail hangi kanaldan ve hangi metinle). Bugün tek kanal e-postadır;
+kutu (05), push (12) ve SMS (13) kendi biletleriyle gelir.
+
+## Bildirim türü (`notification_types`)
+
+| Alan | Anlamı |
+|---|---|
+| `key` | Template key'in alfabesi (`event.cancelled`). Türün e-posta varyantı aynı anahtarlı şablondur. |
+| `category` | Tercih kategorisi; `null` kategorisiz. |
+| `required` | Zorunlu tür tercihe bakmaz (giriş kodu, bilet, sertifika). |
+| `default_channels` | Türün kanalları. Bugün yalnız `email` (veritabanında `CHECK`). |
+| `lane` | Kuyruk şeridi: `system` (toplu gönderimi hiç beklemez) ya da `bulk` (işçilerin en çok %70'i). |
+| `archived_at` | Doluysa tür kullanımda değildir. |
+
+- Template seed yazar: `PUT /v1/notification_types/{key}` (`skymail:templates:write`),
+  gövde `{"category", "required", "default_channels", "lane"}`. Var olan tür
+  üzerine yazılır, arşivi olduğu gibi kalır. Kategori küçük harf, rakam, nokta,
+  tire ve alt çizgi; 2–64 karakter.
+- Okuma: `GET /v1/notification_types`, `GET /v1/notification_types/{key}`
+  (`skymail:templates:read`).
+- Operatörün türü değiştireceği bir uç yok (konsol, bilet 10). O uç geldiğinde
+  ADR-0047'nin kuralı (seed operatörün değişikliğini sessizce ezmez) buraya da
+  uygulanır.
+- `templates.channel` her şablonun hangi kanal varyantı olduğunu söyler; bugün
+  hepsi `email`. Tekillik ikinci kanal gelene kadar `key` üzerinde kalır (eski
+  imajın seed'i `ON CONFLICT (key)` yazar).
+
+## `POST /v1/notifications`
+
+Yalnız bir servis hesabının token'ı (client credentials: `client_id` = `azp`)
+ve `skymail:notifications:send` (bilet 04, core'un servis hesabına) girer;
+`/v1`'in her ucu gibi `skymail:access` de gerekir. Kişi token'ı rolü olsa da
+`403 auth.service_account_required` alır.
+
+```http
+POST /v1/notifications
+Idempotency-Key: core-outbox-7f3a…
+Content-Type: application/json
+
+{
+  "type": "event.cancelled",
+  "recipients": [
+    {"sub": "31ef736f-…", "allowed_channels": ["email"]},
+    {"sub": "5d0c…", "email": "ayse@example.com", "name": "Ayşe Kaya", "allowed_channels": []}
+  ],
+  "variables": {"EventName": "Kodlama Gecesi"},
+  "source": {"kind": "event", "ref": "6f1c…"}
+}
+```
+
+- `recipients`: 1–1000 kişi, Keycloak `sub`'ıyla. Aynı `sub` ikinci kez
+  geçerse sayılır (`duplicates`) ve atlanır.
+- `email`, `name` isteğe bağlı. `variables` her alıcıya aynıdır; alıcının adı ve
+  adresi şablonda `.FullName` ve `.Email`.
+- `allowed_channels`: core'un kişinin tercihine göre izin verdiği kanallar
+  (`email`, `inbox`, `push`, `sms`). İsteğe bağlı türde her alıcıda zorunludur
+  (`[]` hiçbir kanal; alan yoksa `400 notification.allowed_channels_required`,
+  `params.recipient` sırası). Zorunlu türde yok sayılır.
+- `source`: nereden geldiği (`kind` en çok 64, `ref` en çok 200 karakter);
+  bildirimle saklanır.
+
+### Kanal seçimi (kişi başına)
+
+tür varsayılanı ∩ `allowed_channels` (yalnız isteğe bağlı türde) ∩ kişinin o
+kanaldaki adresi.
+
+E-posta adresi: istekteki `email`; yoksa Keycloak'tan `sub` ile Primary e-mail
+(servis hesabının `view-users` rolü). Atlanma nedenleri:
+
+| Neden | Ne zaman |
+|---|---|
+| `not_allowed` | İsteğe bağlı tür, kanal `allowed_channels`'ta yok |
+| `unknown_person` | Keycloak'ta bu `sub`'la kullanıcı yok |
+| `disabled` | Hesap devre dışı |
+| `no_address` | İstekte de Keycloak'ta da adres yok |
+| `unverified` | Keycloak'taki adres doğrulanmamış |
+
+İstekte adres verilmişse Keycloak'a sorulmaz: adresi veren çağıran onun
+doğruluğundan sorumludur. Keycloak yanıt vermezse hiçbir şey kuyruğa girmez ve
+saklanmaz: `503 notification.directory_unavailable`, aynı anahtarla yeniden
+denenir.
+
+E-posta türün anahtarındaki şablonla, türün şeridinde, kişinin `sub`'ı
+`mail_queue.recipient_sub`'a yazılarak kuyruğa girer (bir gönderim,
+`mail_tasks.notification_id`). Gönderim bir listeye ya da onaylı isteğe
+gitmediği için içerik kuralında tekil sayılır (`docs/data-lifecycle.md`).
+Takip yoktur.
+
+### Yanıt (`201`)
+
+```json
+{
+  "id": "…",
+  "type": "event.cancelled",
+  "recipients": 2,
+  "duplicates": 0,
+  "channels": {
+    "email": {"task_id": "…", "queued": 1, "failed": 0, "skipped": {"not_allowed": 1}}
+  }
+}
+```
+
+`task_id` e-posta gönderimidir (`GET /v1/mail_tasks/{id}`); kimse kuyruğa
+girmediyse `null`. `failed`: metni render edilemeyen alıcılar (gönderimde
+`failed` satır olarak görünür).
+
+### Idempotency (`Idempotency-Key`)
+
+- Başlık zorunlu: 1–255 görünür ASCII karakter, bir bildirimin her denemesinde
+  aynı. Yoksa `400 notification.idempotency_key_required`.
+- Anahtar çağırana özeldir: `(sent_by, idempotency_key)` tekil
+  (`notifications`).
+- Aynı çağıran, aynı anahtar, aynı istek (isteğin SHA-256'sı): ilk yanıt yine
+  `201` ile döner, `Idempotent-Replayed: true`; hiçbir şey yeniden kuyruğa
+  girmez, Keycloak'a sorulmaz.
+- Aynı anahtar, başka istek: `422 notification.idempotency_key_reused`.
+- Aynı anda gelen iki istek: ikincisi birincinin işlemini bekler, sonra onun
+  yanıtını döner.
+- Anahtar, bildirim satırı durdukça (silinmez) geçerlidir; yeni bildirim yeni
+  anahtar ister (core'un giden kutusu satırının kimliği gibi).
+
+### Hatalar
+
+| Durum | Kod |
+|---|---|
+| 400 | `validation.error`, `notification.idempotency_key_required`, `notification.allowed_channels_required` |
+| 403 | `server.forbidden` (rol yok), `auth.service_account_required` (kişi token'ı) |
+| 409 | `notification.email_variant_missing` (tür e-postayla gider, anahtarında kullanımda şablon yok) |
+| 422 | `notification.type_unknown` (yok ya da arşivli), `notification.idempotency_key_reused` |
+| 503 | `notification.directory_unavailable` |
+
+### Gözlem
+
+Her kabul edilen bildirim kanal başına bir log satırı yazar (kişi, adres,
+değişken yok):
+
+```json
+{"level":"info","event":"notification_queued","notification_id":"…","type":"event.cancelled","lane":"bulk","channel":"email","queued":12,"failed":0,"skipped_not_allowed":3}
+```
+
+SkyMail'de bugün metrik ucu yok; tür ve kanal başına kuyruk derinliği ve
+gönderim sayısı metrikleri duyuru 05'in metrik maddesiyle birlikte gelir.
+O zamana kadar sayım bu satırdan (production sunucusunda, salt okunur):
+
+```bash
+docker service logs --raw --since 24h sky-lab-production-skymail-tvrjzs 2>&1 | grep -F '"event":"notification_queued"' | grep -o '"type":"[^"]*","lane":"[^"]*","channel":"[^"]*","queued":[0-9]*' | sort | uniq -c
+```
+
+## `POST /v1/mail_tasks/single` aynen kalır
+
+İstek ve yanıt değişmez; Keycloak SPI, Forms ve core çağırmaya devam eder.
+`template_key` o anahtarın e-posta varyantıdır ve yalnız e-postayla gider;
+`notification_types`'ta satırı olması gerekmez. `Idempotency-Key` `/single`'da
+henüz okunmaz (horizontal-scale 28'in `/single` kısmı ayrı iş).

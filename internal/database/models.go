@@ -380,6 +380,7 @@ type MailTask struct {
 	// When retention closed the send's tracking: events rolled up and deleted, tokens closed. Null while open.
 	TrackingClosedAt *time.Time `json:"tracking_closed_at"`
 	FormSourceID     *uuid.UUID `json:"form_source_id"`
+	NotificationID   *uuid.UUID `json:"notification_id"`
 }
 
 // A send's links that are the same for every recipient, each with its random token: the only addresses /t/c redirects to.
@@ -433,6 +434,31 @@ type MailingListRecipient struct {
 	RecipientID uuid.UUID `json:"recipient_id"`
 }
 
+// One accepted POST /v1/notifications: type, caller, Idempotency-Key and a SHA-256 of the request, source, and its answer (counts only).
+type Notification struct {
+	ID             uuid.UUID `json:"id"`
+	Type           string    `json:"type"`
+	SentBy         string    `json:"sent_by"`
+	IdempotencyKey string    `json:"idempotency_key"`
+	RequestSha256  string    `json:"request_sha256"`
+	SourceKind     *string   `json:"source_kind"`
+	SourceRef      *string   `json:"source_ref"`
+	Result         []byte    `json:"result"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// What core may send a person by POST /v1/notifications: category (null: none), required (preferences not looked at), default channels, queue lane. The e-mail variant is the template of the same key.
+type NotificationType struct {
+	Key             string     `json:"key"`
+	Category        *string    `json:"category"`
+	Required        bool       `json:"required"`
+	DefaultChannels []string   `json:"default_channels"`
+	Lane            string     `json:"lane"`
+	ArchivedAt      *time.Time `json:"archived_at"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
 type Recipient struct {
 	ID        uuid.UUID `json:"id"`
 	FullName  string    `json:"full_name"`
@@ -478,6 +504,8 @@ type Template struct {
 	ContentSensitive *bool `json:"content_sensitive"`
 	// The top-level variables whose values the content sweep masks whole in a sensitive send, as the Template seed states them; null: by name and shape only.
 	SensitiveVariables []string `json:"sensitive_variables"`
+	// The channel variant the template is: email (subject, HTML, plain text). Other channels' variants come with their channel.
+	Channel string `json:"channel"`
 }
 
 type TemplateContentSensitiveEvent struct {
