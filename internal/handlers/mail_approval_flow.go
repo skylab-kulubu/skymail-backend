@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
 	"github.com/skylab-kulubu/skymail-backend/internal/requiredvars"
@@ -598,6 +599,10 @@ func (h *mailApprovalHandlerImpl) groupRecipients(ctx context.Context, groupID u
 		return prepared, nil
 	}
 	members, err := h.kc.GetGroupMembers(ctx, groupID.String())
+	if errors.Is(err, keycloak.ErrGroupNotFound) {
+		// Gone since GetGroup: as if GetGroup had not found it.
+		return prepared, nil
+	}
 	if err != nil {
 		return prepared, err
 	}

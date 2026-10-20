@@ -855,9 +855,15 @@ WHERE id = sqlc.arg(id)
   AND claimed_at = sqlc.arg(claimed_at)::timestamptz
 RETURNING attempts;
 
+-- content_sensitive_at_send is whether the send is sensitive as it is
+-- queued: 'true' when its template's key is locked sensitive
+-- (template_key_content_locked) whatever the template says, else the
+-- template's content_sensitive ('unset' for NULL). It never changes after:
+-- mail_task_content_sensitive() reads it first (20261020120000).
 -- name: CreateMailTask :many
 WITH active_source AS (
-    SELECT t.id AS template_id, ml.id AS mail_list_id, COALESCE(t.content_sensitive::text, 'unset') AS content_sensitive
+    SELECT t.id AS template_id, ml.id AS mail_list_id,
+           CASE WHEN template_key_content_locked(t.key) THEN 'true' ELSE COALESCE(t.content_sensitive::text, 'unset') END AS content_sensitive
     FROM templates t
              JOIN mailing_lists ml ON ml.id = sqlc.narg(mail_list_id)::uuid
     WHERE t.id = sqlc.narg(template_id)::uuid
@@ -1262,19 +1268,31 @@ FROM due
 WHERE mt.id = due.id
 RETURNING mt.id, (SELECT count(*) FROM rows WHERE rows.task_id = mt.id) AS rows_cleared;
 
+-- content_sensitive_at_send is whether the send is sensitive as it is
+-- queued: 'true' when its template's key is locked sensitive
+-- (template_key_content_locked) whatever the template says, else the
+-- template's content_sensitive ('unset' for NULL). It never changes after:
+-- mail_task_content_sensitive() reads it first (20261020120000).
 -- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, form_source_id, body_variables, content_sensitive_at_send,
                         tracking_requested)
 SELECT sqlc.arg(sent_by), sqlc.arg(template_id), sqlc.narg(mail_list_id), sqlc.narg(form_source_id), sqlc.arg(body_variables),
-       COALESCE(templates.content_sensitive::text, 'unset'), sqlc.arg(tracking_requested)::boolean
+       CASE WHEN template_key_content_locked(templates.key) THEN 'true' ELSE COALESCE(templates.content_sensitive::text, 'unset') END,
+       sqlc.arg(tracking_requested)::boolean
 FROM templates
 WHERE templates.id = sqlc.arg(template_id)
   AND archived_at IS NULL
 RETURNING mail_tasks.id, sent_by, template_id, mail_list_id, body_variables, created_at;
 
+-- content_sensitive_at_send is whether the send is sensitive as it is
+-- queued: 'true' when its template's key is locked sensitive
+-- (template_key_content_locked) whatever the template says, else the
+-- template's content_sensitive ('unset' for NULL). It never changes after:
+-- mail_task_content_sensitive() reads it first (20261020120000).
 -- name: CreateSingleMailTask :one
 WITH active_template AS (
-    SELECT templates.id, COALESCE(templates.content_sensitive::text, 'unset') AS content_sensitive
+    SELECT templates.id,
+           CASE WHEN template_key_content_locked(templates.key) THEN 'true' ELSE COALESCE(templates.content_sensitive::text, 'unset') END AS content_sensitive
     FROM templates
     WHERE templates.id = sqlc.narg(template_id)::uuid
       AND archived_at IS NULL
@@ -1798,3 +1816,62 @@ DELETE FROM mail_form_sources WHERE id IN (
  SELECT fs.id FROM mail_form_sources fs WHERE fs.consumed_at IS NULL AND fs.expires_at <= sqlc.arg(at)
  ORDER BY fs.expires_at,fs.id LIMIT sqlc.arg(batch_size) FOR UPDATE SKIP LOCKED
 );
+
+-- A notification type as the Template seed states it
+-- (PUT /v1/notification_types/{key}): written over, its archive left as it
+-- is.
+-- name: UpsertNotificationType :one
+INSERT INTO notification_types (key, category, required, default_channels, lane)
+VALUES (sqlc.arg(key)::text, sqlc.narg(category)::text, sqlc.arg(required)::boolean,
+        sqlc.arg(default_channels)::text[], sqlc.arg(lane)::text)
+ON CONFLICT (key) DO UPDATE
+    SET category         = EXCLUDED.category,
+        required         = EXCLUDED.required,
+        default_channels = EXCLUDED.default_channels,
+        lane             = EXCLUDED.lane,
+        updated_at       = now()
+RETURNING *;
+
+-- name: GetNotificationType :one
+SELECT *
+FROM notification_types
+WHERE key = $1;
+
+-- name: ListNotificationTypes :many
+SELECT *
+FROM notification_types
+ORDER BY key;
+
+-- A notification accepted under its caller's Idempotency-Key; nothing when
+-- the caller already used the key (a concurrent request with it waits here
+-- for the first to commit or roll back).
+-- name: InsertNotification :one
+INSERT INTO notifications (type, sent_by, idempotency_key, request_sha256, source_kind, source_ref)
+VALUES (sqlc.arg(type)::text, sqlc.arg(sent_by)::text, sqlc.arg(idempotency_key)::text,
+        sqlc.arg(request_sha256)::text, sqlc.narg(source_kind)::text, sqlc.narg(source_ref)::text)
+ON CONFLICT (sent_by, idempotency_key) DO NOTHING
+RETURNING id;
+
+-- name: GetNotificationByIdempotencyKey :one
+SELECT id, type, request_sha256, result
+FROM notifications
+WHERE sent_by = sqlc.arg(sent_by)::text
+  AND idempotency_key = sqlc.arg(idempotency_key)::text;
+
+-- name: SetNotificationResult :exec
+UPDATE notifications
+SET result = sqlc.arg(result)::jsonb
+WHERE id = sqlc.arg(id);
+
+-- name: SetMailTaskNotification :exec
+UPDATE mail_tasks
+SET notification_id = sqlc.arg(notification_id)::uuid
+WHERE id = sqlc.arg(id);
+
+-- A send's queue rows as POST /v1/notifications answers them: queued (any row
+-- not failed) and failed (a recipient whose mail did not render).
+-- name: CountMailTaskRows :one
+SELECT count(*) FILTER (WHERE status <> 'failed') AS queued,
+       count(*) FILTER (WHERE status = 'failed')  AS failed
+FROM mail_queue
+WHERE task_id = sqlc.arg(task_id);

@@ -2,6 +2,7 @@ package mailer
 
 import (
 	"context"
+	"errors"
 	"github.com/google/uuid"
 	"time"
 
@@ -105,3 +106,12 @@ func SetMaskSendHook(hook func(uuid.UUID)) func() {
 func SetChannelSender(m Transactional, channel string, send func(ctx context.Context, job database.MailQueue) error) {
 	m.(*mailerImpl).channels[channel] = func() (ChannelSender, error) { return channelSenderFunc(send), nil }
 }
+
+// IsPermanent says err fails its row for good at once: no retry.
+func IsPermanent(err error) bool {
+	var permanent permanentError
+	return errors.As(err, &permanent)
+}
+
+// ReservedDomain says address is in a domain reserved for tests and examples.
+var ReservedDomain = reservedDomain
