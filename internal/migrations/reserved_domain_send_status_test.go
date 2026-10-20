@@ -31,7 +31,10 @@ func TestAReservedDomainRecipientDoesNotFailItsSend(t *testing.T) {
 		    ('70000000-0000-4000-8000-000000000001', 'sub', '{}'),
 		    ('70000000-0000-4000-8000-000000000002', 'sub', '{}'),
 		    ('70000000-0000-4000-8000-000000000003', 'sub', '{}'),
-		    ('70000000-0000-4000-8000-000000000004', 'sub', '{}');
+		    ('70000000-0000-4000-8000-000000000004', 'sub', '{}')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Pool.Exec(ctx, `
 		INSERT INTO mail_queue (task_id, recipient_full_name, recipient_email, subject, body, status, error) VALUES
 		    ('70000000-0000-4000-8000-000000000001', 'A', 'a@yildizskylab.com', 'K', 'G', 'sent', NULL),
 		    ('70000000-0000-4000-8000-000000000001', 'S', 'seed@example.com', '', '', 'failed', $1),
