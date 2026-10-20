@@ -360,6 +360,8 @@ type MailQueue struct {
 	TrackingSkipReason *string `json:"tracking_skip_reason"`
 	// When the relay took the mail; null for a row not sent, or sent by an image from before it.
 	SentAt *time.Time `json:"sent_at"`
+	// Account mail (keycloak.*, account.*) queued to a suppressed address: sent anyway, flagged.
+	SuppressedButSent bool `json:"suppressed_but_sent"`
 }
 
 type MailSendWindow struct {
@@ -383,6 +385,17 @@ type MailSuppression struct {
 	LastQueueID *uuid.UUID `json:"last_queue_id"`
 	// When account mail (keycloak.*, account.*) was last sent to the address anyway, flagged.
 	ExemptFlaggedAt *time.Time `json:"exempt_flagged_at"`
+}
+
+// Who removed a suppression and when, with what it said (source, code, count, first seen). No address; Account erasure replaces the actor.
+type MailSuppressionRemoval struct {
+	ID         int64     `json:"id"`
+	RemovedAt  time.Time `json:"removed_at"`
+	ActorSub   string    `json:"actor_sub"`
+	Source     string    `json:"source"`
+	ReasonCode string    `json:"reason_code"`
+	Count      int       `json:"count"`
+	FirstSeen  time.Time `json:"first_seen"`
 }
 
 type MailTask struct {

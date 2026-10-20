@@ -64,6 +64,12 @@ const docTemplate = `{
                     },
                     "status": {
                         "$ref": "#/components/schemas/database.NullMailQueueStatus"
+                    },
+                    "suppressed_but_sent": {
+                        "type": "boolean"
+                    },
+                    "undelivered": {
+                        "type": "boolean"
                     }
                 },
                 "type": "object"
@@ -696,7 +702,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "recipient_counts": {
-                        "$ref": "#/components/schemas/handlers.QueueCounts"
+                        "$ref": "#/components/schemas/handlers.QueueTotals"
                     },
                     "sent_by": {
                         "type": "string"
@@ -822,6 +828,35 @@ const docTemplate = `{
                         "type": "integer"
                     },
                     "sent": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.QueueTotals": {
+                "properties": {
+                    "failed": {
+                        "type": "integer"
+                    },
+                    "pending": {
+                        "type": "integer"
+                    },
+                    "processing": {
+                        "type": "integer"
+                    },
+                    "sent": {
+                        "type": "integer"
+                    },
+                    "suppressed": {
+                        "description": "Written failed when queued, never sent: the address is suppressed (in failed too).",
+                        "type": "integer"
+                    },
+                    "suppressed_but_sent": {
+                        "description": "Account mail sent to a suppressed address anyway, flagged (in its status too).",
+                        "type": "integer"
+                    },
+                    "undelivered": {
+                        "description": "Sent, then a delivery status notification said the address does not exist (in sent too).",
                         "type": "integer"
                     }
                 },
@@ -1131,6 +1166,54 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "task_id": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.Suppression": {
+                "properties": {
+                    "address": {
+                        "description": "Lower-case.",
+                        "type": "string"
+                    },
+                    "count": {
+                        "description": "How many permanent failures were recorded.",
+                        "type": "integer"
+                    },
+                    "exempt_flagged_at": {
+                        "description": "When account mail (a login code, a verification, a password reset) was\nlast sent to the address anyway; null if never.",
+                        "type": "string"
+                    },
+                    "first_seen": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "description": "What DELETE /suppressions/{id} names it by.",
+                        "type": "string"
+                    },
+                    "last_queue_id": {
+                        "description": "The queue row of the last one; null once that row is gone.",
+                        "type": "string"
+                    },
+                    "last_seen": {
+                        "type": "string"
+                    },
+                    "reason_code": {
+                        "description": "The codes of the last permanent failure, never its text: 5.1.10,\n5.4.1 AS(201806281), RCPT TO 550 5.1.1.",
+                        "example": "5.1.10",
+                        "type": "string"
+                    },
+                    "recipient_sub": {
+                        "description": "The recipient's Keycloak subject, when the mail refused knew it.",
+                        "type": "string"
+                    },
+                    "source": {
+                        "description": "dsn: a delivery status notification said the address does not exist;\nsmtp: the relay refused it when the mail was sent.",
+                        "enum": [
+                            "dsn",
+                            "smtp"
+                        ],
                         "type": "string"
                     }
                 },
@@ -3246,7 +3329,7 @@ const docTemplate = `{
                         }
                     },
                     {
-                        "description": "Derived send status: failed (a recipient failed, other than one skipped for a reserved domain (reserved_domain); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent)",
+                        "description": "Derived send status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent)",
                         "in": "query",
                         "name": "status",
                         "schema": {
@@ -3564,7 +3647,7 @@ const docTemplate = `{
         },
         "/mail_tasks/summary": {
             "get": {
-                "description": "Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, other than one skipped for a reserved domain (reserved_domain); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).",
+                "description": "Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).",
                 "parameters": [
                     {
                         "description": "Days in the daily series, ending today in Europe/Istanbul (1-90)",
@@ -4876,6 +4959,159 @@ const docTemplate = `{
                 "summary": "Send a notification to people",
                 "tags": [
                     "Notifications"
+                ]
+            }
+        },
+        "/suppressions": {
+            "get": {
+                "description": "Addresses mail is not sent to after one permanent failure (a relay's refusal of the address, or a delivery status notification saying it does not exist), most recently failed first. Account mail (keycloak.*, account.* templates) is still sent to them and flagged. Nothing leaves the list by itself: an operator removes an address, or Account erasure does. q keeps the addresses that contain it, case-insensitively; X-Total-Count counts them.",
+                "parameters": [
+                    {
+                        "description": "Part of an address",
+                        "in": "query",
+                        "name": "q",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Start index",
+                        "in": "query",
+                        "name": "_start",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "End index (at most 100 rows a page)",
+                        "in": "query",
+                        "name": "_end",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "items": {
+                                        "$ref": "#/components/schemas/handlers.Suppression"
+                                    },
+                                    "type": "array"
+                                }
+                            }
+                        },
+                        "description": "OK",
+                        "headers": {
+                            "X-Total-Count": {
+                                "description": "Number of suppressed addresses matching q",
+                                "schema": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "List the suppression list",
+                "tags": [
+                    "Suppressions"
+                ]
+            }
+        },
+        "/suppressions/{id}": {
+            "delete": {
+                "description": "Mail is sent to the address again. The removal is recorded — who, when, and the suppression's source, code, count and first failure — without the address. The address is named by the list's id, so it is never in a URL.",
+                "parameters": [
+                    {
+                        "description": "Suppression ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Remove an address from the suppression list",
+                "tags": [
+                    "Suppressions"
                 ]
             }
         },

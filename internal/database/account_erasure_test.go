@@ -109,6 +109,10 @@ INSERT INTO mail_suppressions (address, recipient_sub, source, reason_code, last
     ('` + erasedSchool + `', NULL, 'smtp', 'RCPT TO 550 5.1.1', '50000000-0000-4000-8000-0000000000b2'),
     ('deniz.eski@example.net', '` + erasedSub + `', 'dsn', '5.1.10', NULL),
     ('ayse@example.com', '` + otherSub + `', 'dsn', '5.4.1 AS(201806281)', '50000000-0000-4000-8000-0000000000a2');
+-- Deniz and Ayşe each removed a suppression.
+INSERT INTO mail_suppression_removals (id, actor_sub, source, reason_code, count, first_seen) OVERRIDING SYSTEM VALUE VALUES
+    (1, '` + erasedSub + `', 'dsn', '5.1.10', 1, '2026-10-01T10:00:00Z'),
+    (2, '` + otherSub + `', 'smtp', 'RCPT TO 550 5.1.1', 2, '2026-10-02T10:00:00Z');
 INSERT INTO mail_bounces (queue_id, source, kind, action, status, smtp_code, ndr_id_sha256) VALUES
     ('50000000-0000-4000-8000-0000000000b1', 'dsn', 'soft', 'failed', '5.2.2', 552, repeat('ab', 32));
 -- Deniz and Ayşe each opened Keycloak's reset mail, masked.
@@ -199,6 +203,7 @@ var erasureTables = map[string]string{
 	"mail_tracking_events":              "id::text",
 	"mail_suppressions":                 "address",
 	"mail_bounces":                      "id::text",
+	"mail_suppression_removals":         "id::text",
 }
 
 type tableRows map[string]map[string]string
@@ -311,7 +316,7 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 		AccountErasureQueueRowsCleared:          2 + 1,
 		AccountErasureBodiesCleared:             3,
 		AccountErasureVariablesCleared:          4 + 1,
-		AccountErasureActorColumnsReplaced:      11,
+		AccountErasureActorColumnsReplaced:      11 + 1,
 		AccountErasureNotesCleared:              3,
 		AccountErasureChangesCleared:            2,
 		AccountErasureApprovalRecipientsRemoved: 5,
@@ -332,6 +337,7 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 			"20000000-0000-4000-8000-000000000002/30000000-0000-4000-8000-000000000002",
 		},
 		"mail_suppressions":                 {erasedSchool, "deniz.eski@example.net"},
+		"mail_suppression_removals":         {"1"},
 		"templates":                         {"10000000-0000-4000-8000-000000000002"},
 		"mailing_lists":                     {"20000000-0000-4000-8000-000000000003"},
 		"template_versions":                 {"11000000-0000-4000-8000-000000000001"},
@@ -766,7 +772,7 @@ func TestEraseAccountWithoutAddressesStillReplacesTheSubject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if counts := receiptCounts(t, receipt); counts[AccountErasureActorColumnsReplaced] != 11 || counts[AccountErasureRecipientsDeleted] != 0 {
+	if counts := receiptCounts(t, receipt); counts[AccountErasureActorColumnsReplaced] != 11+1 || counts[AccountErasureRecipientsDeleted] != 0 {
 		t.Errorf("counts = %v", counts)
 	}
 	// The names the subject's own rows carry are still searched for.

@@ -252,7 +252,7 @@ type MailTaskItem struct {
 	MailListName    *string      `json:"mail_list_name"`
 	TemplateKey     *string      `json:"template_key"`
 	Status          SendStatus   `json:"status"`
-	RecipientCounts QueueCounts  `json:"recipient_counts"`
+	RecipientCounts QueueTotals  `json:"recipient_counts"`
 	Audience        SendAudience `json:"audience"`
 	// Whether the caller may open the send's content (GET /mail_tasks/{id}/queue/{itemId}/content), and if not why.
 	// masked: a sensitive send, kept with its codes and one-time links masked; pending: a sensitive send not masked yet, not shown; not_kept: a sensitive send emptied (before sensitive content was kept, or not masked for certain).
@@ -271,7 +271,7 @@ type MailTaskItem struct {
 //	@Produce		json
 //	@Param			_start	query		int		false	"Start index"
 //	@Param			_end	query		int		false	"End index"
-//	@Param			status	query		string	false	"Derived send status: failed (a recipient failed, other than one skipped for a reserved domain (reserved_domain); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent)"	Enums(failed,sending,sent)
+//	@Param			status	query		string	false	"Derived send status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent)"	Enums(failed,sending,sent)
 //	@Success		200		{array}		handlers.MailTaskItem
 //	@Header			200		{integer}	X-Total-Count		"Number of sends matching the filter"
 //	@Failure		400		{object}	apperrors.AppError	"Bad Request"

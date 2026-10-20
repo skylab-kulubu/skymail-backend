@@ -803,7 +803,10 @@ func (t mailTemplates) renderWith(textVars, htmlVars map[string]interface{}, rec
 // strict, a mail that does not render is returned as the error and nothing is
 // written. With refuseReserved, a recipient in a reserved domain (a seed
 // account at example.com) is written failed with reservedDomainError, strict
-// or not, and never reaches the relay. tracked says the send asked for open and click tracking with the
+// or not, and never reaches the relay. A recipient at a suppressed address
+// (suppression.go) is written failed with suppressedError the same way,
+// unless the send is account mail (AccountMail): then it is queued, its row
+// flagged suppressed_but_sent. tracked says the send asked for open and click tracking with the
 // flag on: each queued row gets a token or why not, as preferences — what
 // core said before the transaction — allows, and the send's shared links are
 // registered (tracking.go).
@@ -822,6 +825,12 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 		return false, err
 	}
 
+	suppressed, accountMail, err := q.suppressionsOf(ctx, rows)
+	if err != nil {
+		return false, err
+	}
+	var flagged []string
+
 	queueItems := make([]database.CreateMailQueueItemsParams, 0, len(rows))
 	var failed []database.CreateFailedMailQueueItemParams
 	for _, row := range rows {
@@ -834,6 +843,20 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 				RecipientEmail:    row.RecipientEmail,
 				Priority:          int16(q.priority),
 				Error:             reservedDomainError,
+				RecipientSub:      row.RecipientSub,
+			})
+			continue
+		}
+		suppression, isSuppressed := suppressed[suppressionAddress(row.RecipientEmail)]
+		if isSuppressed && !accountMail {
+			q.logger.Warn().Str("task_id", row.TaskID.String()).Str("suppression", suppression.Source+" "+suppression.ReasonCode).
+				Msg("A recipient's address is suppressed: written failed, never sent; the others are queued")
+			failed = append(failed, database.CreateFailedMailQueueItemParams{
+				TaskID:            row.TaskID,
+				RecipientFullName: row.RecipientFullName,
+				RecipientEmail:    row.RecipientEmail,
+				Priority:          int16(q.priority),
+				Error:             suppressedError(suppression),
 				RecipientSub:      row.RecipientSub,
 			})
 			continue
@@ -867,7 +890,13 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 			BodyHtml:          &htmlRes,
 			Priority:          int16(q.priority),
 			RecipientSub:      row.RecipientSub,
+			SuppressedButSent: isSuppressed,
 		})
+		if isSuppressed {
+			q.logger.Warn().Str("task_id", row.TaskID.String()).Str("suppression", suppression.Source+" "+suppression.ReasonCode).
+				Msg("Account mail to a suppressed address: queued and flagged")
+			flagged = append(flagged, suppression.Address)
+		}
 	}
 
 	if tracked && len(queueItems) > 0 {
@@ -885,6 +914,11 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 	}
 	for _, item := range failed {
 		if err := q.q.CreateFailedMailQueueItem(ctx, item); err != nil {
+			return false, err
+		}
+	}
+	if len(flagged) > 0 {
+		if err := q.q.FlagSuppressionsExempt(ctx, flagged); err != nil {
 			return false, err
 		}
 	}
@@ -1138,6 +1172,8 @@ func (m *mailerImpl) recordSendFailure(ctx context.Context, logger *zerolog.Logg
 			logger.Err(err).Str("job_id", job.ID.String()).Msg("Failed to set mail queue item")
 		} else if n == 0 {
 			m.lostLease(logger, job, "failed")
+		} else {
+			m.suppressRefused(ctx, logger, job, sendErr)
 		}
 		return
 	}
