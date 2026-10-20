@@ -22,6 +22,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/docs"
 	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skymail-backend/internal/bounce"
 	"github.com/skylab-kulubu/skymail-backend/internal/config"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/erasuretoken"
@@ -424,7 +425,8 @@ const viewSweepBatch = 500
 // startup and every interval after (docs/data-lifecycle.md, sent mail
 // content). It runs while the sender is paused too: it touches no row still
 // to go out. Then it deletes the records of who opened a masked mail older
-// than viewRetentionDays. It logs counts only.
+// than viewRetentionDays, and the bounces older than a year
+// (bounce.RetentionDays). It logs counts only.
 func clearMailContent(ctx context.Context, db *database.Store, retentionDays, viewRetentionDays int, interval time.Duration) {
 	log.Info().Int("retention_days", retentionDays).Int("view_retention_days", viewRetentionDays).
 		Msg("mail content sweep (MAIL_CONTENT_RETENTION_DAYS, SENT_CONTENT_VIEWS_RETENTION_DAYS)")
@@ -455,6 +457,13 @@ func clearMailContent(ctx context.Context, db *database.Store, retentionDays, vi
 		}
 		if views > 0 {
 			log.Info().Int64("views", views).Msg("deleted the records of masked mail openings past retention")
+		}
+		bounces, err := db.DeleteMailBounces(ctx, bounce.RetentionDays, viewSweepBatch)
+		if err != nil && ctx.Err() == nil {
+			log.Error().Err(err).Msg("bounce sweep failed")
+		}
+		if bounces > 0 {
+			log.Info().Int64("bounces", bounces).Msg("deleted the bounces past retention")
 		}
 		select {
 		case <-ctx.Done():

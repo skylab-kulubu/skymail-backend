@@ -1406,6 +1406,31 @@ func (q *Queries) DeleteExpiredMailFormSources(ctx context.Context, arg DeleteEx
 	return result.RowsAffected(), nil
 }
 
+const deleteOldMailBounces = `-- name: DeleteOldMailBounces :execrows
+DELETE
+FROM mail_bounces
+WHERE id IN (SELECT b.id
+             FROM mail_bounces b
+             WHERE b.received_at < now() - make_interval(days => $1::int)
+             ORDER BY b.received_at
+             LIMIT $2::int FOR UPDATE SKIP LOCKED)
+`
+
+type DeleteOldMailBouncesParams struct {
+	RetentionDays int `json:"retention_days"`
+	BatchSize     int `json:"batch_size"`
+}
+
+// Deletes up to batch_size of the oldest bounces older than retention_days
+// (a year): the content sweep's step.
+func (q *Queries) DeleteOldMailBounces(ctx context.Context, arg DeleteOldMailBouncesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOldMailBounces, arg.RetentionDays, arg.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteOldSentContentViews = `-- name: DeleteOldSentContentViews :execrows
 DELETE
 FROM sent_content_views
@@ -2636,6 +2661,49 @@ func (q *Queries) GetTrackingReport(ctx context.Context, arg GetTrackingReportPa
 	return report, err
 }
 
+const insertMailBounce = `-- name: InsertMailBounce :execrows
+INSERT INTO mail_bounces (queue_id, source, kind, action, status, smtp_code, exo_as_code, recipient_matched,
+                          ndr_id_sha256, received_at)
+VALUES ($1, $2::text, $3::text, $4::text,
+        $5::text, $6::int, $7::text,
+        $8::boolean, $9::text, $10::timestamptz)
+ON CONFLICT ON CONSTRAINT mail_bounces_ndr_once DO NOTHING
+`
+
+type InsertMailBounceParams struct {
+	QueueID          uuid.UUID `json:"queue_id"`
+	Source           string    `json:"source"`
+	Kind             string    `json:"kind"`
+	Action           string    `json:"action"`
+	Status           *string   `json:"status"`
+	SmtpCode         *int      `json:"smtp_code"`
+	ExoAsCode        *string   `json:"exo_as_code"`
+	RecipientMatched bool      `json:"recipient_matched"`
+	NdrIDSha256      *string   `json:"ndr_id_sha256"`
+	ReceivedAt       time.Time `json:"received_at"`
+}
+
+// Records what a report or a relay's refusal said about a queue row. A report
+// already recorded (its id's hash) records nothing: 0 rows.
+func (q *Queries) InsertMailBounce(ctx context.Context, arg InsertMailBounceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertMailBounce,
+		arg.QueueID,
+		arg.Source,
+		arg.Kind,
+		arg.Action,
+		arg.Status,
+		arg.SmtpCode,
+		arg.ExoAsCode,
+		arg.RecipientMatched,
+		arg.NdrIDSha256,
+		arg.ReceivedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertMailTask = `-- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, form_source_id, body_variables, content_sensitive_at_send,
                         tracking_requested)
@@ -3711,6 +3779,41 @@ func (q *Queries) ListTrackingRecipients(ctx context.Context, arg ListTrackingRe
 	var recipients []byte
 	err := row.Scan(&recipients)
 	return recipients, err
+}
+
+const lockBounceQueueRow = `-- name: LockBounceQueueRow :one
+
+SELECT id, channel, status, recipient_email, sent_at
+FROM mail_queue
+WHERE id = $1
+    FOR SHARE
+`
+
+type LockBounceQueueRowRow struct {
+	ID             uuid.UUID           `json:"id"`
+	Channel        string              `json:"channel"`
+	Status         NullMailQueueStatus `json:"status"`
+	RecipientEmail string              `json:"recipient_email"`
+	SentAt         *time.Time          `json:"sent_at"`
+}
+
+// Bounces and the suppression list (hub spec skymail-bounce-isleme; README,
+// "Geri dönen posta ve bastırma listesi").
+// The queue row a delivery status notification names, locked FOR SHARE until
+// the report is recorded: Account erasure locks the person's rows FOR UPDATE
+// first, so a report either waits for it and finds the row cleared, or holds
+// it off until the suppression it writes is there for erasure to delete.
+func (q *Queries) LockBounceQueueRow(ctx context.Context, id uuid.UUID) (LockBounceQueueRowRow, error) {
+	row := q.db.QueryRow(ctx, lockBounceQueueRow, id)
+	var i LockBounceQueueRowRow
+	err := row.Scan(
+		&i.ID,
+		&i.Channel,
+		&i.Status,
+		&i.RecipientEmail,
+		&i.SentAt,
+	)
+	return i, err
 }
 
 const lockDueMailApproval = `-- name: LockDueMailApproval :one
@@ -5298,6 +5401,41 @@ WHERE status = 'processing'
 // time a process sees it: the image that took it may be sending it still.
 func (q *Queries) StartLeaseOnUnclaimedJobs(ctx context.Context) (int64, error) {
 	result, err := q.db.Exec(ctx, startLeaseOnUnclaimedJobs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const suppressQueueRowAddress = `-- name: SuppressQueueRowAddress :execrows
+INSERT INTO mail_suppressions (address, recipient_sub, source, reason_code, last_queue_id)
+SELECT lower(btrim(q.recipient_email)), q.recipient_sub, $1::text, $2::text, q.id
+FROM mail_queue q
+WHERE q.id = $3
+  AND q.channel = 'email'
+  AND btrim(q.recipient_email) LIKE '_%@_%'
+    FOR SHARE OF q
+ON CONFLICT (address) DO UPDATE
+    SET last_seen     = now(),
+        count         = mail_suppressions.count + 1,
+        source        = EXCLUDED.source,
+        reason_code   = EXCLUDED.reason_code,
+        last_queue_id = EXCLUDED.last_queue_id,
+        recipient_sub = COALESCE(EXCLUDED.recipient_sub, mail_suppressions.recipient_sub)
+`
+
+type SuppressQueueRowAddressParams struct {
+	Source     string    `json:"source"`
+	ReasonCode string    `json:"reason_code"`
+	QueueID    uuid.UUID `json:"queue_id"`
+}
+
+// Suppresses the address of a queue row after a permanent failure: the
+// row's own address, read under a lock (FOR SHARE: a row Account erasure is
+// clearing is waited for and then found empty, and nothing is written). A
+// suppressed address is counted again and keeps its first_seen.
+func (q *Queries) SuppressQueueRowAddress(ctx context.Context, arg SuppressQueueRowAddressParams) (int64, error) {
+	result, err := q.db.Exec(ctx, suppressQueueRowAddress, arg.Source, arg.ReasonCode, arg.QueueID)
 	if err != nil {
 		return 0, err
 	}

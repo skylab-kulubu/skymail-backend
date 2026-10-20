@@ -143,6 +143,9 @@ type Querier interface {
 	// failure since the send was last masked starts its deadline.
 	DeferMaskFailure(ctx context.Context, arg DeferMaskFailureParams) error
 	DeleteExpiredMailFormSources(ctx context.Context, arg DeleteExpiredMailFormSourcesParams) (int64, error)
+	// Deletes up to batch_size of the oldest bounces older than retention_days
+	// (a year): the content sweep's step.
+	DeleteOldMailBounces(ctx context.Context, arg DeleteOldMailBouncesParams) (int64, error)
 	// Deletes up to batch_size of the oldest records of who opened a masked mail
 	// that are older than retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
 	DeleteOldSentContentViews(ctx context.Context, arg DeleteOldSentContentViewsParams) (int64, error)
@@ -213,6 +216,9 @@ type Querier interface {
 	// people into the HTTP process. Link URLs are omitted: one-recipient sends
 	// can have personal URLs and the summary only requires mails:read.
 	GetTrackingReport(ctx context.Context, arg GetTrackingReportParams) ([]byte, error)
+	// Records what a report or a relay's refusal said about a queue row. A report
+	// already recorded (its id's hash) records nothing: 0 rows.
+	InsertMailBounce(ctx context.Context, arg InsertMailBounceParams) (int64, error)
 	// content_sensitive_at_send is whether the send is sensitive as it is
 	// queued: 'true' when its template's key is locked sensitive
 	// (template_key_content_locked) whatever the template says, else the
@@ -286,6 +292,13 @@ type Querier interface {
 	// than their recipient's one-year window (tracking.EventRetentionDays) never
 	// reappear while retention is disabled or catching up. No tracking token or link target is selected.
 	ListTrackingRecipients(ctx context.Context, arg ListTrackingRecipientsParams) ([]byte, error)
+	// Bounces and the suppression list (hub spec skymail-bounce-isleme; README,
+	// "Geri dönen posta ve bastırma listesi").
+	// The queue row a delivery status notification names, locked FOR SHARE until
+	// the report is recorded: Account erasure locks the person's rows FOR UPDATE
+	// first, so a report either waits for it and finds the row cleared, or holds
+	// it off until the suppression it writes is there for erasure to delete.
+	LockBounceQueueRow(ctx context.Context, id uuid.UUID) (LockBounceQueueRowRow, error)
 	// The next undecided request past its deadline that no one is deciding right
 	// now, locked for the expiry sweep.
 	LockDueMailApproval(ctx context.Context, asOf time.Time) (MailApproval, error)
@@ -471,6 +484,11 @@ type Querier interface {
 	// lease, or comes from a dump made before it. Its lease starts now, the first
 	// time a process sees it: the image that took it may be sending it still.
 	StartLeaseOnUnclaimedJobs(ctx context.Context) (int64, error)
+	// Suppresses the address of a queue row after a permanent failure: the
+	// row's own address, read under a lock (FOR SHARE: a row Account erasure is
+	// clearing is waited for and then found empty, and nothing is written). A
+	// suppressed address is counted again and keeps its first_seen.
+	SuppressQueueRowAddress(ctx context.Context, arg SuppressQueueRowAddressParams) (int64, error)
 	// The next send the content sweep has to decide on masking (content_mask_due,
 	// idx_mail_tasks_content_mask_due): not masked or emptied, five minutes old,
 	// none of whose rows is still to go out, not among those it already tried in

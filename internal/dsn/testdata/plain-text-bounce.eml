@@ -1,0 +1,19 @@
+From: MAILER-DAEMON@eski.example.net
+To: bildirim@kulup.example
+Subject: failure notice
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="xx"
+
+--xx
+Content-Type: text/plain
+
+<kimse@eski.example.net>:
+Sorry, no mailbox here by that name. (#5.1.1)
+
+--xx
+Content-Type: message/rfc822
+
+Message-ID: <9c8b7a6d-5e4f-4321-8fed-cba987654321@mail.example.org>
+Subject: Duyuru
+
+--xx--

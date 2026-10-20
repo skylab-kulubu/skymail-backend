@@ -102,6 +102,15 @@ INSERT INTO mail_queue (id, task_id, recipient_full_name, recipient_email, subje
     ('50000000-0000-4000-8000-0000000000f1', '40000000-0000-4000-8000-00000000000f', 'Deniz Yılmaz', '` + erasedPersonal + `', 'Yeni dönem', 'Merhaba Deniz Yılmaz', '<p>Merhaba Deniz Yılmaz</p>', 'pending', NULL),
     ('50000000-0000-4000-8000-0000000000f2', '40000000-0000-4000-8000-00000000000f', 'Ayşe Kaya', 'ayse@example.com', 'Yeni dönem', 'Merhaba Ayşe Kaya', '<p>Merhaba Ayşe Kaya</p>', 'pending', NULL),
     ('50000000-0000-4000-8000-000000000101', '40000000-0000-4000-8000-000000000010', 'Deniz Yılmaz', 'd.yilmaz@example.org', 'Selam', 'Merhaba Deniz Yılmaz', '<p>Merhaba Deniz Yılmaz</p>', 'sent', NULL);
+-- The suppression list: Deniz's school address (refused at RCPT TO), an old
+-- address of Deniz's known only by the subject, and Ayşe's, which stays. A
+-- report about Keycloak's reset mail to Deniz stays with that mail: codes only.
+INSERT INTO mail_suppressions (address, recipient_sub, source, reason_code, last_queue_id) VALUES
+    ('` + erasedSchool + `', NULL, 'smtp', 'RCPT TO 550 5.1.1', '50000000-0000-4000-8000-0000000000b2'),
+    ('deniz.eski@example.net', '` + erasedSub + `', 'dsn', '5.1.10', NULL),
+    ('ayse@example.com', '` + otherSub + `', 'dsn', '5.4.1 AS(201806281)', '50000000-0000-4000-8000-0000000000a2');
+INSERT INTO mail_bounces (queue_id, source, kind, action, status, smtp_code, ndr_id_sha256) VALUES
+    ('50000000-0000-4000-8000-0000000000b1', 'dsn', 'soft', 'failed', '5.2.2', 552, repeat('ab', 32));
 -- Deniz and Ayşe each opened Keycloak's reset mail, masked.
 INSERT INTO sent_content_views (id, task_id, queue_item_id, actor_sub, actor_name, masked_by, masked_variables) VALUES
     ('13000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-00000000000b', '50000000-0000-4000-8000-0000000000b1', '` + erasedSub + `', 'Deniz Yılmaz', 'variables', '{link}'),
@@ -188,6 +197,8 @@ var erasureTables = map[string]string{
 	"mail_approval_events":              "id::text",
 	"mail_task_links":                   "id::text",
 	"mail_tracking_events":              "id::text",
+	"mail_suppressions":                 "address",
+	"mail_bounces":                      "id::text",
 }
 
 type tableRows map[string]map[string]string
@@ -308,6 +319,7 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 		AccountErasureApprovalSendLinksDeleted:  1,
 		AccountErasureTrackingEventsDeleted:     0,
 		AccountErasureTrackingLinksCleared:      0,
+		AccountErasureSuppressionsDeleted:       2,
 	}
 	if counts := receiptCounts(t, receipt); !reflect.DeepEqual(counts, wantCounts) {
 		t.Errorf("counts = %v\nwant     %v", counts, wantCounts)
@@ -319,6 +331,7 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 			"20000000-0000-4000-8000-000000000001/30000000-0000-4000-8000-000000000001",
 			"20000000-0000-4000-8000-000000000002/30000000-0000-4000-8000-000000000002",
 		},
+		"mail_suppressions":                 {erasedSchool, "deniz.eski@example.net"},
 		"templates":                         {"10000000-0000-4000-8000-000000000002"},
 		"mailing_lists":                     {"20000000-0000-4000-8000-000000000003"},
 		"template_versions":                 {"11000000-0000-4000-8000-000000000001"},

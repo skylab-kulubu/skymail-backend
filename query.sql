@@ -1875,3 +1875,57 @@ SELECT count(*) FILTER (WHERE status <> 'failed') AS queued,
        count(*) FILTER (WHERE status = 'failed')  AS failed
 FROM mail_queue
 WHERE task_id = sqlc.arg(task_id);
+
+-- Bounces and the suppression list (hub spec skymail-bounce-isleme; README,
+-- "Geri dönen posta ve bastırma listesi").
+
+-- The queue row a delivery status notification names, locked FOR SHARE until
+-- the report is recorded: Account erasure locks the person's rows FOR UPDATE
+-- first, so a report either waits for it and finds the row cleared, or holds
+-- it off until the suppression it writes is there for erasure to delete.
+-- name: LockBounceQueueRow :one
+SELECT id, channel, status, recipient_email, sent_at
+FROM mail_queue
+WHERE id = sqlc.arg(id)
+    FOR SHARE;
+
+-- Records what a report or a relay's refusal said about a queue row. A report
+-- already recorded (its id's hash) records nothing: 0 rows.
+-- name: InsertMailBounce :execrows
+INSERT INTO mail_bounces (queue_id, source, kind, action, status, smtp_code, exo_as_code, recipient_matched,
+                          ndr_id_sha256, received_at)
+VALUES (sqlc.arg(queue_id), sqlc.arg(source)::text, sqlc.arg(kind)::text, sqlc.arg(action)::text,
+        sqlc.narg(status)::text, sqlc.narg(smtp_code)::int, sqlc.narg(exo_as_code)::text,
+        sqlc.arg(recipient_matched)::boolean, sqlc.narg(ndr_id_sha256)::text, sqlc.arg(received_at)::timestamptz)
+ON CONFLICT ON CONSTRAINT mail_bounces_ndr_once DO NOTHING;
+
+-- Suppresses the address of a queue row after a permanent failure: the
+-- row's own address, read under a lock (FOR SHARE: a row Account erasure is
+-- clearing is waited for and then found empty, and nothing is written). A
+-- suppressed address is counted again and keeps its first_seen.
+-- name: SuppressQueueRowAddress :execrows
+INSERT INTO mail_suppressions (address, recipient_sub, source, reason_code, last_queue_id)
+SELECT lower(btrim(q.recipient_email)), q.recipient_sub, sqlc.arg(source)::text, sqlc.arg(reason_code)::text, q.id
+FROM mail_queue q
+WHERE q.id = sqlc.arg(queue_id)
+  AND q.channel = 'email'
+  AND btrim(q.recipient_email) LIKE '_%@_%'
+    FOR SHARE OF q
+ON CONFLICT (address) DO UPDATE
+    SET last_seen     = now(),
+        count         = mail_suppressions.count + 1,
+        source        = EXCLUDED.source,
+        reason_code   = EXCLUDED.reason_code,
+        last_queue_id = EXCLUDED.last_queue_id,
+        recipient_sub = COALESCE(EXCLUDED.recipient_sub, mail_suppressions.recipient_sub);
+
+-- Deletes up to batch_size of the oldest bounces older than retention_days
+-- (a year): the content sweep's step.
+-- name: DeleteOldMailBounces :execrows
+DELETE
+FROM mail_bounces
+WHERE id IN (SELECT b.id
+             FROM mail_bounces b
+             WHERE b.received_at < now() - make_interval(days => sqlc.arg(retention_days)::int)
+             ORDER BY b.received_at
+             LIMIT sqlc.arg(batch_size)::int FOR UPDATE SKIP LOCKED);
