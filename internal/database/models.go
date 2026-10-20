@@ -359,7 +359,7 @@ type MailTask struct {
 	BodyVariables    []byte     `json:"body_variables"`
 	CreatedAt        time.Time  `json:"created_at"`
 	ContentClearedAt *time.Time `json:"content_cleared_at"`
-	// The template's content_sensitive when the send was queued: true, false or unset (NULL). A send is sensitive if this or its template now says so.
+	// Whether the send was sensitive when it was queued: true when its template said so or its key was locked sensitive (template_key_content_locked), false when its template said it may be shown, unset when the template said nothing. A send is sensitive if this or its template now says so.
 	ContentSensitiveAtSend string `json:"content_sensitive_at_send"`
 	// When the content sweep replaced the send's content and body_variables with their masked copies; null while raw or never sensitive.
 	ContentMaskedAt        *time.Time `json:"content_masked_at"`
