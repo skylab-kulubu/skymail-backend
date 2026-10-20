@@ -199,6 +199,7 @@ func main() {
 		mailer.WithTracking(mailer.Tracking{
 			Config:      trackingConfig,
 			Preferences: tracking.NewCoreClient(trackingConfig.CoreURL, kcClient, nil),
+			Accounts:    kcClient,
 		}))
 
 	log.Info().Str("mode", string(audienceMode)).Str("audience", cfg.KeycloakClientID).Msg("v1 token audience check (V1_TOKEN_AUDIENCE_MODE)")

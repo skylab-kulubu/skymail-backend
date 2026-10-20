@@ -37,6 +37,10 @@ func (failingLifecycleKeycloakStub) GetGroup(context.Context, string) (*gocloak.
 
 func (failingLifecycleKeycloakStub) ServiceToken(context.Context) (string, error) { return "", nil }
 
+func (failingLifecycleKeycloakStub) VerifiedAccountByEmail(context.Context, string) (*uuid.UUID, error) {
+	return nil, nil
+}
+
 func (failingLifecycleKeycloakStub) GetUser(context.Context, string) (*gocloak.User, error) {
 	return nil, nil
 }
@@ -69,6 +73,10 @@ func (*lifecycleMailerStub) EnqueueSingle(context.Context, database.CreateSingle
 	return uuid.New(), nil
 }
 
+func (*lifecycleMailerStub) EnqueueTrackedSingle(context.Context, database.CreateSingleMailTaskParams, *mailer.TrackingPreferences) (uuid.UUID, error) {
+	return uuid.New(), nil
+}
+
 func (*lifecycleMailerStub) EnqueueWithRecipients(context.Context, mailer.EnqueueWithRecipientsParams) (uuid.UUID, error) {
 	return uuid.New(), nil
 }
@@ -82,6 +90,10 @@ func (lifecycleKeycloakStub) GetGroup(context.Context, string) (*gocloak.Group, 
 }
 
 func (lifecycleKeycloakStub) ServiceToken(context.Context) (string, error) { return "", nil }
+
+func (lifecycleKeycloakStub) VerifiedAccountByEmail(context.Context, string) (*uuid.UUID, error) {
+	return nil, nil
+}
 
 func (lifecycleKeycloakStub) GetUser(context.Context, string) (*gocloak.User, error) { return nil, nil }
 

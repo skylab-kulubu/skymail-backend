@@ -487,6 +487,11 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 			prepared.tracking = h.mailer.ResolveTracking(ctx, view.MailApproval.TemplateID, view.MailApproval.MailListID, prepared.groupMembers)
 		}
 	}
+	// People named one by one: their accounts are found by address, and core
+	// asked, before the lock too.
+	if action.sends && view.MailApproval.TrackingRequested && view.MailApproval.MailListID == nil && view.MailApproval.FormSourceID == nil {
+		prepared.tracking = h.mailer.ResolvePeopleTracking(ctx, view.MailApproval.TemplateID, recipientsOfView(view))
+	}
 	if action.check != nil {
 		if prepared.checked, err = action.check(ctx, view, caller); err != nil {
 			return err
@@ -718,7 +723,7 @@ func (h *mailApprovalHandlerImpl) queue(ctx context.Context, q *database.Queries
 		return []uuid.UUID{id}, nil
 	}
 	if a.MailListID == nil {
-		return queueToPeople(ctx, q, sends, a)
+		return queueToPeople(ctx, q, sends, a, prepared.tracking)
 	}
 	taskID, err := queueToList(ctx, q, sends, a, prepared)
 	if err != nil {
@@ -728,8 +733,10 @@ func (h *mailApprovalHandlerImpl) queue(ctx context.Context, q *database.Queries
 }
 
 // queueToPeople queues a request, locked, as one single send per person, in
-// their order.
-func queueToPeople(ctx context.Context, q *database.Queries, sends mailer.Queue, a database.MailApproval) ([]uuid.UUID, error) {
+// their order. A request that asks for tracking queues each with what
+// Keycloak and core said before the lock (preferences); a person not asked
+// about then — the request changed in between — is not tracked.
+func queueToPeople(ctx context.Context, q *database.Queries, sends mailer.Queue, a database.MailApproval, preferences *mailer.TrackingPreferences) ([]uuid.UUID, error) {
 	send, err := lockedSend(ctx, q, a)
 	if err != nil {
 		return nil, err
@@ -739,14 +746,20 @@ func queueToPeople(ctx context.Context, q *database.Queries, sends mailer.Queue,
 	}
 	taskIDs := make([]uuid.UUID, len(send.recipients))
 	for i, to := range send.recipients {
-		if taskIDs[i], err = sends.EnqueueSingle(ctx, database.CreateSingleMailTaskParams{
+		arg := database.CreateSingleMailTaskParams{
 			SentBy:            a.SubmitterSub,
 			TemplateID:        &a.TemplateID,
 			BodyVariables:     a.BodyVariables,
 			RecipientFullName: to.FullName,
 			RecipientEmail:    to.Email,
 			TrackingRequested: a.TrackingRequested,
-		}); err != nil {
+		}
+		if a.TrackingRequested {
+			taskIDs[i], err = sends.EnqueueTrackedSingle(ctx, arg, preferences)
+		} else {
+			taskIDs[i], err = sends.EnqueueSingle(ctx, arg)
+		}
+		if err != nil {
 			return nil, err
 		}
 	}

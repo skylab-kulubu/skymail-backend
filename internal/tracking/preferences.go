@@ -57,6 +57,16 @@ type Preferences interface {
 	Resolve(ctx context.Context, subs []uuid.UUID) (map[uuid.UUID]Decision, error)
 }
 
+// Accounts finds the Keycloak account of a recipient SkyMail knows only by
+// address (a person a send names one by one; Yusuf, 2026-10-20): the one
+// enabled account whose primary e-mail is the address, compared whole and
+// case-insensitively, and verified. No such account, or more than one, is
+// nil: an address is never guessed. Secondary attributes (a school address)
+// are not read.
+type Accounts interface {
+	VerifiedAccountByEmail(ctx context.Context, address string) (*uuid.UUID, error)
+}
+
 // TokenSource is SkyMail's service account token (KEYCLOAK_SERVICE_CLIENT_ID).
 type TokenSource interface {
 	ServiceToken(ctx context.Context) (string, error)
