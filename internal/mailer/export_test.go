@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/google/uuid"
+	"net/http"
 	"time"
 
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
@@ -115,3 +116,28 @@ func IsPermanent(err error) bool {
 
 // ReservedDomain says address is in a domain reserved for tests and examples.
 var ReservedDomain = reservedDomain
+
+// TokenSource is a scope's access token, as the sender lanes ask for it.
+type TokenSource = tokenSource
+
+// SetGraph makes m's Graph lanes send to url with client and take their
+// tokens from tokens. Call it after WithSendLanes, before Start.
+func SetGraph(m Transactional, url string, client *http.Client, tokens TokenSource) {
+	impl := m.(*mailerImpl)
+	impl.graphURL, impl.graphClient, impl.graphTokens = url, client, tokens
+}
+
+// SetExchangeTokens makes m's XOAUTH2 lanes take their tokens from tokens.
+func SetExchangeTokens(m Transactional, tokens TokenSource) { m.(*mailerImpl).exchangeTokens = tokens }
+
+// SetTemplateKeys makes m read a send's template key, which picks a mail's
+// sender lane, with keyOf instead of the database.
+func SetTemplateKeys(m Transactional, keyOf func(ctx context.Context, taskID uuid.UUID) (*string, bool, error)) {
+	m.(*mailerImpl).templateKey = keyOf
+}
+
+// GraphFailure classifies Graph's answer to a send.
+var GraphFailure = graphFailure
+
+// RetryAfterOf reads a Retry-After header.
+var RetryAfterOf = retryAfter

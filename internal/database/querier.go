@@ -91,6 +91,7 @@ type Querier interface {
 	// Counts taken rows of one lane in the minute starting at minute_start and
 	// the hour starting at hour_start.
 	CountSends(ctx context.Context, arg CountSendsParams) error
+	CountSuppressions(ctx context.Context, search *string) (int64, error)
 	CountTemplateContentSensitiveEvents(ctx context.Context, templateID uuid.UUID) (int64, error)
 	CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error)
 	CountTemplates(ctx context.Context) (int64, error)
@@ -143,14 +144,22 @@ type Querier interface {
 	// failure since the send was last masked starts its deadline.
 	DeferMaskFailure(ctx context.Context, arg DeferMaskFailureParams) error
 	DeleteExpiredMailFormSources(ctx context.Context, arg DeleteExpiredMailFormSourcesParams) (int64, error)
+	// Deletes up to batch_size of the oldest bounces older than retention_days
+	// (a year): the content sweep's step.
+	DeleteOldMailBounces(ctx context.Context, arg DeleteOldMailBouncesParams) (int64, error)
 	// Deletes up to batch_size of the oldest records of who opened a masked mail
 	// that are older than retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
 	DeleteOldSentContentViews(ctx context.Context, arg DeleteOldSentContentViewsParams) (int64, error)
+	// Removes a suppression: the address is mailed again. What it said is
+	// returned for the removal's record, never the address.
+	DeleteSuppression(ctx context.Context, id uuid.UUID) (DeleteSuppressionRow, error)
 	// Discards a draft: it stays in the history, but it is nobody's draft in
 	// progress any more and it is never published. A draft discarded already
 	// keeps the time it was. The caller holds the template row's lock and has
 	// checked that the version is a draft of this template.
 	DiscardTemplateDraft(ctx context.Context, arg DiscardTemplateDraftParams) error
+	// Account mail went to these suppressed addresses anyway.
+	FlagSuppressionsExempt(ctx context.Context, addresses []string) error
 	GetAllMailingLists(ctx context.Context, arg GetAllMailingListsParams) ([]MailingList, error)
 	GetAllMailingListsIncludingArchived(ctx context.Context, arg GetAllMailingListsIncludingArchivedParams) ([]MailingList, error)
 	GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams) ([]Template, error)
@@ -179,8 +188,14 @@ type Querier interface {
 	// A send's recipients, newest first. A list send's rows come from one insert
 	// and share a created_at, so the id breaks the tie: pages neither repeat nor
 	// skip a recipient. A NULL status lists every recipient.
+	// suppressed_but_sent: account mail sent to a suppressed address, flagged.
+	// undelivered: a report said the address does not exist (a hard bounce of
+	// the row's own address) after the relay took the mail.
 	GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueueItemsByTaskIdParams) ([]GetMailQueueItemsByTaskIdRow, error)
 	GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTaskByIdRow, error)
+	// The key of a send's template and whether it is a system template, which
+	// together say whether it is account mail (mailer.AccountMail).
+	GetMailTaskTemplateKey(ctx context.Context, taskID uuid.UUID) (GetMailTaskTemplateKeyRow, error)
 	// Whether a send is never tracked, whatever was asked: its template is a
 	// System template, or its content is sensitive by the one definition the
 	// content panel and the masking sweep use (mail_task_content_sensitive: the
@@ -196,6 +211,9 @@ type Querier interface {
 	GetRecipients(ctx context.Context, arg GetRecipientsParams) ([]Recipient, error)
 	GetRecipientsByMailingListId(ctx context.Context, arg GetRecipientsByMailingListIdParams) ([]Recipient, error)
 	GetRetainedTrackingReport(ctx context.Context, taskID uuid.UUID) ([]byte, error)
+	// The suppressed among a send's recipients (lower-cased addresses): what
+	// queueing writes failed, or sends flagged when the send is account mail.
+	GetSuppressedAddresses(ctx context.Context, addresses []string) ([]GetSuppressedAddressesRow, error)
 	GetTemplateById(ctx context.Context, id uuid.UUID) (Template, error)
 	GetTemplateByIdIncludingArchived(ctx context.Context, id uuid.UUID) (Template, error)
 	GetTemplateByKey(ctx context.Context, key *string) (Template, error)
@@ -213,6 +231,9 @@ type Querier interface {
 	// people into the HTTP process. Link URLs are omitted: one-recipient sends
 	// can have personal URLs and the summary only requires mails:read.
 	GetTrackingReport(ctx context.Context, arg GetTrackingReportParams) ([]byte, error)
+	// Records what a report or a relay's refusal said about a queue row. A report
+	// already recorded (its id's hash) records nothing: 0 rows.
+	InsertMailBounce(ctx context.Context, arg InsertMailBounceParams) (int64, error)
 	// content_sensitive_at_send is whether the send is sensitive as it is
 	// queued: 'true' when its template's key is locked sensitive
 	// (template_key_content_locked) whatever the template says, else the
@@ -223,6 +244,9 @@ type Querier interface {
 	// the caller already used the key (a concurrent request with it waits here
 	// for the first to commit or roll back).
 	InsertNotification(ctx context.Context, arg InsertNotificationParams) (uuid.UUID, error)
+	// Records a relay's permanent refusal of a queue row's address.
+	InsertSMTPRefusalBounce(ctx context.Context, arg InsertSMTPRefusalBounceParams) error
+	InsertSuppressionRemoval(ctx context.Context, arg InsertSuppressionRemovalParams) error
 	// Limits live in SQL as well as the process-wide recording budget. There
 	// are at most 20 opens and 50 clicks per recipient across every replica.
 	InsertTrackingEvent(ctx context.Context, arg InsertTrackingEventParams) (int64, error)
@@ -265,6 +289,9 @@ type Querier interface {
 	// between the reading and the writing (a row it is emptying is waited for and
 	// read again: emptied, it is not taken).
 	ListQueueRowsToMask(ctx context.Context, arg ListQueueRowsToMaskParams) ([]ListQueueRowsToMaskRow, error)
+	// The suppression list, newest first, those whose address contains search
+	// (case-insensitively) when it is given.
+	ListSuppressions(ctx context.Context, arg ListSuppressionsParams) ([]ListSuppressionsRow, error)
 	// A template's content_sensitive changes, newest first.
 	ListTemplateContentSensitiveEvents(ctx context.Context, arg ListTemplateContentSensitiveEventsParams) ([]TemplateContentSensitiveEvent, error)
 	// Each operator's draft in progress on the given templates, newest first: the
@@ -286,6 +313,13 @@ type Querier interface {
 	// than their recipient's one-year window (tracking.EventRetentionDays) never
 	// reappear while retention is disabled or catching up. No tracking token or link target is selected.
 	ListTrackingRecipients(ctx context.Context, arg ListTrackingRecipientsParams) ([]byte, error)
+	// Bounces and the suppression list (hub spec skymail-bounce-isleme; README,
+	// "Geri dönen posta ve bastırma listesi").
+	// The queue row a delivery status notification names, locked FOR SHARE until
+	// the report is recorded: Account erasure locks the person's rows FOR UPDATE
+	// first, so a report either waits for it and finds the row cleared, or holds
+	// it off until the suppression it writes is there for erasure to delete.
+	LockBounceQueueRow(ctx context.Context, id uuid.UUID) (LockBounceQueueRowRow, error)
 	// The next undecided request past its deadline that no one is deciding right
 	// now, locked for the expiry sweep.
 	LockDueMailApproval(ctx context.Context, asOf time.Time) (MailApproval, error)
@@ -471,6 +505,11 @@ type Querier interface {
 	// lease, or comes from a dump made before it. Its lease starts now, the first
 	// time a process sees it: the image that took it may be sending it still.
 	StartLeaseOnUnclaimedJobs(ctx context.Context) (int64, error)
+	// Suppresses the address of a queue row after a permanent failure: the
+	// row's own address, read under a lock (FOR SHARE: a row Account erasure is
+	// clearing is waited for and then found empty, and nothing is written). A
+	// suppressed address is counted again and keeps its first_seen.
+	SuppressQueueRowAddress(ctx context.Context, arg SuppressQueueRowAddressParams) (int64, error)
 	// The next send the content sweep has to decide on masking (content_mask_due,
 	// idx_mail_tasks_content_mask_due): not masked or emptied, five minutes old,
 	// none of whose rows is still to go out, not among those it already tried in
