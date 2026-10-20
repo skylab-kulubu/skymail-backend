@@ -232,7 +232,11 @@ func (s *emailSender) sendXOAUTH2(ctx context.Context, job database.MailQueue, l
 	if err != nil {
 		return err
 	}
-	token, err := s.exchangeTokens.Token(ctx)
+	// The token's wait is bounded by the send budget, as Graph's is: a slow
+	// Entra must not hold a row past its lease.
+	waiting, cancel := context.WithTimeout(ctx, s.sendBudget)
+	token, err := s.exchangeTokens.Token(waiting)
+	cancel()
 	if err != nil {
 		return fmt.Errorf("send failed: exchange token: %w", err)
 	}

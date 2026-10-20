@@ -269,12 +269,15 @@ func (e *TokenError) Error() string {
 func (e *TokenError) refused() bool { return e.Status == 400 || e.Status == 401 }
 
 // Refreshing: a cached token is fetched again once it has refreshBefore left;
-// if that fails, the cached token is still used while it has minLeft left.
+// while that fetch is in flight, or for refreshBackoff after it failed, the
+// cached token is still used while it has minLeft left.
 const (
-	refreshBefore = 5 * time.Minute
-	minLeft       = 30 * time.Second
-	// defaultLifetime is the lifetime of a token whose response gives none.
-	defaultLifetime = 5 * time.Minute
+	refreshBefore  = 5 * time.Minute
+	minLeft        = 30 * time.Second
+	refreshBackoff = 30 * time.Second
+	// defaultLifetime is the lifetime of a token whose response gives none:
+	// longer than refreshBefore, so such a token is still reused.
+	defaultLifetime = 10 * time.Minute
 )
 
 // TokenSource is one scope's access token, cached for every caller: the
@@ -286,13 +289,17 @@ type TokenSource struct {
 	client    *http.Client
 	now       func() time.Time
 
-	// fetching is held by the caller fetching a token; others wait on it
+	// fetching is held by the caller fetching a token. Others take the
+	// cached token while it has minLeft left; without one they wait on it
 	// (or their context) and then find the token it cached.
 	fetching chan struct{}
 
 	mu      sync.Mutex
 	token   string
 	expires time.Time
+	// retryAt is when a refresh that failed is tried again; until then the
+	// cached token serves while it has minLeft left.
+	retryAt time.Time
 	// alg is the signing algorithm the token endpoint last accepted; it is
 	// tried first.
 	alg string
@@ -347,26 +354,55 @@ func (s *TokenSource) cached(left time.Duration) (string, bool) {
 	return "", false
 }
 
+// fresh returns the cached token if it needs no refresh: it has more than
+// refreshBefore left, or a refresh failed less than refreshBackoff ago and it
+// has more than minLeft left.
+func (s *TokenSource) fresh() (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	if s.token == "" {
+		return "", false
+	}
+	if now.Add(refreshBefore).Before(s.expires) || (now.Before(s.retryAt) && now.Add(minLeft).Before(s.expires)) {
+		return s.token, true
+	}
+	return "", false
+}
+
 // Token returns an access token for the scope: the cached one while it has
-// more than five minutes left, otherwise a new one. If the new one cannot be
-// had, the cached one is returned while it still has 30 seconds.
+// more than five minutes left, otherwise a new one. While another caller
+// fetches the new one, or for 30 seconds after a fetch failed, the cached one
+// is returned without waiting while it still has 30 seconds; so it is when the
+// new one cannot be had.
 func (s *TokenSource) Token(ctx context.Context) (string, error) {
-	if token, ok := s.cached(refreshBefore); ok {
+	if token, ok := s.fresh(); ok {
 		return token, nil
 	}
 	select {
 	case s.fetching <- struct{}{}:
-	case <-ctx.Done():
-		return "", ctx.Err()
+	default:
+		// A fetch is in flight: a token still good does not wait for it.
+		if token, ok := s.cached(minLeft); ok {
+			return token, nil
+		}
+		select {
+		case s.fetching <- struct{}{}:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
 	}
 	defer func() { <-s.fetching }()
 	// Another caller may have fetched it while this one waited.
-	if token, ok := s.cached(refreshBefore); ok {
+	if token, ok := s.fresh(); ok {
 		return token, nil
 	}
 	token, err := s.fetch(ctx)
 	if err != nil {
 		if old, ok := s.cached(minLeft); ok {
+			s.mu.Lock()
+			s.retryAt = s.now().Add(refreshBackoff)
+			s.mu.Unlock()
 			return old, nil
 		}
 		return "", err
@@ -402,7 +438,7 @@ func (s *TokenSource) fetch(ctx context.Context) (string, error) {
 		token, lifetime, err := s.request(ctx, alg)
 		if err == nil {
 			s.mu.Lock()
-			s.token, s.expires, s.alg = token, s.now().Add(lifetime), alg
+			s.token, s.expires, s.alg, s.retryAt = token, s.now().Add(lifetime), alg, time.Time{}
 			s.mu.Unlock()
 			return token, nil
 		}

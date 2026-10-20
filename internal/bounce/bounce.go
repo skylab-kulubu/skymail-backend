@@ -10,8 +10,10 @@
 // and its recipient together:
 //
 //  1. it is a delivery status notification (dsn.Parse);
-//  2. the returned message's Message-ID (or, without one, the report's
-//     In-Reply-To, then References) is <queue id@SMTP_FQDN>;
+//  2. the returned message's Message-ID, or else its X-SkyMail-Queue-Id (a
+//     mail sent through Graph, whose Message-ID is Exchange's), is
+//     <queue id@SMTP_FQDN>; a report that returned no headers is matched by
+//     its own In-Reply-To, then References (dsn.Report.QueueID);
 //  3. that row exists, is e-mail, was sent, and the report came after it was
 //     (sentAtSlack allowed for the two clocks);
 //  4. the report names the row's address (Final-Recipient or

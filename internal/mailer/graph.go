@@ -112,8 +112,25 @@ func (s *emailSender) graphRequest(ctx context.Context, job database.MailQueue, 
 	if s.lanes.ReplyTo != nil {
 		message.ReplyTo = []graphRecipient{recipientOf(s.lanes.ReplyTo)}
 	}
-	return json.Marshal(graphSendMail{Message: message, SaveToSentItems: false})
+	// Markup as it is: json.Marshal would write each <, > and & as six bytes.
+	var payload bytes.Buffer
+	encoder := json.NewEncoder(&payload)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(graphSendMail{Message: message, SaveToSentItems: false}); err != nil {
+		return nil, err
+	}
+	if payload.Len() > graphMaxRequest {
+		return nil, permanentError{errors.New(graphTooLargeError)}
+	}
+	return payload.Bytes(), nil
 }
+
+// graphMaxRequest is the largest sendMail request Graph takes (4 MB); a
+// larger mail is refused before it is sent, as Graph would refuse it (413).
+const graphMaxRequest = 4 << 20
+
+// graphTooLargeError is a mail over graphMaxRequest: never sent.
+const graphTooLargeError = "graph_rejected: the mail is over Graph's 4 MB request limit, not sent"
 
 // sendGraph sends job from lane's mailbox with Graph sendMail.
 func (s *emailSender) sendGraph(ctx context.Context, job database.MailQueue, lane Lane, config LaneConfig) error {
@@ -146,11 +163,13 @@ func (s *emailSender) sendGraph(ctx context.Context, job database.MailQueue, lan
 		return fmt.Errorf("send failed: graph: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusAccepted {
+	// Graph answers 202; any 2xx took the mail, and retrying it would send
+	// it again.
+	if resp.StatusCode/100 == 2 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 		s.logger.Debug().Str("job_id", job.ID.String()).Str("lane", string(lane)).
-			Str("graph_request_id", resp.Header.Get("request-id")).
-			Msg("Graph took the mail (202)")
+			Str("graph_request_id", resp.Header.Get("request-id")).Int("status", resp.StatusCode).
+			Msg("Graph took the mail")
 		return nil
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))

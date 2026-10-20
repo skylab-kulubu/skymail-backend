@@ -21,6 +21,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/msauth"
+	"github.com/wneessen/go-mail"
 )
 
 // fakeEntra is Entra's token endpoint: it verifies each client assertion with
@@ -72,6 +73,7 @@ func (e *fakeEntra) times(scope string) int {
 type graphCall struct {
 	path, authorization, contentType, clientRequestID string
 	body                                              map[string]any
+	raw                                               string
 }
 
 // fakeGraph is Microsoft Graph's sendMail: it keeps each request and answers
@@ -91,6 +93,7 @@ func startFakeGraph(t *testing.T) *fakeGraph {
 		call := graphCall{
 			path: r.URL.EscapedPath(), authorization: r.Header.Get("Authorization"),
 			contentType: r.Header.Get("Content-Type"), clientRequestID: r.Header.Get("client-request-id"),
+			raw: string(raw),
 		}
 		if err := json.Unmarshal(raw, &call.body); err != nil {
 			t.Errorf("sendMail body is not JSON: %v", err)
@@ -118,13 +121,15 @@ func (g *fakeGraph) taken() []graphCall {
 	return append([]graphCall(nil), g.calls...)
 }
 
-// oauthMail is a mail the XOAUTH2 relay took and the AUTH it came with.
+// oauthMail is a mail the relay took and the AUTH it came with: the
+// mechanism, the user, and the token or password.
 type oauthMail struct {
-	user, token, mailFrom, data string
+	mechanism, user, token, mailFrom, data string
 }
 
-// xoauth2Relay speaks SMTP with AUTH XOAUTH2 only, as smtp.office365.com
-// offers it to an application, and takes a token it was told to.
+// xoauth2Relay speaks SMTP with AUTH XOAUTH2, as smtp.office365.com offers it
+// to an application, and takes a token it was told to. It takes AUTH LOGIN
+// and PLAIN too, with the password accept is told, as the off path uses them.
 type xoauth2Relay struct {
 	listener net.Listener
 	accept   func(token string) bool
@@ -179,10 +184,47 @@ func (r *xoauth2Relay) serve(conn net.Conn) {
 		switch verb := strings.ToUpper(fields[0]); {
 		case verb == "EHLO" || verb == "HELO":
 			reply("250-relay.test")
-			reply("250-AUTH XOAUTH2")
+			reply("250-AUTH LOGIN PLAIN XOAUTH2")
 			reply("250 8BITMIME")
+		case verb == "AUTH" && len(fields) >= 2 && strings.ToUpper(fields[1]) == "LOGIN":
+			r.auths.Add(1)
+			current.mechanism = "LOGIN"
+			var answers []string
+			for _, prompt := range []string{"VXNlcm5hbWU6", "UGFzc3dvcmQ6"} {
+				reply("334 " + prompt)
+				answer, err := reader.ReadString('\n')
+				if err != nil {
+					return
+				}
+				decoded, _ := base64.StdEncoding.DecodeString(strings.TrimSpace(answer))
+				answers = append(answers, string(decoded))
+			}
+			current.user, current.token = answers[0], answers[1]
+			if !r.accept(current.token) {
+				reply("535 5.7.3 Authentication unsuccessful")
+				continue
+			}
+			authed = true
+			reply("235 2.7.0 Authentication successful")
+		case verb == "AUTH" && len(fields) >= 3 && strings.ToUpper(fields[1]) == "PLAIN":
+			r.auths.Add(1)
+			current.mechanism = "PLAIN"
+			decoded, _ := base64.StdEncoding.DecodeString(fields[2])
+			parts := strings.Split(string(decoded), "\x00")
+			if len(parts) != 3 {
+				reply("501 5.5.2 malformed PLAIN")
+				continue
+			}
+			current.user, current.token = parts[1], parts[2]
+			if !r.accept(current.token) {
+				reply("535 5.7.3 Authentication unsuccessful")
+				continue
+			}
+			authed = true
+			reply("235 2.7.0 Authentication successful")
 		case verb == "AUTH":
 			r.auths.Add(1)
+			current.mechanism = "XOAUTH2"
 			if len(fields) < 3 || strings.ToUpper(fields[1]) != "XOAUTH2" {
 				reply("504 5.7.4 unrecognized authentication type")
 				continue
@@ -380,6 +422,11 @@ func TestTheLanesSendFromTheirMailboxes(t *testing.T) {
 		}
 	}
 
+	// The markup goes as it is, not as \u003c escapes.
+	if !strings.Contains(calls[0].raw, `"content":"<p>Kod: <b>482910</b></p>"`) {
+		t.Errorf("the HTML is escaped in the request: %s", calls[0].raw)
+	}
+
 	mails := l.relay.taken()
 	if len(mails) != 1 {
 		t.Fatalf("the relay took %d mails, want 1", len(mails))
@@ -546,6 +593,94 @@ func TestGraphRefusals(t *testing.T) {
 	err = mailer.SendOnce(ctx, l.m, job("not an address"))
 	if !mailer.IsPermanent(err) || !strings.HasPrefix(err.Error(), "invalid_recipient:") || len(l.graph.taken()) != before {
 		t.Errorf("unparsable address: %v, Graph took %d", err, len(l.graph.taken())-before)
+	}
+
+	// A mail over Graph's 4 MB request limit is refused before it is sent.
+	large := job("kisi@example.net")
+	large.Body = strings.Repeat("x", 4<<20)
+	err = mailer.SendOnce(ctx, l.m, large)
+	if !mailer.IsPermanent(err) || !strings.HasPrefix(err.Error(), "graph_rejected: the mail is over") || len(l.graph.taken()) != before {
+		t.Errorf("a mail over 4 MB: %v, Graph took %d", err, len(l.graph.taken())-before)
+	}
+
+	// Any 2xx took the mail: a 200 is sent, not tried again.
+	l.graph.mu.Lock()
+	l.graph.answer = func(w http.ResponseWriter) bool {
+		w.WriteHeader(http.StatusOK)
+		return true
+	}
+	l.graph.mu.Unlock()
+	if err := mailer.SendOnce(ctx, l.m, job("kisi@example.net")); err != nil {
+		t.Errorf("a 200: %v", err)
+	}
+	if n := len(l.graph.taken()) - before; n != 1 {
+		t.Errorf("a 200: Graph took %d requests, want 1", n)
+	}
+}
+
+// The XOAUTH2 lane waits for its token no longer than the send budget, as
+// the Graph lane does: a slow Entra cannot hold a row past its lease.
+func TestXOAUTH2TokenWaitIsBoundedByTheSendBudget(t *testing.T) {
+	captureMailerLogs(t)
+	task := uuid.New()
+	l := newLaneMailer(t, decidedEnv(), map[uuid.UUID]struct {
+		key    *string
+		system bool
+	}{task: {nil, false}})
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Read the body first: only then does the server notice the client
+		// going away and end r's context.
+		_, _ = io.Copy(io.Discard, r.Body)
+		select {
+		case <-r.Context().Done():
+		case <-time.After(10 * time.Second):
+		}
+	}))
+	t.Cleanup(slow.Close)
+	mailer.SetExchangeTokens(l.m, msauth.NewTokenSource(mustLanes(t, decidedEnv()).Credentials, msauth.ScopeExchange, msauth.WithAuthority(slow.URL)))
+	mailer.SetSendBudget(l.m, 300*time.Millisecond)
+	begun := time.Now()
+	err := mailer.SendOnce(context.Background(), l.m, database.MailQueue{ID: uuid.New(), TaskID: task, Channel: mailer.ChannelEmail,
+		Priority: int16(mailer.PriorityBulk), RecipientFullName: "Üye", RecipientEmail: "uye@example.net", Subject: "Duyuru", Body: "Duyuru"})
+	if err == nil || mailer.IsPermanent(err) || !strings.HasPrefix(err.Error(), "send failed: exchange token:") || time.Since(begun) > 2*time.Second {
+		t.Fatalf("%v after %v, want a transient token failure within the budget", err, time.Since(begun))
+	}
+	if len(l.relay.taken()) != 0 {
+		t.Fatal("a mail reached the relay")
+	}
+}
+
+// The off path authenticates as it always has: AUTH LOGIN, or PLAIN with
+// SMTP_PLAIN, as SMTP_USER with SMTP_PASS, from SMTP_FROM; the lanes' XOAUTH2
+// client is not even made.
+func TestTheOffPathAuthenticatesAsSMTPUser(t *testing.T) {
+	for _, plain := range []bool{false, true} {
+		want := map[bool]string{false: "LOGIN", true: "PLAIN"}[plain]
+		t.Run(want, func(t *testing.T) {
+			captureMailerLogs(t)
+			relay := startXOAUTH2Relay(t, func(secret string) bool { return secret == "smtp-pass" })
+			m := mailer.NewMailer(nil, mailer.SMTPConfig{
+				FromEmail: "SKY LAB <info@example.org>", Host: "127.0.0.1", Port: relay.listener.Addr().(*net.TCPAddr).Port,
+				User: "info@example.org", Password: "smtp-pass", FQDN: "example.com", Plain: plain,
+			}, mailer.SenderOn)
+			mailer.SetClientOptions(m, mail.WithTLSPolicy(mail.NoTLS))
+			mailer.SetSendBudget(m, 30*time.Second)
+			if err := mailer.SendOnce(context.Background(), m, database.MailQueue{ID: uuid.New(), Channel: mailer.ChannelEmail,
+				RecipientFullName: "Alıcı", RecipientEmail: "alici@example.net", Subject: "Konu", Body: "Gövde"}); err != nil {
+				t.Fatal(err)
+			}
+			mails := relay.taken()
+			if len(mails) != 1 {
+				t.Fatalf("%d mails", len(mails))
+			}
+			got := mails[0]
+			if got.mechanism != want || got.user != "info@example.org" || got.token != "smtp-pass" || got.mailFrom != "info@example.org" {
+				t.Errorf("AUTH %s as %q, MAIL FROM %q; want %s as info@example.org", got.mechanism, got.user, got.mailFrom, want)
+			}
+			if from := headerOf(got.data, "From"); from != `"SKY LAB" <info@example.org>` {
+				t.Errorf("From %q", from)
+			}
+		})
 	}
 }
 

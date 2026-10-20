@@ -359,7 +359,11 @@ func logSendLanes(lanes mailer.SendLanes) {
 	if creds := lanes.Credentials; creds != nil {
 		line = line.Str("graph_client_id", creds.ClientID).Str("certificate_x5t_s256", creds.Thumbprint()).
 			Time("certificate_not_after", creds.NotAfter())
-		if left := time.Until(creds.NotAfter()); left < 30*24*time.Hour {
+		switch left := time.Until(creds.NotAfter()); {
+		case left <= 0:
+			log.Warn().Time("certificate_not_after", creds.NotAfter()).
+				Msg("sender lanes: the skymail-posta certificate has expired: Entra refuses its tokens, the lanes that are on cannot send; renew it (ops/wizards/skymail-posta-app-kaydi.sh)")
+		case left < 30*24*time.Hour:
 			log.Warn().Time("certificate_not_after", creds.NotAfter()).
 				Msg("sender lanes: the skymail-posta certificate expires within 30 days; renew it (ops/wizards/skymail-posta-app-kaydi.sh)")
 		}
