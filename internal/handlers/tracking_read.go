@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
 )
 
@@ -132,7 +133,7 @@ func (h *mailHandlerImpl) GetTracking(c fiber.Ctx) error {
 // GetTrackingRecipients godoc
 //
 //	@Summary		Recipient opening and click observations
-//	@Description	Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub). First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 a year after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.
+//	@Description	Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role). First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 a year after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id			path		string	true	"Mail task ID"
@@ -156,8 +157,11 @@ func (h *mailHandlerImpl) GetTrackingRecipients(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	// The sender reads their own send's people; a service is no sender here:
+	// the mail it sends (SKYMAIL_TRACKING_SYSTEM) is read with the role only.
 	caller := contentCallerOf(c)
-	if !caller.has(TrackingReadRole) && (caller.sub == "" || caller.sub != task.SentBy) {
+	sender := caller.sub != "" && caller.sub == task.SentBy && !middlewares.IsServiceAccount(c)
+	if !caller.has(TrackingReadRole) && !sender {
 		return apperrors.ErrForbidden
 	}
 	if task.TrackingClosedAt != nil || !task.SentAt.Add(tracking.EventRetention).After(h.now()) {

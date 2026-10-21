@@ -271,13 +271,22 @@ func (h *mailApprovalHandlerImpl) notify(ctx context.Context, key, sentBy string
 		return fail("enqueue_failed")
 	}
 	for _, recipient := range to {
-		if _, err := h.mailer.EnqueueSingle(ctx, database.CreateSingleMailTaskParams{
+		arg := database.CreateSingleMailTaskParams{
 			SentBy:            sentBy,
 			TemplateID:        &template.ID,
 			BodyVariables:     raw,
 			RecipientFullName: recipient.FullName,
 			RecipientEmail:    recipient.Email,
-		}); err != nil {
+		}
+		// SkyMail's own mail: tracked as a service's is, when
+		// SKYMAIL_TRACKING_SYSTEM is on.
+		var err error
+		if h.mailer.SystemTrackingAvailable() {
+			_, _, err = h.mailer.EnqueueSystemSingle(ctx, arg)
+		} else {
+			_, err = h.mailer.EnqueueSingle(ctx, arg)
+		}
+		if err != nil {
 			log.Warn().Err(err).Str("template_key", key).Msg("could not queue a mail approval notification")
 			fail("enqueue_failed")
 			continue

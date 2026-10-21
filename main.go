@@ -190,6 +190,7 @@ func main() {
 
 	log.Info().Str("mode", string(trackingConfig.Mode)).Str("base_url", trackingConfig.BaseURL).Str("core_url", trackingConfig.CoreURL).
 		Msg("open and click tracking (SKYMAIL_TRACKING)")
+	logSystemTracking(trackingConfig)
 	log.Info().Str("mode", string(trackingRetention)).Int("event_retention_days", tracking.EventRetentionDays).Int64("max_rows", trackingRetentionMaxRows).
 		Msg("open and click tracking retention (SKYMAIL_TRACKING_RETENTION)")
 	logSendLanes(sendLanes)
@@ -369,6 +370,23 @@ func logSendLanes(lanes mailer.SendLanes) {
 		}
 	}
 	line.Msg("sender lanes (SKYMAIL_SEND_HESAP, SKYMAIL_SEND_BILGI, SKYMAIL_SEND_DUYURU)")
+}
+
+// logSystemTracking says at startup whether the mail services send is
+// tracked (SKYMAIL_TRACKING_SYSTEM): mode is what applies, on only with
+// SKYMAIL_TRACKING on. Asked for with tracking off, it warns: nothing is
+// tracked, and SkyMail starts all the same.
+func logSystemTracking(cfg tracking.Config) {
+	mode := tracking.ModeOff
+	if cfg.SystemOn() {
+		mode = tracking.ModeOn
+	}
+	event := log.Info()
+	if cfg.System == tracking.ModeOn && !cfg.On() {
+		event = log.Warn()
+	}
+	event.Str("mode", string(mode)).Str("requested", string(cfg.System)).
+		Msg("open and click tracking of system mail (SKYMAIL_TRACKING_SYSTEM; on only with SKYMAIL_TRACKING=on)")
 }
 
 // trackingConfigFromEnv validates tracking before any service starts. Routes

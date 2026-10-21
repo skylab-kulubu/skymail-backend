@@ -87,7 +87,10 @@ E-posta türün anahtarındaki şablonla, türün şeridinde, kişinin `sub`'ı
 `mail_queue.recipient_sub`'a yazılarak kuyruğa girer (bir gönderim,
 `mail_tasks.notification_id`). Gönderim bir listeye ya da onaylı isteğe
 gitmediği için içerik kuralında tekil sayılır (`docs/data-lifecycle.md`).
-Takip yoktur.
+Takip yalnız `SKYMAIL_TRACKING_SYSTEM=on` (ve `SKYMAIL_TRACKING=on`) iken
+vardır: core gönderimden önce (2 saniye içinde) sorulur, piksel konur, tıklama
+adresi yalnız şablonun olduğu gibi yazdığı bağlantılara, hassas şablonda hiçbir
+bağlantıya konmaz (README, "Sistem postaları"). Varsayılan: takip yok.
 
 ### Yanıt (`201`)
 

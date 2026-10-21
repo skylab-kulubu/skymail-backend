@@ -105,7 +105,7 @@ func claimsUserinfo(t *testing.T) string {
 	return server.URL
 }
 
-func newNotificationWorld(t *testing.T) *notificationWorld {
+func newNotificationWorld(t *testing.T, opts ...mailer.Option) *notificationWorld {
 	t.Helper()
 	ctx := context.Background()
 	postgres := testpostgres.StartDatabase(t)
@@ -138,7 +138,7 @@ func newNotificationWorld(t *testing.T) *notificationWorld {
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
 	auth := middlewares.NewAuthMiddleware("skymail", claimsUserinfo(t), middlewares.AudienceOff)
 	api := protectedAPI(app, auth, nil)
-	registerNotificationRoutes(api, auth, handlers.NewNotificationHandler(store, mailer.NewMailer(store, mailer.SMTPConfig{}, mailer.SenderOn), directory))
+	registerNotificationRoutes(api, auth, handlers.NewNotificationHandler(store, mailer.NewMailer(store, mailer.SMTPConfig{}, mailer.SenderOn, opts...), directory))
 	return &notificationWorld{t: t, store: store, app: app, people: directory}
 }
 

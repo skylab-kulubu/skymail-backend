@@ -44,6 +44,13 @@ func (m *recordingMailerStub) EnqueueSingle(_ context.Context, arg database.Crea
 	return uuid.New(), nil
 }
 
+func (*recordingMailerStub) SystemTrackingAvailable() bool { return false }
+
+func (m *recordingMailerStub) EnqueueSystemSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, bool, error) {
+	id, err := m.EnqueueSingle(ctx, arg)
+	return id, false, err
+}
+
 func (*recordingMailerStub) EnqueueTrackedSingle(context.Context, database.CreateSingleMailTaskParams, *mailer.TrackingPreferences) (uuid.UUID, error) {
 	return uuid.New(), nil
 }
