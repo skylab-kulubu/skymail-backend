@@ -630,6 +630,28 @@ func (q *Queries) CountArchivedTemplates(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countInboxItems = `-- name: CountInboxItems :one
+SELECT count(*) FILTER (WHERE seen_at IS NULL) AS unseen,
+       count(*) FILTER (WHERE read_at IS NULL) AS unread
+FROM inbox_items
+WHERE user_id = $1::uuid
+  AND archived_at IS NULL
+  AND expires_at > now()
+`
+
+type CountInboxItemsRow struct {
+	Unseen int64 `json:"unseen"`
+	Unread int64 `json:"unread"`
+}
+
+// A person's unseen and unread items, archived and expired ones left out.
+func (q *Queries) CountInboxItems(ctx context.Context, userID uuid.UUID) (CountInboxItemsRow, error) {
+	row := q.db.QueryRow(ctx, countInboxItems, userID)
+	var i CountInboxItemsRow
+	err := row.Scan(&i.Unseen, &i.Unread)
+	return i, err
+}
+
 const countMailApprovals = `-- name: CountMailApprovals :one
 SELECT count(*)
 FROM mail_approvals a
@@ -1401,6 +1423,29 @@ func (q *Queries) DeferMaskFailure(ctx context.Context, arg DeferMaskFailurePara
 	return err
 }
 
+const deleteExpiredInboxItems = `-- name: DeleteExpiredInboxItems :execrows
+DELETE FROM inbox_items
+WHERE id IN (SELECT i.id
+             FROM inbox_items i
+             WHERE i.expires_at <= $1::timestamptz
+             ORDER BY i.expires_at, i.id
+             LIMIT $2::int FOR UPDATE SKIP LOCKED)
+`
+
+type DeleteExpiredInboxItemsParams struct {
+	At        time.Time `json:"at"`
+	BatchSize int       `json:"batch_size"`
+}
+
+// The inbox sweep: at most batch_size items past their expiry.
+func (q *Queries) DeleteExpiredInboxItems(ctx context.Context, arg DeleteExpiredInboxItemsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredInboxItems, arg.At, arg.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteExpiredMailFormSources = `-- name: DeleteExpiredMailFormSources :execrows
 DELETE FROM mail_form_sources WHERE id IN (
  SELECT fs.id FROM mail_form_sources fs WHERE fs.consumed_at IS NULL AND fs.expires_at <= $1
@@ -1419,6 +1464,22 @@ func (q *Queries) DeleteExpiredMailFormSources(ctx context.Context, arg DeleteEx
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteNotificationVariant = `-- name: DeleteNotificationVariant :exec
+DELETE FROM notification_variants
+WHERE type = $1::text
+  AND channel = $2::text
+`
+
+type DeleteNotificationVariantParams struct {
+	Type    string `json:"type"`
+	Channel string `json:"channel"`
+}
+
+func (q *Queries) DeleteNotificationVariant(ctx context.Context, arg DeleteNotificationVariantParams) error {
+	_, err := q.db.Exec(ctx, deleteNotificationVariant, arg.Type, arg.Channel)
+	return err
 }
 
 const deleteOldMailBounces = `-- name: DeleteOldMailBounces :execrows
@@ -2324,6 +2385,32 @@ func (q *Queries) GetNotificationType(ctx context.Context, key string) (Notifica
 	return i, err
 }
 
+const getNotificationVariant = `-- name: GetNotificationVariant :one
+SELECT type, channel, title, summary, link, updated_at
+FROM notification_variants
+WHERE type = $1::text
+  AND channel = $2::text
+`
+
+type GetNotificationVariantParams struct {
+	Type    string `json:"type"`
+	Channel string `json:"channel"`
+}
+
+func (q *Queries) GetNotificationVariant(ctx context.Context, arg GetNotificationVariantParams) (NotificationVariant, error) {
+	row := q.db.QueryRow(ctx, getNotificationVariant, arg.Type, arg.Channel)
+	var i NotificationVariant
+	err := row.Scan(
+		&i.Type,
+		&i.Channel,
+		&i.Title,
+		&i.Summary,
+		&i.Link,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getOwnedMailFormSource = `-- name: GetOwnedMailFormSource :one
 SELECT id, owner_sub, form_id, form_title, prepared_at, expires_at, response_count, recipient_count, skipped_count, duplicate_count, snapshot_hash, invalidated_at, consumed_at, consumed_approval_id, consumed_task_id, consume_request_hash FROM mail_form_sources WHERE id=$1 AND owner_sub=$2
 `
@@ -2784,6 +2871,44 @@ func (q *Queries) GetTrackingReport(ctx context.Context, arg GetTrackingReportPa
 	return report, err
 }
 
+const insertInboxItems = `-- name: InsertInboxItems :execrows
+INSERT INTO inbox_items (user_id, notification_id, notification_type, title, summary, link, expires_at)
+SELECT person, $1::uuid, $2::text, $3::text,
+       $4::text, $5::text,
+       LEAST(now() + interval '90 days', COALESCE($6::timestamptz, 'infinity'::timestamptz))
+FROM unnest($7::uuid[]) AS person
+ON CONFLICT (notification_id, user_id) DO NOTHING
+`
+
+type InsertInboxItemsParams struct {
+	NotificationID   uuid.UUID   `json:"notification_id"`
+	NotificationType string      `json:"notification_type"`
+	Title            string      `json:"title"`
+	Summary          string      `json:"summary"`
+	Link             *string     `json:"link"`
+	ExpiresAt        *time.Time  `json:"expires_at"`
+	UserIds          []uuid.UUID `json:"user_ids"`
+}
+
+// One notification's inbox item for each person, its text rendered once:
+// gone in 90 days, or at expires_at when that is sooner. A person already
+// holding the notification's item is left as they are.
+func (q *Queries) InsertInboxItems(ctx context.Context, arg InsertInboxItemsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertInboxItems,
+		arg.NotificationID,
+		arg.NotificationType,
+		arg.Title,
+		arg.Summary,
+		arg.Link,
+		arg.ExpiresAt,
+		arg.UserIds,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertMailBounce = `-- name: InsertMailBounce :execrows
 INSERT INTO mail_bounces (queue_id, source, kind, action, status, smtp_code, exo_as_code, recipient_matched,
                           ndr_id_sha256, received_at)
@@ -3056,6 +3181,71 @@ func (q *Queries) LastTemplateSeedVersion(ctx context.Context, templateID uuid.U
 		&i.Name,
 	)
 	return i, err
+}
+
+const listInboxItems = `-- name: ListInboxItems :many
+SELECT id, user_id, notification_id, notification_type, title, summary, link, created_at, seen_at, read_at, archived_at, expires_at
+FROM inbox_items
+WHERE user_id = $1::uuid
+  AND expires_at > now()
+  AND CASE $2::text
+          WHEN 'include' THEN true
+          WHEN 'only' THEN archived_at IS NOT NULL
+          ELSE archived_at IS NULL END
+  AND ($3::timestamptz IS NULL
+      OR (created_at, id) < ($3::timestamptz, $4::uuid))
+ORDER BY created_at DESC, id DESC
+LIMIT $5::int
+`
+
+type ListInboxItemsParams struct {
+	UserID          uuid.UUID  `json:"user_id"`
+	Archived        string     `json:"archived"`
+	BeforeCreatedAt *time.Time `json:"before_created_at"`
+	BeforeID        *uuid.UUID `json:"before_id"`
+	PageSize        int        `json:"page_size"`
+}
+
+// A page of one person's inbox, newest first: the items after the cursor
+// (created_at, id), archived ones as archived says (exclude, include, only),
+// none past its expiry.
+func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) ([]InboxItem, error) {
+	rows, err := q.db.Query(ctx, listInboxItems,
+		arg.UserID,
+		arg.Archived,
+		arg.BeforeCreatedAt,
+		arg.BeforeID,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InboxItem
+	for rows.Next() {
+		var i InboxItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.NotificationID,
+			&i.NotificationType,
+			&i.Title,
+			&i.Summary,
+			&i.Link,
+			&i.CreatedAt,
+			&i.SeenAt,
+			&i.ReadAt,
+			&i.ArchivedAt,
+			&i.ExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listLastMailApprovalEvents = `-- name: ListLastMailApprovalEvents :many
@@ -3536,6 +3726,39 @@ func (q *Queries) ListNotificationTypes(ctx context.Context) ([]NotificationType
 			&i.Lane,
 			&i.ArchivedAt,
 			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotificationVariants = `-- name: ListNotificationVariants :many
+SELECT type, channel, title, summary, link, updated_at
+FROM notification_variants
+ORDER BY type, channel
+`
+
+func (q *Queries) ListNotificationVariants(ctx context.Context) ([]NotificationVariant, error) {
+	rows, err := q.db.Query(ctx, listNotificationVariants)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NotificationVariant
+	for rows.Next() {
+		var i NotificationVariant
+		if err := rows.Scan(
+			&i.Type,
+			&i.Channel,
+			&i.Title,
+			&i.Summary,
+			&i.Link,
 			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -4316,6 +4539,74 @@ func (q *Queries) LockTrackingRecipient(ctx context.Context, trackingToken []byt
 		&i.TaskID,
 		&i.SentAt,
 		&i.At,
+	)
+	return i, err
+}
+
+const markAllInboxItems = `-- name: MarkAllInboxItems :execrows
+UPDATE inbox_items
+SET seen_at = COALESCE(seen_at, now()),
+    read_at = CASE WHEN $1::boolean THEN COALESCE(read_at, now()) ELSE read_at END
+WHERE user_id = $2::uuid
+  AND archived_at IS NULL
+  AND expires_at > now()
+  AND (seen_at IS NULL OR ($1::boolean AND read_at IS NULL))
+`
+
+type MarkAllInboxItemsParams struct {
+	Read   bool      `json:"read"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+// Every item of the person's inbox (archived ones left out) not yet seen, or
+// with read not yet read, marked so.
+func (q *Queries) MarkAllInboxItems(ctx context.Context, arg MarkAllInboxItemsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markAllInboxItems, arg.Read, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markInboxItem = `-- name: MarkInboxItem :one
+UPDATE inbox_items
+SET seen_at     = CASE WHEN $1::text IN ('seen', 'read') THEN COALESCE(seen_at, now()) ELSE seen_at END,
+    read_at     = CASE $1::text
+                      WHEN 'read' THEN COALESCE(read_at, now())
+                      WHEN 'unread' THEN NULL
+                      ELSE read_at END,
+    archived_at = CASE WHEN $1::text = 'archived' THEN COALESCE(archived_at, now()) ELSE archived_at END
+WHERE id = $2::uuid
+  AND user_id = $3::uuid
+  AND expires_at > now()
+RETURNING id, user_id, notification_id, notification_type, title, summary, link, created_at, seen_at, read_at, archived_at, expires_at
+`
+
+type MarkInboxItemParams struct {
+	Mark   string    `json:"mark"`
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+// One of the person's own items, marked: seen; read (seen too); unread;
+// archived. A mark already there keeps its time. Nothing when the item is not
+// theirs, does not exist or has expired.
+func (q *Queries) MarkInboxItem(ctx context.Context, arg MarkInboxItemParams) (InboxItem, error) {
+	row := q.db.QueryRow(ctx, markInboxItem, arg.Mark, arg.ID, arg.UserID)
+	var i InboxItem
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.NotificationID,
+		&i.NotificationType,
+		&i.Title,
+		&i.Summary,
+		&i.Link,
+		&i.CreatedAt,
+		&i.SeenAt,
+		&i.ReadAt,
+		&i.ArchivedAt,
+		&i.ExpiresAt,
 	)
 	return i, err
 }
@@ -5956,6 +6247,48 @@ func (q *Queries) UpsertNotificationType(ctx context.Context, arg UpsertNotifica
 		&i.Lane,
 		&i.ArchivedAt,
 		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertNotificationVariant = `-- name: UpsertNotificationVariant :one
+INSERT INTO notification_variants (type, channel, title, summary, link)
+VALUES ($1::text, $2::text, $3::text,
+        $4::text, $5::text)
+ON CONFLICT (type, channel) DO UPDATE
+    SET title      = EXCLUDED.title,
+        summary    = EXCLUDED.summary,
+        link       = EXCLUDED.link,
+        updated_at = now()
+RETURNING type, channel, title, summary, link, updated_at
+`
+
+type UpsertNotificationVariantParams struct {
+	Type    string `json:"type"`
+	Channel string `json:"channel"`
+	Title   string `json:"title"`
+	Summary string `json:"summary"`
+	Link    string `json:"link"`
+}
+
+// A notification type's text on a channel other than e-mail (hub ticket
+// iletisim-servisi 05: inbox), as the Template seed states it with the type.
+func (q *Queries) UpsertNotificationVariant(ctx context.Context, arg UpsertNotificationVariantParams) (NotificationVariant, error) {
+	row := q.db.QueryRow(ctx, upsertNotificationVariant,
+		arg.Type,
+		arg.Channel,
+		arg.Title,
+		arg.Summary,
+		arg.Link,
+	)
+	var i NotificationVariant
+	err := row.Scan(
+		&i.Type,
+		&i.Channel,
+		&i.Title,
+		&i.Summary,
+		&i.Link,
 		&i.UpdatedAt,
 	)
 	return i, err

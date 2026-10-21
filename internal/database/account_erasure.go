@@ -47,6 +47,10 @@ const (
 	AccountErasureTrackingLinksCleared  = "tracking_links_cleared"
 	// The suppression list: the person's suppressed addresses deleted.
 	AccountErasureSuppressionsDeleted = "suppressions_deleted"
+	// The in-app inbox: the person's own items, and anyone else's whose
+	// text names them.
+	AccountErasureInboxItemsDeleted       = "inbox_items_deleted"
+	AccountErasureInboxItemsNamingDeleted = "inbox_items_naming_deleted"
 )
 
 // ErrAccountErasureInProgress says a send to the person, or another person's
@@ -279,6 +283,7 @@ func newEraser(ctx context.Context, tx pgx.Tx, erasure AccountErasure) (*eraser,
 		AccountErasureActorColumnsReplaced, AccountErasureNotesCleared, AccountErasureChangesCleared,
 		AccountErasureApprovalRecipientsRemoved, AccountErasureApprovalPlaceholders, AccountErasureApprovalSendLinksDeleted,
 		AccountErasureTrackingEventsDeleted, AccountErasureTrackingLinksCleared, AccountErasureSuppressionsDeleted,
+		AccountErasureInboxItemsDeleted, AccountErasureInboxItemsNamingDeleted,
 	} {
 		counts[key] = 0
 	}
@@ -429,6 +434,23 @@ var keepNamesSteps = []erasureStep{
 		      SET body_variables = '{}'::jsonb
 		      WHERE body_variables <> '{}'::jsonb
 		        AND ` + nameIn("body_variables::text"),
+	},
+	{
+		// The person's inbox (ADR 0070), whatever its age: items are kept
+		// by the subject alone. The subject is a canonical UUID (the
+		// handler checks it), so it is compared as one and the feed index
+		// finds the rows.
+		name:  "the person's inbox items",
+		count: AccountErasureInboxItemsDeleted,
+		sql:   `DELETE FROM inbox_items WHERE user_id = @subject::uuid`,
+	},
+	{
+		// Anyone else's inbox item whose text names the person: an item is
+		// a short notice, so it goes whole rather than being emptied.
+		name:  "inbox items naming the person",
+		count: AccountErasureInboxItemsNamingDeleted,
+		sql: `DELETE FROM inbox_items i
+		      WHERE (` + nameIn("i.title") + ` OR ` + nameIn("i.summary") + ` OR ` + nameIn("COALESCE(i.link, '')") + `)`,
 	},
 	{
 		// Queue residue: never sent. A row the dispatcher has just taken is

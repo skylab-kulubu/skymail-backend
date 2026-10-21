@@ -1,8 +1,9 @@
 # Bildirimler (`POST /v1/notifications`) ve Bildirim türleri
 
-Hub bileti iletişim-servisi 03; ADR 0069 taslağı (önerilen: core ne oldu ve
-kime, SkyMail hangi kanaldan ve hangi metinle). Bugün tek kanal e-postadır;
-kutu (05), push (12) ve SMS (13) kendi biletleriyle gelir.
+Hub bileti iletişim-servisi 03; ADR 0070 (core ne oldu ve kime, SkyMail
+hangi kanaldan ve hangi metinle). Kanallar e-posta ve uygulama içi kutu
+(bilet 05, [`inbox.md`](inbox.md)); push (12) ve SMS (13) kendi biletleriyle
+gelir.
 
 ## Bildirim türü (`notification_types`)
 
@@ -11,13 +12,16 @@ kutu (05), push (12) ve SMS (13) kendi biletleriyle gelir.
 | `key` | Template key'in alfabesi (`event.cancelled`). Türün e-posta varyantı aynı anahtarlı şablondur. |
 | `category` | Tercih kategorisi; `null` kategorisiz. |
 | `required` | Zorunlu tür tercihe bakmaz (giriş kodu, bilet, sertifika). |
-| `default_channels` | Türün kanalları. Bugün yalnız `email` (veritabanında `CHECK`). |
+| `default_channels` | Türün kanalları: `email`, `inbox` (veritabanında `CHECK`). |
 | `lane` | Kuyruk şeridi: `system` (toplu gönderimi hiç beklemez) ya da `bulk` (işçilerin en çok %70'i). |
 | `archived_at` | Doluysa tür kullanımda değildir. |
+| `inbox` | Türün kutu metni (`title`, `summary`, `link`); kanallarda `inbox` yoksa `null`. `notification_variants`'ta tutulur. |
 
 - Template seed yazar: `PUT /v1/notification_types/{key}` (`skymail:templates:write`),
-  gövde `{"category", "required", "default_channels", "lane"}`. Var olan tür
-  üzerine yazılır, arşivi olduğu gibi kalır. Kategori küçük harf, rakam, nokta,
+  gövde `{"category", "required", "default_channels", "lane", "inbox"}`. Var
+  olan tür, kutu metniyle birlikte üzerine yazılır, arşivi olduğu gibi kalır.
+  `inbox` kanallarda `inbox` varken zorunlu, yokken reddedilir
+  ([`inbox.md`](inbox.md#türün-kutu-metni)). Kategori küçük harf, rakam, nokta,
   tire ve alt çizgi; 2–64 karakter.
 - Okuma: `GET /v1/notification_types`, `GET /v1/notification_types/{key}`
   (`skymail:templates:read`).
@@ -61,11 +65,17 @@ Content-Type: application/json
   `params.recipient` sırası). Zorunlu türde yok sayılır.
 - `source`: nereden geldiği (`kind` en çok 64, `ref` en çok 200 karakter);
   bildirimle saklanır.
+- `expires_at` (isteğe bağlı, gelecekte): konusu bitince kutu öğeleri o an
+  gider (en çok 90 gün). Geçmiş tarih `400 notification.expires_at_past`.
 
 ### Kanal seçimi (kişi başına)
 
 tür varsayılanı ∩ `allowed_channels` (yalnız isteğe bağlı türde) ∩ kişinin o
 kanaldaki adresi.
+
+Kutu (`inbox`) tercihe bakmaz: türün kanallarında varsa isteğe bağlı türde de
+her alıcıya öğe yazılır, adres gerekmez ve Keycloak'a sorulmaz
+([`inbox.md`](inbox.md)).
 
 E-posta adresi: istekteki `email`; yoksa Keycloak'tan `sub` ile Primary e-mail
 (servis hesabının `view-users` rolü). Atlanma nedenleri:
@@ -101,14 +111,16 @@ bağlantıya konmaz (README, "Sistem postaları"). Varsayılan: takip yok.
   "recipients": 2,
   "duplicates": 0,
   "channels": {
-    "email": {"task_id": "…", "queued": 1, "failed": 0, "skipped": {"not_allowed": 1}}
+    "email": {"task_id": "…", "queued": 1, "failed": 0, "skipped": {"not_allowed": 1}},
+    "inbox": {"task_id": null, "queued": 2, "failed": 0, "skipped": {}}
   }
 }
 ```
 
 `task_id` e-posta gönderimidir (`GET /v1/mail_tasks/{id}`); kimse kuyruğa
-girmediyse `null`. `failed`: metni render edilemeyen alıcılar (gönderimde
-`failed` satır olarak görünür).
+girmediyse ve kutuda her zaman `null`. `failed`: metni render edilemeyen
+alıcılar (e-postada gönderimde `failed` satır olarak görünür; kutuda öğe
+yazılmaz). Kutuda `queued` yazılan öğe sayısıdır.
 
 ### Idempotency (`Idempotency-Key`)
 
@@ -129,9 +141,9 @@ girmediyse `null`. `failed`: metni render edilemeyen alıcılar (gönderimde
 
 | Durum | Kod |
 |---|---|
-| 400 | `validation.error`, `notification.idempotency_key_required`, `notification.allowed_channels_required` |
+| 400 | `validation.error`, `notification.idempotency_key_required`, `notification.allowed_channels_required`, `notification.expires_at_past` |
 | 403 | `server.forbidden` (rol yok), `auth.service_account_required` (kişi token'ı) |
-| 409 | `notification.email_variant_missing` (tür e-postayla gider, anahtarında kullanımda şablon yok) |
+| 409 | `notification.email_variant_missing` (tür e-postayla gider, anahtarında kullanımda şablon yok), `notification.inbox_variant_missing` (tür kutuya gider, kutu metni yok) |
 | 422 | `notification.type_unknown` (yok ya da arşivli), `notification.idempotency_key_reused` |
 | 503 | `notification.directory_unavailable` |
 

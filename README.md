@@ -198,7 +198,9 @@ kabul edilir ve alıcısı `failed` olur. Bu kuralı `main.go`
 (`WithReservedDomainsRefused`) açar. Testler sahte relay ile `example.com`'a
 gönderdiği için kural varsayılan olarak kapalıdır.
 
-Bugün tek kanal `email`'dir: `recipient_email` kanalın adresidir. Var olan ve
+Kuyruktaki tek kanal `email`'dir: `recipient_email` kanalın adresidir
+(uygulama içi kutu kuyruğa girmez, öğesini bildirimin işleminde yazar;
+[`docs/inbox.md`](docs/inbox.md)). Var olan ve
 eski imajın yazdığı satırlar varsayılanla `email` olur; `CHECK` başka kanalı
 reddeder, yeni bir kanal kendi migration'ında eklenir. Bu sürecin göndericisi
 olmayan bir kanalın satırı (daha yeni bir imajın yazdığı, geri dönülmüşse)
@@ -392,8 +394,23 @@ core kişiye (Keycloak `sub`) bir Bildirim türüyle yazar; SkyMail kişi başı
 kanalı seçer (tür varsayılanı ∩ core'un izin verdiği kanallar ∩ adres) ve
 kuyruğa alır. `Idempotency-Key` zorunlu; yalnız servis hesabı ve
 `skymail:notifications:send`. Türleri Template seed yazar
-(`PUT /v1/notification_types/{key}`). Bugün tek kanal e-posta. Sözleşme:
-[`docs/notifications.md`](docs/notifications.md).
+(`PUT /v1/notification_types/{key}`). Kanallar e-posta ve uygulama içi kutu.
+Sözleşme: [`docs/notifications.md`](docs/notifications.md).
+
+## Uygulama içi kutu (`/v1/me/inbox`)
+
+Türün kanallarında `inbox` varsa her alıcıya, tercihine bakılmadan, bir kutu
+öğesi yazılır (türün kutu metni, bildirim başına bir kez render edilir; kuyruğa
+girmez). Kişi kendi öğelerini kendi token'ıyla okur ve işaretler:
+`GET /v1/me/inbox` (imleçli, yeniden eskiye), `GET /v1/me/inbox/counts`,
+`POST /v1/me/inbox/{id}/seen|read|unread|archive`, `POST /v1/me/inbox/read-all`,
+`POST /v1/me/inbox/seen-all`. Token `aud`'unda `skymail` olmalı
+(`V1_TOKEN_AUDIENCE_MODE`'dan bağımsız) ve kişi token'ı olmalı; rol, ve
+`skymail:access`, istenmez. Başkasının öğesi `404`. Öğe en çok 90 gün kalır
+(bildirimin `expires_at`'i daha erken silebilir); kutu süpürmesi saatte bir
+siler, hesap silme kişinin bütün öğelerini siler. Bu sürümden önceki imaja
+dönmeden önce `inbox`'ı türlerden çıkarın. Sözleşme:
+[`docs/inbox.md`](docs/inbox.md).
 
 ## Mail kuyruğu kirası (`MAIL_QUEUE_LEASE`)
 
