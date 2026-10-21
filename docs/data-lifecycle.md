@@ -307,8 +307,15 @@ off).
 
 The mail kept (`body_html`) never holds the pixel or a click address: they
 are put in as the mail goes to the relay, so the content panel shows the
-mail as rendered and looking at it is never an opening. Single mail, System
-templates and sensitive templates are never tracked.
+mail as rendered and looking at it is never an opening. A person's single
+mail that does not ask, System templates and sensitive templates are never
+tracked as asked. With `SKYMAIL_TRACKING_SYSTEM=on` (off by default; Yusuf,
+2026-10-21) the mail services send — account and transaction mail, Forms
+confirmations, core's notifications, SkyMail's approval notices — is tracked
+too, with the same tables, retention and withdrawal: the pixel always, a
+click address only on a link its template writes out as it is, none at all in
+a sensitive mail; so no `mail_task_links.url` of such a send holds what a
+variable put in a link (a reset, verification or login link).
 
 ## In-app inbox
 

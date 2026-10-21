@@ -433,6 +433,14 @@ func (h *notificationHandlerImpl) Send(c fiber.Ctx) error {
 		}
 	}
 
+	// core's notification is a service's mail: with SKYMAIL_TRACKING_SYSTEM
+	// on it is tracked, Keycloak and core asked before the transaction.
+	system := len(emails) > 0 && h.mailer.SystemTrackingAvailable()
+	var preferences *mailer.TrackingPreferences
+	if system {
+		preferences = h.mailer.ResolveSystemTracking(ctx, emails)
+	}
+
 	queued := false
 	err = h.db.InTx(ctx, func(q *database.Queries) error {
 		id, err := q.InsertNotification(ctx, database.InsertNotificationParams{
@@ -454,6 +462,8 @@ func (h *notificationHandlerImpl) Send(c fiber.Ctx) error {
 				TemplateID:    template.ID,
 				BodyVariables: bodyVariables,
 				Recipients:    emails,
+				System:        system,
+				Preferences:   preferences,
 			})
 			if err != nil {
 				return err

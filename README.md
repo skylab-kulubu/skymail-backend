@@ -642,6 +642,7 @@ diyordu). Olay yazımı, raporlar ve saklama işi aynı sabiti kullanır.
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
 | `SKYMAIL_TRACKING` | `off` | `off` ya da `on`; başka değer açılışı durdurur |
+| `SKYMAIL_TRACKING_SYSTEM` | `off` | servislerin postaları (hesap ve işlem postaları, bildirimler): `off` ya da `on`; başka değer açılışı durdurur; yalnız `SKYMAIL_TRACKING=on` iken etkili (aşağıda, "Sistem postaları") |
 | `SKYMAIL_TRACKING_BASE_URL` | yok | `/t/`'nin herkese açık adresi (`https://api.yildizskylab.com/api/skymail`); yalnız https, kimlik bilgisi, sorgu ve parça yok; `on` iken zorunlu |
 | `CORE_URL` | yok | core'un Docker ağındaki adresi (`http://core-backend:8080`); `on` iken zorunlu |
 | `SKYMAIL_TRACKING_RETENTION` | `off` | saklama işi: `off`, `dry-run`, `apply` ya da `purge`; başka değer açılışı durdurur; `purge` için `SKYMAIL_TRACKING=off` zorunlu |
@@ -649,6 +650,8 @@ diyordu). Olay yazımı, raporlar ve saklama işi aynı sabiti kullanır.
 
 Hatalı adres, değeri değil değişkeni söyleyerek açılışı durdurur. Açılışta
 `open and click tracking (SKYMAIL_TRACKING)` satırı kipi ve adresleri,
+`open and click tracking of system mail (SKYMAIL_TRACKING_SYSTEM; …)` satırı
+sistem postalarının geçerli kipini (`mode`) ve istenen değeri (`requested`),
 `open and click tracking retention (SKYMAIL_TRACKING_RETENTION)` satırı
 saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
 
@@ -658,8 +661,9 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   isteği); satır toplu şeritte; şablon System değil ve hassas değil
   (`mail_task_content_sensitive()`, içerik panelinin tek tanımı; kişilere
   giden gönderimde içeriği hakkında bir şey söylemeyen şablon hassas
-  sayılır). Bayrak kapalıyken ya da şablon System/hassasken alan yok
-  sayılır: yanıt, gönderim ve onay isteği `tracking: false` der, satırlara
+  sayılır). Servislerin postaları bu kurala değil `SKYMAIL_TRACKING_SYSTEM`'e
+  bağlıdır (aşağıda, "Sistem postaları"). Bayrak kapalıyken ya da şablon
+  System/hassasken alan yok sayılır: yanıt, gönderim ve onay isteği `tracking: false` der, satırlara
   neden yazılmaz. Sonra alıcının Keycloak `sub`'ı biliniyor
   (`recipient_sub`: Keycloak grubu üyeleri ve kişilere tek tek gönderimde
   adresten bulunan hesap, aşağıda) ve core izin veriyor.
@@ -692,10 +696,11 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   kapsar. Servis hesabı Keycloak'ta kullanıcı okuyabilmeli (`view-users`;
   `GET /users/{id}` için zaten gerekiyor). Takip isteyen ve alabilen
   `/single` gönderimi toplu şeride girer (operatör postası); sistem şeridi
-  hiçbir zaman takip edilmez. Bir servisin token'ıyla gelen `/single`
-  (Keycloak, core, Forms: hesap ve işlem postaları) takip istese de
-  `tracking: false` alır, sistem şeridinde kalır. Forms kaynağı gönderimi
-  değişmedi: takip istemez, `tracking: false` der.
+  istekle hiçbir zaman takip edilmez. Bir servisin token'ıyla gelen
+  `/single` (Keycloak, core, Forms: hesap ve işlem postaları) takip isteyemez:
+  alan yok sayılır, posta sistem şeridinde kalır ve yalnız
+  `SKYMAIL_TRACKING_SYSTEM=on` iken takip edilir (aşağıda). Forms kaynağı
+  gönderimi değişmedi: takip istemez, `tracking: false` der.
 - **core'a ulaşılamazsa** (5 saniye, hata ya da sözleşme dışı yanıt) o
   gönderimde kimse takip edilmez (`preference_unavailable`), gönderim durmaz.
   Uyarı satırı `"event":"tracking_preferences_unavailable"` (`"cause":"core"`
@@ -733,6 +738,68 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   ona giden gönderimin bağlantılarının adresini boşaltır; sayaçlar
   `tracking_events_deleted`, `tracking_links_cleared`
   ([`docs/data-lifecycle.md`](docs/data-lifecycle.md#open-and-click-tracking)).
+
+### Sistem postaları (`SKYMAIL_TRACKING_SYSTEM`)
+
+Yusuf, 2026-10-21: takip bütün postalarda (avukat onayı); gizli anahtarlı
+bağlantılar takibe girmez. **Varsayılan kapalı**; açılış, KVKK aydınlatma
+metni bu kapsamla yayımlandıktan sonra (hub
+`notes/hukuki/kvkk-aydinlatma-metni-YENI-20261021-s3-taslak.md`). Yalnız
+`SKYMAIL_TRACKING=on` iken etkilidir: `on` + `SKYMAIL_TRACKING=off` hata
+değildir, hiçbir şey yapmaz, açılış satırı uyarır (takibi kapatmak SkyMail'in
+açılmasını hiçbir zaman engellemez).
+
+- **Hangi postalar:** servislerin istemeden gönderdiği postalar: bir servisin
+  token'ıyla gelen `POST /v1/mail_tasks/single` (Keycloak'ın giriş/kayıt
+  kodu, doğrulama, parola sıfırlama; core; Forms onayları), core'un
+  bildirimleri (`POST /v1/notifications`, her iki şeritte) ve SkyMail'in
+  kendi Mail onayı bildirimleri. Şablonun System ya da hassas olması takibi
+  engellemez. Bir kişinin (operatörün) gönderimi değişmez: kutuyu
+  işaretlemediyse takip edilmez, işaretlediyse yukarıdaki kuralla. Forms
+  kaynağı gönderimi (yanıtlayanlara operatör postası) değişmedi.
+- **Şerit değişmez:** posta kendi şeridinde kalır (tekil posta ve sistem
+  bildirimi sistem şeridinde, toplu bildirim toplu şeritte); gönderen
+  şeridi (`LaneOf`) ve gönderim katmanı aynıdır, piksel ve tıklama adresi
+  her yolda gönderim anında yerleştirilir.
+- **Kim:** her alıcı yukarıdaki kuralla: `sub`'ı bilinen (bildirim) core'a
+  sorulur; yalnız adresi bilinen (tekil posta, onay bildirimi) önce
+  Keycloak'ta tam doğrulanmış birincil e-postayla aranır, hesap yoksa
+  `no_account` (ör. henüz doğrulanmamış kayıt adresi), varsa core karar
+  verir. Keycloak ve core gönderimin veritabanı işlemi başlamadan önce,
+  **ikisi birlikte en çok 2 saniye** sorulur (giriş kodunu bekleyen biri
+  var); süre dolarsa ya da yanıt yoksa `preference_unavailable`, posta
+  gider.
+- **Gizli bağlantı hiçbir zaman `/t/`'den geçmez:**
+  - İçeriği hassas posta (`mail_task_content_sensitive()`: kodu ya da tek
+    kullanımlık bağlantıyı maskelenen posta; `keycloak.*`, `account.*`,
+    `auth.*` ve kilitli anahtar sözcükleri, hassas işaretli şablon, içeriği
+    hakkında bir şey söylemeyen tekil posta): **yalnız piksel**, hiçbir
+    bağlantı yeniden yazılmaz, `mail_task_links`'e hiçbir şey yazılmaz.
+    (Saklama işinin D7 kuralı da hassas gönderimin bağlantı adreslerini
+    boşaltır.)
+  - Öteki sistem postası: piksel, ve tıklama adresi **yalnız şablonun
+    kendisinin olduğu gibi yazdığı** bağlantılarda: `href`'inde hiçbir
+    şablon eylemi (`{{…}}`) olmayan, dolayısıyla her alıcının postasında
+    aynı olan adres (`tracking.LiteralLinks`). Değişkenin doldurduğu ya da
+    içine değişken giren her bağlantı (sıfırlama, doğrulama, giriş
+    bağlantısı, `?davet=` gibi kişiye özel kod) olduğu gibi gider ve
+    kaydedilmez; tek alıcılı gönderimin "değişkenli bağlantı da kaydedilir"
+    istisnası burada yoktur. Serbest gövdeli şablonun (`safeHTML .BodyHtml`)
+    gövdesindeki bağlantılar da değişkenden geldiği için yazılmaz.
+  - `data-skymail-notrack` ve öteki kurallar (`mailto:`, `unsubscribe`,
+    `communication-preferences`, `/t/`) her postada geçerlidir.
+  - Emsal: SendGrid parola sıfırlama gibi postalarda `clicktracking`'i
+    kapatmayı, Postmark bağlantı başına `data-pm-no-track`'i önerir; burada
+    varsayılan güvenli taraftır: emin olunamayan bağlantı takibe girmez.
+- **Kayıt:** gönderim `tracking_requested = true` olur; tekil postanın
+  `POST /v1/mail_tasks/single` yanıtı `tracking: true` der. Satır nedenleri,
+  raporlar, geri alma, hesap silme ve saklama aynıdır.
+- **Geri dönüş:** `SKYMAIL_TRACKING_SYSTEM=off` + yeniden dağıtım: yeni
+  sistem postaları takipsiz. Bilinen sınır: kapatmadan önce kuyruğa girmiş
+  (saniyeler içinde giden) sistem postası takipli gider, daha önce gitmiş
+  sistem postalarının açılması `SKYMAIL_TRACKING=on` kaldıkça yazılmaya
+  devam eder. Tam durdurma ve silme için `SKYMAIL_TRACKING=off` ve saklama
+  işinin `purge` kipi (aşağıda).
 
 ### Piksel, tıklama ve raporlar
 

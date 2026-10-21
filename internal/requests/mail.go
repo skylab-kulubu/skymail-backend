@@ -21,7 +21,7 @@ type SendSingleMail struct {
 	RecipientEmail    string                 `json:"recipient_email" validate:"required,email"`
 	RecipientFullName string                 `json:"recipient_full_name"`
 	BodyVariables     map[string]interface{} `json:"body_variables"`
-	// Open and click tracking for a mail a person sends (the compose form's people). Ignored (and answered false) for a service's token — account and transaction mail is never tracked — while SkyMail's tracking is off, and for a System template or a sensitive one (a template that says nothing counts as sensitive for one person). The recipient's account is looked up in Keycloak by address before the send is queued: the one enabled user whose primary e-mail equals it (case-insensitively) and is verified; none such is no_account, Keycloak not answering is preference_unavailable, and core decides for the account found.
+	// Open and click tracking for a mail a person sends (the compose form's people). Ignored (and answered false) while SkyMail's tracking is off, and for a System template or a sensitive one (a template that says nothing counts as sensitive for one person). A service's token (account and transaction mail) does not ask: the field is ignored, and its mail is tracked only while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM), in the system lane, with no click address on a link a variable fills and none at all in a sensitive mail. The recipient's account is looked up in Keycloak by address before the send is queued: the one enabled user whose primary e-mail equals it (case-insensitively) and is verified; none such is no_account, Keycloak not answering is preference_unavailable, and core decides for the account found.
 	Tracking bool `json:"tracking"`
 }
 

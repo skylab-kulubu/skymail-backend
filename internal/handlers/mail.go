@@ -91,7 +91,7 @@ func (h *mailHandlerImpl) resolveTemplate(c fiber.Ctx, params requests.SendSingl
 // CreatedMailTask is a send just queued.
 type CreatedMailTask struct {
 	ID uuid.UUID `json:"id"`
-	// Whether the send asked for open and click tracking and got it: false when it did not ask, when SkyMail's tracking is off (GET /mail_tasks/summary tracking_available), or when its template is a System template or sensitive, which are never tracked.
+	// Whether the send asked for open and click tracking and got it: false when it did not ask, when SkyMail's tracking is off (GET /mail_tasks/summary tracking_available), or when its template is a System template or sensitive, which a person's send never tracks. A service's single mail does not ask: true when SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM).
 	Tracking bool `json:"tracking"`
 }
 
@@ -192,7 +192,7 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 // SendSingle godoc
 //
 //	@Summary		Send a single email
-//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never for a service's token, while SkyMail's tracking is off, or for a System or sensitive template). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it.
+//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way and the answer says tracking true, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail).
 //	@Tags			Mail
 //	@Accept			json
 //	@Produce		json
@@ -222,10 +222,12 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 		return apperrors.ErrForbidden
 	}
 
-	// Account and transaction mail, which services send here, is never
-	// tracked: only a person's own send may ask, and it then goes in the bulk
-	// lane, an operator's mail; the system lane stays untracked.
-	tracking := params.Tracking && !middlewares.IsServiceAccount(c) && h.mailer.TrackingApplies(c.Context(), templateID, nil)
+	// Account and transaction mail, which services send here, never asks for
+	// tracking: only a person's own send may, and it then goes in the bulk
+	// lane, an operator's mail. A service's mail stays in the system lane and
+	// is tracked only while SKYMAIL_TRACKING_SYSTEM says so.
+	service := middlewares.IsServiceAccount(c)
+	tracking := params.Tracking && !service && h.mailer.TrackingApplies(c.Context(), templateID, nil)
 	arg := database.CreateSingleMailTaskParams{
 		SentBy:            sentBy,
 		TemplateID:        &templateID,
@@ -235,9 +237,12 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 		TrackingRequested: tracking,
 	}
 	var taskID uuid.UUID
-	if tracking {
+	switch {
+	case service && h.mailer.SystemTrackingAvailable():
+		taskID, tracking, err = h.mailer.EnqueueSystemSingle(c.Context(), arg)
+	case tracking:
 		taskID, err = h.mailer.EnqueueTrackedSingle(c.Context(), arg, nil)
-	} else {
+	default:
 		taskID, err = h.mailer.EnqueueSingle(c.Context(), arg)
 	}
 	if err != nil {
@@ -271,7 +276,7 @@ type MailTaskItem struct {
 	ContentAccess ContentAccess `json:"content_access" enums:"available,masked,pending,restricted,expired,not_kept"`
 	// When the content sweep empties the send's content; null unless content_access is available or masked.
 	ContentExpiresAt *time.Time `json:"content_expires_at"`
-	// Whether the send asked for open and click tracking and got it: SkyMail's tracking was on when it was queued and its template may be tracked (not System, not sensitive).
+	// Whether the send is tracked: it asked for open and click tracking, SkyMail's tracking was on when it was queued and its template may be tracked (not System, not sensitive); or it is a service's mail queued while SkyMail tracked system mail (SKYMAIL_TRACKING_SYSTEM).
 	Tracking bool `json:"tracking"`
 }
 

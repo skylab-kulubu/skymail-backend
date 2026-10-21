@@ -102,3 +102,42 @@ func TestConfigFromEnvChecksTheAddresses(t *testing.T) {
 		t.Error("off with a bad SKYMAIL_TRACKING_BASE_URL: no error")
 	}
 }
+
+// SKYMAIL_TRACKING_SYSTEM is off unless on; any other value stops startup.
+// It counts only with SKYMAIL_TRACKING on: on beside off is not an error
+// (turning tracking off must never stop startup), only nothing.
+func TestConfigFromEnvReadsSystemTracking(t *testing.T) {
+	on := map[string]string{
+		"SKYMAIL_TRACKING":          "on",
+		"SKYMAIL_TRACKING_BASE_URL": "https://api.yildizskylab.com/api/skymail",
+		"CORE_URL":                  "http://core:8080",
+	}
+	with := func(values map[string]string, system string) map[string]string {
+		out := map[string]string{"SKYMAIL_TRACKING_SYSTEM": system}
+		for k, v := range values {
+			out[k] = v
+		}
+		return out
+	}
+	for _, raw := range []string{"", " ", "off", " off "} {
+		cfg, err := tracking.ConfigFromEnv(env(with(on, raw)))
+		if err != nil || cfg.System != tracking.ModeOff || cfg.SystemOn() || !cfg.On() {
+			t.Errorf("SKYMAIL_TRACKING_SYSTEM=%q: %+v, %v; want tracking on, system off", raw, cfg, err)
+		}
+	}
+	cfg, err := tracking.ConfigFromEnv(env(with(on, " on ")))
+	if err != nil || !cfg.SystemOn() {
+		t.Errorf("SKYMAIL_TRACKING_SYSTEM=on: %+v, %v; want system on", cfg, err)
+	}
+	for _, tracked := range []map[string]string{{}, {"SKYMAIL_TRACKING": "off"}} {
+		cfg, err := tracking.ConfigFromEnv(env(with(tracked, "on")))
+		if err != nil || cfg.System != tracking.ModeOn || cfg.SystemOn() || cfg.On() {
+			t.Errorf("SKYMAIL_TRACKING_SYSTEM=on with %v: %+v, %v; want it asked for, not on, no error", tracked, cfg, err)
+		}
+	}
+	for _, raw := range []string{"On", "true", "1", "yes", "evet"} {
+		if _, err := tracking.ConfigFromEnv(env(with(on, raw))); err == nil || !strings.Contains(err.Error(), "SKYMAIL_TRACKING_SYSTEM") {
+			t.Errorf("SKYMAIL_TRACKING_SYSTEM=%q: %v, want an error naming the variable", raw, err)
+		}
+	}
+}

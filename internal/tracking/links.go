@@ -70,10 +70,57 @@ func anchorAttributes(z *html.Tokenizer) (href string, notrack bool) {
 // order the first mail has them, at most MaxLinksPerSend: a link a variable
 // made personal differs between recipients and is never counted.
 func CommonLinks(bodies []string, baseURL string) []string {
+	return commonLinks(bodies, baseURL, nil)
+}
+
+// LiteralLinks are the addresses of the <a> tags a template's HTML writes
+// out as they are: an href no template action ({{…}}) is part of, which
+// every mail of the template carries the same, whatever its variables. An
+// <a> marked data-skymail-notrack is left out, and so is every address
+// Trackable refuses. A link a variable fills or changes — a password reset,
+// an e-mail verification or a login link, any address with a variable in
+// it — is never among them, so it can never carry a secret to /t/. The
+// HTML is read as the tokenizer reads a mail: an href it cannot tell apart
+// from an action is no literal link.
+func LiteralLinks(templateHTML, baseURL string) []string {
+	var links []string
+	for _, link := range Links(templateHTML, baseURL) {
+		if !strings.Contains(link, "{{") {
+			links = append(links, link)
+		}
+	}
+	return links
+}
+
+// CommonLiteralLinks are CommonLinks kept to the template's LiteralLinks:
+// the links of a service's mail a click is counted on (Yusuf, 2026-10-21).
+// A single mail has no other mail to tell a personal link by, so only what
+// the template writes itself is counted; a link a variable made, secret or
+// not, goes to its address as it is.
+func CommonLiteralLinks(bodies []string, templateHTML, baseURL string) []string {
+	literal := map[string]bool{}
+	for _, link := range LiteralLinks(templateHTML, baseURL) {
+		literal[link] = true
+	}
+	return commonLinks(bodies, baseURL, literal)
+}
+
+// commonLinks is CommonLinks, kept to only, when it is not nil, before the
+// MaxLinksPerSend cut.
+func commonLinks(bodies []string, baseURL string, only map[string]bool) []string {
 	if len(bodies) == 0 {
 		return nil
 	}
 	common := Links(bodies[0], baseURL)
+	if only != nil {
+		kept := common[:0]
+		for _, link := range common {
+			if only[link] {
+				kept = append(kept, link)
+			}
+		}
+		common = kept
+	}
 	for _, body := range bodies[1:] {
 		if len(common) == 0 {
 			break

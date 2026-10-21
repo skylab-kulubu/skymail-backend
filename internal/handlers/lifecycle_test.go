@@ -73,6 +73,12 @@ func (*lifecycleMailerStub) EnqueueSingle(context.Context, database.CreateSingle
 	return uuid.New(), nil
 }
 
+func (*lifecycleMailerStub) SystemTrackingAvailable() bool { return false }
+
+func (*lifecycleMailerStub) EnqueueSystemSingle(context.Context, database.CreateSingleMailTaskParams) (uuid.UUID, bool, error) {
+	return uuid.New(), false, nil
+}
+
 func (*lifecycleMailerStub) EnqueueTrackedSingle(context.Context, database.CreateSingleMailTaskParams, *mailer.TrackingPreferences) (uuid.UUID, error) {
 	return uuid.New(), nil
 }
