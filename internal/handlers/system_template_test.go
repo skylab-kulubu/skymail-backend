@@ -73,6 +73,8 @@ func systemTemplateApp(t *testing.T, db *database.Store, mail mailer.Mailer) *fi
 	}})
 	app.Use(func(c fiber.Ctx) error {
 		c.Locals("user_id", "31ef736f-72da-4a40-8791-d523199cf9f0")
+		// The by-key upsert's system mark takes the seed's role.
+		c.Locals("roles", []string{TemplatesSystemRole})
 		return c.Next()
 	})
 

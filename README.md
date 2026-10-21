@@ -64,6 +64,18 @@ sunmak, sunulanı okumayı ister: `skymail:templates:read`, listeye sunmak için
 ayrıca `skymail:lists:read`. Eksik olana 403 döner ve `params.missing_roles`
 eksik rolleri sayar.
 
+Bir şablonu **sistem şablonu** yapmak ya da bu işareti kaldırmak (`PUT
+/v1/templates/by-key/{key}` gövdesindeki `system`) ayrı bir rol ister:
+`skymail:templates:system`. Onu yalnız Template seed'in servis hesabı
+(`skymail-seed`) taşır, hiçbir kişi ya da grup taşımaz; çünkü `account.*` ya
+da `keycloak.*` sistem şablonu bastırma listesini atlar ve hesap şeridinden
+gider. Rolü olmayan (`skymail:templates:write` sahibi operatör) aynı uçla
+sistem şablonunun içeriğini yine yeniden yazabilir, ama `system` şablonda ne
+ise onu göndermelidir (yeni anahtar için `false`); başkasını gönderirse
+`403 server.forbidden` döner (`params.missing_roles:
+["skymail:templates:system"]`, `params.field: "system"`, `params.system`
+şablonun bugünkü işareti) ve hiçbir şey yazılmaz.
+
 `KEYCLOAK_SERVICE_CLIENT_ID` (`skymail-backend`) istemcisinin service
 account'u Keycloak'tan okur: gönderim ve listeler için grupları ve üyelerini,
 mail onayında da `skymail:mails:approve` rolünü kimin taşıdığını (doğrudan ya
@@ -403,7 +415,9 @@ relay'in senkron kalıcı reddidir (aşağıda).
   `account.*` olan **ve** sistem şablonu (`system = true`, Template seed'inki)
   olan gönderim (giriş/kayıt kodu, e-posta doğrulama, şifre sıfırlama)
   bastırılmış adrese yine gider; anahtar tek başına yetmez (önekler ayrılmış
-  değil, sistem olmayan bir `account.x` şablonu bastırılır); satır `suppressed_but_sent = true`,
+  değil, sistem olmayan bir `account.x` şablonu bastırılır); sistem işaretini
+  de yalnız `skymail:templates:system` (seed'in servis hesabı) koyar ya da
+  kaldırır, `skymail:templates:write` yetmez (bkz. Keycloak); satır `suppressed_but_sent = true`,
   bastırma satırı `exempt_flagged_at` alır. Forms, Mail onayı, listeler ve
   öteki her şey bastırılır. Muafiyet şeritle değil anahtarla: sistem
   şeridinde Forms ve Mail onayı bildirimleri de var.

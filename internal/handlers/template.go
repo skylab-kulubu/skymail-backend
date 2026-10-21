@@ -34,6 +34,26 @@ var errSystemTemplateKey = apperrors.New(
 	fiber.StatusConflict,
 )
 
+// TemplatesSystemRole marks a template as a system template, or takes the mark
+// away (PUT /templates/by-key/{key}): the Template seed's service account
+// holds it, no person. Being a system template is a privilege — an account.* or
+// keycloak.* system template goes past the suppression list and from the
+// account lane — so skymail:templates:write alone does not grant it.
+const TemplatesSystemRole = "skymail:templates:system"
+
+// systemMarkForbidden refuses a by-key write that would make a template a
+// system template, or take that away, from a caller without
+// TemplatesSystemRole: 403 server.forbidden, as a missing role is refused
+// elsewhere, with params.missing_roles, and params.system the mark the
+// template has (false for a new key), which such a caller may send.
+func systemMarkForbidden(system bool) error {
+	return apperrors.ErrForbidden.WithParams(map[string]interface{}{
+		"missing_roles": []string{TemplatesSystemRole},
+		"field":         "system",
+		"system":        system,
+	})
+}
+
 // A key arriving in the path skips the struct tag that validates one in a body,
 // so without this a malformed key reached the database and came back as a check
 // constraint violation — a 500 for what is the caller's mistake.
@@ -510,6 +530,8 @@ func (h *templateHandlerImpl) GetTemplateByKey(c fiber.Ctx) error {
 //	@Summary		Create or replace a template addressed by key
 //	@Description	The Template seed's path: creates the template when the key is new and replaces its content — the subject included — when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once; react_email_content holding a JSX source (anything but whitespace and comments, so not the seed's old pointer comment) makes it the version's JSX Main source, and otherwise the HTML content is the HTML Main source. Writes the contract Required variables when sent, and keeps them when not. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.
 //	@Description
+//	@Description	Whether the template is a system template (system) is changed only with skymail:templates:system, which the Template seed's service account holds: without it, system must be what the template has — false for a new key — or the write is refused with 403 server.forbidden (params.missing_roles ["skymail:templates:system"], params.field "system", params.system the mark it has) and nothing is written. So skymail:templates:write still rewrites a system template's content here, and never makes or unmakes one.
+//	@Description
 //	@Description	Neither the seed nor an operator silently overwrites the other (ADR-0047). A template an operator changed since the last seed is refused with 409 template.seed_conflict and nothing is written, when any of these holds (params.rules lists each that does): published_by_operator — the version the template sends is not the last Template seed version; newer_operator_version — an operator wrote a version after the last seed version, a draft included and a discarded draft not; operator_subject — the subject sent is an operator's that the seed would overwrite: neither the one the last seed version asked for nor the one asked for now (for a template whose last seed version is the migration's first one, which does not know what the seed asked for: the seed asks for a subject other than the one sent). The refusal is kept on the template as seed_refusal until a seed goes through. A seed that would leave the template as its published version already is overwrites nothing and is never refused. force=true writes over the operator's change anyway, as a published Template seed version; their versions stay in the history and can be restored, and the answer names what was overridden in overrode (left out when nothing was).
 //	@Tags			Templates
 //	@Accept			json
@@ -519,6 +541,7 @@ func (h *templateHandlerImpl) GetTemplateByKey(c fiber.Ctx) error {
 //	@Param			template	body		requests.UpsertTemplateByKey	true	"Template details"
 //	@Success		200			{object}	handlers.SeededTemplate			"The template; forced over an operator's change, also what it overrode"
 //	@Failure		400			{object}	apperrors.AppError				"Bad Request (validation.error, force included)"
+//	@Failure		403			{object}	apperrors.AppError				"server.forbidden: system differs from what the template has (false for a new key) and the caller lacks skymail:templates:system; params: missing_roles, field (system), system (the mark the template has)"
 //	@Failure		409			{object}	apperrors.AppError				"template.seed_conflict: an operator changed the template since the last seed; params: key, template_id, rules, published_version, last_seed_version, operator_versions (each a version summary, as the history serves it), subject (sent now) and requested_subject (the seed's)"
 //	@Failure		422			{object}	apperrors.AppError				"The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
 //	@Failure		500			{object}	apperrors.AppError				"Internal Server Error"
@@ -558,6 +581,12 @@ func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 		sensitive = &locked
 	}
 
+	// Only TemplatesSystemRole changes whether the template is a system
+	// template; the check reads the row locked below, so no other write slips
+	// between it and this one.
+	roles, _ := c.Locals("roles").([]string)
+	maySetSystem := slices.Contains(roles, TemplatesSystemRole)
+
 	// A Template seed's version is published at once, unless an operator's
 	// change is in its way and it is not forced.
 	author := versionAuthor(c, database.TemplateAuthorKindTemplateSeed)
@@ -569,10 +598,15 @@ func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 		PayloadSHA256: payloadSHA256,
 	}, checkedWrite(func(q *database.Queries) (database.Template, error) {
 		var before *bool
+		system := false // a new key is no system template
 		if existing, err := q.LockTemplateByKey(c.Context(), &key); err == nil {
 			before = existing.ContentSensitive
+			system = existing.System
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return database.Template{}, err
+		}
+		if params.System != system && !maySetSystem {
+			return database.Template{}, systemMarkForbidden(system)
 		}
 		written, err := q.UpsertTemplateByKey(c.Context(), database.UpsertTemplateByKeyParams{
 			Key:                       key,
