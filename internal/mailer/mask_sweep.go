@@ -348,7 +348,11 @@ func maskSend(ctx context.Context, q *database.Queries, send database.TakeSendTo
 			if row.BodyHtml != nil {
 				sent.HTML = *row.BodyHtml
 			}
-			mail, err := masker.Mail(sent, RecipientInfo{FullName: row.RecipientFullName, Email: row.RecipientEmail})
+			recipient := RecipientInfo{FullName: row.RecipientFullName, Email: row.RecipientEmail}
+			if row.ListUnsubscribeUrl != nil {
+				recipient.UnsubscribeURL = *row.ListUnsubscribeUrl
+			}
+			mail, err := masker.Mail(sent, recipient)
 			if errors.Is(err, ErrCannotMask) {
 				// Rows of this send masked in earlier chunks are emptied too.
 				return sendOutcome{kind: outcomeNotKept}, q.ClearSendContent(ctx, send.ID)

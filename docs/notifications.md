@@ -63,6 +63,19 @@ Content-Type: application/json
   (`email`, `inbox`, `push`, `sms`). İsteğe bağlı türde her alıcıda zorunludur
   (`[]` hiçbir kanal; alan yoksa `400 notification.allowed_channels_required`,
   `params.recipient` sırası). Zorunlu türde yok sayılır.
+- `unsubscribe_url` (isteğe bağlı): kişinin core'un imzaladığı tek tık çıkış
+  bağlantısı (`https://api.yildizskylab.com/v1/communication-preferences/unsubscribe?t=…`;
+  core'un kitle ucunun `unsubscribeUrl`'i). Yalnız **isteğe bağlı** ve
+  **`bulk` şeritli** türde kabul edilir; zorunlu ya da `system` şeritli türde
+  `400 notification.unsubscribe_url_not_allowed` (giriş kodu, bilet, onay
+  postası çıkış bağlantısı taşımaz). Mutlak `https`, host'lu, kullanıcısız, en
+  çok 960 karakter görünür ASCII, `<`, `>`, virgül ve tırnak yok; değilse
+  `400 notification.unsubscribe_url_invalid` (ikisi de `params.recipient`
+  sırası). Bağlantı satırda (`mail_queue.list_unsubscribe_url`) saklanır,
+  şablona `.UnsubscribeUrl` olarak girer ve `SKYMAIL_LIST_UNSUBSCRIBE=on`
+  iken duyuru kutusundan `List-Unsubscribe` + `List-Unsubscribe-Post`
+  başlıklarıyla gider (README, "Tek tık çıkış"). Boşsa istekte yazılmaz; eski
+  bir isteğin `Idempotency-Key` özeti değişmez.
 - `source`: nereden geldiği (`kind` en çok 64, `ref` en çok 200 karakter);
   bildirimle saklanır.
 - `expires_at` (isteğe bağlı, gelecekte): konusu bitince kutu öğeleri o an
@@ -138,7 +151,7 @@ yazılmaz). Kutuda `queued` yazılan öğe sayısıdır.
 
 | Durum | Kod |
 |---|---|
-| 400 | `validation.error`, `notification.idempotency_key_required`, `notification.allowed_channels_required`, `notification.expires_at_past` |
+| 400 | `validation.error`, `notification.idempotency_key_required`, `notification.allowed_channels_required`, `notification.expires_at_past`, `notification.unsubscribe_url_not_allowed`, `notification.unsubscribe_url_invalid` |
 | 403 | `server.forbidden` (rol yok), `auth.service_account_required` (kişi token'ı) |
 | 409 | `notification.email_variant_missing` (tür e-postayla gider, anahtarında kullanımda şablon yok), `notification.inbox_variant_missing` (tür kutuya gider, kutu metni yok) |
 | 422 | `notification.type_unknown` (yok ya da arşivli), `notification.idempotency_key_reused` |

@@ -36,6 +36,8 @@ type NotificationRecipient struct {
 	Name string `json:"name" validate:"max=200" example:"Ayşe Kaya"`
 	// The channels the person's preferences allow for this notification, as core resolved them. Required for an optional type (a person with [] gets nothing); a required type ignores it.
 	AllowedChannels *[]string `json:"allowed_channels" validate:"omitempty,dive,oneof=email inbox push sms" example:"email"`
+	// The person's one-click unsubscribe link as core signed it (core's /v1/communication-preferences/unsubscribe?t=…), for an optional type of the bulk lane only: the e-mail renders it as .UnsubscribeUrl and, while SKYMAIL_LIST_UNSUBSCRIBE is on, carries it in List-Unsubscribe and List-Unsubscribe-Post from the duyuru mailbox. An https URL of visible ASCII, at most 960 characters, without < > , or ".
+	UnsubscribeURL string `json:"unsubscribe_url,omitempty" validate:"omitempty,max=960" example:"https://api.yildizskylab.com/v1/communication-preferences/unsubscribe?t=AQEB"`
 }
 
 // NotificationSource is where a notification came from.

@@ -112,6 +112,11 @@ type RecipientInfo struct {
 	// Keycloak group's member), written to mail_queue.recipient_sub; nil
 	// when only an address is known. A mail never renders it.
 	Sub *uuid.UUID
+	// UnsubscribeURL is the person's one-click unsubscribe link when core
+	// gave one (a notification's unsubscribe_url): the row keeps it for
+	// List-Unsubscribe (list_unsubscribe.go) and the mail renders it as
+	// .UnsubscribeUrl. Empty for none.
+	UnsubscribeURL string
 }
 
 type EnqueueWithRecipientsParams struct {
@@ -538,6 +543,7 @@ type commonMailRow struct {
 	RecipientFullName string
 	RecipientEmail    string
 	RecipientSub      *uuid.UUID
+	UnsubscribeURL    string
 }
 
 // queue writes sends through q: the pool's queries, or a transaction's, in
@@ -730,6 +736,7 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 			RecipientFullName: r.FullName,
 			RecipientEmail:    r.Email,
 			RecipientSub:      r.Sub,
+			UnsubscribeURL:    r.UnsubscribeURL,
 		})
 	}
 
@@ -804,7 +811,8 @@ type Rendered struct {
 // Render renders a Mail template's subject, plain text and HTML for one
 // recipient exactly as a send renders what it queues: the send's variables —
 // a JSON object, as a mail task keeps them — with the recipient's Email and
-// FullName over them. A part that does not parse is a *ParseError.
+// FullName over them, and UnsubscribeUrl when the recipient has a link. A
+// part that does not parse is a *ParseError.
 func Render(subject, plainText, html string, variables []byte, recipient RecipientInfo) (Rendered, error) {
 	parsed, err := parseMailTemplates(subject, plainText, html)
 	if err != nil {
@@ -834,6 +842,9 @@ func (t mailTemplates) renderWith(textVars, htmlVars map[string]interface{}, rec
 		}
 		data["Email"] = recipient.Email
 		data["FullName"] = recipient.FullName
+		if recipient.UnsubscribeURL != "" {
+			data["UnsubscribeUrl"] = recipient.UnsubscribeURL
+		}
 		return data
 	}
 	textData, htmlData := withRecipient(textVars), withRecipient(htmlVars)
@@ -916,7 +927,7 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 			})
 			continue
 		}
-		rendered, err := parsed.render(taskVars, RecipientInfo{FullName: row.RecipientFullName, Email: row.RecipientEmail})
+		rendered, err := parsed.render(taskVars, RecipientInfo{FullName: row.RecipientFullName, Email: row.RecipientEmail, UnsubscribeURL: row.UnsubscribeURL})
 		if err != nil {
 			if strict {
 				return false, err
@@ -937,15 +948,16 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 		htmlRes := rendered.HTML
 
 		queueItems = append(queueItems, database.CreateMailQueueItemsParams{
-			TaskID:            row.TaskID,
-			RecipientFullName: row.RecipientFullName,
-			RecipientEmail:    row.RecipientEmail,
-			Subject:           rendered.Subject,
-			Body:              rendered.PlainText,
-			BodyHtml:          &htmlRes,
-			Priority:          int16(q.priority),
-			RecipientSub:      row.RecipientSub,
-			SuppressedButSent: isSuppressed,
+			TaskID:             row.TaskID,
+			RecipientFullName:  row.RecipientFullName,
+			RecipientEmail:     row.RecipientEmail,
+			Subject:            rendered.Subject,
+			Body:               rendered.PlainText,
+			BodyHtml:           &htmlRes,
+			Priority:           int16(q.priority),
+			RecipientSub:       row.RecipientSub,
+			SuppressedButSent:  isSuppressed,
+			ListUnsubscribeUrl: nonEmpty(row.UnsubscribeURL),
 		})
 		if isSuppressed {
 			q.logger.Warn().Str("task_id", row.TaskID.String()).Str("suppression", suppression.Source+" "+suppression.ReasonCode).
@@ -1261,4 +1273,12 @@ func (m *mailerImpl) recordSendFailure(ctx context.Context, logger *zerolog.Logg
 		Int("attempts", attempts).
 		Dur("retry_in", delay).
 		Msg("Retrying email")
+}
+
+// nonEmpty is s, or nil when it is empty.
+func nonEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

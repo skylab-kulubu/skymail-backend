@@ -3,6 +3,7 @@ package mailer
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +32,12 @@ import (
 //
 // JSON has one body: the HTML when the mail has one (Exchange writes the
 // plain-text alternative of an HTML mail itself), the plain text otherwise.
+//
+// JSON carries only X- headers, so a duyuru mail with a List-Unsubscribe link
+// (list_unsubscribe.go) goes as MIME instead: the mail the SMTP path writes,
+// base64, Content-Type text/plain, to the same sendMail. Graph takes no
+// saveToSentItems with MIME: Exchange keeps a copy in Sent Items, which the
+// mailbox's retention policy deletes (a day). Every other mail stays JSON.
 
 // DefaultGraphURL is Microsoft Graph's v1.0 endpoint.
 const DefaultGraphURL = "https://graph.microsoft.com/v1.0"
@@ -132,12 +139,52 @@ const graphMaxRequest = 4 << 20
 // graphTooLargeError is a mail over graphMaxRequest: never sent.
 const graphTooLargeError = "graph_rejected: the mail is over Graph's 4 MB request limit, not sent"
 
-// sendGraph sends job from lane's mailbox with Graph sendMail.
+// graphMIMERequest is the MIME sendMail body of job from lane's mailbox with
+// List-Unsubscribe: the mail as the SMTP path writes it (Reply-To, Message-ID,
+// X-SkyMail-Queue-Id, the plain text and the HTML), base64.
+func (s *emailSender) graphMIMERequest(ctx context.Context, job database.MailQueue, lane LaneConfig, unsubscribe string) ([]byte, error) {
+	if _, err := recipientAddress(job); err != nil {
+		return nil, err
+	}
+	msg, err := s.message(ctx, job, lane.From.String(), true)
+	if err != nil {
+		return nil, err
+	}
+	setListUnsubscribe(msg, unsubscribe)
+	var raw bytes.Buffer
+	if _, err := msg.WriteTo(&raw); err != nil {
+		return nil, fmt.Errorf("send failed: write the mail: %w", err)
+	}
+	if base64.StdEncoding.EncodedLen(raw.Len()) > graphMaxRequest {
+		return nil, permanentError{errors.New(graphTooLargeError)}
+	}
+	payload := make([]byte, base64.StdEncoding.EncodedLen(raw.Len()))
+	base64.StdEncoding.Encode(payload, raw.Bytes())
+	return payload, nil
+}
+
+// sendGraph sends job from lane's mailbox with Graph sendMail, as JSON.
 func (s *emailSender) sendGraph(ctx context.Context, job database.MailQueue, lane Lane, config LaneConfig) error {
 	payload, err := s.graphRequest(ctx, job, config)
 	if err != nil {
 		return err
 	}
+	return s.postSendMail(ctx, job, lane, config, payload, "application/json")
+}
+
+// sendGraphMIME sends job from lane's mailbox with Graph sendMail, as MIME
+// with List-Unsubscribe.
+func (s *emailSender) sendGraphMIME(ctx context.Context, job database.MailQueue, lane Lane, config LaneConfig, unsubscribe string) error {
+	payload, err := s.graphMIMERequest(ctx, job, config, unsubscribe)
+	if err != nil {
+		return err
+	}
+	return s.postSendMail(ctx, job, lane, config, payload, "text/plain")
+}
+
+// postSendMail posts a sendMail body, JSON or MIME (contentType), and reads
+// Graph's answer.
+func (s *emailSender) postSendMail(ctx context.Context, job database.MailQueue, lane Lane, config LaneConfig, payload []byte, contentType string) error {
 	send, cancel := context.WithTimeout(ctx, s.sendBudget)
 	defer cancel()
 	token, err := s.graphTokens.Token(send)
@@ -150,7 +197,7 @@ func (s *emailSender) sendGraph(ctx context.Context, job database.MailQueue, lan
 		return fmt.Errorf("send failed: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	// Graph echoes it and Microsoft's support finds the request by it.
 	req.Header.Set("client-request-id", job.ID.String())
 	resp, err := s.graphClient.Do(req)

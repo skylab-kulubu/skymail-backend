@@ -255,12 +255,13 @@ WITH due AS (SELECT mt.id
              ORDER BY mt.created_at
              LIMIT $2::int FOR UPDATE OF mt SKIP LOCKED),
      rows AS (UPDATE mail_queue q
-         SET subject   = '',
-             body      = '',
-             body_html = NULL
+         SET subject              = '',
+             body                 = '',
+             body_html            = NULL,
+             list_unsubscribe_url = NULL
          FROM due
          WHERE q.task_id = due.id
-           AND (q.subject <> '' OR q.body <> '' OR q.body_html IS NOT NULL)
+           AND (q.subject <> '' OR q.body <> '' OR q.body_html IS NOT NULL OR q.list_unsubscribe_url IS NOT NULL)
          RETURNING q.task_id)
 UPDATE mail_tasks mt
 SET body_variables     = '{}',
@@ -338,7 +339,7 @@ func (q *Queries) ClearMailTaskTracking(ctx context.Context, taskID uuid.UUID) e
 
 const clearSendContent = `-- name: ClearSendContent :exec
 WITH emptied AS (UPDATE mail_queue
-    SET subject = '', body = '', body_html = NULL
+    SET subject = '', body = '', body_html = NULL, list_unsubscribe_url = NULL
     WHERE mail_queue.task_id = $1
     RETURNING mail_queue.id)
 UPDATE mail_tasks
@@ -369,9 +370,10 @@ WITH due AS (SELECT mt.id, mt.content_mask_failing_since
              ORDER BY mt.content_mask_failing_since
              LIMIT $2::int FOR UPDATE OF mt SKIP LOCKED),
      emptied AS (UPDATE mail_queue q
-         SET subject   = '',
-             body      = '',
-             body_html = NULL
+         SET subject              = '',
+             body                 = '',
+             body_html            = NULL,
+             list_unsubscribe_url = NULL
          FROM due
          WHERE q.task_id = due.id
          RETURNING q.task_id)
@@ -1141,6 +1143,7 @@ type CreateMailQueueItemsParams struct {
 	TrackingToken      []byte     `json:"-"`
 	TrackingSkipReason *string    `json:"tracking_skip_reason"`
 	SuppressedButSent  bool       `json:"suppressed_but_sent"`
+	ListUnsubscribeUrl *string    `json:"-"`
 }
 
 const createMailTask = `-- name: CreateMailTask :many
@@ -3860,7 +3863,7 @@ func (q *Queries) ListPublishedMainModes(ctx context.Context, templateIds []uuid
 }
 
 const listQueueRowsToMask = `-- name: ListQueueRowsToMask :many
-SELECT id, recipient_full_name, recipient_email, subject, body, body_html
+SELECT id, recipient_full_name, recipient_email, subject, body, body_html, list_unsubscribe_url
 FROM mail_queue
 WHERE task_id = $1
   AND id > $2
@@ -3876,12 +3879,13 @@ type ListQueueRowsToMaskParams struct {
 }
 
 type ListQueueRowsToMaskRow struct {
-	ID                uuid.UUID `json:"id"`
-	RecipientFullName string    `json:"recipient_full_name"`
-	RecipientEmail    string    `json:"recipient_email"`
-	Subject           string    `json:"subject"`
-	Body              string    `json:"body"`
-	BodyHtml          *string   `json:"body_html"`
+	ID                 uuid.UUID `json:"id"`
+	RecipientFullName  string    `json:"recipient_full_name"`
+	RecipientEmail     string    `json:"recipient_email"`
+	Subject            string    `json:"subject"`
+	Body               string    `json:"body"`
+	BodyHtml           *string   `json:"body_html"`
+	ListUnsubscribeUrl *string   `json:"-"`
 }
 
 // The next rows of a send that still hold a mail, after the row after, for the
@@ -3904,6 +3908,7 @@ func (q *Queries) ListQueueRowsToMask(ctx context.Context, arg ListQueueRowsToMa
 			&i.Subject,
 			&i.Body,
 			&i.BodyHtml,
+			&i.ListUnsubscribeUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -4698,7 +4703,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url
 `
 
 type ProcessBulkQueueItemsParams struct {
@@ -4741,6 +4746,7 @@ func (q *Queries) ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueu
 			&i.TrackingSkipReason,
 			&i.SentAt,
 			&i.SuppressedButSent,
+			&i.ListUnsubscribeUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -4764,7 +4770,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url
 `
 
 type ProcessSystemQueueItemsParams struct {
@@ -4811,6 +4817,7 @@ func (q *Queries) ProcessSystemQueueItems(ctx context.Context, arg ProcessSystem
 			&i.TrackingSkipReason,
 			&i.SentAt,
 			&i.SuppressedButSent,
+			&i.ListUnsubscribeUrl,
 		); err != nil {
 			return nil, err
 		}

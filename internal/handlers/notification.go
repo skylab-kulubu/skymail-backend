@@ -86,6 +86,16 @@ var (
 		"Keycloak could not be asked for a recipient's address. Nothing was queued; retry with the same Idempotency-Key.",
 		fiber.StatusServiceUnavailable,
 	)
+	errUnsubscribeURLNotAllowed = apperrors.New(
+		"notification.unsubscribe_url_not_allowed",
+		"Only an optional notification type of the bulk lane takes an unsubscribe_url: a required or a system-lane type (a login code, a ticket, a confirmation) never carries one.",
+		fiber.StatusBadRequest,
+	)
+	errUnsubscribeURLInvalid = apperrors.New(
+		"notification.unsubscribe_url_invalid",
+		"An unsubscribe_url is an absolute https URL with a host and no user, at most 960 characters of visible ASCII without < > , or \".",
+		fiber.StatusBadRequest,
+	)
 	errNotificationCategory = apperrors.New(
 		"notification_type.invalid_category",
 		"A category is lower-case letters, digits, dots, dashes and underscores, 2 to 64 characters, starting and ending with a letter or a digit.",
@@ -180,7 +190,8 @@ type person struct {
 // for an enabled account whose address is verified.
 func (h *notificationHandlerImpl) emailOf(ctx context.Context, p *person) (mailer.RecipientInfo, string, error) {
 	sub := p.recipient.Sub
-	info := mailer.RecipientInfo{FullName: strings.TrimSpace(p.recipient.Name), Email: strings.TrimSpace(p.recipient.Email), Sub: &sub}
+	info := mailer.RecipientInfo{FullName: strings.TrimSpace(p.recipient.Name), Email: strings.TrimSpace(p.recipient.Email), Sub: &sub,
+		UnsubscribeURL: p.recipient.UnsubscribeURL}
 	if info.Email == "" && !p.looked {
 		user, err := h.people.GetUser(ctx, sub.String())
 		if err != nil {
@@ -250,7 +261,7 @@ var errNotificationReplay = errors.New("idempotency key already used")
 // Send godoc
 //
 //	@Summary		Send a notification to people
-//	@Description	core says what happened (type) and to whom (recipients, by Keycloak sub); SkyMail picks each person's channels: the type's default channels, for an optional type only those in the person's allowed_channels (a required type ignores them), and only where the person has an address. E-mail goes to the request's address or, without one, to the person's primary e-mail in Keycloak; a person Keycloak does not know, a disabled account and an unverified address are skipped and counted. The e-mail is the template of the type's key, queued in the type's lane. The inbox does not look at allowed_channels: every recipient gets an item, the type's inbox text rendered with the variables, kept 90 days or until expires_at. The Idempotency-Key header is required: the same key from the same caller answers the first answer again (Idempotent-Replayed: true) and queues nothing; a different request with it is 422. Only a service account's token with skymail:notifications:send may call it.
+//	@Description	core says what happened (type) and to whom (recipients, by Keycloak sub); SkyMail picks each person's channels: the type's default channels, for an optional type only those in the person's allowed_channels (a required type ignores them), and only where the person has an address. E-mail goes to the request's address or, without one, to the person's primary e-mail in Keycloak; a person Keycloak does not know, a disabled account and an unverified address are skipped and counted. The e-mail is the template of the type's key, queued in the type's lane. The inbox does not look at allowed_channels: every recipient gets an item, the type's inbox text rendered with the variables, kept 90 days or until expires_at. An optional type of the bulk lane may give a recipient core's unsubscribe_url: the e-mail renders it as .UnsubscribeUrl and, while SKYMAIL_LIST_UNSUBSCRIBE is on, carries it in List-Unsubscribe and List-Unsubscribe-Post (RFC 8058) from the duyuru mailbox; any other type refuses it. The Idempotency-Key header is required: the same key from the same caller answers the first answer again (Idempotent-Replayed: true) and queues nothing; a different request with it is 422. Only a service account's token with skymail:notifications:send may call it.
 //	@Tags			Notifications
 //	@Accept			json
 //	@Produce		json
@@ -258,7 +269,7 @@ var errNotificationReplay = errors.New("idempotency key already used")
 //	@Param			notification	body		requests.SendNotification	true	"The notification"
 //	@Success		201				{object}	handlers.NotificationResult
 //	@Header			201				{string}	Idempotent-Replayed	"true when the answer is the first answer to this Idempotency-Key"
-//	@Failure		400				{object}	apperrors.AppError	"validation.error; notification.idempotency_key_required; notification.allowed_channels_required (params.recipient: its index); notification.expires_at_past"
+//	@Failure		400				{object}	apperrors.AppError	"validation.error; notification.idempotency_key_required; notification.allowed_channels_required, notification.unsubscribe_url_not_allowed, notification.unsubscribe_url_invalid (params.recipient: its index); notification.expires_at_past"
 //	@Failure		403				{object}	apperrors.AppError	"server.forbidden: no skymail:notifications:send; auth.service_account_required: a person's token"
 //	@Failure		409				{object}	apperrors.AppError	"notification.email_variant_missing: the type goes by e-mail and has no template of its key; notification.inbox_variant_missing"
 //	@Failure		422				{object}	apperrors.AppError	"notification.type_unknown; notification.idempotency_key_reused"
@@ -304,6 +315,20 @@ func (h *notificationHandlerImpl) Send(c fiber.Ctx) error {
 			if r.AllowedChannels == nil {
 				return errAllowedChannelsRequired.WithParams(map[string]interface{}{"recipient": i})
 			}
+		}
+	}
+	// An unsubscribe link only on mail one may unsubscribe from (bounce
+	// ticket 11): an optional type in the bulk lane, never account or system
+	// mail.
+	for i, r := range params.Recipients {
+		if r.UnsubscribeURL == "" {
+			continue
+		}
+		if kind.Required || kind.Lane != "bulk" {
+			return errUnsubscribeURLNotAllowed.WithParams(map[string]interface{}{"recipient": i})
+		}
+		if !mailer.ValidUnsubscribeURL(r.UnsubscribeURL) {
+			return errUnsubscribeURLInvalid.WithParams(map[string]interface{}{"recipient": i})
 		}
 	}
 	var template database.Template
