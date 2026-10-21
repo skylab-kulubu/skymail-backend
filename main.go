@@ -198,6 +198,7 @@ func main() {
 	log.Info().Str("mode", string(trackingConfig.Mode)).Str("base_url", trackingConfig.BaseURL).Str("core_url", trackingConfig.CoreURL).
 		Msg("open and click tracking (SKYMAIL_TRACKING)")
 	logSystemTracking(trackingConfig)
+	logOperatorTracking(trackingConfig)
 	log.Info().Str("mode", string(trackingRetention)).Int("event_retention_days", tracking.EventRetentionDays).Int64("max_rows", trackingRetentionMaxRows).
 		Msg("open and click tracking retention (SKYMAIL_TRACKING_RETENTION)")
 	logSendLanes(sendLanes)
@@ -411,6 +412,22 @@ func logSystemTracking(cfg tracking.Config) {
 		Msg("open and click tracking of system mail (SKYMAIL_TRACKING_SYSTEM; on only with SKYMAIL_TRACKING=on)")
 }
 
+// logOperatorTracking says at startup whether every send a person queues is
+// tracked (SKYMAIL_TRACKING_OPERATOR), as logSystemTracking does for the
+// mail services send: mode is what applies, on only with SKYMAIL_TRACKING on.
+func logOperatorTracking(cfg tracking.Config) {
+	mode := tracking.ModeOff
+	if cfg.OperatorOn() {
+		mode = tracking.ModeOn
+	}
+	event := log.Info()
+	if cfg.Operator == tracking.ModeOn && !cfg.On() {
+		event = log.Warn()
+	}
+	event.Str("mode", string(mode)).Str("requested", string(cfg.Operator)).
+		Msg("open and click tracking of every operator send (SKYMAIL_TRACKING_OPERATOR; on only with SKYMAIL_TRACKING=on)")
+}
+
 // trackingConfigFromEnv validates tracking before any service starts. Routes
 // now exist, but production enablement still waits for the rollout gates.
 func trackingConfigFromEnv(getenv func(string) string) (tracking.Config, error) {
@@ -474,6 +491,8 @@ func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, m
 	tasks.Get("/", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTasks)
 	// Before /:id, which would otherwise take "summary" for a task id.
 	tasks.Get("/summary", auth.RequireAnyPermission("skymail:mails:read"), mail.GetSummary)
+	// A setting, not a send: anyone who may use SkyMail (skymail:access).
+	tasks.Get("/tracking-mode", mail.GetTrackingMode)
 	tasks.Get("/:id", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTask)
 	tasks.Get("/:id/tracking", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTracking)
 	tasks.Get("/:id/tracking/recipients", mail.GetTrackingRecipients)

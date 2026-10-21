@@ -1711,10 +1711,16 @@ WHERE e.queue_id = sqlc.arg(queue_id) AND e.kind = 'click'
          AND b.classifier_version = sqlc.arg(classifier_version)
          AND b.occurred_at BETWEEN sqlc.arg(at)::timestamptz - interval '5 seconds' AND sqlc.arg(at)) >= 3;
 
+-- system_lane: a row of the send is in the system lane (priority > 0, as
+-- ProcessSystemQueueItems reads it). A tracked mail there is always one the
+-- system sends (a service's single mail, SkyMail's own approval notice): a
+-- person's tracked send is in the bulk lane, and the system lane is never
+-- tracked as a person asks. Its people are read with the role only.
 -- name: TrackingTaskAccess :one
 SELECT t.id, t.sent_by, t.tracking_requested, t.tracking_closed_at,
        COALESCE((SELECT max(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS sent_at,
-       COALESCE((SELECT min(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS started_at
+       COALESCE((SELECT min(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS started_at,
+       EXISTS (SELECT 1 FROM mail_queue q WHERE q.task_id = t.id AND q.priority > 0) AS system_lane
 FROM mail_tasks t WHERE t.id = $1;
 
 -- Aggregates remain inside PostgreSQL: a report never loads raw events or

@@ -477,20 +477,29 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	if err := authorizeApproval(caller, view.MailApproval.SubmitterSub, action.by); err != nil {
 		return err
 	}
+	// An approved send is an operator's mail: while SkyMail tracks every
+	// person's send it is tracked, whatever the request said when it was
+	// submitted (queue does the same under the lock).
+	tracked := view.MailApproval.TrackingRequested || h.mailer.OperatorTrackingAlways()
 	var prepared approvalPrepared
 	if action.sends && view.MailApproval.MailListID != nil && !view.InternalMailList {
 		prepared, err = h.groupRecipients(ctx, *view.MailApproval.MailListID)
 		if err != nil {
 			return err
 		}
-		if view.MailApproval.TrackingRequested && prepared.groupMembers != nil {
+		if tracked && prepared.groupMembers != nil {
 			prepared.tracking = h.mailer.ResolveTracking(ctx, view.MailApproval.TemplateID, view.MailApproval.MailListID, prepared.groupMembers)
 		}
 	}
 	// People named one by one: their accounts are found by address, and core
 	// asked, before the lock too.
-	if action.sends && view.MailApproval.TrackingRequested && view.MailApproval.MailListID == nil && view.MailApproval.FormSourceID == nil {
+	if action.sends && tracked && view.MailApproval.MailListID == nil && view.MailApproval.FormSourceID == nil {
 		prepared.tracking = h.mailer.ResolvePeopleTracking(ctx, view.MailApproval.TemplateID, recipientsOfView(view))
+	}
+	// A Forms source's respondents, the same way, while SkyMail tracks every
+	// person's send.
+	if action.sends && view.MailApproval.FormSourceID != nil {
+		prepared.tracking = formSourceTracking(ctx, h.db, h.mailer, *view.MailApproval.FormSourceID, view.MailApproval.SubmitterSub, view.MailApproval.TemplateID, false)
 	}
 	if action.check != nil {
 		if prepared.checked, err = action.check(ctx, view, caller); err != nil {
@@ -712,11 +721,21 @@ func (h *mailApprovalHandlerImpl) queue(ctx context.Context, q *database.Queries
 		})
 	}
 
-	// An approved send is an operator's mail, to a list or to up to 100
-	// people: the bulk lane, so it never holds back a login code.
+	// An approved send is an operator's mail, to a list, to up to 100
+	// people or to a Forms source's respondents: the bulk lane, so it never
+	// holds back a login code. While SkyMail tracks every person's send
+	// (SKYMAIL_TRACKING_OPERATOR) it is tracked whatever the request asked
+	// when it was submitted; otherwise a Forms source's never is (it has no
+	// box).
 	sends := h.mailer.Queue(q, mailer.PriorityBulk)
+	switch {
+	case h.mailer.OperatorTrackingAlways():
+		a.TrackingRequested = true
+	case a.FormSourceID != nil:
+		a.TrackingRequested = false
+	}
 	if a.FormSourceID != nil {
-		id, err := queueToFormSource(ctx, q, sends, a)
+		id, err := queueToFormSource(ctx, q, sends, a, prepared.tracking)
 		if err != nil {
 			return nil, err
 		}
@@ -878,13 +897,17 @@ func (h *mailApprovalHandlerImpl) resubmit(ctx context.Context, q *database.Quer
 	}
 
 	now := h.now()
+	// A Forms source's send is tracked only while SkyMail tracks every
+	// person's send: it has no box.
+	tracked := (send.formSourceID == nil || h.mailer.OperatorTrackingAlways()) &&
+		operatorTracking(ctx, h.mailer, send.tracking, checked.template.ID, send.mailListID)
 	if _, err := q.ResubmitMailApproval(ctx, database.ResubmitMailApprovalParams{
 		TemplateID:        checked.template.ID,
 		TemplateVersionID: checked.versionID,
 		MailListID:        send.mailListID,
 		FormSourceID:      send.formSourceID,
 		BodyVariables:     send.variables,
-		TrackingRequested: send.tracking && h.mailer.TrackingApplies(ctx, checked.template.ID, send.mailListID),
+		TrackingRequested: tracked,
 		At:                now,
 		DeadlineAt:        now.Add(mailApprovalDeadline),
 		ID:                a.ID,
