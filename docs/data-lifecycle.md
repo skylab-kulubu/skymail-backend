@@ -244,6 +244,11 @@ takes the person out of them:
   holds no address: it belongs to a queue row.
   `mail_suppression_removals.actor_sub` — who removed an address from the
   list (the address is not kept).
+- The unsubscribe record (see [Unsubscribe record](#unsubscribe-record)):
+  `mail_unsubscribes.address` — an address that left the duyuru stream
+  through SkyMail's one-click link. `mail_unsubscribe_reactivations.actor_sub`
+  and `reason` — who reversed an unsubscribe and why (the address is not
+  kept).
 
 ## Bounces and suppression
 
@@ -266,6 +271,34 @@ sent and flagged.
 
 Logs carry the queue row's id, the outcome and the codes; never an address
 or a report's text.
+
+## Unsubscribe record
+
+An address that left the duyuru stream through SkyMail's own one-click link
+(README, "Tek tık çıkış ucu"; ADR 0072 decisions 4–9; hub ticket
+abonelik-cikisi 02). Purpose: not to mail it again from that stream (KVKK
+md. 5/2-f, legitimate interest; the one-click link is the balance's
+safeguard).
+
+| What | Kept | Then |
+|---|---|---|
+| `mail_unsubscribes` (lower-cased address, `stream` — `duyuru` —, `source` — `link` —, `created_at`) | until the person resubscribes (the link's page), an operator with `skymail:unsubscribes:reactivate` reverses it at the person's request or after a mistake, or the person is erased: nothing removes it by itself | Account erasure deletes the person's addresses' |
+| `mail_unsubscribe_reactivations` (when, `actor` — `recipient` or `operator` —, the operator's `actor_sub` and `reason`, the record's stream, source and date) — no address | without end: the record of who reversed what | Account erasure replaces the actor with Silinmiş kullanıcı, and clears a reason that names the person |
+| the link's token | never stored: it is sealed (XChaCha20-Poly1305) from the stream and the address, carries its key's version, and does not expire | — |
+
+A recipient of a duyuru send whose address is in the record is written
+failed when the send is queued (`suppressed: unsubscribed`), and a row
+already queued is written so when the dispatcher takes it; never sent. Mail
+of the islem stream (account mail, Forms confirmations, notices) is sent as
+before. The record is applied whatever `SKYMAIL_UNSUBSCRIBE_LINK` says.
+
+The `/u/` endpoint keeps no IP address (its per-client limit counts in
+memory only), sets no cookie, and logs neither the path, the token nor the
+address. The edge's access log must not keep `/api/skymail/u/` paths (hub
+ticket abonelik-cikisi 06).
+
+The migration's `down` drops both tables: every unsubscribe would be lost.
+It is not run in production once the link has been on.
 
 These are kept for a fixed time, whatever happens to the account before
 erasure:
@@ -662,6 +695,9 @@ person is cleared whole, never masked.
 | `mail_suppressions` | `address` in E, `recipient_sub` = S, or its last queue row is to the person | deleted, before that row's address is cleared |
 | `mail_bounces` | of a `mail_queue` row to the person | kept with the cleared row: it holds no address, codes only |
 | `mail_suppression_removals` | `actor_sub` = S | Silinmiş kullanıcı |
+| `mail_unsubscribes` | `address` in E | deleted |
+| `mail_unsubscribe_reactivations` | `actor_sub` = S | Silinmiş kullanıcı |
+| `mail_unsubscribe_reactivations.reason` | names E or N | `[silindi]` |
 | `inbox_items` | `user_id` = S | deleted, whatever their age |
 | `inbox_items`, anyone else's | `title`, `summary` or `link` names E or N | deleted: an item is a short notice, it goes whole |
 
@@ -681,7 +717,9 @@ Template and version content, list names and the club's mail history as a
 count stay (ADR-0051: editorial record). Pending Mail onayı requests are not
 cancelled; they expire in seven days. The person's addresses leave the
 suppression list: mail to them is sent again if they are added to a list
-again. A report about their old mail that arrives later finds its row cleared
+again. Their addresses' unsubscribes go too (ADR 0072, deviation 9): an
+address put on a list again by hand is mailed from the duyuru stream until it
+leaves again. A report about their old mail that arrives later finds its row cleared
 and suppresses nothing (it locks the row first: README, "Geri dönen posta ve
 bastırma listesi").
 
@@ -701,7 +739,7 @@ bastırma listesi").
   `approval_recipient_placeholders`, `approval_send_links_deleted`,
   `tracking_events_deleted`, `tracking_links_cleared`,
   `suppressions_deleted`, `inbox_items_deleted`,
-  `inbox_items_naming_deleted`. The counts
+  `inbox_items_naming_deleted`, `unsubscribes_deleted`. The counts
   are what the completing call did; work committed by an earlier `202` call
   is not in them. A repeat, or a concurrent duplicate, returns the stored
   body without doing the work again. Other answers: `202` (above),

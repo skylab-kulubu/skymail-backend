@@ -33,6 +33,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
 	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skymail-backend/internal/unsubscribe"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 	"github.com/yokeTH/gofiber-scalar/scalar/v3"
 )
@@ -152,6 +153,12 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid open and click tracking retention configuration")
 	}
+	// SkyMail's own one-click unsubscribe link: off unless
+	// SKYMAIL_UNSUBSCRIBE_LINK=on; its key ring (README, "Tek tık çıkış ucu").
+	unsubscribeConfig, err := unsubscribe.ConfigFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid unsubscribe link configuration")
+	}
 	if migrationConfig.Mode == migrations.ModeApply {
 		// A stop signal ends a wait for another process's migrations, never
 		// a migration under way.
@@ -194,6 +201,7 @@ func main() {
 	log.Info().Str("mode", string(trackingRetention)).Int("event_retention_days", tracking.EventRetentionDays).Int64("max_rows", trackingRetentionMaxRows).
 		Msg("open and click tracking retention (SKYMAIL_TRACKING_RETENTION)")
 	logSendLanes(sendLanes)
+	logUnsubscribeLink(unsubscribeConfig)
 	db := database.NewStore(conn)
 	mailerService := mailer.NewMailer(db, mailer.SMTPConfig{
 		FromEmail: cfg.SMTPFrom,
@@ -259,6 +267,7 @@ func main() {
 	*/
 
 	handlers.NewTrackingPublicHandler(db, trackingConfig).Register(app)
+	handlers.NewUnsubscribePublicHandler(db, unsubscribeConfig).Register(app)
 	registerPublicRoutes(app, accountAccessGate, readiness)
 	registerInternalRoutes(app, erasureHandler, withdrawalHandler)
 	// Before protectedAPI: /v1/me is a person's own, with no role, and must
@@ -620,13 +629,17 @@ func registerMailApprovalRoutes(api fiber.Router, auth middlewares.AuthMiddlewar
 	requests.Post("/:id/resubmit", approvals.Resubmit)
 }
 
-// registerSuppressionRoutes serves the suppression list to operators with
-// skymail:suppressions:manage (README, "Geri dönen posta ve bastırma
-// listesi").
+// registerSuppressionRoutes serves the suppression list and the unsubscribe
+// record (README, "Geri dönen posta ve bastırma listesi", "Tek tık çıkış
+// ucu"): a bounce is removed with skymail:suppressions:manage, an
+// unsubscribe reversed only with skymail:unsubscribes:reactivate, which also
+// reads the reversals; either role reads the list.
 func registerSuppressionRoutes(api fiber.Router, auth middlewares.AuthMiddleware, suppressions handlers.SuppressionHandler) {
 	group := api.Group("/suppressions")
-	group.Get("/", auth.RequireAnyPermission(handlers.SuppressionsManageRole), suppressions.List)
+	group.Get("/", auth.RequireAnyPermission(handlers.SuppressionsManageRole, handlers.UnsubscribesReactivateRole), suppressions.List)
+	group.Get("/reactivations", auth.RequireAnyPermission(handlers.UnsubscribesReactivateRole), suppressions.Reactivations)
 	group.Delete("/:id", auth.RequireAnyPermission(handlers.SuppressionsManageRole), suppressions.Delete)
+	group.Post("/:id/reactivate", auth.RequireAnyPermission(handlers.UnsubscribesReactivateRole), suppressions.Reactivate)
 }
 
 // registerNotificationRoutes serves POST /notifications to services (hub

@@ -428,15 +428,128 @@ relay'in senkron kalıcı reddidir (aşağıda).
   /v1/mail_tasks/{id}/queue` her satırda `suppressed_but_sent` ve
   `undelivered` döner.
 - **Operatör uçları** (`skymail:suppressions:manage`, `skymail` istemci
-  rolü, gruba verilir): `GET /v1/suppressions?q=&_start=&_end=` (son
-  ret en yeni önce, `q` adresin bir parçası, sayfa en çok 100, `X-Total-Count`)
-  ve `DELETE /v1/suppressions/{id}` (`204`; yoksa `404`). Satır listenin opak
+  rolü, gruba verilir): `GET /v1/suppressions?reason=&q=&_start=&_end=` (en
+  yeni önce, `q` adresin bir parçası, sayfa en çok 100, `X-Total-Count`)
+  ve `DELETE /v1/suppressions/{id}` (`204`; yoksa `404`). Liste bastırma
+  listesiyle [çıkış kaydını](#tek-tık-çıkış-ucu-skymail_unsubscribe_link-mail_unsubscribes)
+  birlikte döner: her satırda `reason` (`bounce` | `unsubscribed`) ve `stream`
+  (`all` | `duyuru`); `?reason=` biriyle süzer; liste
+  `skymail:unsubscribes:reactivate` ile de okunur. Satır listenin opak
   `id`'siyle adlandırılır, adres hiçbir URL'de olmaz (hata logu yolu yazar).
-  Kaldırma `mail_suppression_removals`'a kim, ne zaman, kaynak, kod, sayı ve
-  ilk görülme olarak yazılır; adres yazılmaz. Kaldırılan adrese yeniden
+  `DELETE` yalnız bounce satırını kaldırır; çıkış satırında
+  `409 suppression.use_reactivate` döner. Kaldırma
+  `mail_suppression_removals`'a kim, ne zaman, kaynak, kod, sayı ve ilk
+  görülme olarak yazılır; adres yazılmaz. Kaldırılan adrese yeniden
   gönderilir. Kendiliğinden düşme yoktur.
 - **Loglar**: adres ve rapor metni yazılmaz; kuyruk id'si, kaynak ve kod
   yazılır.
+
+## Tek tık çıkış ucu (`SKYMAIL_UNSUBSCRIBE_LINK`, `mail_unsubscribes`)
+
+Hesabı olmayan adresin duyuru akışından çıktığı yer (ADR 0072 karar 4–7; hub
+bileti abonelik-cikisi 02). Postmark'ın broadcast stream suppression'ı gibi:
+kayıt **akış başınadır** ve yalnız `duyuru` akışını durdurur; tercih değildir,
+kategori ya da ekip taşımaz. Kimliği olan kişinin tercihi core'dadır ve
+SkyMail'e kopyalanmaz. Satırlara bağlantıyı koymak ve core'a sormak bilet
+09'undur; bu bölüm kaydı, ucu ve bağlantının üreticisini anlatır
+(`unsubscribe.Config.Link`).
+
+**Kayıt.** `mail_unsubscribes`: küçük harfli adres, `stream` (`duyuru`),
+`source` (`link`), `created_at`, opak `id`; anahtar `(address, stream)`.
+`mail_suppressions`'ın kardeşidir, ona sütun eklenmez: eski imaj
+`mail_suppressions`'ın her satırını bounce sayar ve çıkmış adrese Forms onayı
+dahil her postayı durdururdu; yeni tabloyu hiç okumaz (göç testi bunu eski
+imajın sorgularıyla kanıtlar). Kendiliğinden düşme yoktur: kişi yeniden abone
+olana, panel kişinin isteğiyle geri alana ya da hesap silinene kadar durur.
+
+**Uygulama.** Kayıt bayraktan bağımsız her zaman uygulanır: bayrağı kapatmak
+çıkmış adrese posta göndermez.
+- **Kuyruğa alırken**: gönderen şeridi `duyuru` olan gönderimde (`LaneOf`;
+  bilet 03'ten sonra amaç) kayıttaki alıcı `failed` yazılır,
+  `error = suppressed: unsubscribed`, deneme 0; relay'e ve bütçeye gitmez.
+  Bounce gibi atlanmış sayılır, gönderimi "Başarısız" yapmaz
+  (`mail_task_status()`).
+- **Göndermeden hemen önce**: dağıtıcı bulk satırlarını aldığı işlemde kaydı
+  yeniden okur (alınan satırlar üzerinde tek indeksli sorgu); kuyruğa
+  alındıktan sonra çıkan adresin satırı aynı hatayla `failed` olur, gönderilmez
+  ve bütçeye sayılmaz.
+- `hesap` (hesap postaları, liste olarak gönderilse de) ve `bilgi` (Forms
+  onayı, bildirimler) kayda bakmaz. Bounce kuralları değişmez: iki kayıt
+  birden olan adreste ikisi de geçerlidir.
+
+**Uç.** `GET|HEAD|POST /u/{belirteç}`, herkese açık kökte
+(`https://api.yildizskylab.com/api/skymail/u/…`), `/t/` ile aynı katman
+(OpenAPI: [unsubscribe-public.openapi.yaml](docs/unsubscribe-public.openapi.yaml)).
+- `GET` hiçbir şey yazmaz (tarayıcılar ve posta tarayıcıları açar): "Bu adres
+  SKY LAB duyuru postalarından çıkarılsın mı?", maskeli adres (`a…@example.com`),
+  tek düğme; kayıt varsa "Çıkarıldı" ve "Yeniden abone ol". Hesap Merkezi'nin
+  iletişim tercihleri bağlantısı (`SKYMAIL_UNSUBSCRIBE_ACCOUNT_URL`, varsayılan
+  `https://my.yildizskylab.com/communication-preferences`).
+- `POST` gövdesi `List-Unsubscribe=One-Click` (form-encoded ya da multipart):
+  kaydı yazar (`source = link`), `200 ok`. Sayfa düğmesi `eylem=cikis` ile
+  aynısını yapar; `eylem=geri` kaydı siler ve
+  `mail_unsubscribe_reactivations`'a `actor = recipient` yazar (adres yok).
+  Alanın adı `eylem`'dir, `islem` akış adıyla karışmasın diye. Tekrar
+  edilebilir: ikinci POST aynı sonucu verir. Başka gövde `400`.
+- Değiştirilmiş, kesilmiş belirteç ya da halkada olmayan sürüm `400` ("Bağlantı
+  geçersiz"; tek tıkta `invalid link`). Halka boşsa `503`. Bayrak `off` iken
+  `/u/` `404`; başka yöntem `405`, başka yol `404`.
+- Çerez, oturum, yönlendirme yok. Her yanıt `Cache-Control: no-store`,
+  `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`,
+  `X-Content-Type-Options: nosniff`, betiksiz CSP.
+- İstemci adresi başına dakikada 120 GET ve 600 POST, yalnız bellekte (`429`,
+  `Retry-After: 60`); IP yazılmaz.
+- Log istek başına tek satırdır: yöntem ve sonuç. Yol, belirteç, adres ve IP
+  yazılmaz; `/u` önekinin tamamı genel hata işleyicisine (yolu yazar) hiç
+  ulaşmaz. Kenarın erişim logu `/api/skymail/u/` yolunu tutmamalıdır (bilet 06).
+
+**Belirteç ve anahtar halkası.** Belirteç sürüm baytı (anahtar kimliği), 24
+baytlık rastgele nonce ve XChaCha20-Poly1305 ile şifrelenmiş (akış etiketi,
+normalize adres)'tir, unpadded base64url; sürüm ek veriye bağlıdır. Adres
+URL'de açık durmaz. Süresizdir ve satıra bağlı değildir: saklama süreleri
+bağlantıyı bozmaz. Yeni belirteç geçerli sürümle mühürlenir; eski sürümler
+yalnız açmada kullanılır ve **hiç silinmez** (silinirse o sürümle giden bütün
+bağlantılar bozulur).
+
+| Değişken | |
+|---|---|
+| `SKYMAIL_UNSUBSCRIBE_LINK` | `off` (ya da boş, varsayılan): `/u/` `404`, üretici bağlantı vermez, kayıt yine uygulanır. `on`: uç açık. Başka değer açılışı durdurur |
+| `SKYMAIL_UNSUBSCRIBE_BASE_URL` | `/u/`'nun herkese açık kökü, `https` (ör. `https://api.yildizskylab.com/api/skymail`); `on` bunu ister |
+| `SKYMAIL_UNSUBSCRIBE_ACCOUNT_URL` | sayfanın Hesap Merkezi bağlantısı (isteğe bağlı) |
+| `SKYMAIL_UNSUBSCRIBE_KEY_CURRENT` | yeni bağlantının sürümü (1–255) |
+| `SKYMAIL_UNSUBSCRIBE_KEY_V<n>` | `n` sürümünün anahtarı: 32 rastgele bayt, base64 ya da base64url; her biri ayrı OpenBao referansı (ADR-0049) |
+
+Anahtar varken `CURRENT` yoksa, `CURRENT`'in anahtarı yoksa, anahtar 32 bayt
+değilse ya da iki sürüm aynı anahtarı tutuyorsa açılış durur; hata yalnız
+değişkenin adını yazar. `on` ve boş halka hata değildir: uç `503` döner,
+açılış logu uyarır (`key_current`, `key_versions`; anahtar hiç yazılmaz). Bilet
+09'un bayrağı açılışta halkayı zorunlu tutar. Anahtarı OpenBao'ya ve yeni
+sürümü halkaya wizard koyar (bilet 06).
+
+**Panel.** `POST /v1/suppressions/{id}/reactivate`, gövde `{"reason": "…"}`:
+kişinin çıkışını yalnız kişi isteyince ya da bir hata olunca geri alır.
+- Yalnız `skymail:unsubscribes:reactivate` (`skymail` istemci rolü, gruba
+  verilir; Keycloak'ta bilet 10). Rol yoksa `403`; canlıda rol verilene kadar
+  kimseye açık değildir.
+- Gerekçe zorunlu: 10–500 karakter yazdırılabilir metin, satır sonu yok
+  (`400 suppression.reason_required`). Adres içeremez: `@` geçen ya da satırın
+  adresini içeren gerekçe `400 suppression.reason_has_address`.
+- Bounce satırında `409 suppression.use_delete`; yoksa `404`.
+- Başarıda `204`; `mail_unsubscribe_reactivations`'a `actor = operator`, kim
+  (`actor_sub`), ne zaman, gerekçe, kaydın akışı, kaynağı ve ilk tarihi yazılır;
+  adres yazılmaz. Hesap silme `actor_sub`'ı Silinmiş kullanıcı yapar, kişiyi
+  adlandıran gerekçeyi `[silindi]` yapar.
+- `GET /v1/suppressions/reactivations?_start=&_end=` aynı rolle geri almaları
+  en yeni önce döner (`X-Total-Count`).
+
+**Hesap silme.** Kişinin adreslerinin çıkış kayıtları silinir, sayaç
+`unsubscribes_deleted` ([`docs/data-lifecycle.md`](docs/data-lifecycle.md)).
+
+**Geri alma (rollback).** Önce bayrakla yapılır (bilet 08): `off` kaydı korur ve
+uygulamaya devam eder. Eski imaj kaydı bilmez: imaj geri alınırsa o süre
+çıkmış adreslere duyuru gidebilir, bu yüzden o süre panelden duyuru
+gönderilmez. Göçün `down`'ı iki tabloyu siler ve bütün çıkışları kaybettirir:
+production'da **kullanılmaz**.
 
 ## Bildirimler (`POST /v1/notifications`)
 

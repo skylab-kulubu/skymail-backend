@@ -2081,22 +2081,6 @@ WHERE address = ANY (sqlc.arg(addresses)::text[]);
 INSERT INTO mail_bounces (queue_id, source, kind, action, status, smtp_code)
 VALUES (sqlc.arg(queue_id), 'smtp', 'hard', 'failed', sqlc.narg(status)::text, sqlc.arg(smtp_code)::int);
 
--- The suppression list, newest first, those whose address contains search
--- (case-insensitively) when it is given.
--- name: ListSuppressions :many
-SELECT id, address, recipient_sub, source, reason_code, first_seen, last_seen, count, last_queue_id, exempt_flagged_at
-FROM mail_suppressions
-WHERE sqlc.narg(search)::text IS NULL
-   OR strpos(address, lower(sqlc.narg(search)::text)) > 0
-ORDER BY last_seen DESC, address
-LIMIT sqlc.arg(row_limit)::int OFFSET sqlc.arg(row_offset)::int;
-
--- name: CountSuppressions :one
-SELECT count(*)
-FROM mail_suppressions
-WHERE sqlc.narg(search)::text IS NULL
-   OR strpos(address, lower(sqlc.narg(search)::text)) > 0;
-
 -- Removes a suppression: the address is mailed again. What it said is
 -- returned for the removal's record, never the address.
 -- name: DeleteSuppression :one
@@ -2109,3 +2093,129 @@ RETURNING source, reason_code, count, first_seen;
 INSERT INTO mail_suppression_removals (actor_sub, source, reason_code, count, first_seen)
 VALUES (sqlc.arg(actor_sub)::text, sqlc.arg(source)::text, sqlc.arg(reason_code)::text, sqlc.arg(count)::int,
         sqlc.arg(first_seen)::timestamptz);
+
+-- The unsubscribe record of the duyuru stream (ADR 0072; hub ticket
+-- abonelik-cikisi 02; README, "Tek tık çıkış ucu").
+
+-- The unsubscribed among a send's recipients (lower-cased addresses) in a
+-- stream: what queueing writes failed when the send is in that stream.
+-- name: GetUnsubscribedAddresses :many
+SELECT address
+FROM mail_unsubscribes
+WHERE stream = sqlc.arg(stream)::text
+  AND address = ANY (sqlc.arg(addresses)::text[]);
+
+-- The e-mail rows among ids, claimed by claimed_by, whose address left the
+-- duyuru stream, with their send's template's key and whether it is a system
+-- template (mailer.LaneOf: account mail is never in the duyuru stream).
+-- name: GetUnsubscribedClaimedRows :many
+SELECT q.id, t.key, coalesce(t.system, false)::boolean AS system
+FROM mail_queue q
+         JOIN mail_unsubscribes u ON u.address = lower(btrim(q.recipient_email)) AND u.stream = 'duyuru'
+         LEFT JOIN mail_tasks mt ON mt.id = q.task_id
+         LEFT JOIN templates t ON t.id = mt.template_id
+WHERE q.id = ANY (sqlc.arg(ids)::uuid[])
+  AND q.channel = 'email'
+  AND q.status = 'processing'
+  AND q.claimed_by = sqlc.arg(claimed_by)::text;
+
+-- Writes failed the claimed rows whose address left the stream after they
+-- were queued: skipped, never sent, nothing tried (attempts stays).
+-- name: SkipUnsubscribedClaimedRows :execrows
+UPDATE mail_queue
+SET status = 'failed',
+    error  = sqlc.arg(error)::text
+WHERE id = ANY (sqlc.arg(ids)::uuid[])
+  AND status = 'processing'
+  AND claimed_by = sqlc.arg(claimed_by)::text;
+
+-- The address's unsubscribe from a stream, if it has one.
+-- name: GetUnsubscribe :one
+SELECT id, address, stream, source, created_at
+FROM mail_unsubscribes
+WHERE address = sqlc.arg(address)::text
+  AND stream = sqlc.arg(stream)::text;
+
+-- Records an unsubscribe; an address already out of the stream keeps its
+-- first record (0 rows).
+-- name: InsertUnsubscribe :execrows
+INSERT INTO mail_unsubscribes (address, stream, source)
+VALUES (sqlc.arg(address)::text, sqlc.arg(stream)::text, sqlc.arg(source)::text)
+ON CONFLICT (address, stream) DO NOTHING;
+
+-- Removes the address's unsubscribe from a stream: the person resubscribed.
+-- What it said is returned for the reactivation's record, never the address.
+-- name: DeleteUnsubscribeOf :one
+DELETE
+FROM mail_unsubscribes
+WHERE address = sqlc.arg(address)::text
+  AND stream = sqlc.arg(stream)::text
+RETURNING stream, source, created_at;
+
+-- The unsubscribe the operator API names by id, locked until it is removed.
+-- name: LockUnsubscribe :one
+SELECT id, address, stream, source, created_at
+FROM mail_unsubscribes
+WHERE id = sqlc.arg(id)
+    FOR UPDATE;
+
+-- name: DeleteUnsubscribe :execrows
+DELETE
+FROM mail_unsubscribes
+WHERE id = sqlc.arg(id);
+
+-- name: UnsubscribeExists :one
+SELECT EXISTS (SELECT 1 FROM mail_unsubscribes WHERE id = sqlc.arg(id))::boolean AS found;
+
+-- name: InsertUnsubscribeReactivation :exec
+INSERT INTO mail_unsubscribe_reactivations (actor, actor_sub, reason, stream, source, unsubscribed_at)
+VALUES (sqlc.arg(actor)::text, sqlc.narg(actor_sub)::text, sqlc.narg(reason)::text, sqlc.arg(stream)::text,
+        sqlc.arg(source)::text, sqlc.arg(unsubscribed_at)::timestamptz);
+
+-- The reactivations, newest first.
+-- name: ListUnsubscribeReactivations :many
+SELECT id, reactivated_at, actor, actor_sub, reason, stream, source, unsubscribed_at
+FROM mail_unsubscribe_reactivations
+ORDER BY reactivated_at DESC, id DESC
+LIMIT sqlc.arg(row_limit)::int OFFSET sqlc.arg(row_offset)::int;
+
+-- name: CountUnsubscribeReactivations :one
+SELECT count(*)
+FROM mail_unsubscribe_reactivations;
+
+-- The suppression list and the unsubscribe record as one list, most recent
+-- first: reason bounce (mail_suppressions, every stream) or unsubscribed
+-- (mail_unsubscribes, its stream). reason, when given, keeps one of them;
+-- search keeps the addresses that contain it, case-insensitively.
+-- name: ListSuppressionEntries :many
+SELECT e.id, e.address, e.reason, e.stream, e.recipient_sub, e.source, e.reason_code, e.first_seen, e.last_seen,
+       e.count, e.last_queue_id, e.exempt_flagged_at
+FROM (SELECT s.id, s.address, 'bounce'::text AS reason, 'all'::text AS stream, s.recipient_sub, s.source,
+             s.reason_code, s.first_seen, s.last_seen, s.count, s.last_queue_id, s.exempt_flagged_at
+      FROM mail_suppressions s
+      WHERE sqlc.narg(reason)::text IS NULL OR sqlc.narg(reason)::text = 'bounce'
+      UNION ALL
+      SELECT u.id, u.address, 'unsubscribed'::text, u.stream, NULL::uuid, u.source, ''::text, u.created_at,
+             u.created_at, 1, NULL::uuid, NULL::timestamptz
+      FROM mail_unsubscribes u
+      WHERE sqlc.narg(reason)::text IS NULL OR sqlc.narg(reason)::text = 'unsubscribed') e
+WHERE sqlc.narg(search)::text IS NULL
+   OR strpos(e.address, lower(sqlc.narg(search)::text)) > 0
+ORDER BY e.last_seen DESC, e.address, e.reason
+LIMIT sqlc.arg(row_limit)::int OFFSET sqlc.arg(row_offset)::int;
+
+-- name: CountSuppressionEntries :one
+SELECT ((SELECT count(*)
+        FROM mail_suppressions s
+        WHERE (sqlc.narg(reason)::text IS NULL OR sqlc.narg(reason)::text = 'bounce')
+          AND (sqlc.narg(search)::text IS NULL OR strpos(s.address, lower(sqlc.narg(search)::text)) > 0))
+           + (SELECT count(*)
+              FROM mail_unsubscribes u
+              WHERE (sqlc.narg(reason)::text IS NULL OR sqlc.narg(reason)::text = 'unsubscribed')
+                AND (sqlc.narg(search)::text IS NULL OR strpos(u.address, lower(sqlc.narg(search)::text)) > 0)))::bigint
+           AS total;
+
+-- name: GetSuppressionID :one
+SELECT id
+FROM mail_suppressions
+WHERE id = sqlc.arg(id);

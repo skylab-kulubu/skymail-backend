@@ -920,7 +920,9 @@ func (t mailTemplates) renderWith(textVars, htmlVars map[string]interface{}, rec
 // or not, and never reaches the relay. A recipient at a suppressed address
 // (suppression.go) is written failed with suppressedError the same way,
 // unless the send is account mail (AccountMail): then it is queued, its row
-// flagged suppressed_but_sent. kind says how the send is tracked (asked for
+// flagged suppressed_but_sent. A recipient whose address left the duyuru
+// stream is written failed with unsubscribedError when the send is in it
+// (unsubscribe.go). kind says how the send is tracked (asked for
 // with the flag on, or a service's mail with SKYMAIL_TRACKING_SYSTEM on):
 // each queued row gets a token or why not, as preferences — what core said
 // before the transaction — allows, and the links a click is counted on are
@@ -941,6 +943,10 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 	}
 
 	suppressed, accountMail, err := q.suppressionsOf(ctx, rows)
+	if err != nil {
+		return false, err
+	}
+	unsubscribed, err := q.unsubscribesOf(ctx, rows)
 	if err != nil {
 		return false, err
 	}
@@ -972,6 +978,19 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 				RecipientEmail:    row.RecipientEmail,
 				Priority:          int16(q.priority),
 				Error:             suppressedError(suppression),
+				RecipientSub:      row.RecipientSub,
+			})
+			continue
+		}
+		if unsubscribed[suppressionAddress(row.RecipientEmail)] {
+			q.logger.Warn().Str("task_id", row.TaskID.String()).
+				Msg("A recipient left the duyuru stream: written failed, never sent; the others are queued")
+			failed = append(failed, database.CreateFailedMailQueueItemParams{
+				TaskID:            row.TaskID,
+				RecipientFullName: row.RecipientFullName,
+				RecipientEmail:    row.RecipientEmail,
+				Priority:          int16(q.priority),
+				Error:             unsubscribedError,
 				RecipientSub:      row.RecipientSub,
 			})
 			continue

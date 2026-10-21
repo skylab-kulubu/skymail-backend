@@ -1,0 +1,93 @@
+openapi: 3.1.0
+info:
+  title: SkyMail public one-click unsubscribe
+  version: 1.0.0
+  description: >-
+    SkyMail's own unsubscribe link for an address without an account (RFC 8058;
+    ADR 0072 decision 4; README, "Tek tık çıkış ucu"). Outside /v1, no
+    authentication, no cookie, no redirect. Off (SKYMAIL_UNSUBSCRIBE_LINK=off,
+    the default) every path under /u answers 404. Every answer carries
+    Cache-Control no-store, Referrer-Policy no-referrer, X-Frame-Options DENY,
+    X-Content-Type-Options nosniff and a CSP without scripts. Each client
+    address may GET 120 and POST 600 times a minute (429, Retry-After 60),
+    counted in memory; no IP address, path, token or address is logged.
+servers:
+  - url: https://api.yildizskylab.com/api/skymail
+security: []
+paths:
+  /u/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^[A-Za-z0-9_-]+$'
+        description: >-
+          Unpadded base64url of the key version (one byte), a 24-byte nonce and
+          the XChaCha20-Poly1305 sealing of the stream's tag and the address.
+          Does not expire.
+    get:
+      operationId: unsubscribePage
+      description: >-
+        Shows a page and changes nothing (mail scanners open the link): the
+        masked address and one button, or, when the address is already out,
+        a button to resubscribe. HEAD answers the same without a body.
+      responses:
+        '200':
+          description: The page.
+          content:
+            text/html: {}
+        '400':
+          description: The token does not open (changed, cut, an unknown key version).
+          content:
+            text/html: {}
+        '404':
+          description: The link is off.
+        '429':
+          description: Too many requests from this client this minute.
+        '503':
+          description: The key ring is empty, or the database does not answer.
+    post:
+      operationId: unsubscribe
+      description: >-
+        List-Unsubscribe=One-Click (a mail client's one-click) or eylem=cikis
+        (the page's button) records the address out of the duyuru stream;
+        eylem=geri resubscribes it. Repeating a POST answers as the first.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/UnsubscribeForm'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UnsubscribeForm'
+      responses:
+        '200':
+          description: >-
+            Done: text/plain "ok" to a one-click, a page to a button.
+          content:
+            text/plain:
+              schema:
+                const: ok
+            text/html: {}
+        '400':
+          description: >-
+            Neither a one-click nor a known eylem, or the token does not open
+            (one-click: text/plain "invalid link").
+        '404':
+          description: The link is off.
+        '429':
+          description: Too many requests from this client this minute.
+        '503':
+          description: The key ring is empty, or the database does not answer.
+components:
+  schemas:
+    UnsubscribeForm:
+      type: object
+      properties:
+        List-Unsubscribe:
+          const: One-Click
+        eylem:
+          enum: [cikis, geri]

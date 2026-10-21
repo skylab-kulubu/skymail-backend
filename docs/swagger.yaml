@@ -736,6 +736,48 @@ components:
             does not exist (in sent too).
           type: integer
       type: object
+    handlers.ReactivateRequest:
+      properties:
+        reason:
+          description: |-
+            10 to 500 printable characters, without an address (no @): what the
+            person asked, or what went wrong. Recorded with who and when.
+          example: Kişi bilgi kutusuna yazıp yeniden abone olmak istedi.
+          type: string
+      type: object
+    handlers.Reactivation:
+      properties:
+        actor:
+          description: 'recipient: the person, on their link''s page; operator: the
+            panel.'
+          enum:
+          - recipient
+          - operator
+          type: string
+        actor_sub:
+          description: |-
+            The operator's Keycloak subject (Silinmiş kullanıcı's after Account
+            erasure); null for the person.
+          type: string
+        id:
+          type: integer
+        reactivated_at:
+          type: string
+        reason:
+          description: The operator's reason; null for the person.
+          type: string
+        source:
+          enum:
+          - link
+          type: string
+        stream:
+          enum:
+          - duyuru
+          type: string
+        unsubscribed_at:
+          description: When the unsubscribe reversed had been made.
+          type: string
+      type: object
     handlers.SeedOverride:
       description: 'What a forced seed wrote over: the rules that held, the version
         that was sent and the operator''s versions after the last seed — what an unforced
@@ -1005,7 +1047,7 @@ components:
           description: Lower-case.
           type: string
         count:
-          description: How many permanent failures were recorded.
+          description: How many permanent failures were recorded; 1 for an unsubscribe.
           type: integer
         exempt_flagged_at:
           description: |-
@@ -1013,32 +1055,55 @@ components:
             last sent to the address anyway; null if never.
           type: string
         first_seen:
+          description: When it was first recorded; for an unsubscribe, when it was
+            made.
           type: string
         id:
-          description: What DELETE /suppressions/{id} names it by.
+          description: |-
+            What DELETE /suppressions/{id} (bounce) or POST
+            /suppressions/{id}/reactivate (unsubscribed) names it by; ids of the
+            two never collide (random UUIDs).
           type: string
         last_queue_id:
           description: The queue row of the last one; null once that row is gone.
           type: string
         last_seen:
           type: string
+        reason:
+          description: |-
+            bounce: a permanent failure, mail of every stream is held (account
+            mail is sent, flagged); unsubscribed: the address left a stream
+            through SkyMail's link, only that stream's mail is held.
+          enum:
+          - bounce
+          - unsubscribed
+          type: string
         reason_code:
           description: |-
             The codes of the last permanent failure, never its text: 5.1.10,
-            5.4.1 AS(201806281), RCPT TO 550 5.1.1.
+            5.4.1 AS(201806281), RCPT TO 550 5.1.1. Empty for an unsubscribe.
           example: 5.1.10
           type: string
         recipient_sub:
-          description: The recipient's Keycloak subject, when the mail refused knew
-            it.
+          description: |-
+            The recipient's Keycloak subject, when the mail refused knew it; null
+            for an unsubscribe.
           type: string
         source:
           description: |-
             dsn: a delivery status notification said the address does not exist;
-            smtp: the relay refused it when the mail was sent.
+            smtp: the relay refused it when the mail was sent; link: the address
+            unsubscribed through SkyMail's link (the one-click POST or its page).
           enum:
           - dsn
           - smtp
+          - link
+          type: string
+        stream:
+          description: 'The stream held: all for a bounce, duyuru for an unsubscribe.'
+          enum:
+          - all
+          - duyuru
           type: string
       type: object
     handlers.Template:
@@ -4050,13 +4115,26 @@ paths:
       - Notifications
   /suppressions:
     get:
-      description: 'Addresses mail is not sent to after one permanent failure (a relay''s
-        refusal of the address, or a delivery status notification saying it does not
-        exist), most recently failed first. Account mail (keycloak.*, account.* templates)
-        is still sent to them and flagged. Nothing leaves the list by itself: an operator
-        removes an address, or Account erasure does. q keeps the addresses that contain
-        it, case-insensitively; X-Total-Count counts them.'
+      description: 'One list of two records, most recent first. reason bounce: an
+        address mail is not sent to after one permanent failure (a relay''s refusal
+        of the address, or a delivery status notification saying it does not exist),
+        in every stream; account mail (keycloak.*, account.* templates) is still sent
+        to it and flagged. reason unsubscribed: an address that left the duyuru stream
+        through SkyMail''s one-click link; mail of the islem stream still goes to
+        it. Nothing leaves the list by itself: an operator removes a bounce, the person
+        (or an operator with skymail:unsubscribes:reactivate, at their request) reverses
+        an unsubscribe, or Account erasure does. reason keeps one of the two; q keeps
+        the addresses that contain it, case-insensitively; X-Total-Count counts them.
+        Needs skymail:suppressions:manage or skymail:unsubscribes:reactivate.'
       parameters:
+      - description: Only bounce or only unsubscribed rows
+        in: query
+        name: reason
+        schema:
+          enum:
+          - bounce
+          - unsubscribed
+          type: string
       - description: Part of an address
         in: query
         name: q
@@ -4083,7 +4161,7 @@ paths:
           description: OK
           headers:
             X-Total-Count:
-              description: Number of suppressed addresses matching q
+              description: Number of rows matching reason and q
               schema:
                 type: integer
         "400":
@@ -4109,9 +4187,11 @@ paths:
       - Suppressions
   /suppressions/{id}:
     delete:
-      description: Mail is sent to the address again. The removal is recorded — who,
-        when, and the suppression's source, code, count and first failure — without
-        the address. The address is named by the list's id, so it is never in a URL.
+      description: 'A bounce row only: mail is sent to the address again. The removal
+        is recorded — who, when, and the suppression''s source, code, count and first
+        failure — without the address. The address is named by the list''s id, so
+        it is never in a URL. An unsubscribed row is 409 suppression.use_reactivate:
+        the person left the stream themself.'
       parameters:
       - description: Suppression ID
         in: path
@@ -4140,6 +4220,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/apperrors.AppError'
           description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'suppression.use_reactivate: an unsubscribe, not a bounce'
         "500":
           content:
             application/json:
@@ -4147,6 +4233,113 @@ paths:
                 $ref: '#/components/schemas/apperrors.AppError'
           description: Internal Server Error
       summary: Remove an address from the suppression list
+      tags:
+      - Suppressions
+  /suppressions/{id}/reactivate:
+    post:
+      description: 'Only when the person asks, or after a mistake (ADR 0072 decision
+        7): duyuru mail is sent to the address again. Needs skymail:unsubscribes:reactivate.
+        The reason is required (10 to 500 printable characters) and must not contain
+        an address. The reversal is recorded — who, when, the reason, and the record''s
+        stream, source and date — without the address. A bounce row is 409 suppression.use_delete.'
+      parameters:
+      - description: Suppression ID (an unsubscribed row)
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/handlers.ReactivateRequest'
+                description: Why
+                summary: body
+        description: Why
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: suppression.reason_required, suppression.reason_has_address,
+            or a malformed id
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'suppression.use_delete: a bounce, not an unsubscribe'
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Internal Server Error
+      summary: Reverse an address's unsubscribe
+      tags:
+      - Suppressions
+  /suppressions/reactivations:
+    get:
+      description: Who reversed an unsubscribe and when — the person themself, or
+        an operator with the reason they gave — newest first, without the address.
+        Needs skymail:unsubscribes:reactivate. X-Total-Count counts them.
+      parameters:
+      - description: Start index
+        in: query
+        name: _start
+        schema:
+          type: integer
+      - description: End index (at most 100 rows a page)
+        in: query
+        name: _end
+        schema:
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/handlers.Reactivation'
+                type: array
+          description: OK
+          headers:
+            X-Total-Count:
+              description: Number of reversals
+              schema:
+                type: integer
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Internal Server Error
+      summary: List the reversals of unsubscribes
       tags:
       - Suppressions
   /templates:
