@@ -1751,6 +1751,9 @@ const docTemplate = `{
                     },
                     "tracking_requested": {
                         "type": "boolean"
+                    },
+                    "withheld": {
+                        "type": "boolean"
                     }
                 },
                 "type": "object"
@@ -4157,7 +4160,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/tracking": {
             "get": {
-                "description": "Requires skymail:mails:read. No identities, link tokens or target URLs. After a year only retained totals for at least 10 tracked recipients, or null. tracking_available follows the current flag.",
+                "description": "Requires skymail:mails:read. No identities, link tokens or target URLs. After a year only retained totals for at least 10 tracked recipients, or null. tracking_available follows the current flag. A send's counts tell of people when it has fewer than 10 tracked recipients (tracking.TotalsMinRecipients, the bound retained totals keep) or is mail the system sends (the system lane): then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read, or the send's own sender outside the system lane) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4).",
                 "parameters": [
                     {
                         "description": "Mail task ID",

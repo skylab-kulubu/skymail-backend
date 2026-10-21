@@ -50,7 +50,7 @@ func operatorVariables() string {
 // never may.
 var (
 	operatorCounted = []string{"https://skylab.example/govde", "https://skylab.example/etkinlik", "https://skylab.example/kayit", "https://skylab.example/k/gecekodu?ref=duyuru"}
-	operatorNever   = []string{"form?e=", "/u/", "/gizli", "@", "%40", "Ay%c5%9fe", "Ayşe", "skymail-probe"}
+	operatorNever   = []string{"form?e=", "/u/", "/gizli", "@", "%40", "Ay%c5%9fe", "Ayşe", ".invalid", "skymail-probe"}
 )
 
 func operatorQueue(t *testing.T) *database.Store {
@@ -289,7 +289,7 @@ func TestALinkMadeFromTheRecipientIsNeverRewrittenInAnOperatorsMail(t *testing.T
 	checkOperatorLinks(t, "the group send", linksOf(t, db, group))
 	for _, task := range []uuid.UUID{single, group} {
 		for email, row := range trackedRows(t, db, task) {
-			if strings.Contains(row.bodyHTML, "skymail-probe") {
+			if strings.Contains(row.bodyHTML, ".invalid") || strings.Contains(row.bodyHTML, "skymail-probe") {
 				t.Errorf("%s's kept mail carries a probe recipient", email)
 			}
 		}

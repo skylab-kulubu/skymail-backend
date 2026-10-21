@@ -891,14 +891,23 @@ kalabilir, ayrı ayrı geri alınır.
   geçmez, tek kişiye gönderimde de: #85'in "tek alıcılı gönderimde
   değişkenli bağlantı da kaydedilir" istisnası bu bayrak açıkken yoktur.
   Kural, postanın gönderimin değişkenleriyle iki uydurma alıcı için
-  (`sonda-a@`/`sonda-b@skymail-probe.invalid`, RFC 2606) yeniden
-  işlenmesiyle uygulanır: iki uydurma postada ve her gerçek postada aynı
-  olan bağlantı alıcıya bağlı değildir. Uydurma posta işlenemezse yalnız
+  (`.invalid` ve `.example` alanlarında, RFC 2606) yeniden işlenmesiyle
+  uygulanır: iki uydurma postada ve her gerçek postada aynı olan bağlantı
+  alıcıya bağlı değildir. İki uydurma alıcının adı, adresi ve abonelik
+  adresi uzunlukta, ilk ve son karakterde, adres yerel kısımda ve alanda
+  da farklıdır; `{{len .Email}}` ya da `{{slice .Email 0 1}}` gibi bir
+  türevden yapılan bağlantı da iki uydurma postada ayrışır, kaydedilmez. Uydurma posta işlenemezse yalnız
   şablonda düz yazılmış bağlantılar sayılır. Gövde değişkeni şablon olarak
   yorumlanmaz: gövdeye yazılan `{{.Email}}` metindir, alıcının adresine
-  dönüşmez. `data-skymail-notrack` öteki kurallarla her zaman geçerlidir
-  (serbest gövdede temizleyici bu özniteliği siler; editörde böyle bir
-  seçenek yok). Sistem postalarının kuralı değişmedi: orada yalnız şablonda
+  dönüşmez. `data-skymail-notrack` öteki kurallarla her zaman geçerlidir;
+  serbest gövdede de: temizleyici `<a>` üzerinde boş ya da `true` değerli
+  `data-skymail-notrack`'i geçirir (başka öznitelik geçmez), panel
+  düzenleyicisindeki "Bu bağlantıyı sayma" anahtarı bunu yazar. Kişiye
+  özel ya da tek kullanımlık bir bağlantı (kişisel davet, toplantı
+  adresi) böylece `/t/`'den geçmez ve `mail_task_links`'e yazılmaz
+  (SendGrid `clicktracking=off`, Postmark `data-pm-no-track`, Mandrill
+  `mc:disable-tracking` gibi). Yalnız bağlantı başına; gönderimin tamamı
+  için kapatma yoktur. Sistem postalarının kuralı değişmedi: orada yalnız şablonda
   düz yazılmış bağlantı sayılır, çünkü servisin değişkeni gizli anahtar
   taşıyabilir.
 - **Kim:** her alıcı yukarıdaki kuralla: grup üyeleri `sub`'larıyla core'a
@@ -951,7 +960,7 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   Referer saklanmaz. `/t/o` ve `/t/c` hata/bozuk yol dahil kendi yanıtını
   üretir: günlük yalnız uç adı, sonuç sınıfı ve süre taşır.
 - `GET /v1/mail_tasks/{id}/tracking` (`skymail:mails:read`) yanıtı
-  `{tracking_available, tracking_requested, retained, report}`. Raporda
+  `{tracking_available, tracking_requested, retained, withheld, report}`. Raporda
   `tracked_recipients`, `untracked_by_reason`, `unique_opens`,
   `unique_likely_human_opens` (otomatik olmayan tıklamadan çıkarım dahil),
   `automated_only_recipients`, `unique_clickers`, `clicks_by_link`
@@ -962,6 +971,14 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   (tek alıcılı hedef kişiyi adlandırabilir). Son postadan 1 yıl sonra
 `retained: true`:
   yalnız ≥10 alıcılı kişisiz toplam, yoksa `report: null`; seri dönmez.
+  **Küçük gönderim ve sistem postası:** takipli alıcısı 10'dan az
+  (`tracking.TotalsMinRecipients`, saklanan toplamın eşiği) ya da sistem
+  şeridindeki bir gönderimin sayıları kişiye dair bilgidir ("1/1 açıldı,
+  14:00"; alıcı `GET /{id}/queue`'da görünür). Bu sayıları yalnız kişi
+  raporunu okuyabilen (aşağıdaki kural: `skymail:mails:tracking:read` ya
+  da sistem şeridi dışında gönderimin kendi göndereni) alır; başka bir
+  `mails:read` sahibine `withheld: true` ve `report: null` döner (KVKK
+  aydınlatma metni s3 §4).
 - `GET /v1/mail_tasks/{id}/tracking/recipients` rolü
   `skymail:mails:tracking:read` **ya da** `sent_by = token sub` ister;
   `mails:read` tek başına yetmez, gönderen için ayrıca gerekmez. Servis

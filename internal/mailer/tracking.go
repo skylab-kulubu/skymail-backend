@@ -466,10 +466,15 @@ func (q *queue) planTracking(ctx context.Context, taskID uuid.UUID, items []data
 
 // probeRecipients are the two made-up recipients linksSendLevel renders a
 // send's mail for: they differ in every field a mail takes from its
-// recipient, and no real address or link is theirs (.invalid, RFC 2606).
+// recipient, and no real address or link is theirs (.invalid and .example,
+// RFC 2606). Each field differs in length, first and last character, and an
+// e-mail in its local part and domain too, so that what a template makes of
+// a field ({{len .Email}}, {{slice .Email 0 1}}, {{printf "%.3s" .FullName}})
+// differs between them as well, and a link made from it is never common
+// (hub review T8). FullName B is not ASCII: its byte and rune counts differ.
 var probeRecipients = [2]RecipientInfo{
-	{FullName: "SkyMail Sonda A", Email: "sonda-a@skymail-probe.invalid", UnsubscribeURL: "https://skymail-probe.invalid/a"},
-	{FullName: "SkyMail Sonda B", Email: "sonda-b@skymail-probe.invalid", UnsubscribeURL: "https://skymail-probe.invalid/b"},
+	{FullName: "Sonda", Email: "a@sonda.invalid", UnsubscribeURL: "https://a.invalid/u"},
+	{FullName: "Örnek Yoklama Alıcısı B Ç", Email: "zz.yoklama-bbbbbbbbbbbb@skymail-probe-b.example", UnsubscribeURL: "https://skymail-probe-b.example/abonelik/bbbbbbbbbbbb?x=1"},
 }
 
 // operatorProbes is a send's HTML rendered with its variables for each of
