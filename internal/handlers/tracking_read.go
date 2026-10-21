@@ -20,11 +20,14 @@ const trackingReadBudget = 2 * time.Second
 
 // TrackingSummary has no identities or target URLs. A year after the last
 // mail went out (tracking.EventRetention) report is a retained
-// >=10-recipient aggregate, or null when there is no such total.
+// >=10-recipient aggregate, or null when there is no such total. Withheld
+// says the send's counts would tell of people (see GetTracking) and the
+// caller may not read its people: report is then null.
 type TrackingSummary struct {
 	TrackingAvailable bool               `json:"tracking_available"`
 	TrackingRequested bool               `json:"tracking_requested"`
 	Retained          bool               `json:"retained"`
+	Withheld          bool               `json:"withheld"`
 	Report            *TrackingAggregate `json:"report"`
 }
 
@@ -87,7 +90,7 @@ type TrackingRecipientLink struct {
 // GetTracking godoc
 //
 //	@Summary		Tracking counts, per-link counts and hour/day series
-//	@Description	Requires skymail:mails:read. No identities, link tokens or target URLs. After a year only retained totals for at least 10 tracked recipients, or null. tracking_available follows the current flag.
+//	@Description	Requires skymail:mails:read. No identities, link tokens or target URLs. After a year only retained totals for at least 10 tracked recipients, or null. tracking_available follows the current flag. A send's counts tell of people when it has fewer than 10 tracked recipients (tracking.TotalsMinRecipients, the bound retained totals keep) or is mail the system sends (the system lane): then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read, or the send's own sender outside the system lane) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4).
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id	path		string	true	"Mail task ID"
@@ -127,7 +130,31 @@ func (h *mailHandlerImpl) GetTracking(c fiber.Ctx) error {
 			return err
 		}
 	}
-	return c.JSON(TrackingSummary{TrackingAvailable: h.mailer.TrackingAvailable(), TrackingRequested: task.TrackingRequested, Retained: retained, Report: aggregate})
+	withheld := aggregate != nil && countsTellOfPeople(task, aggregate) && !mayReadTrackingPeople(c, task)
+	if withheld {
+		aggregate = nil
+	}
+	return c.JSON(TrackingSummary{TrackingAvailable: h.mailer.TrackingAvailable(), TrackingRequested: task.TrackingRequested, Retained: retained, Withheld: withheld, Report: aggregate})
+}
+
+// countsTellOfPeople says a send's counts are as good as its people's: a
+// send to fewer than tracking.TotalsMinRecipients tracked people ("1 of 1
+// opened at 14:00" names the one whose address GET /:id/queue shows), or
+// mail the system sends, whose people only YK, DK and the admins see.
+func countsTellOfPeople(task database.TrackingTaskAccessRow, report *TrackingAggregate) bool {
+	return task.SystemLane || report.TrackedRecipients < tracking.TotalsMinRecipients
+}
+
+// mayReadTrackingPeople is who reads a send's people: skymail:mails:tracking:read,
+// or the send's own sender. A service is no sender here: the mail it sends
+// (SKYMAIL_TRACKING_SYSTEM) is read with the role only. Nor is the person a
+// system mail names as its sender (a Mail onayı notice's requester or
+// decider): the system lane's mail is the system's, whose people only YK,
+// DK and the admins see (KVKK notice s3, §4).
+func mayReadTrackingPeople(c fiber.Ctx, task database.TrackingTaskAccessRow) bool {
+	caller := contentCallerOf(c)
+	sender := caller.sub != "" && caller.sub == task.SentBy && !middlewares.IsServiceAccount(c) && !task.SystemLane
+	return caller.has(TrackingReadRole) || sender
 }
 
 // GetTrackingRecipients godoc
@@ -157,14 +184,7 @@ func (h *mailHandlerImpl) GetTrackingRecipients(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	// The sender reads their own send's people; a service is no sender here:
-	// the mail it sends (SKYMAIL_TRACKING_SYSTEM) is read with the role only.
-	// Nor is the person a system mail names as its sender (a Mail onayı
-	// notice's requester or decider): the system lane's mail is the system's,
-	// whose people only YK, DK and the admins see (KVKK notice s3, §4).
-	caller := contentCallerOf(c)
-	sender := caller.sub != "" && caller.sub == task.SentBy && !middlewares.IsServiceAccount(c) && !task.SystemLane
-	if !caller.has(TrackingReadRole) && !sender {
+	if !mayReadTrackingPeople(c, task) {
 		return apperrors.ErrForbidden
 	}
 	if task.TrackingClosedAt != nil || !task.SentAt.Add(tracking.EventRetention).After(h.now()) {
