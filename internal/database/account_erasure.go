@@ -437,10 +437,12 @@ var keepNamesSteps = []erasureStep{
 	},
 	{
 		// The person's inbox (ADR 0070), whatever its age: items are kept
-		// by the subject alone.
+		// by the subject alone. The subject is a canonical UUID (the
+		// handler checks it), so it is compared as one and the feed index
+		// finds the rows.
 		name:  "the person's inbox items",
 		count: AccountErasureInboxItemsDeleted,
-		sql:   `DELETE FROM inbox_items WHERE user_id::text = @subject::text`,
+		sql:   `DELETE FROM inbox_items WHERE user_id = @subject::uuid`,
 	},
 	{
 		// Anyone else's inbox item whose text names the person: an item is

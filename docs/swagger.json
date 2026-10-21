@@ -5353,7 +5353,7 @@
                 ]
             },
             "put": {
-                "description": "Writes the type of the key as the Template seed states it: its preference category (null: none), whether it is required (preferences not looked at), its default channels (email, inbox), its queue lane and, when it goes to the inbox, its inbox text (title, summary, link: Go text/template over the notification's variables; the link an in-app path starting with one /). A type that exists is written over, its inbox text with it; its archive stays as it is. The type's e-mail variant is the template of the same key (PUT /templates/by-key/{key}).",
+                "description": "Writes the type of the key as the Template seed states it: its preference category (null: none), whether it is required (preferences not looked at), its default channels (email, inbox), its queue lane and, when it goes to the inbox, its inbox text (title, summary, link: Go text/template over the notification's variables; the link an in-app path starting with one /, or an https address on yildizskylab.com or one of its subdomains with the scheme and host written out). A type that exists is written over, its inbox text with it; its archive stays as it is. The type's e-mail variant is the template of the same key (PUT /templates/by-key/{key}).",
                 "parameters": [
                     {
                         "description": "The type's key, the Template key's alphabet",
