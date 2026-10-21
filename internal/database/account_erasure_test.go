@@ -181,6 +181,19 @@ INSERT INTO mail_approval_events (id, approval_id, seq, kind, actor_sub, actor_n
      '[{"field": "variable", "name": "Place", "before": "Deniz kıyısı", "after": "Göl"}]', NULL, '2026-09-22T12:00:00Z'),
     ('70000000-0000-4000-8000-000000000071', '60000000-0000-4000-8000-000000000007', 1, 'submitted', '` + erasedSub + `', 'Deniz Yılmaz', NULL, NULL, NULL, '2026-09-10T10:00:00Z'),
     ('70000000-0000-4000-8000-000000000072', '60000000-0000-4000-8000-000000000007', 2, 'expired', NULL, NULL, NULL, NULL, NULL, '2026-09-17T10:00:00Z');
+
+-- The in-app inbox: Deniz's own item goes; Ayşe's item naming Deniz goes; her
+-- other item stays.
+INSERT INTO notification_types (key, default_channels) VALUES ('team.joined', '{inbox}');
+INSERT INTO notifications (id, type, sent_by, idempotency_key, request_sha256) VALUES
+    ('80000000-0000-4000-8000-000000000001', 'team.joined', 'service-account-core', 'k1', 'x');
+INSERT INTO inbox_items (id, user_id, notification_id, notification_type, title, summary, link, expires_at) VALUES
+    ('81000000-0000-4000-8000-000000000001', '` + erasedSub + `', '80000000-0000-4000-8000-000000000001', 'team.joined', 'Ekibe katıldın', '', '/teams/1', now() + interval '1 day'),
+    ('81000000-0000-4000-8000-000000000002', '` + otherSub + `', '80000000-0000-4000-8000-000000000001', 'team.joined', 'Ekibe biri katıldı', 'Deniz Yılmaz ekibe katıldı', NULL, now() + interval '1 day');
+INSERT INTO notifications (id, type, sent_by, idempotency_key, request_sha256) VALUES
+    ('80000000-0000-4000-8000-000000000002', 'team.joined', 'service-account-core', 'k2', 'x');
+INSERT INTO inbox_items (id, user_id, notification_id, notification_type, title, summary, link, expires_at) VALUES
+    ('81000000-0000-4000-8000-000000000003', '` + otherSub + `', '80000000-0000-4000-8000-000000000002', 'team.joined', 'Ekibe katıldın', '', NULL, now() + interval '1 day');
 `
 
 // erasureTables names every table erasure may touch and the key each row is
@@ -201,6 +214,7 @@ var erasureTables = map[string]string{
 	"mail_approval_events":              "id::text",
 	"mail_task_links":                   "id::text",
 	"mail_tracking_events":              "id::text",
+	"inbox_items":                       "id::text",
 	"mail_suppressions":                 "address",
 	"mail_bounces":                      "id::text",
 	"mail_suppression_removals":         "id::text",
@@ -324,6 +338,8 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 		AccountErasureApprovalSendLinksDeleted:  1,
 		AccountErasureTrackingEventsDeleted:     0,
 		AccountErasureTrackingLinksCleared:      0,
+		AccountErasureInboxItemsDeleted:         1,
+		AccountErasureInboxItemsNamingDeleted:   1,
 		AccountErasureSuppressionsDeleted:       2,
 	}
 	if counts := receiptCounts(t, receipt); !reflect.DeepEqual(counts, wantCounts) {
@@ -370,7 +386,12 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 			"70000000-0000-4000-8000-000000000032", "70000000-0000-4000-8000-000000000033",
 			"70000000-0000-4000-8000-000000000061", "70000000-0000-4000-8000-000000000071",
 		},
+		// Deniz's own item, and Ayşe's that names Deniz; her other item stays.
+		"inbox_items": {"81000000-0000-4000-8000-000000000001", "81000000-0000-4000-8000-000000000002"},
 	})
+	if n := queryCount(t, store, `SELECT count(*) FROM inbox_items WHERE id IN ('81000000-0000-4000-8000-000000000001', '81000000-0000-4000-8000-000000000002')`); n != 0 {
+		t.Errorf("inbox items to or naming the person left = %d", n)
+	}
 
 	t.Run("recipients and list memberships are deleted", func(t *testing.T) {
 		if n := queryCount(t, store, `SELECT count(*) FROM recipients WHERE lower(email) = ANY($1)`, erasedEmails); n != 0 {

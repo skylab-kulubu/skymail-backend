@@ -13,6 +13,9 @@ import (
 
 type AuthMiddleware interface {
 	Authenticate(c fiber.Ctx) error
+	// AuthenticatePerson is the person's own routes' check (/v1/me): a
+	// person's token issued for SkyMail, no role (see its doc).
+	AuthenticatePerson(c fiber.Ctx) error
 	RequireAnyPermission(permissions ...string) func(c fiber.Ctx) error
 }
 
@@ -68,43 +71,9 @@ func (a *authMiddlewareImpl) Authenticate(c fiber.Ctx) error {
 }
 
 func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) error {
-	req := a.client.R()
-
-	req.AddHeader("Authorization", "Bearer "+tokenStr)
-	req.SetURL(a.realmURL + "/protocol/openid-connect/userinfo")
-	req.SetMethod(fiber.MethodGet)
-
-	resp, err := req.Send()
+	info, err := a.userinfo(tokenStr)
 	if err != nil {
-		// The caller's token may be perfectly good; we simply could not ask.
-		// That is our failure to report, not theirs to be blamed for.
-		a.logger.Error().Err(err).Msg("identity provider unreachable")
-		return apperrors.ErrServiceUnavailable
-	}
-
-	defer resp.Close()
-
-	// The status has to be read before the body. Keycloak answers an expired or
-	// revoked token with 401 and an EMPTY body, putting the reason in
-	// WWW-Authenticate, so parsing first turns "your session ended" into a JSON
-	// error and then into a 500 the operator reads as a broken server.
-	switch status := resp.StatusCode(); {
-	case status == fiber.StatusUnauthorized, status == fiber.StatusForbidden:
-		return apperrors.ErrUnauthorized
-	case status < 200 || status > 299:
-		a.logger.Error().Int("status", status).Msg("unexpected userinfo status")
-		return apperrors.ErrServiceUnavailable
-	}
-
-	var info userInfo
-	if err := resp.JSON(&info); err != nil {
-		// A 2xx that does not carry the claims is genuinely our problem.
-		a.logger.Error().Err(err).Msg("userinfo body could not be read")
-		return apperrors.ErrStatusInternalServer
-	}
-
-	if info.ID == "" {
-		return apperrors.ErrForbidden
+		return err
 	}
 
 	forUs, azp := true, ""
@@ -144,6 +113,102 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) er
 		}
 	}
 	return c.Next()
+}
+
+var errPersonRequired = apperrors.New(
+	"auth.person_required",
+	"Only a person's own token may call this; a service's token (client credentials) has no inbox.",
+	fiber.StatusForbidden,
+)
+
+// AuthenticatePerson authenticates a person's own routes (/v1/me: the inbox,
+// hub ticket iletisim-servisi 05; ADR 0070). Keycloak's userinfo must accept
+// the bearer, as on /v1. Then, whatever V1_TOKEN_AUDIENCE_MODE says, the
+// token's aud must name SkyMail's client — these routes ask for no role, so
+// the audience is what keeps a token issued for another service out (401) —
+// and it must be a person's: a service account's token (client_id = azp)
+// gets 403 auth.person_required, and so does a token whose sub is not the one
+// userinfo accepted. Only the sub is kept ("user_id"); roles are not read.
+func (a *authMiddlewareImpl) AuthenticatePerson(c fiber.Ctx) error {
+	authHeader := c.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") || len(authHeader) == len("Bearer ") {
+		return apperrors.ErrUnauthorized
+	}
+	tokenStr := authHeader[len("Bearer "):]
+	info, err := a.userinfo(tokenStr)
+	if err != nil {
+		return err
+	}
+	if forUs, azp := tokenAudience(tokenStr, a.clientID); !forUs {
+		a.logger.Warn().
+			Str("event", PersonAudienceMissingEvent).
+			Str("azp", nonEmpty(azp)).
+			Msg("a person route's token aud does not name SkyMail")
+		c.Set(fiber.HeaderWWWAuthenticate, `Bearer error="invalid_token"`)
+		return apperrors.ErrUnauthorized
+	}
+	identity := acceptedIdentity(tokenStr)
+	if identity.subject != info.ID || identity.clientID != "" {
+		return errPersonRequired
+	}
+	c.Locals("user_id", info.ID)
+	c.Locals(acceptedTokenIdentityKey, identity)
+	return c.Next()
+}
+
+// PersonAudienceMissingEvent is the event of the line AuthenticatePerson
+// writes for a token whose aud lacks SkyMail: the caller's client (azp) and
+// nothing else, as AudienceMissingEvent.
+const PersonAudienceMissingEvent = "person_token_audience_missing"
+
+func nonEmpty(azp string) string {
+	if azp == "" {
+		return "none"
+	}
+	return azp
+}
+
+// userinfo asks Keycloak whether the bearer is live and whose it is.
+func (a *authMiddlewareImpl) userinfo(tokenStr string) (userInfo, error) {
+	req := a.client.R()
+
+	req.AddHeader("Authorization", "Bearer "+tokenStr)
+	req.SetURL(a.realmURL + "/protocol/openid-connect/userinfo")
+	req.SetMethod(fiber.MethodGet)
+
+	resp, err := req.Send()
+	if err != nil {
+		// The caller's token may be perfectly good; we simply could not ask.
+		// That is our failure to report, not theirs to be blamed for.
+		a.logger.Error().Err(err).Msg("identity provider unreachable")
+		return userInfo{}, apperrors.ErrServiceUnavailable
+	}
+
+	defer resp.Close()
+
+	// The status has to be read before the body. Keycloak answers an expired or
+	// revoked token with 401 and an EMPTY body, putting the reason in
+	// WWW-Authenticate, so parsing first turns "your session ended" into a JSON
+	// error and then into a 500 the operator reads as a broken server.
+	switch status := resp.StatusCode(); {
+	case status == fiber.StatusUnauthorized, status == fiber.StatusForbidden:
+		return userInfo{}, apperrors.ErrUnauthorized
+	case status < 200 || status > 299:
+		a.logger.Error().Int("status", status).Msg("unexpected userinfo status")
+		return userInfo{}, apperrors.ErrServiceUnavailable
+	}
+
+	var info userInfo
+	if err := resp.JSON(&info); err != nil {
+		// A 2xx that does not carry the claims is genuinely our problem.
+		a.logger.Error().Err(err).Msg("userinfo body could not be read")
+		return userInfo{}, apperrors.ErrStatusInternalServer
+	}
+
+	if info.ID == "" {
+		return userInfo{}, apperrors.ErrForbidden
+	}
+	return info, nil
 }
 
 // logMissingAudience writes the line a wizard counts per client: azp and the

@@ -260,6 +260,9 @@ func main() {
 	handlers.NewTrackingPublicHandler(db, trackingConfig).Register(app)
 	registerPublicRoutes(app, accountAccessGate, readiness)
 	registerInternalRoutes(app, erasureHandler, withdrawalHandler)
+	// Before protectedAPI: /v1/me is a person's own, with no role, and must
+	// not go through /v1's skymail:access chain.
+	registerInboxRoutes(app, authMiddleware, accountAccessGate, handlers.NewInboxHandler(db))
 
 	api := protectedAPI(app, authMiddleware, accountAccessGate)
 
@@ -301,6 +304,11 @@ func main() {
 		defer close(contentSweepStopped)
 		clearMailContent(workers, db, contentRetentionDays, viewRetentionDays, contentSweepInterval)
 	}()
+	inboxSweepStopped := make(chan struct{})
+	go func() {
+		defer close(inboxSweepStopped)
+		sweepInbox(workers, db, inboxSweepInterval)
+	}()
 	trackingRetentionStopped := make(chan struct{})
 	go func() {
 		defer close(trackingRetentionStopped)
@@ -331,6 +339,7 @@ func main() {
 		Wait: []stopping{
 			{name: "the mail approval expiry sweep", done: approvalsStopped},
 			{name: "the mail content sweep", done: contentSweepStopped},
+			{name: "the inbox sweep", done: inboxSweepStopped},
 			{name: "the tracking retention run", done: trackingRetentionStopped},
 			{name: "the mailer's sends", done: mailerService.Stopped()},
 		},
@@ -608,6 +617,54 @@ func registerNotificationRoutes(api fiber.Router, auth middlewares.AuthMiddlewar
 	types.Get("/", auth.RequireAnyPermission("skymail:templates:read"), notifications.ListTypes)
 	types.Get("/:key", auth.RequireAnyPermission("skymail:templates:read"), notifications.GetType)
 	types.Put("/:key", auth.RequireAnyPermission("skymail:templates:write"), notifications.PutType)
+}
+
+// registerInboxRoutes serves a person's own inbox (hub ticket
+// iletisim-servisi 05; ADR 0070) at /v1/me/inbox: a person's own token issued
+// for SkyMail (aud skymail), no role, the account access gate as on /v1. Each
+// route ends its chain, so /v1's skymail:access chain, registered after
+// these, never runs for them.
+func registerInboxRoutes(app *fiber.App, auth middlewares.AuthMiddleware, gate accessgate.Reader, inbox handlers.InboxHandler) {
+	me := app.Group("/v1/me/inbox")
+	person, gated := auth.AuthenticatePerson, middlewares.AccountAccessGate(gate)
+	me.Get("/", person, gated, inbox.List)
+	me.Get("/counts", person, gated, inbox.Counts)
+	me.Post("/read-all", person, gated, inbox.ReadAll)
+	me.Post("/seen-all", person, gated, inbox.SeenAll)
+	me.Post("/:id/seen", person, gated, inbox.Seen)
+	me.Post("/:id/read", person, gated, inbox.Read)
+	me.Post("/:id/unread", person, gated, inbox.Unread)
+	me.Post("/:id/archive", person, gated, inbox.Archive)
+}
+
+// inboxSweepInterval is how often the inbox sweep runs: an item is gone
+// within it of its expiry (reads leave it out from the moment it expires).
+const inboxSweepInterval = time.Hour
+
+// inboxSweepBatch is how many inbox items one statement of the sweep deletes.
+const inboxSweepBatch = 1000
+
+// sweepInbox deletes the inbox items past their expiry — 90 days after they
+// were written, or sooner (ADR 0070; ADR-0062: each service deletes its own
+// data with its own job) — at startup and every interval after. It logs the
+// count only.
+func sweepInbox(ctx context.Context, db *database.Store, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		deleted, err := db.DeleteExpiredInbox(ctx, time.Now(), inboxSweepBatch)
+		if err != nil && ctx.Err() == nil {
+			log.Error().Err(err).Str("event", "inbox_sweep_failed").Msg("inbox sweep failed")
+		}
+		if deleted > 0 {
+			log.Info().Str("event", "inbox_sweep").Int64("items", deleted).Msg("deleted inbox items past their expiry")
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // expireMailApprovals expires the requests left undecided past their deadline
