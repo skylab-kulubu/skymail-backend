@@ -18,6 +18,7 @@ import (
 	migrationfiles "github.com/skylab-kulubu/skymail-backend/db/migrations"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
+	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
@@ -34,9 +35,9 @@ func formSourcePerson(key string) (approvalPerson, bool) {
 // These tests use the real stores, transactions, renderer and bulk queue;
 // no dispatcher is started and no SMTP connection is made. Authentication
 // stands in for the already-tested userinfo/service guard.
-func newFormSourceWorld(t *testing.T) *approvalWorld {
+func newFormSourceWorld(t *testing.T, opts ...mailer.Option) *approvalWorld {
 	t.Helper()
-	w := newApprovalWorldWithPool(t, 2)
+	w := newApprovalWorldWithPool(t, 2, opts...)
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
 	api := app.Group("/v1")
 	api.Use(func(c fiber.Ctx) error {

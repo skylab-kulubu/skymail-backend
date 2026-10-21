@@ -167,8 +167,8 @@ type Mailer interface {
 	// SKYMAIL_TRACKING: every send a person queues (an operator's mail) is
 	// tracked whether it asked or not, whatever its template; its callers
 	// ask for tracking on every one. A sensitive mail gets the pixel only,
-	// any other a click address only on the links its template writes out
-	// as they are, as a service's mail does.
+	// any other a click address on the links every recipient gets alike,
+	// never on one made from the recipient.
 	OperatorTrackingAlways() bool
 	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error)
 	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
@@ -801,6 +801,14 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 
 	rows := make([]commonMailRow, 0, len(params.Recipients))
 	for _, r := range params.Recipients {
+		sub := r.Sub
+		// A person's send to people known by address (a Forms source's
+		// respondents) with SKYMAIL_TRACKING_OPERATOR on: the account
+		// Keycloak found for the address, if any, is the row's, as for one
+		// person (enqueueSingle).
+		if sub == nil && kind == trackOperator {
+			sub, _ = params.Preferences.accountOf(r.Email)
+		}
 		rows = append(rows, commonMailRow{
 			TaskID:            task.ID,
 			BodyVariables:     params.BodyVariables,
@@ -809,7 +817,7 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 			PlainTextContent:  tmpl.PlainTextContent,
 			RecipientFullName: r.FullName,
 			RecipientEmail:    r.Email,
-			RecipientSub:      r.Sub,
+			RecipientSub:      sub,
 			UnsubscribeURL:    r.UnsubscribeURL,
 		})
 	}
@@ -1047,7 +1055,11 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 		if err != nil {
 			return queueResult{}, err
 		}
-		if err := q.registerLinks(ctx, rows[0].TaskID, queueItems, rule, rows[0].HtmlContent); err != nil {
+		var probes []string
+		if rule == linksSendLevel {
+			probes = parsed.operatorProbes(taskVars)
+		}
+		if err := q.registerLinks(ctx, rows[0].TaskID, queueItems, rule, rows[0].HtmlContent, probes); err != nil {
 			return queueResult{}, err
 		}
 		for _, item := range queueItems {

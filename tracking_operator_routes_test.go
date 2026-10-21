@@ -75,8 +75,10 @@ func TestTheSummarySaysWhetherEveryPersonsSendIsTracked(t *testing.T) {
 // A person's single send is tracked whether it asks or not — tracking
 // false is ignored too — and whatever free.basic says of itself (may be
 // shown, System, sensitive, nothing): in the bulk lane, Elif's account found
-// by address, a token from core. The link in its body comes in a variable
-// and is never registered. The answer says tracking true.
+// by address, a token from core. The link the operator wrote in its body is
+// registered (the same for whoever it goes to), except in a sensitive mail —
+// one that says nothing of itself is, to one person — which gets the pixel
+// only. The answer says tracking true.
 func TestEveryPersonsSingleSendIsTrackedWithOperatorTracking(t *testing.T) {
 	w, prefs := operatorTrackedWorld(t)
 	sensitive := true
@@ -84,7 +86,8 @@ func TestEveryPersonsSingleSendIsTrackedWithOperatorTracking(t *testing.T) {
 		name      string
 		system    bool
 		sensitive *bool
-	}{{"System", true, nil}, {"sensitive", false, &sensitive}, {"says nothing", false, nil}, {"may be shown", false, new(bool)}} {
+		links     int
+	}{{"System", true, nil, 0}, {"sensitive", false, &sensitive, 0}, {"says nothing", false, nil, 0}, {"may be shown", false, new(bool), 1}} {
 		w.setFreeBasic(c.system, c.sensitive)
 		for _, asks := range []any{nil, false, true} {
 			send := w.singleSendTo(elif.email, "Elif", false)
@@ -101,8 +104,8 @@ func TestEveryPersonsSingleSendIsTrackedWithOperatorTracking(t *testing.T) {
 			if row.sub != elif.sub || len(row.token) != tracking.RecipientTokenBytes {
 				t.Errorf("%s, asks %v: row %+v; want Elif's account and a token", c.name, asks, row)
 			}
-			if n := w.linkCount(created.ID); n != 0 {
-				t.Errorf("%s, asks %v: %d links registered; the body's link is a variable's", c.name, asks, n)
+			if n := w.linkCount(created.ID); n != c.links {
+				t.Errorf("%s, asks %v: %d links registered, want %d", c.name, asks, n, c.links)
 			}
 		}
 	}
@@ -261,5 +264,124 @@ func TestASystemMailsPeopleAreReadWithTheRoleOnly(t *testing.T) {
 	}
 	if status := people("elif", answer.send()); status != fiber.StatusOK {
 		t.Errorf("Elif reading the people of her own approved send: %d, want 200", status)
+	}
+}
+
+// The tracking mode is a setting anyone who may use SkyMail reads: someone
+// who only submits for approval (okur: no mails:read) sees that every send
+// is tracked.
+func TestTheTrackingModeIsReadWithoutMailsRead(t *testing.T) {
+	w, _ := operatorTrackedWorld(t)
+	var mode map[string]bool
+	status, raw := w.call("okur", fiber.MethodGet, "/v1/mail_tasks/tracking-mode", nil, &mode)
+	if status != fiber.StatusOK || !mode["tracking_available"] || !mode["tracking_always"] {
+		t.Fatalf("tracking-mode = %d %s; want both true", status, raw)
+	}
+	w, _ = trackedWorld(t, true)
+	mode = nil
+	status, raw = w.call("okur", fiber.MethodGet, "/v1/mail_tasks/tracking-mode", nil, &mode)
+	if status != fiber.StatusOK || !mode["tracking_available"] || mode["tracking_always"] {
+		t.Fatalf("operator tracking off: tracking-mode = %d %s; want available, not always", status, raw)
+	}
+}
+
+// operatorFormSourceWorld is the Forms source world with operator tracking
+// on: the first respondent has Elif's account (core lets it be tracked), the
+// others none.
+func operatorFormSourceWorld(t *testing.T) (*approvalWorld, *routePreferences) {
+	t.Helper()
+	prefs := &routePreferences{}
+	accounts := &laterAccounts{}
+	w := newFormSourceWorld(t, mailer.WithTracking(mailer.Tracking{
+		Config: tracking.Config{Mode: tracking.ModeOn, Operator: tracking.ModeOn,
+			BaseURL: "https://api.example.test/api/skymail", CoreURL: "http://core.invalid"},
+		Preferences: prefs,
+		Accounts:    accounts,
+	}))
+	prefs.store = w.store
+	accounts.directory = w.directory
+	notSensitive := false
+	w.setFreeBasic(false, &notSensitive)
+	w.account(approvalPerson{sub: elif.sub, name: "Source Recipient 0", email: "source-0@example.invalid"}, true, true)
+	w.directory.store = w.store
+	return w, prefs
+}
+
+// checkFormSourceRows says a Forms source's send is tracked: the respondent
+// with an account has it and a token, the others are no_account.
+func checkFormSourceRows(t *testing.T, w *approvalWorld, task uuid.UUID, n int) {
+	t.Helper()
+	requested, rows := w.trackingOf(task)
+	if !requested || len(rows) != n || w.laneOf(task) != mailer.PriorityBulk {
+		t.Fatalf("send %s: tracking_requested %v, %d rows, lane %d", task, requested, len(rows), w.laneOf(task))
+	}
+	for email, row := range rows {
+		if email == "source-0@example.invalid" {
+			if row.sub != elif.sub || len(row.token) != tracking.RecipientTokenBytes {
+				t.Errorf("%s: %+v; want the account found and a token", email, row)
+			}
+		} else if row.sub != "" || row.token != nil || row.reason != tracking.SkipNoAccount {
+			t.Errorf("%s: %+v; want no_account", email, row)
+		}
+	}
+}
+
+// A send to a Forms source's respondents is tracked with operator tracking
+// on, directly and through Mail onayı: each address looked up in Keycloak
+// once, all before the transaction, core asked once; an address with no
+// account is no_account. The answers say tracking true.
+func TestAFormSourceSendIsTrackedWithOperatorTracking(t *testing.T) {
+	w, prefs := operatorFormSourceWorld(t)
+	source := prepareSource(t, w, "source-sender", 12)
+	var created createdSend
+	status, raw := w.call("source-sender", fiber.MethodPost, "/v1/mail_tasks/form-source", sourceSend(w, source.ID), &created)
+	if status != fiber.StatusCreated || created.Tracking == nil || !*created.Tracking {
+		t.Fatalf("form-source send = %d %s; want 201, tracking true", status, raw)
+	}
+	checkFormSourceRows(t, w, created.ID, 12)
+	if w.directory.accountAsks != 12 || prefs.asked != 1 {
+		t.Errorf("Keycloak asked %d times, core %d; want 12 and 1", w.directory.accountAsks, prefs.asked)
+	}
+	for _, open := range append(append([]int{}, w.directory.openTx...), prefs.openTx...) {
+		if open != 0 {
+			t.Fatalf("asked with a transaction open: Keycloak %v, core %v", w.directory.openTx, prefs.openTx)
+		}
+	}
+	// An exact retry returns the same send, says it is tracked, and asks no
+	// one again.
+	var again createdSend
+	if status, raw := w.call("source-sender", fiber.MethodPost, "/v1/mail_tasks/form-source", sourceSend(w, source.ID), &again); status != fiber.StatusOK || again.ID != created.ID || again.Tracking == nil || !*again.Tracking {
+		t.Errorf("retry = %d %s; want 200, the same send, tracking true", status, raw)
+	}
+	if w.directory.accountAsks != 12 || prefs.asked != 1 {
+		t.Errorf("after the retry Keycloak asked %d times, core %d; want still 12 and 1", w.directory.accountAsks, prefs.asked)
+	}
+
+	approvalSource := prepareSource(t, w, "okur", 3)
+	var submitted map[string]any
+	status, raw = w.call("okur", fiber.MethodPost, "/v1/mail_approvals", sourceSend(w, approvalSource.ID), &submitted)
+	if status != fiber.StatusCreated || submitted["tracking"] != true {
+		t.Fatalf("submit the Forms source = %d %s; want tracking true", status, raw)
+	}
+	status, answer, failure := w.act("fatih", uuid.MustParse(submitted["id"].(string)), "approve", nil)
+	if status != fiber.StatusOK || answer.send() == uuid.Nil {
+		t.Fatalf("approve = %d %+v %+v", status, answer.TaskIDs, failure)
+	}
+	checkFormSourceRows(t, w, answer.send(), 3)
+}
+
+// Operator tracking off, a Forms source's send is not tracked, as before.
+func TestAFormSourceSendIsUntrackedWithoutOperatorTracking(t *testing.T) {
+	w := newFormSourceWorld(t)
+	source := prepareSource(t, w, "source-sender", 2)
+	send := sourceSend(w, source.ID)
+	send["tracking"] = true
+	var created createdSend
+	status, raw := w.call("source-sender", fiber.MethodPost, "/v1/mail_tasks/form-source", send, &created)
+	if status != fiber.StatusCreated || created.Tracking == nil || *created.Tracking {
+		t.Fatalf("form-source send = %d %s; want 201, tracking false", status, raw)
+	}
+	if requested, _ := w.trackingOf(created.ID); requested {
+		t.Error("a Forms source's send is tracked with operator tracking off")
 	}
 }

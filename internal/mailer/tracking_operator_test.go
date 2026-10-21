@@ -14,10 +14,77 @@ import (
 
 // Operator tracking (SKYMAIL_TRACKING_OPERATOR, Yusuf 2026-10-21): every send
 // a person queues is tracked, with no box and no opting out, whatever its
-// template, under the system's link rule: a sensitive mail gets the pixel
-// only, any other a click address only on the links its template writes out
-// as they are. A link a variable fills is never rewritten, even in a mail to
-// one person, where a person's send that asked (flag off) rewrites it.
+// template. A sensitive mail gets the pixel only. Any other gets a click
+// address on the links the send gives every recipient alike — written in the
+// template, or in a variable of the send's own, such as the body an operator
+// wrote (orchestrator, 2026-10-21: as Mailchimp, HubSpot and Dynamics count
+// a campaign body's links) — and never on one that changes with the
+// recipient (.Email, .FullName), in whole or in part, even in a mail to one
+// person, where a person's send that asked (flag off) rewrites it.
+
+// operatorTemplate is an operator's announcement: a free body, a link written
+// out, links the recipient's address and name make, a link a send's variable
+// fills, one with a send's variable in part, and one marked not to count.
+var operatorTemplate = uuid.MustParse("72000000-0000-4000-8000-000000000001")
+
+const operatorHTML = `<!DOCTYPE html><html><body style="margin:0">
+<h1>{{.Heading}}</h1>
+<div>{{safeHTML .BodyHtml}}</div>
+<a href="https://skylab.example/etkinlik">Etkinlik</a>
+<a href="https://skylab.example/form?e={{.Email}}">Sana özel</a>
+<a href="https://skylab.example/u/{{.FullName}}/onay">Adına özel</a>
+<a href="{{.Link}}">Gönderimin bağlantısı</a>
+<a href="https://skylab.example/k/{{.Slug}}?ref=duyuru">Kısmi</a>
+<a href="https://skylab.example/gizli" data-skymail-notrack>Sayılmaz</a>
+</body></html>`
+
+// operatorVariables is what the operator wrote once for every recipient: a
+// body with a link of its own and one that tries to name the recipient
+// ({{.Email}} in a variable is text, never a template action).
+func operatorVariables() string {
+	return `{"Heading":"GECEKODU","Link":"https://skylab.example/kayit","Slug":"gecekodu",` +
+		`"BodyHtml":"<p><a href=\"https://skylab.example/govde\">Gövde</a> <a href=\"https://skylab.example/x?e={{.Email}}\">Gömme</a></p>"}`
+}
+
+// The links an operator's announcement counts clicks on, and the ones it
+// never may.
+var (
+	operatorCounted = []string{"https://skylab.example/govde", "https://skylab.example/etkinlik", "https://skylab.example/kayit", "https://skylab.example/k/gecekodu?ref=duyuru"}
+	operatorNever   = []string{"form?e=", "/u/", "/gizli", "@", "%40", "Ay%c5%9fe", "Ayşe", "skymail-probe"}
+)
+
+func operatorQueue(t *testing.T) *database.Store {
+	t.Helper()
+	db := systemQueue(t)
+	if _, err := db.Conn.Exec(context.Background(), `
+		INSERT INTO templates (id, key, name, subject, html_content, plain_text_content, react_email_content, system, content_sensitive)
+		VALUES ($1, 'club.gecekodu', 'Duyuru', '{{.Heading}}', $2, '{{.Heading}}', '', false, false)`,
+		operatorTemplate, operatorHTML); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+// checkOperatorLinks says what of an operator's announcement send was
+// registered: every link of operatorCounted, and none that names, or is made
+// from, the recipient.
+func checkOperatorLinks(t *testing.T, what string, links []registeredLink) {
+	t.Helper()
+	got := map[string]bool{}
+	for _, l := range links {
+		got[l.url] = true
+		for _, never := range operatorNever {
+			if strings.Contains(l.url, never) {
+				t.Errorf("%s registered %s, a link that carries %q", what, l.url, never)
+			}
+		}
+	}
+	for _, want := range operatorCounted {
+		if !got[want] {
+			t.Errorf("%s did not register %s; registered %v", what, want, linkURLs(links))
+		}
+	}
+}
 
 func operatorTracking(operator tracking.Mode, prefs tracking.Preferences, accounts tracking.Accounts) mailer.Option {
 	return mailer.WithTracking(mailer.Tracking{
@@ -108,7 +175,9 @@ func TestEveryPersonsSendIsTrackedWithOperatorTracking(t *testing.T) {
 		links     []string
 	}{
 		{"may be shown", announcementTemplate, `{}`, []string{"https://skylab.example/etkinlik?gun=1&saat=2"}},
-		{"System", formsReplyTemplate, formsVariables(), []string{"https://yildizskylab.com/etkinlikler"}},
+		// The edit link and the invitation code are the send's variables,
+		// the same for whoever it goes to: an operator typed them.
+		{"System", formsReplyTemplate, formsVariables(), []string{"https://yildizskylab.com/etkinlikler", editLink, "https://forms.yildizskylab.com/f/abc?davet=" + inviteKey}},
 		{"locked key", resetPasswordTemplate, resetVariables(), nil},
 		{"sensitive", sensitiveTemplate, `{}`, nil},
 	} {
@@ -136,36 +205,27 @@ func TestEveryPersonsSendIsTrackedWithOperatorTracking(t *testing.T) {
 		}
 	}
 
-	// A group send of a System template, and of one whose variable link
-	// every member has: tracked as core says; the variable link, common to
-	// all, is not registered.
-	for _, template := range []uuid.UUID{systemTemplate, formsReplyTemplate} {
-		variables := `{}`
-		if template == formsReplyTemplate {
-			variables = formsVariables()
-		}
-		task, err := m.EnqueueWithRecipients(ctx, mailer.EnqueueWithRecipientsParams{
-			SentBy: "operator-sub", TemplateID: template, MailListID: &announcementList, BodyVariables: []byte(variables),
-			Recipients: groupOf(), Tracking: true,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		rows := trackedRows(t, db, task)
-		if !trackingRequested(t, db, task) || len(rows["ayse@example.com"].token) != tracking.RecipientTokenBytes ||
-			rows["mehmet@example.com"].reason != tracking.SkipPreferenceOff || rows["adres@example.com"].reason != tracking.SkipNoAccount {
-			t.Errorf("group send of %s: requested %v, rows %+v", template, trackingRequested(t, db, task), rows)
-		}
-		for _, url := range linkURLs(linksOf(t, db, task)) {
-			if strings.Contains(url, "{{") || strings.Contains(url, "tek-kullanimlik") || strings.Contains(url, inviteKey) || strings.Contains(url, "form?e=") {
-				t.Errorf("group send of %s registered %s, a link a variable fills", template, url)
-			}
-		}
+	// A group send of a System template: tracked as core says; the link
+	// {{.Email}} makes is not registered, though written in the template.
+	task, err := m.EnqueueWithRecipients(ctx, mailer.EnqueueWithRecipientsParams{
+		SentBy: "operator-sub", TemplateID: systemTemplate, MailListID: &announcementList, BodyVariables: []byte(`{}`),
+		Recipients: groupOf(), Tracking: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := trackedRows(t, db, task)
+	if !trackingRequested(t, db, task) || len(rows["ayse@example.com"].token) != tracking.RecipientTokenBytes ||
+		rows["mehmet@example.com"].reason != tracking.SkipPreferenceOff || rows["adres@example.com"].reason != tracking.SkipNoAccount {
+		t.Errorf("group send of a System template: requested %v, rows %+v", trackingRequested(t, db, task), rows)
+	}
+	if got := linkURLs(linksOf(t, db, task)); strings.Join(got, " ") != "https://skylab.example/etkinlik?gun=1&saat=2" {
+		t.Errorf("group send of a System template registered %v", got)
 	}
 
 	// An internal list's addresses are not looked up: the send is tracked,
 	// its recipients no_account.
-	task, err := m.Enqueue(ctx, database.CreateMailTaskParams{
+	task, err = m.Enqueue(ctx, database.CreateMailTaskParams{
 		SentBy: "operator-sub", TemplateID: &announcementTemplate, MailListID: &announcementList, BodyVariables: []byte(`{}`), TrackingRequested: true,
 	})
 	if err != nil {
@@ -201,25 +261,83 @@ func TestEveryPersonsSendIsTrackedWithOperatorTracking(t *testing.T) {
 	}
 }
 
-// The secret link in an operator's mail is never rewritten. A person's
-// single mail of a template that may be shown goes out with the pixel and a
-// click address on the link its template writes out only: the edit link a
-// variable fills, the address with the invitation code in it and the link
-// {{.Email}} fills reach the recipient byte for byte, and none of them is a
-// mail_task_links address or part of a /t/ address. A sensitive mail goes
-// out with the pixel alone.
-func TestASecretLinkInAnOperatorsMailIsNeverRewritten(t *testing.T) {
+// A link made from the recipient is never rewritten in an operator's mail.
+// An announcement to one person (where there is no other mail to tell a
+// personal link by) and to a group registers the body's link, the template's
+// written link, the link a send's variable fills and the one with a send's
+// variable in part; never the links .Email and .FullName make, the one marked
+// data-skymail-notrack, nor anything naming the recipient — not even the
+// {{.Email}} the body tried to slip in, which is text and stays text.
+func TestALinkMadeFromTheRecipientIsNeverRewrittenInAnOperatorsMail(t *testing.T) {
 	captureMailerLogs(t)
-	db := systemQueue(t)
-	if _, err := db.Conn.Exec(context.Background(), `UPDATE templates SET system = false WHERE id = $1`, formsReplyTemplate); err != nil {
+	db := operatorQueue(t)
+	m := mailer.NewMailer(db, startFakeSMTP(t).config(), mailer.SenderOn, operatorTracking(tracking.ModeOn, coreSays(), ayseHasAnAccount(nil)))
+	ctx := context.Background()
+
+	single, err := m.EnqueueTrackedSingle(ctx, personTo(operatorTemplate, "ayse@example.com", "Ayşe Yılmaz", operatorVariables()), nil)
+	if err != nil {
 		t.Fatal(err)
 	}
+	checkOperatorLinks(t, "the mail to Ayşe", linksOf(t, db, single))
+	group, err := m.EnqueueWithRecipients(ctx, mailer.EnqueueWithRecipientsParams{
+		SentBy: "operator-sub", TemplateID: operatorTemplate, MailListID: &announcementList, BodyVariables: []byte(operatorVariables()),
+		Recipients: groupOf(), Tracking: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkOperatorLinks(t, "the group send", linksOf(t, db, group))
+	for _, task := range []uuid.UUID{single, group} {
+		for email, row := range trackedRows(t, db, task) {
+			if strings.Contains(row.bodyHTML, "skymail-probe") {
+				t.Errorf("%s's kept mail carries a probe recipient", email)
+			}
+		}
+	}
+
+	// Flag off, the same mail to one person that asked registers the links
+	// its recipient's address and name made, as #85 does.
+	off := mailer.NewMailer(db, startFakeSMTP(t).config(), mailer.SenderOn, operatorTracking(tracking.ModeOff, coreSays(), ayseHasAnAccount(nil)))
+	asked, err := off.EnqueueTrackedSingle(ctx, personTo(operatorTemplate, "ayse@example.com", "Ayşe Yılmaz", operatorVariables()), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if urls := strings.Join(linkURLs(linksOf(t, db, asked)), " "); !strings.Contains(urls, "form?e=ayse%40example.com") {
+		t.Errorf("flag off: registered %s; want the link the address made too, as before", urls)
+	}
+}
+
+// anchorHref is the href of the <a> whose text is text in html, as written.
+func anchorHref(t *testing.T, html, text string) string {
+	t.Helper()
+	end := strings.Index(html, ">"+text+"</a>")
+	open := strings.LastIndex(html[:max(end, 0)], "<a ")
+	if end < 0 || open < 0 {
+		t.Fatalf("no link %q in:\n%s", text, html)
+	}
+	tag := html[open:end]
+	start := strings.Index(tag, `href="`)
+	if start < 0 {
+		t.Fatalf("link %q has no href: %s", text, tag)
+	}
+	value := tag[start+len(`href="`):]
+	return value[:strings.Index(value, `"`)]
+}
+
+// Through the relay: the mail to one person goes out with the pixel, click
+// addresses on the counted links, and every link made from the recipient,
+// and the one marked, byte for byte as the kept mail has it; no /t/ address
+// names the recipient. A sensitive mail of the operator's goes out with the
+// pixel alone.
+func TestAnOperatorsMailGoesOutWithItsPersonalLinksAsTheyAre(t *testing.T) {
+	captureMailerLogs(t)
+	db := operatorQueue(t)
 	relay := startAnsweringRelay(t, "", "")
 	m := mailer.NewMailer(db, answeringConfig(relay), mailer.SenderOn, operatorTracking(tracking.ModeOn, coreSays(), ayseHasAnAccount(nil)))
 	plainSMTP(m)
 	ctx := context.Background()
 
-	forms, err := m.EnqueueTrackedSingle(ctx, personTo(formsReplyTemplate, "ayse@example.com", "Ayşe Yılmaz", formsVariables()), nil)
+	announcement, err := m.EnqueueTrackedSingle(ctx, personTo(operatorTemplate, "ayse@example.com", "Ayşe Yılmaz", operatorVariables()), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,53 +345,51 @@ func TestASecretLinkInAnOperatorsMailIsNeverRewritten(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	formsLinks := linksOf(t, db, forms)
-	if len(formsLinks) != 1 || formsLinks[0].url != "https://yildizskylab.com/etkinlikler" {
-		t.Fatalf("the operator's Forms mail registered %+v, want only the link its template writes out", formsLinks)
-	}
 	if links := linksOf(t, db, reset); len(links) != 0 {
 		t.Errorf("the operator's reset mail registered %+v; a sensitive mail registers none", links)
 	}
-	var kept int
-	if err := db.Conn.QueryRow(ctx, `SELECT count(*) FROM mail_task_links WHERE url LIKE '%' || $1 || '%' OR url LIKE '%' || $2 || '%' OR url LIKE '%' || $3 || '%'`,
-		"gizli-sifirlama", "tek-kullanimlik", inviteKey).Scan(&kept); err != nil {
-		t.Fatal(err)
-	}
-	if kept != 0 {
-		t.Errorf("%d registered links carry a secret", kept)
-	}
 
-	sendAll(t, db, m, relay, forms)
+	sendAll(t, db, m, relay, announcement)
 	waitFor(t, "the reset mail sent", 20*time.Second, func() bool {
 		return trackedRows(t, db, reset)["ayse@example.com"].status == "sent"
 	})
-	var formsMail, resetMail relayedMail
+	var mail, resetMail relayedMail
 	for _, raw := range relay.taken() {
 		got := parseRelayed(t, raw)
 		switch {
-		case strings.Contains(got.html, "Yanıtını düzenle"):
-			formsMail = got
+		case strings.Contains(got.html, "Sana özel"):
+			mail = got
 		case strings.Contains(got.html, "Parolanı sıfırla"):
 			resetMail = got
 		}
 	}
 
-	formsRow := trackedRows(t, db, forms)["ayse@example.com"]
-	click := tracking.ClickURL(trackingBase, formsRow.token, formsLinks[0].token)
-	if !strings.Contains(formsMail.html, tracking.PixelHTML(tracking.PixelURL(trackingBase, formsRow.token))) {
-		t.Errorf("the operator's Forms mail has no pixel:\n%s", formsMail.html)
+	row := trackedRows(t, db, announcement)["ayse@example.com"]
+	if !strings.Contains(mail.html, tracking.PixelHTML(tracking.PixelURL(trackingBase, row.token))) {
+		t.Errorf("the announcement has no pixel:\n%s", mail.html)
 	}
-	for _, want := range []string{
-		`<a href="` + click + `">Etkinlikler</a>`,
-		`<a href="` + editLink + `">Yanıtını düzenle</a>`,
-		`<a href="https://forms.yildizskylab.com/f/abc?davet=` + inviteKey + `">Forma dön</a>`,
-	} {
-		if !strings.Contains(formsMail.html, want) {
-			t.Errorf("the operator's Forms mail lacks %s:\n%s", want, formsMail.html)
+	for _, text := range []string{"Sana özel", "Adına özel", "Sayılmaz", "Gömme"} {
+		kept, sent := anchorHref(t, row.bodyHTML, text), anchorHref(t, mail.html, text)
+		if text == "Gömme" {
+			// Text an operator wrote once for all: counted, but naming no one.
+			if strings.Contains(sent, "ayse") || strings.Contains(kept, "ayse") {
+				t.Errorf("the body's {{.Email}} became the recipient's address: kept %s, sent %s", kept, sent)
+			}
+			continue
+		}
+		if sent != kept || strings.Contains(sent, "/t/c/") {
+			t.Errorf("%q went out as %s; kept as %s, want it as it is", text, sent, kept)
 		}
 	}
-	if n := strings.Count(formsMail.html, "/t/c/"); n != 1 {
-		t.Errorf("the operator's Forms mail has %d click addresses, want the one", n)
+	for _, text := range []string{"Gövde", "Etkinlik", "Gönderimin bağlantısı", "Kısmi"} {
+		if href := anchorHref(t, mail.html, text); !strings.HasPrefix(href, trackingBase+"/t/c/") {
+			t.Errorf("%q went out as %s, want a click address", text, href)
+		}
+	}
+	for _, line := range strings.Split(mail.html, "\n") {
+		if strings.Contains(line, trackingBase) && (strings.Contains(line, "ayse") || strings.Contains(line, "Ay%c5%9fe")) {
+			t.Errorf("a /t/ address names the recipient: %s", line)
+		}
 	}
 
 	resetRow := trackedRows(t, db, reset)["ayse@example.com"]
@@ -284,13 +400,9 @@ func TestASecretLinkInAnOperatorsMailIsNeverRewritten(t *testing.T) {
 	if strings.Replace(resetMail.html, pixel, "", 1) != resetRow.bodyHTML {
 		t.Errorf("the operator's reset mail is more than the kept mail and the pixel")
 	}
-	for _, secret := range []string{"gizli-sifirlama", "tek-kullanimlik", inviteKey} {
-		for _, mail := range []relayedMail{formsMail, resetMail} {
-			for _, line := range strings.Split(mail.html, "\n") {
-				if strings.Contains(line, secret) && strings.Contains(line, trackingBase) {
-					t.Errorf("a /t/ address carries %q: %s", secret, line)
-				}
-			}
+	for _, line := range strings.Split(resetMail.html, "\n") {
+		if strings.Contains(line, "gizli-sifirlama") && strings.Contains(line, trackingBase) {
+			t.Errorf("a /t/ address carries the reset key: %s", line)
 		}
 	}
 }

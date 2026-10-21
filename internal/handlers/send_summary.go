@@ -189,11 +189,34 @@ type SendSummary struct {
 	SenderPaused bool `json:"sender_paused"`
 	// True while SKYMAIL_TRACKING=on: a send may ask for open and click tracking. The send form shows its tracking box only then.
 	TrackingAvailable bool `json:"tracking_available"`
-	// True while SKYMAIL_TRACKING_OPERATOR=on with SKYMAIL_TRACKING=on: every person's send (a list, a group, people, a Mail onayı request) is tracked whether it asked or not, of any template. The send form then shows no tracking box: a send's tracking field is ignored.
+	// True while SKYMAIL_TRACKING_OPERATOR=on with SKYMAIL_TRACKING=on: every person's send (a list, a group, people, a Forms source, a Mail onayı request) is tracked whether it asked or not, of any template. The send form then shows no tracking box: a send's tracking field is ignored.
 	TrackingAlways bool           `json:"tracking_always"`
 	SendCounts     SendCounts     `json:"send_counts"`
 	DailySent      []DailySent    `json:"daily_sent"`
 	RecentSends    []MailTaskItem `json:"recent_sends"`
+}
+
+// TrackingMode is how SkyMail tracks a person's send: what the send form needs
+// to show its box, or to say that every send is tracked. It names no send and
+// no person.
+type TrackingMode struct {
+	// True while SKYMAIL_TRACKING=on: a send may ask for open and click tracking.
+	TrackingAvailable bool `json:"tracking_available"`
+	// True while SKYMAIL_TRACKING_OPERATOR=on too: every person's send is tracked, the send form shows no box and a send's tracking field is ignored.
+	TrackingAlways bool `json:"tracking_always"`
+}
+
+// GetTrackingMode godoc
+//
+//	@Summary		How a person's send is tracked
+//	@Description	tracking_available and tracking_always, as the summary says them, for anyone who may use SkyMail: someone who only submits a send for approval sees whether it will be tracked. It is a setting of SkyMail, not of any send.
+//	@Tags			Mail
+//	@Produce		json
+//	@Success		200	{object}	handlers.TrackingMode
+//	@Failure		403	{object}	apperrors.AppError	"Forbidden"
+//	@Router			/mail_tasks/tracking-mode [get]
+func (h *mailHandlerImpl) GetTrackingMode(c fiber.Ctx) error {
+	return c.JSON(TrackingMode{TrackingAvailable: h.mailer.TrackingAvailable(), TrackingAlways: h.mailer.OperatorTrackingAlways()})
 }
 
 // GetSummary godoc

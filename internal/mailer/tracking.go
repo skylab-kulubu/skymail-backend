@@ -67,8 +67,9 @@ const (
 	trackSystem
 	// trackOperator: a person's send, with SKYMAIL_TRACKING_OPERATOR on
 	// (Yusuf, 2026-10-21: the panel's mail is always tracked; the callers
-	// then ask for every one): whatever its template, under trackSystem's
-	// link rule, in the bulk lane only.
+	// then ask for every one): whatever its template, in the bulk lane only;
+	// the pixel always, a click on the links the send gives every recipient
+	// alike (linksSendLevel), none at all in a sensitive mail.
 	trackOperator
 )
 
@@ -335,13 +336,24 @@ const (
 	// a person's send.
 	linksCommon
 	// linksLiteral: of those, only the ones the template writes out as they
-	// are (tracking.CommonLiteralLinks); a service's mail, and a person's
-	// with SKYMAIL_TRACKING_OPERATOR on. A link a variable fills — a password
-	// reset, an e-mail verification or a login link, an address with a
-	// sensitive variable — is never rewritten (Yusuf, 2026-10-21;
-	// SendGrid's clicktracking=off and Postmark's data-pm-no-track for the
-	// same links).
+	// are (tracking.CommonLiteralLinks); a service's mail. A link a variable
+	// fills — a password reset, an e-mail verification or a login link, an
+	// address with a sensitive variable — is never rewritten (Yusuf,
+	// 2026-10-21; SendGrid's clicktracking=off and Postmark's
+	// data-pm-no-track for the same links).
 	linksLiteral
+	// linksSendLevel: of those, the ones the send gives every recipient
+	// alike: written out in the template, or in a send's own variable — the
+	// body an operator wrote in free.basic, an address typed once for all —
+	// but never one that changes with the recipient (.Email, .FullName,
+	// .UnsubscribeUrl, in whole or in part). A person's send with
+	// SKYMAIL_TRACKING_OPERATOR on (orchestrator, 2026-10-21, as Mailchimp,
+	// HubSpot and Dynamics count every link of a campaign's body but the
+	// ones marked). It is read by rendering the mail again for two made-up
+	// recipients (operatorProbes): a link both renders and every real
+	// recipient's mail carry depends on nothing about the recipient. So a
+	// one-person send never counts the link its recipient's address made.
+	linksSendLevel
 )
 
 // planTracking decides, in the send's transaction, for a send that asked for
@@ -361,8 +373,10 @@ const (
 //     Any other gets one only on the links its template writes out as they
 //     are (linksLiteral);
 //   - a person's send with SKYMAIL_TRACKING_OPERATOR on (trackOperator):
-//     as a service's mail, of any template, but in the bulk lane only: in
-//     the system lane it is not tracked at all, as a send that asked is not.
+//     of any template, the pixel only when it is sensitive, otherwise a click
+//     on the links every recipient gets alike (linksSendLevel); in the bulk
+//     lane only: in the system lane it is not tracked at all, as a send that
+//     asked is not.
 //     So a tracked mail in the system lane is always one the system sends
 //     (a service's, or SkyMail's own approval notice), which the person
 //     report reads with the role only (GetTrackingRecipients);
@@ -387,6 +401,9 @@ func (q *queue) planTracking(ctx context.Context, taskID uuid.UUID, items []data
 			return linksNone, err
 		}
 		rule = linksLiteral
+		if kind == trackOperator {
+			rule = linksSendLevel
+		}
 		if exclusion.ContentSensitive {
 			rule = linksNone
 		}
@@ -447,13 +464,38 @@ func (q *queue) planTracking(ctx context.Context, taskID uuid.UUID, items []data
 	return rule, nil
 }
 
+// probeRecipients are the two made-up recipients linksSendLevel renders a
+// send's mail for: they differ in every field a mail takes from its
+// recipient, and no real address or link is theirs (.invalid, RFC 2606).
+var probeRecipients = [2]RecipientInfo{
+	{FullName: "SkyMail Sonda A", Email: "sonda-a@skymail-probe.invalid", UnsubscribeURL: "https://skymail-probe.invalid/a"},
+	{FullName: "SkyMail Sonda B", Email: "sonda-b@skymail-probe.invalid", UnsubscribeURL: "https://skymail-probe.invalid/b"},
+}
+
+// operatorProbes is a send's HTML rendered with its variables for each of
+// probeRecipients, the mails linksSendLevel compares the real ones with; nil
+// when either does not render, and then only the template's own links count.
+func (t mailTemplates) operatorProbes(vars map[string]interface{}) []string {
+	probes := make([]string, 0, len(probeRecipients))
+	for _, recipient := range probeRecipients {
+		rendered, err := t.render(vars, recipient)
+		if err != nil {
+			return nil
+		}
+		probes = append(probes, rendered.HTML)
+	}
+	return probes
+}
+
 // registerLinks registers the links of a send with a tracked row, each with
 // a token of its own, as rule says: the http and https links every queued
 // recipient's mail has (tracking.CommonLinks; a link a variable made
 // personal differs between recipients and is never registered, so it is
-// never rewritten), and for a service's mail only those of them templateHTML
-// writes out as they are (tracking.CommonLiteralLinks).
-func (q *queue) registerLinks(ctx context.Context, taskID uuid.UUID, items []database.CreateMailQueueItemsParams, rule linkRule, templateHTML string) error {
+// never rewritten); for a service's mail only those of them templateHTML
+// writes out as they are (tracking.CommonLiteralLinks); for a person's send
+// with SKYMAIL_TRACKING_OPERATOR on those the probes carry too (probes, from
+// operatorProbes), or, without probes, the template's own.
+func (q *queue) registerLinks(ctx context.Context, taskID uuid.UUID, items []database.CreateMailQueueItemsParams, rule linkRule, templateHTML string, probes []string) error {
 	if rule == linksNone {
 		return nil
 	}
@@ -469,10 +511,14 @@ func (q *queue) registerLinks(ctx context.Context, taskID uuid.UUID, items []dat
 		return nil
 	}
 	var links []string
-	if rule == linksLiteral {
-		links = tracking.CommonLiteralLinks(bodies, templateHTML, q.tracking.Config.BaseURL)
-	} else {
-		links = tracking.CommonLinks(bodies, q.tracking.Config.BaseURL)
+	base := q.tracking.Config.BaseURL
+	switch {
+	case rule == linksSendLevel && len(probes) == len(probeRecipients):
+		links = tracking.CommonLinks(append(append(make([]string, 0, len(bodies)+len(probes)), bodies...), probes...), base)
+	case rule == linksSendLevel, rule == linksLiteral:
+		links = tracking.CommonLiteralLinks(bodies, templateHTML, base)
+	default:
+		links = tracking.CommonLinks(bodies, base)
 	}
 	if len(links) == 0 {
 		return nil

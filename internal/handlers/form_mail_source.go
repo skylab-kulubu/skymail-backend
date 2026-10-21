@@ -168,15 +168,45 @@ func formSourceRecipients(ctx context.Context, q *database.Queries, s database.M
 	if err != nil {
 		return nil, err
 	}
-	to := make([]mailer.RecipientInfo, len(rows))
-	for i, r := range rows {
-		to[i] = mailer.RecipientInfo{FullName: r.FullName, Email: r.Email}
-	}
+	to := formSourceRecipientInfos(rows)
 	hash := formSnapshotHash(s.OwnerSub, s.FormID, s.FormTitle, to, s.ResponseCount, s.SkippedCount, s.DuplicateCount)
 	if len(to) != s.RecipientCount || !bytes.Equal(hash, s.SnapshotHash) {
 		return nil, errFormSourceChanged
 	}
 	return to, nil
+}
+
+func formSourceRecipientInfos(rows []database.MailFormSourceRecipient) []mailer.RecipientInfo {
+	to := make([]mailer.RecipientInfo, len(rows))
+	for i, r := range rows {
+		to[i] = mailer.RecipientInfo{FullName: r.FullName, Email: r.Email}
+	}
+	return to
+}
+
+// formSourceTracking is, while SkyMail tracks every person's send
+// (SKYMAIL_TRACKING_OPERATOR), whom of a Forms source's respondents the
+// send may track, asked before the transaction that locks the source: each
+// address looked up in Keycloak (exact verified primary e-mail; none is
+// no_account), all of them at once within the people send's budget, then
+// core. The source is immutable, so the people asked about are the people
+// the send goes to. Nil when the flag is off, or the source cannot be read
+// (the transaction then refuses it, or tracks no one), or — direct, a send
+// that consumes the source — it is consumed already: the send is a retry,
+// answered with the send it made, and no one is asked again.
+func formSourceTracking(ctx context.Context, db *database.Store, m mailer.Transactional, sourceID uuid.UUID, owner string, templateID uuid.UUID, direct bool) *mailer.TrackingPreferences {
+	if !m.OperatorTrackingAlways() {
+		return nil
+	}
+	source, err := db.GetOwnedMailFormSource(ctx, database.GetOwnedMailFormSourceParams{ID: sourceID, OwnerSub: owner})
+	if err != nil || source.InvalidatedAt != nil || (direct && source.ConsumedAt != nil) {
+		return nil
+	}
+	rows, err := db.ListMailFormSourceRecipients(ctx, source.ID)
+	if err != nil {
+		return nil
+	}
+	return m.ResolvePeopleTracking(ctx, templateID, formSourceRecipientInfos(rows))
 }
 
 // An exact retry returns the committed target before the preparation TTL is
@@ -305,7 +335,7 @@ func (h *mailHandlerImpl) GetFormSource(c fiber.Ctx) error {
 // SendFormSource godoc
 //
 //	@Summary		Send to an immutable Forms audience
-//	@Description	The source owner holding current skymail:mails:send or skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. Tracking is false for this address-only source version.
+//	@Description	The source owner holding current skymail:mails:send or skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is no_account) and core deciding, and the answer says tracking true.
 //	@Tags			Mail
 //	@Param			send	body	requests.SendFormSource	true	"Prepared source and mail content"
 //	@Accept			json
@@ -344,6 +374,8 @@ func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	tracked := m.OperatorTrackingAlways()
+	preferences := formSourceTracking(c.Context(), h.db, m, p.FormSourceID, owner, p.TemplateID, true)
 	var id uuid.UUID
 	repeated := false
 	err = h.db.InTx(c.Context(), func(q *database.Queries) error {
@@ -369,6 +401,7 @@ func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 		}
 		id, err = m.Queue(q, mailer.PriorityBulk).EnqueueWithRecipients(c.Context(), mailer.EnqueueWithRecipientsParams{
 			SentBy: owner, TemplateID: p.TemplateID, FormSourceID: &source.ID, BodyVariables: variables, Recipients: to,
+			Tracking: tracked, Preferences: preferences,
 		})
 		if err != nil {
 			return err
@@ -383,10 +416,16 @@ func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 	status := fiber.StatusCreated
 	if repeated {
 		status = fiber.StatusOK
+		// The send the retry returns is as tracked as it was queued.
+		task, err := h.db.TrackingTaskAccess(c.Context(), id)
+		if err != nil {
+			return err
+		}
+		tracked = task.TrackingRequested
 	} else {
 		m.Wake()
 	}
-	return c.Status(status).JSON(CreatedMailTask{ID: id, Tracking: false})
+	return c.Status(status).JSON(CreatedMailTask{ID: id, Tracking: tracked})
 }
 
 func (h *mailApprovalHandlerImpl) submitFormSource(c fiber.Ctx, caller approvalCaller, p requests.SubmitMailApproval, send approvalSend) error {
@@ -419,10 +458,12 @@ func (h *mailApprovalHandlerImpl) submitFormSource(c fiber.Ctx, caller approvalC
 			return err
 		}
 		now := h.now()
+		// A Forms source's send is tracked only while SkyMail tracks every
+		// person's send: it has no box.
 		a, err := q.CreateMailApproval(c.Context(), database.CreateMailApprovalParams{
 			SubmitterSub: caller.sub, SubmitterName: caller.name, SubmitterEmail: caller.email, SubmitterEmailUnverified: caller.emailUnverified,
 			TemplateID: p.TemplateID, TemplateVersionID: checked.versionID, FormSourceID: &source.ID, BodyVariables: send.variables,
-			At: now, DeadlineAt: now.Add(mailApprovalDeadline),
+			At: now, DeadlineAt: now.Add(mailApprovalDeadline), TrackingRequested: h.mailer.OperatorTrackingAlways(),
 		})
 		if err != nil {
 			return err
@@ -457,7 +498,11 @@ func (h *mailApprovalHandlerImpl) submitFormSource(c fiber.Ctx, caller approvalC
 	return c.Status(status).JSON(answer)
 }
 
-func queueToFormSource(ctx context.Context, q *database.Queries, sends mailer.Queue, a database.MailApproval) (uuid.UUID, error) {
+// queueToFormSource queues an approved request to a Forms source, locked:
+// tracked as the request is (a.TrackingRequested, while SkyMail tracks every
+// person's send), with what Keycloak and core said about its respondents
+// before the lock (preferences).
+func queueToFormSource(ctx context.Context, q *database.Queries, sends mailer.Queue, a database.MailApproval, preferences *mailer.TrackingPreferences) (uuid.UUID, error) {
 	source, err := q.LockMailFormSource(ctx, *a.FormSourceID)
 	if err != nil {
 		return uuid.Nil, formSourceLockError(err)
@@ -469,5 +514,8 @@ func queueToFormSource(ctx context.Context, q *database.Queries, sends mailer.Qu
 	if err != nil {
 		return uuid.Nil, err
 	}
-	return sends.EnqueueWithRecipients(ctx, mailer.EnqueueWithRecipientsParams{SentBy: a.SubmitterSub, TemplateID: a.TemplateID, FormSourceID: a.FormSourceID, BodyVariables: a.BodyVariables, Recipients: to})
+	return sends.EnqueueWithRecipients(ctx, mailer.EnqueueWithRecipientsParams{
+		SentBy: a.SubmitterSub, TemplateID: a.TemplateID, FormSourceID: a.FormSourceID, BodyVariables: a.BodyVariables, Recipients: to,
+		Tracking: a.TrackingRequested, Preferences: preferences,
+	})
 }

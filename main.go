@@ -482,6 +482,8 @@ func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, m
 	tasks.Get("/", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTasks)
 	// Before /:id, which would otherwise take "summary" for a task id.
 	tasks.Get("/summary", auth.RequireAnyPermission("skymail:mails:read"), mail.GetSummary)
+	// A setting, not a send: anyone who may use SkyMail (skymail:access).
+	tasks.Get("/tracking-mode", mail.GetTrackingMode)
 	tasks.Get("/:id", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTask)
 	tasks.Get("/:id/tracking", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTracking)
 	tasks.Get("/:id/tracking/recipients", mail.GetTrackingRecipients)
