@@ -133,7 +133,7 @@ func (h *mailHandlerImpl) GetTracking(c fiber.Ctx) error {
 // GetTrackingRecipients godoc
 //
 //	@Summary		Recipient opening and click observations
-//	@Description	Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role). First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 a year after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.
+//	@Description	Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 a year after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id			path		string	true	"Mail task ID"
@@ -159,8 +159,11 @@ func (h *mailHandlerImpl) GetTrackingRecipients(c fiber.Ctx) error {
 	}
 	// The sender reads their own send's people; a service is no sender here:
 	// the mail it sends (SKYMAIL_TRACKING_SYSTEM) is read with the role only.
+	// Nor is the person a system mail names as its sender (a Mail onayı
+	// notice's requester or decider): the system lane's mail is the system's,
+	// whose people only YK, DK and the admins see (KVKK notice s3, §4).
 	caller := contentCallerOf(c)
-	sender := caller.sub != "" && caller.sub == task.SentBy && !middlewares.IsServiceAccount(c)
+	sender := caller.sub != "" && caller.sub == task.SentBy && !middlewares.IsServiceAccount(c) && !task.SystemLane
 	if !caller.has(TrackingReadRole) && !sender {
 		return apperrors.ErrForbidden
 	}

@@ -164,6 +164,9 @@ func TestAServicesSingleSendIsTrackedWithSystemTracking(t *testing.T) {
 // SkyMail's own notice to the approvers, with system tracking on, is
 // tracked as a service's mail: each approver's account found by address,
 // core decides (it says preference_off for both here), in the system lane.
+// Keycloak and core are asked about every approver at once, before the
+// first notice is queued (core once, not once per approver), with no
+// transaction open.
 func TestApprovalNoticesAreTrackedWithSystemTracking(t *testing.T) {
 	w, prefs := systemTrackedWorld(t)
 	w.account(fatih, true, true)
@@ -181,8 +184,13 @@ func TestApprovalNoticesAreTrackedWithSystemTracking(t *testing.T) {
 			t.Errorf("notice to %v: tracking_requested %v, lane %d, row %+v; want tracked, preference_off", sent.recipients, requested, w.laneOf(sent.taskID), row)
 		}
 	}
-	if notices != 2 || prefs.asked != 2 {
-		t.Fatalf("%d notices, core asked %d times; want 2 and 2", notices, prefs.asked)
+	if notices != 2 || prefs.asked != 1 || w.directory.accountAsks != 2 {
+		t.Fatalf("%d notices, core asked %d times, Keycloak %d; want 2, 1 and 2", notices, prefs.asked, w.directory.accountAsks)
+	}
+	for _, open := range append(append([]int{}, w.directory.openTx...), prefs.openTx...) {
+		if open != 0 {
+			t.Fatalf("asked with a transaction open: Keycloak %v, core %v", w.directory.openTx, prefs.openTx)
+		}
 	}
 }
 
