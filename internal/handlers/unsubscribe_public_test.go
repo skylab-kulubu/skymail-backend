@@ -278,7 +278,11 @@ func TestABadTokenIsRefusedAndAnOldVersionStillWorks(t *testing.T) {
 		"unknown": base64.RawURLEncoding.EncodeToString(unknown),
 		"garbage": "not-a-token",
 	} {
-		if a := w.call(t, fiber.MethodGet, "/u/"+token, "", nil); a.status != fiber.StatusBadRequest || !strings.Contains(a.body, "Bağlantı geçersiz") {
+		page := "Bağlantı geçersiz"
+		if name == "unknown" {
+			page = "Bağlantı artık geçerli değil"
+		}
+		if a := w.call(t, fiber.MethodGet, "/u/"+token, "", nil); a.status != fiber.StatusBadRequest || !strings.Contains(a.body, page) {
 			t.Errorf("%s GET = %d %s", name, a.status, a.body)
 		}
 		if a := w.form(t, "/u/"+token, url.Values{"List-Unsubscribe": {"One-Click"}}); a.status != fiber.StatusBadRequest || a.body != "invalid link" {
@@ -290,6 +294,17 @@ func TestABadTokenIsRefusedAndAnOldVersionStillWorks(t *testing.T) {
 	}
 	if a := w.form(t, "/u/"+oldToken, url.Values{"List-Unsubscribe": {"One-Click"}}); a.status != fiber.StatusOK {
 		t.Errorf("a V1 token with V2 current = %d %q", a.status, a.body)
+	}
+
+	// After a leak V1 is taken out of the ring: its link no longer works and
+	// the page sends the person to the Account center's preferences.
+	leaked := newUnsubscribeWorld(t, onConfig(testRing(t, 2, 2)))
+	a := leaked.call(t, fiber.MethodGet, "/u/"+oldToken, "", nil)
+	if a.status != fiber.StatusBadRequest || !strings.Contains(a.body, "Bağlantı artık geçerli değil") || !strings.Contains(a.body, unsubscribe.DefaultAccountURL) {
+		t.Errorf("a leaked version's link = %d %s", a.status, a.body)
+	}
+	if a := leaked.form(t, "/u/"+oldToken, url.Values{"List-Unsubscribe": {"One-Click"}}); a.status != fiber.StatusBadRequest || leaked.store.writes != 0 {
+		t.Errorf("a leaked version's one-click = %d, %d writes", a.status, leaked.store.writes)
 	}
 }
 

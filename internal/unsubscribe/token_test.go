@@ -162,6 +162,32 @@ func TestTheRingAndTheLinkAreReadFromTheEnvironment(t *testing.T) {
 		t.Error("an empty ring gives a link")
 	}
 
+	// Planned rotation: V1 stays, its links open. A leak: V1's variable is
+	// removed, its links open no more (an unknown version), V2's still do;
+	// CURRENT naming the removed V1 stops startup.
+	planned, err := RingFromEnv(env(map[string]string{CurrentKeyEnv: "2", KeyEnvPrefix + "1": keyV1, KeyEnvPrefix + "2": keyV2}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1, _ := ring(t, 1, map[byte][]byte{1: key(1)}).Seal(StreamDuyuru, "ayse@example.com")
+	v2, _ := planned.Seal(StreamDuyuru, "ayse@example.com")
+	if _, err := planned.Open(v1); err != nil {
+		t.Errorf("planned rotation: a V1 link = %v, want it to open", err)
+	}
+	leaked, err := RingFromEnv(env(map[string]string{CurrentKeyEnv: "2", KeyEnvPrefix + "2": keyV2}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := leaked.Open(v1); !errors.Is(err, ErrUnknownVersion) {
+		t.Errorf("after a leak: a V1 link = %v, want ErrUnknownVersion", err)
+	}
+	if _, err := leaked.Open(v2); err != nil {
+		t.Errorf("after a leak: a V2 link = %v, want it to open", err)
+	}
+	if _, err := RingFromEnv(env(map[string]string{CurrentKeyEnv: "1", KeyEnvPrefix + "2": keyV2})); err == nil {
+		t.Error("CURRENT naming the removed version started")
+	}
+
 	secret := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 31))
 	for name, values := range map[string]map[string]string{
 		"a typo":                     {LinkEnv: "yes"},

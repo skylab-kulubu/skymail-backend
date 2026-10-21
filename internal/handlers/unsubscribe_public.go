@@ -262,14 +262,24 @@ func (h *UnsubscribePublicHandler) linkErrorPage(c fiber.Ctx, err error, oneClic
 		}
 		return "no_key"
 	}
-	if oneClick {
+	unknown := errors.Is(err, unsubscribe.ErrUnknownVersion)
+	switch {
+	case oneClick:
 		unsubscribeText(c, fiber.StatusBadRequest, "invalid link")
-	} else {
+	case unknown:
+		// A version taken out of the ring (a leaked key): the link no
+		// longer works; the person leaves from the Account center.
+		renderUnsubscribePage(c, fiber.StatusBadRequest, unsubscribePage{
+			Title: "Bağlantı artık geçerli değil",
+			Lines: []string{"Bu bağlantı artık çalışmıyor. Duyuru postalarından Hesap Merkezi'ndeki iletişim tercihlerinden çıkabilirsin."},
+			Links: []unsubscribeLink{{Label: "İletişim tercihleri", URL: h.cfg.AccountURL}},
+		})
+	default:
 		renderUnsubscribePage(c, fiber.StatusBadRequest, unsubscribePage{
 			Title: "Bağlantı geçersiz", Lines: []string{"Bu bağlantı geçersiz. E-postadaki bağlantıyı eksiksiz açtığından emin ol."},
 		})
 	}
-	if errors.Is(err, unsubscribe.ErrUnknownVersion) {
+	if unknown {
 		return "unknown_version"
 	}
 	return "invalid"

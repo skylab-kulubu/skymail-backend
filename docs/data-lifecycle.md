@@ -284,7 +284,7 @@ safeguard).
 |---|---|---|
 | `mail_unsubscribes` (lower-cased address, `stream` — `duyuru` —, `source` — `link` —, `created_at`) | until the person resubscribes (the link's page), an operator with `skymail:unsubscribes:reactivate` reverses it at the person's request or after a mistake, or the person is erased: nothing removes it by itself | Account erasure deletes the person's addresses' |
 | `mail_unsubscribe_reactivations` (when, `actor` — `recipient` or `operator` —, the operator's `actor_sub` and `reason`, the record's stream, source and date) — no address | without end: the record of who reversed what | Account erasure replaces the actor with Silinmiş kullanıcı, and clears a reason that names the person |
-| the link's token | never stored: it is sealed (XChaCha20-Poly1305) from the stream and the address, carries its key's version, and does not expire | — |
+| the link's token | never stored: it is sealed (XChaCha20-Poly1305) from the stream and the address, carries its key's version, and does not expire; it stops opening only when its key version is taken out of the ring after a leak | — |
 
 A recipient of a duyuru send whose address is in the record is written
 failed when the send is queued (`suppressed: unsubscribed`), and a row

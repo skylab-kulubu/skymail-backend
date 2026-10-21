@@ -93,8 +93,10 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 }
 
 // RingFromEnv reads SKYMAIL_UNSUBSCRIBE_KEY_CURRENT and every
-// SKYMAIL_UNSUBSCRIBE_KEY_V<n>. Neither set is an empty ring. A key without
-// a current version, a current version without its key, a key that is not
+// SKYMAIL_UNSUBSCRIBE_KEY_V<n>: the ring is exactly the versions set, so a
+// version whose variable is removed (a leaked key) opens nothing from the
+// next start. Neither set is an empty ring. A key without a current version,
+// a current version without its key (fail fast: no start), a key that is not
 // 32 bytes, or two versions holding the same key is an error.
 func RingFromEnv(getenv func(string) string) (*Ring, error) {
 	keys := map[byte][]byte{}

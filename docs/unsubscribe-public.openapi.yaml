@@ -26,7 +26,8 @@ paths:
         description: >-
           Unpadded base64url of the key version (one byte), a 24-byte nonce and
           the XChaCha20-Poly1305 sealing of the stream's tag and the address.
-          Does not expire.
+          Does not expire; a key version taken out of the ring after a leak
+          answers 400 and points to the Account center's preferences.
     get:
       operationId: unsubscribePage
       description: >-
@@ -39,7 +40,10 @@ paths:
           content:
             text/html: {}
         '400':
-          description: The token does not open (changed, cut, an unknown key version).
+          description: >-
+            The token does not open: changed or cut ("Bağlantı geçersiz"), or a
+            key version not in the ring, such as one removed after a leak ("Bağlantı
+            artık geçerli değil", with the Account center's preferences link).
           content:
             text/html: {}
         '404':

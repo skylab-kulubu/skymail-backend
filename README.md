@@ -508,8 +508,16 @@ baytlık rastgele nonce ve XChaCha20-Poly1305 ile şifrelenmiş (akış etiketi,
 normalize adres)'tir, unpadded base64url; sürüm ek veriye bağlıdır. Adres
 URL'de açık durmaz. Süresizdir ve satıra bağlı değildir: saklama süreleri
 bağlantıyı bozmaz. Yeni belirteç geçerli sürümle mühürlenir; eski sürümler
-yalnız açmada kullanılır ve **hiç silinmez** (silinirse o sürümle giden bütün
-bağlantılar bozulur).
+yalnız açmada kullanılır. Halka tam olarak tanımlı `V<n>` değişkenleridir.
+
+Döndürme (orkestratör kararı, 2026-10-21; core bilet 13 ile aynı):
+- **Planlı döndürme:** yeni `V<n>` eklenir ve `CURRENT` ona çekilir. Eski sürüm
+  açmada **süresiz** kalır, eski postaların bağlantıları çalışmaya devam eder.
+- **Sızıntı:** sızan sürümün değişkeni **hemen** kaldırılır, yeni sürüm
+  `CURRENT` olur ve deploy edilir. O sürümle giden bağlantılar artık açılmaz:
+  sayfa `400` "Bağlantı artık geçerli değil" der ve kişiyi Hesap Merkezi'nin
+  iletişim tercihlerine yollar; tek tık `invalid link` alır.
+- Bir sürüm numarası başka bir anahtara verilmez.
 
 | Değişken | |
 |---|---|
@@ -519,7 +527,8 @@ bağlantılar bozulur).
 | `SKYMAIL_UNSUBSCRIBE_KEY_CURRENT` | yeni bağlantının sürümü (1–255) |
 | `SKYMAIL_UNSUBSCRIBE_KEY_V<n>` | `n` sürümünün anahtarı: 32 rastgele bayt, base64 ya da base64url; her biri ayrı OpenBao referansı (ADR-0049) |
 
-Anahtar varken `CURRENT` yoksa, `CURRENT`'in anahtarı yoksa, anahtar 32 bayt
+Anahtar varken `CURRENT` yoksa, `CURRENT` var olmayan bir sürümü gösteriyorsa
+(ör. sızıntıda kaldırılan sürüm), anahtar 32 bayt
 değilse ya da iki sürüm aynı anahtarı tutuyorsa açılış durur; hata yalnız
 değişkenin adını yazar. `on` ve boş halka hata değildir: uç `503` döner,
 açılış logu uyarır (`key_current`, `key_versions`; anahtar hiç yazılmaz). Bilet

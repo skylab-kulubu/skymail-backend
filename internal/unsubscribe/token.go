@@ -7,8 +7,17 @@
 // expire. It is sealed, not only signed, so the address is not readable in
 // the URL. Each token carries the version of the key that sealed it: a new
 // token is sealed with the current key, an older version is kept only to
-// open the tokens already mailed. A version is never removed: every link
-// mailed with it would stop working.
+// open the tokens already mailed. Rotation (orchestrator decision,
+// 2026-10-21, as core ticket 13):
+//
+//   - planned: the old version stays in the ring for opening, without end,
+//     so every link mailed with it keeps working;
+//   - after a leak: the old version is taken out of the ring at once. Its
+//     links then answer as an unknown version (ErrUnknownVersion): the page
+//     says the link no longer works and sends the person to the Account
+//     center's communication preferences.
+//
+// A version number is never given to another key.
 package unsubscribe
 
 import (
