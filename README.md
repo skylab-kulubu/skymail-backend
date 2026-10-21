@@ -213,7 +213,7 @@ boştur. Hesap silme kişinin satırlarını adresleriyle ve `sub`'ıyla bulur;
 silinen satırda `recipient_sub` da boşalır. `GET /v1/mail_tasks/{id}/queue`
 her satırın `channel`'ını döner.
 
-## Gönderen şeritleri (`SKYMAIL_SEND_HESAP`, `SKYMAIL_SEND_BILGI`, `SKYMAIL_SEND_DUYURU`)
+## Gönderen şeritleri (`SKYMAIL_SEND_HESAP`, `SKYMAIL_SEND_BILGI`, `SKYMAIL_SEND_DUYURU`, `SKYMAIL_LIST_UNSUBSCRIBE`)
 
 Her posta türüne göre üç paylaşılan kutudan birinden çıkar (hub bileti
 skymail-bounce-isleme 10; Yusuf, 2026-10-20). Kural `internal/mailer/lanes.go`
@@ -297,12 +297,48 @@ JSON'da kaçırılmaz (`<` olduğu gibi). Exchange `from`'un görünen adını
 kutunun dizindeki adıyla ezebilir: kutuların `DisplayName`'i
 `SKYMAIL_FROM_*` adlarıyla aynı tutulur.
 
-**`List-Unsubscribe`.** SkyMail bugün bu başlığı yazmaz (bilet 11). `xoauth2`
-yolu postayı SMTP yoluyla aynı kodla kurar; başlık eklendiğinde duyuru
-kutusundan da gider. Graph JSON'u yalnız `X-` önekli başlık taşır. Şerit
-kuyruk önceliğinden türer: bilet 11 başlığı şeride değil gönderim türüne
-(liste, grup, onaylı gönderim, toplu bildirim) bağlamalı; duyuru@'dan giden
-takipli tekil postaya abonelik başlığı anlamsızdır.
+**Tek tık çıkış (`SKYMAIL_LIST_UNSUBSCRIBE`, RFC 8058; hub bileti
+skymail-bounce-isleme 11).** Çıkış bağlantısı core'undur: tercih core'da
+(`communication_preferences`, ekranı Hesap Merkezi'nde), belirteci core imzalar
+(`GET|POST /v1/communication-preferences/unsubscribe?t=…`; GET yalnız sayfa,
+POST `List-Unsubscribe=One-Click` bağlantının kategorilerini kapatır). SkyMail
+anahtarı tutmaz, kendi tercih kaydı yoktur; core'un verdiği bağlantıyı satırda
+(`mail_queue.list_unsubscribe_url`) taşır. Bugün bağlantıyı veren tek yol
+`POST /v1/notifications` alıcısının `unsubscribe_url`'idir (yalnız isteğe bağlı
+ve `bulk` şeritli türde; [`docs/notifications.md`](docs/notifications.md)).
+Liste, grup, Forms ve onaylı gönderimin satırında bağlantı yoktur: bu postalar
+core tercihine bakmaz, çıkış başlığı onurlandırılamaz.
+
+| `SKYMAIL_LIST_UNSUBSCRIBE` | |
+|---|---|
+| `off` (ya da boş, varsayılan) | hiçbir postada başlık yok; her şey bugünkü gibi |
+| `on` | şeridi `duyuru` olan, duyuru kutusundan (`graph` ya da `xoauth2`) giden ve satırında bağlantı olan posta `List-Unsubscribe: <bağlantı>` ve `List-Unsubscribe-Post: List-Unsubscribe=One-Click` taşır |
+
+Başka değer açılışı durdurur; açılış logu `list_unsubscribe` alanını yazar,
+duyuru şeridi `off` iken `on` ise uyarır. `hesap` ve `bilgi` hiçbir zaman
+başlık yazmaz, `off` yolu (eski `SMTP_FROM`) da yazmaz.
+
+- **Graph'ta MIME.** Graph JSON'u yalnız `X-` önekli başlık taşır. Bağlantılı
+  duyuru postası aynı `sendMail`'e MIME olarak gider: SMTP yolunun kurduğu
+  ileti (Reply-To, `Message-ID`, `X-SkyMail-Queue-Id`, düz metin ve HTML),
+  base64, `Content-Type: text/plain`; 4 MB sınırı kodlanmış gövdeye uygulanır.
+  MIME'da `saveToSentItems` yoktur: Exchange kopyayı Gönderilmiş Öğeler'e
+  koyar (duyuru kutusunda MRM 1 gün). Bağlantısız posta bugünkü gibi JSON,
+  kopyasız gider.
+- **Başlık güvenliği.** Bağlantı mutlak `https` adresi, host'lu, kullanıcısız,
+  en çok 960 karakter (başlık tek satır yazılır, RFC 5322 998), yalnız
+  görünür ASCII; `<`, `>`, virgül ve tırnak yok. Veritabanı denetimi
+  `https://` ve uzunluğu ayrıca tutar; kuralı tutmayan eski bir satır
+  başlıksız gider.
+- **Gövdede bağlantı.** Kişinin bağlantısı şablona `.UnsubscribeUrl` olarak
+  girer (`.Email`, `.FullName` gibi; gönderimin aynı adlı değişkenini ezer).
+- **Saklama.** Bağlantı API'de hiç sunulmaz (`json:"-"`); satırın kişisel
+  içeriğiyle birlikte boşaltılır (saklama süresi, maskeleme son tarihi,
+  saklanmayan gönderim) ve hesap silmede satırla gider.
+- **DKIM.** RFC 8058 iki başlığın DKIM imzasında (`h=`) olmasını ister.
+  Exchange Online'ın MIME `sendMail`'de bunları imzaya alıp almadığı
+  belgelenmemiştir; açılışta gelen postanın `DKIM-Signature: h=` satırı okunur
+  (hub bileti 11'in açılış runbook'u).
 
 Gönderim bütçesi (`SKYMAIL_RATE_PER_MINUTE`) şeritlerden bağımsız, hepsi için
 ortaktır; Exchange'in dakikada 30 ileti sınırı kutu başınadır.

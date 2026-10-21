@@ -197,7 +197,11 @@ takes the person out of them:
   recipient's Keycloak subject, when the send knew it: a Keycloak group's
   member), and `error`, which can quote the address. The mail rendered for them — `subject`, `body`,
   `body_html` — is kept only for a while: see
-  [Sent mail content](#sent-mail-content).
+  [Sent mail content](#sent-mail-content). `list_unsubscribe_url`, the
+  recipient's one-click unsubscribe link as core signed it (its token names
+  the recipient's subject; README "Tek tık çıkış"), goes with that content:
+  emptied with it (retention, the masking deadline, a send not kept) and on
+  Account erasure; the API never serves it.
 - `mail_tasks.sent_by` — who sent: the Keycloak subject of the token that
   queued the send — for an approved Mail onayı request, its submitter's — or
   `skymail` for the mail SkyMail sends of its own accord, the notice that a
@@ -631,7 +635,7 @@ person is cleared whole, never masked.
 | `recipients` | `email` in E | deleted, with their `mailing_list_recipients` |
 | `mail_queue`, `pending` | `recipient_email` in E or `recipient_sub` = S | deleted: never sent |
 | `mail_queue`, `processing` | `recipient_email` in E or `recipient_sub` = S | waited for (`202`) |
-| `mail_queue`, `sent`/`failed` | `recipient_email` in E or `recipient_sub` = S | `recipient_full_name` Silinmiş kullanıcı, `recipient_email`, `subject`, `body` `''`, `body_html`, `error`, `recipient_sub` NULL; the row stays for the counts |
+| `mail_queue`, `sent`/`failed` | `recipient_email` in E or `recipient_sub` = S | `recipient_full_name` Silinmiş kullanıcı, `recipient_email`, `subject`, `body` `''`, `body_html`, `error`, `recipient_sub`, `list_unsubscribe_url` NULL; the row stays for the counts |
 | `mail_queue`, anyone else's, `sent`/`failed` | `subject`, `body` or `body_html` names E or N | those three cleared (`''`, `''`, NULL) |
 | `mail_queue`, anyone else's, `pending`/`processing` | the same | waited for (`202`): it goes out as it was rendered, then it is cleared |
 | `mail_tasks` | `sent_by` = S | Silinmiş kullanıcı |

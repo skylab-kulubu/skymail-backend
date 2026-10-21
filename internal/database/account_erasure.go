@@ -752,7 +752,8 @@ var dropAddressSteps = []erasureStep{
 		          body = '',
 		          body_html = NULL,
 		          error = NULL,
-		          recipient_sub = NULL
+		          recipient_sub = NULL,
+		          list_unsubscribe_url = NULL
 		      WHERE q.status IN ('sent', 'failed')
 		        AND ` + toPerson,
 	},

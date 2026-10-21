@@ -895,12 +895,15 @@ FROM inserted_task it
 -- recipient_sub is the recipient's Keycloak subject when the send knew it.
 -- tracking_token is the recipient's token when the row is tracked, and
 -- tracking_skip_reason why not when the send asked for tracking.
+-- list_unsubscribe_url is the recipient's one-click unsubscribe link when
+-- core gave one (List-Unsubscribe, bounce ticket 11).
 -- name: CreateMailQueueItems :copyfrom
 INSERT INTO mail_queue (
     task_id, recipient_full_name, recipient_email,
     subject, body, body_html, priority, recipient_sub,
-    tracking_token, tracking_skip_reason, suppressed_but_sent
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
+    tracking_token, tracking_skip_reason, suppressed_but_sent,
+    list_unsubscribe_url
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
 
 -- A recipient whose mail did not render, say a template that slices an empty
 -- full name, is written failed, with the render error the send's page shows:
@@ -1128,9 +1131,10 @@ WITH due AS (SELECT mt.id, mt.content_mask_failing_since
              ORDER BY mt.content_mask_failing_since
              LIMIT sqlc.arg(batch_size)::int FOR UPDATE OF mt SKIP LOCKED),
      emptied AS (UPDATE mail_queue q
-         SET subject   = '',
-             body      = '',
-             body_html = NULL
+         SET subject              = '',
+             body                 = '',
+             body_html            = NULL,
+             list_unsubscribe_url = NULL
          FROM due
          WHERE q.task_id = due.id
          RETURNING q.task_id)
@@ -1165,7 +1169,7 @@ ORDER BY parts.rank;
 -- between the reading and the writing (a row it is emptying is waited for and
 -- read again: emptied, it is not taken).
 -- name: ListQueueRowsToMask :many
-SELECT id, recipient_full_name, recipient_email, subject, body, body_html
+SELECT id, recipient_full_name, recipient_email, subject, body, body_html, list_unsubscribe_url
 FROM mail_queue
 WHERE task_id = sqlc.arg(task_id)
   AND id > sqlc.arg(after)
@@ -1212,7 +1216,7 @@ WHERE id = sqlc.arg(id);
 -- times: it is not kept.
 -- name: ClearSendContent :exec
 WITH emptied AS (UPDATE mail_queue
-    SET subject = '', body = '', body_html = NULL
+    SET subject = '', body = '', body_html = NULL, list_unsubscribe_url = NULL
     WHERE mail_queue.task_id = sqlc.arg(task_id)
     RETURNING mail_queue.id)
 UPDATE mail_tasks
@@ -1263,12 +1267,13 @@ WITH due AS (SELECT mt.id
              ORDER BY mt.created_at
              LIMIT sqlc.arg(batch_size)::int FOR UPDATE OF mt SKIP LOCKED),
      rows AS (UPDATE mail_queue q
-         SET subject   = '',
-             body      = '',
-             body_html = NULL
+         SET subject              = '',
+             body                 = '',
+             body_html            = NULL,
+             list_unsubscribe_url = NULL
          FROM due
          WHERE q.task_id = due.id
-           AND (q.subject <> '' OR q.body <> '' OR q.body_html IS NOT NULL)
+           AND (q.subject <> '' OR q.body <> '' OR q.body_html IS NOT NULL OR q.list_unsubscribe_url IS NOT NULL)
          RETURNING q.task_id)
 UPDATE mail_tasks mt
 SET body_variables     = '{}',

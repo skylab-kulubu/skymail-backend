@@ -1983,6 +1983,12 @@ const docTemplate = `{
                         "description": "The person's Keycloak subject.",
                         "example": "31ef736f-72da-4a40-8791-d523199cf9f0",
                         "type": "string"
+                    },
+                    "unsubscribe_url": {
+                        "description": "The person's one-click unsubscribe link as core signed it (core's /v1/communication-preferences/unsubscribe?t=…), for an optional type of the bulk lane only: the e-mail renders it as .UnsubscribeUrl and, while SKYMAIL_LIST_UNSUBSCRIBE is on, carries it in List-Unsubscribe and List-Unsubscribe-Post from the duyuru mailbox. An https URL of visible ASCII, at most 960 characters, without \u003c \u003e , or \".",
+                        "example": "https://api.yildizskylab.com/v1/communication-preferences/unsubscribe?t=AQEB",
+                        "maxLength": 960,
+                        "type": "string"
                     }
                 },
                 "required": [
@@ -5432,7 +5438,7 @@ const docTemplate = `{
         },
         "/notifications": {
             "post": {
-                "description": "core says what happened (type) and to whom (recipients, by Keycloak sub); SkyMail picks each person's channels: the type's default channels, for an optional type only those in the person's allowed_channels (a required type ignores them), and only where the person has an address. E-mail goes to the request's address or, without one, to the person's primary e-mail in Keycloak; a person Keycloak does not know, a disabled account and an unverified address are skipped and counted. The e-mail is the template of the type's key, queued in the type's lane. The inbox does not look at allowed_channels: every recipient gets an item, the type's inbox text rendered with the variables, kept 90 days or until expires_at. The Idempotency-Key header is required: the same key from the same caller answers the first answer again (Idempotent-Replayed: true) and queues nothing; a different request with it is 422. Only a service account's token with skymail:notifications:send may call it.",
+                "description": "core says what happened (type) and to whom (recipients, by Keycloak sub); SkyMail picks each person's channels: the type's default channels, for an optional type only those in the person's allowed_channels (a required type ignores them), and only where the person has an address. E-mail goes to the request's address or, without one, to the person's primary e-mail in Keycloak; a person Keycloak does not know, a disabled account and an unverified address are skipped and counted. The e-mail is the template of the type's key, queued in the type's lane. The inbox does not look at allowed_channels: every recipient gets an item, the type's inbox text rendered with the variables, kept 90 days or until expires_at. An optional type of the bulk lane may give a recipient core's unsubscribe_url: the e-mail renders it as .UnsubscribeUrl and, while SKYMAIL_LIST_UNSUBSCRIBE is on, carries it in List-Unsubscribe and List-Unsubscribe-Post (RFC 8058) from the duyuru mailbox; any other type refuses it. The Idempotency-Key header is required: the same key from the same caller answers the first answer again (Idempotent-Replayed: true) and queues nothing; a different request with it is 422. Only a service account's token with skymail:notifications:send may call it.",
                 "parameters": [
                     {
                         "description": "The notification's own key: 1 to 255 visible ASCII characters, the same on every retry",
@@ -5491,7 +5497,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "validation.error; notification.idempotency_key_required; notification.allowed_channels_required (params.recipient: its index); notification.expires_at_past"
+                        "description": "validation.error; notification.idempotency_key_required; notification.allowed_channels_required, notification.unsubscribe_url_not_allowed, notification.unsubscribe_url_invalid (params.recipient: its index); notification.expires_at_past"
                     },
                     "403": {
                         "content": {

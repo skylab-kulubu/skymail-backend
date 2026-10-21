@@ -118,6 +118,8 @@ type Querier interface {
 	// recipient_sub is the recipient's Keycloak subject when the send knew it.
 	// tracking_token is the recipient's token when the row is tracked, and
 	// tracking_skip_reason why not when the send asked for tracking.
+	// list_unsubscribe_url is the recipient's one-click unsubscribe link when
+	// core gave one (List-Unsubscribe, bounce ticket 11).
 	CreateMailQueueItems(ctx context.Context, arg []CreateMailQueueItemsParams) (int64, error)
 	// content_sensitive_at_send is whether the send is sensitive as it is
 	// queued: 'true' when its template's key is locked sensitive

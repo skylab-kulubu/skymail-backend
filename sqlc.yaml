@@ -26,6 +26,10 @@ sql:
           # reader record openings and clicks in their name.
           - column: "mail_queue.tracking_token"
             go_struct_tag: 'json:"-"'
+          # Nor is a recipient's unsubscribe link: it turns their preferences
+          # off without signing in.
+          - column: "mail_queue.list_unsubscribe_url"
+            go_struct_tag: 'json:"-"'
           - column: "mail_tracking_events.link_id"
             go_type:
               type: "int64"

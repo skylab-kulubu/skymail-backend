@@ -379,6 +379,8 @@ type MailQueue struct {
 	SentAt *time.Time `json:"sent_at"`
 	// Account mail (keycloak.*, account.*) queued to a suppressed address: sent anyway, flagged.
 	SuppressedButSent bool `json:"suppressed_but_sent"`
+	// The recipient's one-click unsubscribe link, as core signed it; null for a row without one. Never served.
+	ListUnsubscribeUrl *string `json:"-"`
 }
 
 type MailSendWindow struct {

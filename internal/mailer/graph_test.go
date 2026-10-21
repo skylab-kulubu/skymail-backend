@@ -69,11 +69,13 @@ func (e *fakeEntra) times(scope string) int {
 	return e.asked[scope]
 }
 
-// graphCall is one request the fake Graph took.
+// graphCall is one request the fake Graph took: a JSON sendMail's body, or a
+// MIME one's mail, decoded.
 type graphCall struct {
 	path, authorization, contentType, clientRequestID string
 	body                                              map[string]any
 	raw                                               string
+	mime                                              string
 }
 
 // fakeGraph is Microsoft Graph's sendMail: it keeps each request and answers
@@ -95,7 +97,13 @@ func startFakeGraph(t *testing.T) *fakeGraph {
 			contentType: r.Header.Get("Content-Type"), clientRequestID: r.Header.Get("client-request-id"),
 			raw: string(raw),
 		}
-		if err := json.Unmarshal(raw, &call.body); err != nil {
+		if call.contentType == "text/plain" {
+			mime, err := base64.StdEncoding.DecodeString(string(raw))
+			if err != nil {
+				t.Errorf("a MIME sendMail body is not base64: %v", err)
+			}
+			call.mime = string(mime)
+		} else if err := json.Unmarshal(raw, &call.body); err != nil {
 			t.Errorf("sendMail body is not JSON: %v", err)
 		}
 		g.mu.Lock()

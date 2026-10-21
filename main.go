@@ -365,6 +365,10 @@ func logSendLanes(lanes mailer.SendLanes) {
 	if lanes.ReplyTo != nil {
 		line = line.Str("reply_to", lanes.ReplyTo.Address)
 	}
+	line = line.Bool("list_unsubscribe", lanes.ListUnsubscribe)
+	if lanes.ListUnsubscribe && lanes.Lane(mailer.LaneDuyuru).Transport == mailer.TransportOff {
+		log.Warn().Msg("sender lanes: SKYMAIL_LIST_UNSUBSCRIBE is on but the duyuru lane is off: no mail carries List-Unsubscribe until SKYMAIL_SEND_DUYURU is graph or xoauth2")
+	}
 	if creds := lanes.Credentials; creds != nil {
 		line = line.Str("graph_client_id", creds.ClientID).Str("certificate_x5t_s256", creds.Thumbprint()).
 			Time("certificate_not_after", creds.NotAfter())
@@ -377,7 +381,7 @@ func logSendLanes(lanes mailer.SendLanes) {
 				Msg("sender lanes: the skymail-posta certificate expires within 30 days; renew it (ops/wizards/skymail-posta-app-kaydi.sh)")
 		}
 	}
-	line.Msg("sender lanes (SKYMAIL_SEND_HESAP, SKYMAIL_SEND_BILGI, SKYMAIL_SEND_DUYURU)")
+	line.Msg("sender lanes (SKYMAIL_SEND_HESAP, SKYMAIL_SEND_BILGI, SKYMAIL_SEND_DUYURU, SKYMAIL_LIST_UNSUBSCRIBE)")
 }
 
 // trackingConfigFromEnv validates tracking before any service starts. Routes

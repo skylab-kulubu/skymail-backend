@@ -124,8 +124,8 @@ func TestSendLanesAreOffByDefault(t *testing.T) {
 			t.Errorf("%s = %q", lane, got)
 		}
 	}
-	if lanes.ReplyTo != nil || lanes.Credentials != nil {
-		t.Errorf("reply-to %v, credentials %v", lanes.ReplyTo, lanes.Credentials)
+	if lanes.ReplyTo != nil || lanes.Credentials != nil || lanes.ListUnsubscribe {
+		t.Errorf("reply-to %v, credentials %v, list-unsubscribe %v", lanes.ReplyTo, lanes.Credentials, lanes.ListUnsubscribe)
 	}
 	if zero := (mailer.SendLanes{}).Lane(mailer.LaneHesap).Transport; zero != mailer.TransportOff {
 		t.Errorf("the zero value's lane is %q", zero)
@@ -157,11 +157,12 @@ func TestSendLanesFromEnv(t *testing.T) {
 		change map[string]string
 		error  string
 	}{
-		"a typo":             {map[string]string{"SKYMAIL_SEND_BILGI": "grahp"}, "SKYMAIL_SEND_BILGI must be off, graph or xoauth2"},
-		"no From":            {map[string]string{"SKYMAIL_FROM_HESAP": ""}, "SKYMAIL_SEND_HESAP=graph needs SKYMAIL_FROM_HESAP"},
-		"a From that is not": {map[string]string{"SKYMAIL_FROM_DUYURU": "duyuru at example"}, "SKYMAIL_FROM_DUYURU is not an address"},
-		"no certificate":     {map[string]string{msauth.EnvClientCert: ""}, "a sender lane is on: GRAPH_CLIENT_CERT is required"},
-		"a bad Reply-To":     {map[string]string{"SMTP_REPLY_TO": "info"}, "SMTP_REPLY_TO is not an address"},
+		"a typo":                  {map[string]string{"SKYMAIL_SEND_BILGI": "grahp"}, "SKYMAIL_SEND_BILGI must be off, graph or xoauth2"},
+		"no From":                 {map[string]string{"SKYMAIL_FROM_HESAP": ""}, "SKYMAIL_SEND_HESAP=graph needs SKYMAIL_FROM_HESAP"},
+		"a From that is not":      {map[string]string{"SKYMAIL_FROM_DUYURU": "duyuru at example"}, "SKYMAIL_FROM_DUYURU is not an address"},
+		"no certificate":          {map[string]string{msauth.EnvClientCert: ""}, "a sender lane is on: GRAPH_CLIENT_CERT is required"},
+		"a bad Reply-To":          {map[string]string{"SMTP_REPLY_TO": "info"}, "SMTP_REPLY_TO is not an address"},
+		"a list-unsubscribe typo": {map[string]string{"SKYMAIL_LIST_UNSUBSCRIBE": "true"}, "SKYMAIL_LIST_UNSUBSCRIBE must be off or on"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			env := decidedEnv()
@@ -182,5 +183,13 @@ func TestSendLanesFromEnv(t *testing.T) {
 	lanes, err = mailer.SendLanesFromEnv(getenv(env))
 	if err != nil || lanes.Lane(mailer.LaneHesap).Transport != mailer.TransportGraph || lanes.Lane(mailer.LaneDuyuru).Transport != mailer.TransportOff {
 		t.Fatalf("%+v %v", lanes, err)
+	}
+
+	// SKYMAIL_LIST_UNSUBSCRIBE: off unless on, which needs no lane on.
+	for value, want := range map[string]bool{"": false, "off": false, " ON ": true, "on": true} {
+		lanes, err := mailer.SendLanesFromEnv(getenv(map[string]string{"SKYMAIL_LIST_UNSUBSCRIBE": value}))
+		if err != nil || lanes.ListUnsubscribe != want {
+			t.Errorf("SKYMAIL_LIST_UNSUBSCRIBE=%q: %v %v, want %v", value, lanes.ListUnsubscribe, err, want)
+		}
 	}
 }
