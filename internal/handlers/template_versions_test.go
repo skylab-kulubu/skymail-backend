@@ -75,6 +75,9 @@ func templateVersionsApp(t *testing.T, db *database.Store) *fiber.App {
 	app.Use(func(c fiber.Ctx) error {
 		c.Locals("user_id", operatorSub)
 		c.Locals("user_name", operatorName)
+		// The routes' permissions are the middleware's, not served here; the by-key
+		// upsert's system mark is the handler's, which the seed's role passes.
+		c.Locals("roles", []string{TemplatesSystemRole})
 		if sub := c.Get("X-Operator-Sub"); sub != "" {
 			c.Locals("user_id", sub)
 			c.Locals("user_name", c.Get("X-Operator-Name"))
