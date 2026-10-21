@@ -176,7 +176,7 @@ func TestSystemTrackingIsOffUnlessBothFlagsAreOn(t *testing.T) {
 		if got := m.ResolveSystemTracking(context.Background(), groupOf()); got != nil {
 			t.Errorf("%s: ResolveSystemTracking = %+v, want nil", c.name, got)
 		}
-		task, tracked, err := m.EnqueueSystemSingle(context.Background(), singleTo(formsReplyTemplate, "ayse@example.com", "Ayşe Yılmaz", formsVariables()))
+		task, tracked, err := m.EnqueueSystemSingle(context.Background(), singleTo(formsReplyTemplate, "ayse@example.com", "Ayşe Yılmaz", formsVariables()), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -202,7 +202,8 @@ func TestSystemTrackingIsOffUnlessBothFlagsAreOn(t *testing.T) {
 // address, core decides, and both are asked before the send's transaction.
 // Ayşe is tracked, Mehmet turned it off, an address with no account is
 // no_account. A System template, and one whose key is locked sensitive, are
-// tracked as well.
+// tracked as well. EnqueueSystemSingle says tracked only for the recipient
+// who got a token: the send is tracked (tracking_requested) for all three.
 func TestAServicesSingleMailIsTrackedWithSystemTrackingOn(t *testing.T) {
 	captureMailerLogs(t)
 	db := systemQueue(t)
@@ -226,12 +227,12 @@ func TestAServicesSingleMailIsTrackedWithSystemTrackingOn(t *testing.T) {
 			if template == resetPasswordTemplate {
 				variables = resetVariables()
 			}
-			task, tracked, err := m.EnqueueSystemSingle(context.Background(), singleTo(template, c.email, "Kişi", variables))
+			task, tracked, err := m.EnqueueSystemSingle(context.Background(), singleTo(template, c.email, "Kişi", variables), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !tracked || !trackingRequested(t, db, task) || laneOfTask(t, db, task) != mailer.PrioritySystem {
-				t.Errorf("%s: tracked %v, requested %v, lane %d; want tracked in the system lane", c.email, tracked, trackingRequested(t, db, task), laneOfTask(t, db, task))
+			if tracked != c.token || !trackingRequested(t, db, task) || laneOfTask(t, db, task) != mailer.PrioritySystem {
+				t.Errorf("%s: tracked %v, requested %v, lane %d; want tracked %v, requested, in the system lane", c.email, tracked, trackingRequested(t, db, task), laneOfTask(t, db, task), c.token)
 			}
 			sub := subOf(t, db, task)
 			if (sub == nil) != (c.sub == nil) || (sub != nil && *sub != *c.sub) {
@@ -279,11 +280,11 @@ func TestASecretLinkIsNeverRewritten(t *testing.T) {
 	plainSMTP(m)
 	ctx := context.Background()
 
-	reset, _, err := m.EnqueueSystemSingle(ctx, singleTo(resetPasswordTemplate, "ayse@example.com", "Ayşe Yılmaz", resetVariables()))
+	reset, _, err := m.EnqueueSystemSingle(ctx, singleTo(resetPasswordTemplate, "ayse@example.com", "Ayşe Yılmaz", resetVariables()), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	forms, _, err := m.EnqueueSystemSingle(ctx, singleTo(formsReplyTemplate, "ayse@example.com", "Ayşe Yılmaz", formsVariables()))
+	forms, _, err := m.EnqueueSystemSingle(ctx, singleTo(formsReplyTemplate, "ayse@example.com", "Ayşe Yılmaz", formsVariables()), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +445,7 @@ func TestAServicesMailGivesTrackingTwoSeconds(t *testing.T) {
 	} {
 		m := mailer.NewMailer(db, startFakeSMTP(t).config(), mailer.SenderOn, systemTracking(tracking.ModeOn, c.core, c.accounts))
 		start := time.Now()
-		task, tracked, err := m.EnqueueSystemSingle(context.Background(), singleTo(resetPasswordTemplate, "ayse@example.com", "Ayşe", resetVariables()))
+		task, tracked, err := m.EnqueueSystemSingle(context.Background(), singleTo(resetPasswordTemplate, "ayse@example.com", "Ayşe", resetVariables()), nil)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
@@ -452,7 +453,7 @@ func TestAServicesMailGivesTrackingTwoSeconds(t *testing.T) {
 			t.Errorf("%s: the mail waited %v to be queued", c.name, waited)
 		}
 		row := trackedRows(t, db, task)["ayse@example.com"]
-		if !tracked || row.token != nil || row.reason != tracking.SkipPreferenceUnavailable || row.status != "pending" {
+		if tracked || !trackingRequested(t, db, task) || row.token != nil || row.reason != tracking.SkipPreferenceUnavailable || row.status != "pending" {
 			t.Errorf("%s: tracked %v, %s, token %x, reason %q; want pending, untracked, preference_unavailable", c.name, tracked, row.status, row.token, row.reason)
 		}
 		if core, ok := c.core.(*slowCore); ok && (!core.deadline || core.budget > 2*time.Second) {

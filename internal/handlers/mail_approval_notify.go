@@ -253,7 +253,10 @@ func (h *mailApprovalHandlerImpl) approvers(ctx context.Context) ([]mailer.Recip
 }
 
 // notify queues the System template key to each recipient, one single send
-// each.
+// each. With SKYMAIL_TRACKING_SYSTEM on they are tracked as a service's mail
+// is, and Keycloak and core are asked about all of them at once, before the
+// first is queued: the action waits at most the system's 2 seconds for
+// them, however many approvers there are.
 func (h *mailApprovalHandlerImpl) notify(ctx context.Context, key, sentBy string, to []mailer.RecipientInfo, variables map[string]interface{}) *MailApprovalNotification {
 	notification := &MailApprovalNotification{TemplateKey: key}
 	fail := func(problem string) *MailApprovalNotification {
@@ -270,6 +273,11 @@ func (h *mailApprovalHandlerImpl) notify(ctx context.Context, key, sentBy string
 	if err != nil {
 		return fail("enqueue_failed")
 	}
+	system := h.mailer.SystemTrackingAvailable()
+	var preferences *mailer.TrackingPreferences
+	if system {
+		preferences = h.mailer.ResolveSystemTracking(ctx, to)
+	}
 	for _, recipient := range to {
 		arg := database.CreateSingleMailTaskParams{
 			SentBy:            sentBy,
@@ -281,8 +289,8 @@ func (h *mailApprovalHandlerImpl) notify(ctx context.Context, key, sentBy string
 		// SkyMail's own mail: tracked as a service's is, when
 		// SKYMAIL_TRACKING_SYSTEM is on.
 		var err error
-		if h.mailer.SystemTrackingAvailable() {
-			_, _, err = h.mailer.EnqueueSystemSingle(ctx, arg)
+		if system {
+			_, _, err = h.mailer.EnqueueSystemSingle(ctx, arg, preferences)
 		} else {
 			_, err = h.mailer.EnqueueSingle(ctx, arg)
 		}

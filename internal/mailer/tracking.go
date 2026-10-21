@@ -45,6 +45,11 @@ func (m *mailerImpl) TrackingAvailable() bool { return m.tracking.Config.On() }
 // tracked (EnqueueSystemSingle, EnqueueWithRecipientsParams.System).
 func (m *mailerImpl) SystemTrackingAvailable() bool { return m.tracking.Config.SystemOn() }
 
+// OperatorTrackingAlways reports whether SKYMAIL_TRACKING_OPERATOR is on with
+// SKYMAIL_TRACKING: whether every send a person queues is tracked, whether it
+// asked or not (the send form offers no box then).
+func (m *mailerImpl) OperatorTrackingAlways() bool { return m.tracking.Config.OperatorOn() }
+
 // trackingKind is how a send is tracked.
 type trackingKind int
 
@@ -60,17 +65,25 @@ const (
 	// a click only on the links its template writes out as they are
 	// (tracking.CommonLiteralLinks), none at all in a sensitive mail.
 	trackSystem
+	// trackOperator: a person's send, with SKYMAIL_TRACKING_OPERATOR on
+	// (Yusuf, 2026-10-21: the panel's mail is always tracked; the callers
+	// then ask for every one): whatever its template, under trackSystem's
+	// link rule, in the bulk lane only.
+	trackOperator
 )
 
 // trackingOf is how a send is tracked: a service's mail (system) as the
 // system when SKYMAIL_TRACKING_SYSTEM is on, and never otherwise; any other
-// send as it asked, when SKYMAIL_TRACKING is on.
+// send as it asked, when SKYMAIL_TRACKING is on, and under the system's link
+// rule when SKYMAIL_TRACKING_OPERATOR is on too.
 func (c Tracking) trackingOf(requested, system bool) trackingKind {
 	switch {
 	case system && c.Config.SystemOn():
 		return trackSystem
 	case system:
 		return trackNone
+	case requested && c.Config.OperatorOn():
+		return trackOperator
 	case requested && c.Config.On():
 		return trackRequested
 	}
@@ -90,8 +103,12 @@ const systemTrackingBudget = 2 * time.Second
 // counts as sensitive, as it does for single mail everywhere. It says false
 // when that cannot be read. The send's transaction decides again
 // (GetMailTaskTrackingExclusion) and, should the template have changed in
-// between, says not tracked.
+// between, says not tracked. With SKYMAIL_TRACKING_OPERATOR on every
+// template is tracked (a sensitive one with the pixel only): true.
 func (m *mailerImpl) TrackingApplies(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID) bool {
+	if m.OperatorTrackingAlways() {
+		return true
+	}
 	if !m.TrackingAvailable() || m.db == nil {
 		return false
 	}
@@ -159,7 +176,8 @@ func (p *TrackingPreferences) accountOf(address string) (*uuid.UUID, bool) {
 // transaction, whom of recipients — a list's or a group's — a send of
 // templateID to mailListID may track. A recipient known only by address is
 // not looked up: no_account. No one is asked when tracking is off or the
-// template is never tracked (System or sensitive; the send's transaction
+// template is never tracked (System or sensitive, unless
+// SKYMAIL_TRACKING_OPERATOR tracks every template; the send's transaction
 // decides that again, and its answer stands). Core failing is an answer
 // too: the send tracks no one with an id and goes out.
 func (m *mailerImpl) ResolveTracking(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID, recipients []RecipientInfo) *TrackingPreferences {
@@ -203,6 +221,9 @@ func (m *mailerImpl) resolveTracking(ctx context.Context, templateID uuid.UUID, 
 	subs, addresses := trackingSubjects(recipients, lookUp)
 	if len(subs) == 0 && len(addresses) == 0 {
 		return &TrackingPreferences{}
+	}
+	if m.OperatorTrackingAlways() {
+		return m.askTracking(ctx, subs, addresses)
 	}
 	if trackable, err := m.templateTrackable(ctx, templateID, mailListID); err == nil && !trackable {
 		return &TrackingPreferences{}
@@ -314,11 +335,12 @@ const (
 	// a person's send.
 	linksCommon
 	// linksLiteral: of those, only the ones the template writes out as they
-	// are (tracking.CommonLiteralLinks); a service's mail. A link a variable
-	// fills — a password reset, an e-mail verification or a login link, an
-	// address with a sensitive variable — is never rewritten (Yusuf,
-	// 2026-10-21; SendGrid's clicktracking=off and Postmark's
-	// data-pm-no-track for the same links).
+	// are (tracking.CommonLiteralLinks); a service's mail, and a person's
+	// with SKYMAIL_TRACKING_OPERATOR on. A link a variable fills — a password
+	// reset, an e-mail verification or a login link, an address with a
+	// sensitive variable — is never rewritten (Yusuf, 2026-10-21;
+	// SendGrid's clicktracking=off and Postmark's data-pm-no-track for the
+	// same links).
 	linksLiteral
 )
 
@@ -338,6 +360,12 @@ const (
 //     masking hides, and retention empties a sensitive send's links (D7).
 //     Any other gets one only on the links its template writes out as they
 //     are (linksLiteral);
+//   - a person's send with SKYMAIL_TRACKING_OPERATOR on (trackOperator):
+//     as a service's mail, of any template, but in the bulk lane only: in
+//     the system lane it is not tracked at all, as a send that asked is not.
+//     So a tracked mail in the system lane is always one the system sends
+//     (a service's, or SkyMail's own approval notice), which the person
+//     report reads with the role only (GetTrackingRecipients);
 //   - a recipient SkyMail knows only by address: no_account — an internal
 //     list's, or a person a send names one by one for whom Keycloak found no
 //     account (preferences.accounts). Such a person Keycloak did not answer
@@ -350,7 +378,10 @@ func (q *queue) planTracking(ctx context.Context, taskID uuid.UUID, items []data
 	switch kind {
 	case trackNone:
 		return linksNone, nil
-	case trackSystem:
+	case trackOperator, trackSystem:
+		if kind == trackOperator && q.priority == PrioritySystem {
+			return linksNone, q.q.ClearMailTaskTracking(ctx, taskID)
+		}
 		exclusion, err := q.q.GetMailTaskTrackingExclusion(ctx, taskID)
 		if err != nil {
 			return linksNone, err

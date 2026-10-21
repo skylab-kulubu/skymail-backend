@@ -191,6 +191,7 @@ func main() {
 	log.Info().Str("mode", string(trackingConfig.Mode)).Str("base_url", trackingConfig.BaseURL).Str("core_url", trackingConfig.CoreURL).
 		Msg("open and click tracking (SKYMAIL_TRACKING)")
 	logSystemTracking(trackingConfig)
+	logOperatorTracking(trackingConfig)
 	log.Info().Str("mode", string(trackingRetention)).Int("event_retention_days", tracking.EventRetentionDays).Int64("max_rows", trackingRetentionMaxRows).
 		Msg("open and click tracking retention (SKYMAIL_TRACKING_RETENTION)")
 	logSendLanes(sendLanes)
@@ -400,6 +401,22 @@ func logSystemTracking(cfg tracking.Config) {
 	}
 	event.Str("mode", string(mode)).Str("requested", string(cfg.System)).
 		Msg("open and click tracking of system mail (SKYMAIL_TRACKING_SYSTEM; on only with SKYMAIL_TRACKING=on)")
+}
+
+// logOperatorTracking says at startup whether every send a person queues is
+// tracked (SKYMAIL_TRACKING_OPERATOR), as logSystemTracking does for the
+// mail services send: mode is what applies, on only with SKYMAIL_TRACKING on.
+func logOperatorTracking(cfg tracking.Config) {
+	mode := tracking.ModeOff
+	if cfg.OperatorOn() {
+		mode = tracking.ModeOn
+	}
+	event := log.Info()
+	if cfg.Operator == tracking.ModeOn && !cfg.On() {
+		event = log.Warn()
+	}
+	event.Str("mode", string(mode)).Str("requested", string(cfg.Operator)).
+		Msg("open and click tracking of every operator send (SKYMAIL_TRACKING_OPERATOR; on only with SKYMAIL_TRACKING=on)")
 }
 
 // trackingConfigFromEnv validates tracking before any service starts. Routes

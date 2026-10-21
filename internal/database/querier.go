@@ -544,6 +544,11 @@ type Querier interface {
 	// another.
 	TakeSendToMask(ctx context.Context, tried []uuid.UUID) ([]TakeSendToMaskRow, error)
 	TrackingHasOpen(ctx context.Context, queueID uuid.UUID) (bool, error)
+	// system_lane: a row of the send is in the system lane (priority > 0, as
+	// ProcessSystemQueueItems reads it). A tracked mail there is always one the
+	// system sends (a service's single mail, SkyMail's own approval notice): a
+	// person's tracked send is in the bulk lane, and the system lane is never
+	// tracked as a person asks. Its people are read with the role only.
 	TrackingTaskAccess(ctx context.Context, id uuid.UUID) (TrackingTaskAccessRow, error)
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
 	UpdateRecipient(ctx context.Context, arg UpdateRecipientParams) (Recipient, error)

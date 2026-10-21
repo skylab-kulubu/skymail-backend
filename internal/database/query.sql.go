@@ -6068,7 +6068,8 @@ func (q *Queries) TrackingHasOpen(ctx context.Context, queueID uuid.UUID) (bool,
 const trackingTaskAccess = `-- name: TrackingTaskAccess :one
 SELECT t.id, t.sent_by, t.tracking_requested, t.tracking_closed_at,
        COALESCE((SELECT max(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS sent_at,
-       COALESCE((SELECT min(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS started_at
+       COALESCE((SELECT min(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS started_at,
+       EXISTS (SELECT 1 FROM mail_queue q WHERE q.task_id = t.id AND q.priority > 0) AS system_lane
 FROM mail_tasks t WHERE t.id = $1
 `
 
@@ -6079,8 +6080,14 @@ type TrackingTaskAccessRow struct {
 	TrackingClosedAt  *time.Time `json:"tracking_closed_at"`
 	SentAt            time.Time  `json:"sent_at"`
 	StartedAt         time.Time  `json:"started_at"`
+	SystemLane        bool       `json:"system_lane"`
 }
 
+// system_lane: a row of the send is in the system lane (priority > 0, as
+// ProcessSystemQueueItems reads it). A tracked mail there is always one the
+// system sends (a service's single mail, SkyMail's own approval notice): a
+// person's tracked send is in the bulk lane, and the system lane is never
+// tracked as a person asks. Its people are read with the role only.
 func (q *Queries) TrackingTaskAccess(ctx context.Context, id uuid.UUID) (TrackingTaskAccessRow, error) {
 	row := q.db.QueryRow(ctx, trackingTaskAccess, id)
 	var i TrackingTaskAccessRow
@@ -6091,6 +6098,7 @@ func (q *Queries) TrackingTaskAccess(ctx context.Context, id uuid.UUID) (Trackin
 		&i.TrackingClosedAt,
 		&i.SentAt,
 		&i.StartedAt,
+		&i.SystemLane,
 	)
 	return i, err
 }

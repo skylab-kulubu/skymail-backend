@@ -191,8 +191,8 @@ func (m *recordingMailer) EnqueueTrackedSingle(ctx context.Context, arg database
 
 // EnqueueSystemSingle is a notification SkyMail sends itself, tracked by the
 // system when SKYMAIL_TRACKING_SYSTEM is on: recorded as a single.
-func (m *recordingMailer) EnqueueSystemSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, bool, error) {
-	id, tracked, err := m.Transactional.EnqueueSystemSingle(ctx, arg)
+func (m *recordingMailer) EnqueueSystemSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *mailer.TrackingPreferences) (uuid.UUID, bool, error) {
+	id, tracked, err := m.Transactional.EnqueueSystemSingle(ctx, arg, preferences)
 	if err == nil {
 		m.record(sentMail{kind: "single", templateID: *arg.TemplateID, sentBy: arg.SentBy, recipients: []string{arg.RecipientEmail},
 			variables: decodeVariables(arg.BodyVariables), taskID: id})

@@ -270,7 +270,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Whether the send asked for open and click tracking and got it: false when it did not ask, when SkyMail's tracking is off (GET /mail_tasks/summary tracking_available), or when its template is a System template or sensitive, which a person's send never tracks. A service's single mail does not ask: true when SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM).",
+                        "description": "Whether the send is tracked. A person's send: it asked for open and click tracking and got it — false when it did not ask, when SkyMail's tracking is off (GET /mail_tasks/summary tracking_available), or when its template is a System template or sensitive — or SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then true whatever it asked and whatever its template. A service's single mail does not ask: true only when SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) and its recipient is tracked (has an account core lets be tracked).",
                         "type": "boolean"
                     }
                 },
@@ -498,7 +498,7 @@ const docTemplate = `{
                         "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
                     },
                     "tracking": {
-                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive); the approved send gets it if that still holds.",
+                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyMail tracks every person's send, it is tracked whatever this says.",
                         "type": "boolean"
                     },
                     "updated_at": {
@@ -641,7 +641,7 @@ const docTemplate = `{
                         "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
                     },
                     "tracking": {
-                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive); the approved send gets it if that still holds.",
+                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyMail tracks every person's send, it is tracked whatever this says.",
                         "type": "boolean"
                     },
                     "updated_at": {
@@ -808,7 +808,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Whether the send is tracked: it asked for open and click tracking, SkyMail's tracking was on when it was queued and its template may be tracked (not System, not sensitive); or it is a service's mail queued while SkyMail tracked system mail (SKYMAIL_TRACKING_SYSTEM).",
+                        "description": "Whether the send is tracked: it asked for open and click tracking, SkyMail's tracking was on when it was queued and its template may be tracked (not System, not sensitive); or it is a person's send queued while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); or it is a service's mail queued while SkyMail tracked system mail (SKYMAIL_TRACKING_SYSTEM).",
                         "type": "boolean"
                     }
                 },
@@ -1209,6 +1209,10 @@ const docTemplate = `{
                     "time_zone": {
                         "example": "Europe/Istanbul",
                         "type": "string"
+                    },
+                    "tracking_always": {
+                        "description": "True while SKYMAIL_TRACKING_OPERATOR=on with SKYMAIL_TRACKING=on: every person's send (a list, a group, people, a Mail onayı request) is tracked whether it asked or not, of any template. The send form then shows no tracking box: a send's tracking field is ignored.",
+                        "type": "boolean"
                     },
                     "tracking_available": {
                         "description": "True while SKYMAIL_TRACKING=on: a send may ask for open and click tracking. The send form shows its tracking box only then.",
@@ -3535,7 +3539,7 @@ const docTemplate = `{
                 ]
             },
             "post": {
-                "description": "Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyMail's tracking is off, or for a System or sensitive template (never tracked), the field is ignored and the answer says tracking false.",
+                "description": "Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyMail's tracking is off, or for a System or sensitive template (never tracked), the field is ignored and the answer says tracking false. While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored too and every send is tracked, of any template: a sensitive one with the pixel only, any other with a click address only on the links the template writes out as they are.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -3720,7 +3724,7 @@ const docTemplate = `{
         },
         "/mail_tasks/single": {
             "post": {
-                "description": "Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way and the answer says tracking true, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail).",
+                "description": "Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address only on the links the template writes out as they are (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -3781,7 +3785,7 @@ const docTemplate = `{
         },
         "/mail_tasks/summary": {
             "get": {
-                "description": "Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).",
+                "description": "Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); tracking_always, true while SKYMAIL_TRACKING_OPERATOR=on too (every person's send is tracked, the field is ignored, the send form shows no box); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).",
                 "parameters": [
                     {
                         "description": "Days in the daily series, ending today in Europe/Istanbul (1-90)",
@@ -4160,7 +4164,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/tracking/recipients": {
             "get": {
-                "description": "Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role). First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 a year after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.",
+                "description": "Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 a year after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.",
                 "parameters": [
                     {
                         "description": "Mail task ID",

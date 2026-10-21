@@ -76,8 +76,9 @@ type Priority int16
 
 const (
 	// PriorityBulk is a send to a mailing list or a Keycloak group, an
-	// approved send, and a single mail a person sends asking for tracking:
-	// an operator's mail, which can wait a moment.
+	// approved send, and a single mail a person sends asking for tracking
+	// (every one, with SKYMAIL_TRACKING_OPERATOR on): an operator's mail,
+	// which can wait a moment.
 	PriorityBulk Priority = 0
 	// PrioritySystem is a single mail (POST /mail_tasks/single): a login
 	// code, a certificate, a Forms confirmation, a notification. It is
@@ -162,6 +163,13 @@ type Mailer interface {
 	// SKYMAIL_TRACKING: the mail services send (EnqueueSystemSingle,
 	// EnqueueWithRecipientsParams.System) is tracked without asking.
 	SystemTrackingAvailable() bool
+	// OperatorTrackingAlways says SKYMAIL_TRACKING_OPERATOR is on with
+	// SKYMAIL_TRACKING: every send a person queues (an operator's mail) is
+	// tracked whether it asked or not, whatever its template; its callers
+	// ask for tracking on every one. A sensitive mail gets the pixel only,
+	// any other a click address only on the links its template writes out
+	// as they are, as a service's mail does.
+	OperatorTrackingAlways() bool
 	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error)
 	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
 	// EnqueueSystemSingle queues a mail a service sends one person (a login
@@ -170,12 +178,16 @@ type Mailer interface {
 	// before the transaction the person's account is found in Keycloak by
 	// address and core is asked (ResolveSystemTracking); the mail gets the
 	// pixel, and a click address only on the links its template writes out
-	// as they are, none in a sensitive mail. It says whether the send is
-	// tracked; off, it is EnqueueSingle.
-	EnqueueSystemSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, bool, error)
+	// as they are, none in a sensitive mail. preferences is what
+	// ResolveSystemTracking said about the recipient (one answer for many
+	// notices: Keycloak and core asked once); nil, and it asks itself. It
+	// says whether the recipient is tracked (has a token: not no_account,
+	// not turned off, not unanswered); off, it is EnqueueSingle.
+	EnqueueSystemSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *TrackingPreferences) (uuid.UUID, bool, error)
 	// EnqueueTrackedSingle queues a mail a person sends one person and asks
-	// tracking for (POST /mail_tasks/single with tracking): an operator's
-	// mail, so in the bulk lane, where tracking is planned. The system lane
+	// tracking for (POST /mail_tasks/single with tracking, or any with
+	// SKYMAIL_TRACKING_OPERATOR on): an operator's mail, so in the bulk lane,
+	// where tracking is planned. The system lane
 	// is never tracked as asked (only a service's mail is, by
 	// EnqueueSystemSingle). preferences is what ResolveTracking said about the
 	// recipient; nil, and it asks itself before the transaction begins
@@ -616,22 +628,27 @@ func (m *mailerImpl) Enqueue(ctx context.Context, arg database.CreateMailTaskPar
 
 func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
 	return m.pooled(ctx, PrioritySystem, func(q *queue) (uuid.UUID, bool, error) {
-		return q.enqueueSingle(ctx, arg, nil, false)
+		id, result, err := q.enqueueSingle(ctx, arg, nil, false)
+		return id, result.queued, err
 	})
 }
 
-func (m *mailerImpl) EnqueueSystemSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, bool, error) {
-	tracked := m.SystemTrackingAvailable() && arg.TemplateID != nil
-	if !tracked {
+func (m *mailerImpl) EnqueueSystemSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *TrackingPreferences) (uuid.UUID, bool, error) {
+	if !m.SystemTrackingAvailable() || arg.TemplateID == nil {
 		id, err := m.EnqueueSingle(ctx, arg)
 		return id, false, err
 	}
 	// Keycloak and core are asked before the transaction begins.
-	preferences := m.ResolveSystemTracking(ctx, []RecipientInfo{{FullName: arg.RecipientFullName, Email: arg.RecipientEmail}})
+	if preferences == nil {
+		preferences = m.ResolveSystemTracking(ctx, []RecipientInfo{{FullName: arg.RecipientFullName, Email: arg.RecipientEmail}})
+	}
+	var tracked bool
 	id, err := m.pooled(ctx, PrioritySystem, func(q *queue) (uuid.UUID, bool, error) {
-		return q.enqueueSingle(ctx, arg, preferences, true)
+		id, result, err := q.enqueueSingle(ctx, arg, preferences, true)
+		tracked = result.tracked
+		return id, result.queued, err
 	})
-	return id, err == nil, err
+	return id, err == nil && tracked, err
 }
 
 func (m *mailerImpl) EnqueueTrackedSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *TrackingPreferences) (uuid.UUID, error) {
@@ -640,7 +657,8 @@ func (m *mailerImpl) EnqueueTrackedSingle(ctx context.Context, arg database.Crea
 		preferences = m.ResolvePeopleTracking(ctx, *arg.TemplateID, []RecipientInfo{{FullName: arg.RecipientFullName, Email: arg.RecipientEmail}})
 	}
 	return m.pooled(ctx, PriorityBulk, func(q *queue) (uuid.UUID, bool, error) {
-		return q.enqueueSingle(ctx, arg, preferences, false)
+		id, result, err := q.enqueueSingle(ctx, arg, preferences, false)
+		return id, result.queued, err
 	})
 }
 
@@ -685,7 +703,15 @@ func (q *queue) EnqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 }
 
 // The three ways to queue a send return the send and whether queue rows were
-// written, which is when the dispatcher has something to do.
+// written, which is when the dispatcher has something to do; a single mail
+// says too whether its recipient is tracked.
+
+// queueResult is what renderAndQueue wrote: whether a row is pending, and
+// whether a pending row got a tracking token.
+type queueResult struct {
+	queued  bool
+	tracked bool
+}
 
 func (q *queue) enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, bool, error) {
 	kind := q.tracking.trackingOf(arg.TrackingRequested, false)
@@ -714,8 +740,8 @@ func (q *queue) enqueue(ctx context.Context, arg database.CreateMailTaskParams) 
 		}
 	}
 
-	queued, err := q.renderAndQueue(ctx, commonRows, false, kind, nil)
-	return rows[0].TaskID, queued, err
+	result, err := q.renderAndQueue(ctx, commonRows, false, kind, nil)
+	return rows[0].TaskID, result.queued, err
 }
 
 // enqueueSingle queues a mail to one person; system says it is a service's
@@ -723,13 +749,13 @@ func (q *queue) enqueue(ctx context.Context, arg database.CreateMailTaskParams) 
 // preferences, when it is tracked, is what ResolveTracking or
 // ResolveSystemTracking found: the person's account, if Keycloak found one
 // by address, becomes the row's recipient_sub.
-func (q *queue) enqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *TrackingPreferences, system bool) (uuid.UUID, bool, error) {
+func (q *queue) enqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *TrackingPreferences, system bool) (uuid.UUID, queueResult, error) {
 	kind := q.tracking.trackingOf(arg.TrackingRequested, system)
 	arg.TrackingRequested = kind != trackNone
 	row, err := q.q.CreateSingleMailTask(ctx, arg)
 	if err != nil {
 		q.logger.Err(err).Msg("Failed to enqueue single mail task")
-		return uuid.Nil, false, err
+		return uuid.Nil, queueResult{}, err
 	}
 
 	commonRows := []commonMailRow{
@@ -750,8 +776,8 @@ func (q *queue) enqueueSingle(ctx context.Context, arg database.CreateSingleMail
 	// A single mail has one recipient, and its caller (a login code, a Forms
 	// confirmation) is waiting for it: a mail that does not render is the
 	// send failing, and the caller is told.
-	queued, err := q.renderAndQueue(ctx, commonRows, true, kind, preferences)
-	return row.TaskID, queued, err
+	result, err := q.renderAndQueue(ctx, commonRows, true, kind, preferences)
+	return row.TaskID, result, err
 }
 
 func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, bool, error) {
@@ -788,8 +814,8 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 		})
 	}
 
-	queued, err := q.renderAndQueue(ctx, rows, false, kind, params.Preferences)
-	return task.ID, queued, err
+	result, err := q.renderAndQueue(ctx, rows, false, kind, params.Preferences)
+	return task.ID, result.queued, err
 }
 
 // mailTemplates holds one template's three parsed parts.
@@ -921,28 +947,28 @@ func (t mailTemplates) renderWith(textVars, htmlVars map[string]interface{}, rec
 // (suppression.go) is written failed with suppressedError the same way,
 // unless the send is account mail (AccountMail): then it is queued, its row
 // flagged suppressed_but_sent. kind says how the send is tracked (asked for
-// with the flag on, or a service's mail with SKYMAIL_TRACKING_SYSTEM on):
-// each queued row gets a token or why not, as preferences — what core said
-// before the transaction — allows, and the links a click is counted on are
-// registered (tracking.go).
-func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict bool, kind trackingKind, preferences *TrackingPreferences) (bool, error) {
+// with the flag on, every person's send with SKYMAIL_TRACKING_OPERATOR on, or
+// a service's mail with SKYMAIL_TRACKING_SYSTEM on): each queued row gets a
+// token or why not, as preferences — what core said before the transaction —
+// allows, and the links a click is counted on are registered (tracking.go).
+func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict bool, kind trackingKind, preferences *TrackingPreferences) (queueResult, error) {
 	if len(rows) == 0 {
-		return false, nil
+		return queueResult{}, nil
 	}
 
 	var taskVars map[string]interface{}
 	if err := json.Unmarshal(rows[0].BodyVariables, &taskVars); err != nil {
-		return false, fmt.Errorf("invalid json variables: %w", err)
+		return queueResult{}, fmt.Errorf("invalid json variables: %w", err)
 	}
 
 	parsed, err := parseMailTemplates(rows[0].TemplateSubject, rows[0].PlainTextContent, rows[0].HtmlContent)
 	if err != nil {
-		return false, err
+		return queueResult{}, err
 	}
 
 	suppressed, accountMail, err := q.suppressionsOf(ctx, rows)
 	if err != nil {
-		return false, err
+		return queueResult{}, err
 	}
 	var flagged []string
 
@@ -979,7 +1005,7 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 		rendered, err := parsed.render(taskVars, RecipientInfo{FullName: row.RecipientFullName, Email: row.RecipientEmail, UnsubscribeURL: row.UnsubscribeURL})
 		if err != nil {
 			if strict {
-				return false, err
+				return queueResult{}, err
 			}
 			q.logger.Err(err).Str("task_id", row.TaskID.String()).
 				Msg("A recipient's mail did not render: written failed, the others are queued")
@@ -1015,31 +1041,35 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 		}
 	}
 
+	tracked := false
 	if kind != trackNone && len(queueItems) > 0 {
 		rule, err := q.planTracking(ctx, rows[0].TaskID, queueItems, preferences, kind)
 		if err != nil {
-			return false, err
+			return queueResult{}, err
 		}
 		if err := q.registerLinks(ctx, rows[0].TaskID, queueItems, rule, rows[0].HtmlContent); err != nil {
-			return false, err
+			return queueResult{}, err
+		}
+		for _, item := range queueItems {
+			tracked = tracked || item.TrackingToken != nil
 		}
 	}
 	if len(queueItems) > 0 {
 		if _, err = q.q.CreateMailQueueItems(ctx, queueItems); err != nil {
-			return false, err
+			return queueResult{}, err
 		}
 	}
 	for _, item := range failed {
 		if err := q.q.CreateFailedMailQueueItem(ctx, item); err != nil {
-			return false, err
+			return queueResult{}, err
 		}
 	}
 	if len(flagged) > 0 {
 		if err := q.q.FlagSuppressionsExempt(ctx, flagged); err != nil {
-			return false, err
+			return queueResult{}, err
 		}
 	}
-	return len(queueItems) > 0, nil
+	return queueResult{queued: len(queueItems) > 0, tracked: tracked}, nil
 }
 
 func (m *mailerImpl) startDispatcher(ctx context.Context) {

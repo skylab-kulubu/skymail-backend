@@ -188,16 +188,18 @@ type SendSummary struct {
 	// the variable is removed and SkyMail redeployed.
 	SenderPaused bool `json:"sender_paused"`
 	// True while SKYMAIL_TRACKING=on: a send may ask for open and click tracking. The send form shows its tracking box only then.
-	TrackingAvailable bool           `json:"tracking_available"`
-	SendCounts        SendCounts     `json:"send_counts"`
-	DailySent         []DailySent    `json:"daily_sent"`
-	RecentSends       []MailTaskItem `json:"recent_sends"`
+	TrackingAvailable bool `json:"tracking_available"`
+	// True while SKYMAIL_TRACKING_OPERATOR=on with SKYMAIL_TRACKING=on: every person's send (a list, a group, people, a Mail onayı request) is tracked whether it asked or not, of any template. The send form then shows no tracking box: a send's tracking field is ignored.
+	TrackingAlways bool           `json:"tracking_always"`
+	SendCounts     SendCounts     `json:"send_counts"`
+	DailySent      []DailySent    `json:"daily_sent"`
+	RecentSends    []MailTaskItem `json:"recent_sends"`
 }
 
 // GetSummary godoc
 //
 //	@Summary		Summarise mail sends
-//	@Description	Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).
+//	@Description	Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); tracking_always, true while SKYMAIL_TRACKING_OPERATOR=on too (every person's send is tracked, the field is ignored, the send form shows no box); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			days	query		int	false	"Days in the daily series, ending today in Europe/Istanbul (1-90)"	default(30)
@@ -257,6 +259,7 @@ func (h *mailHandlerImpl) GetSummary(c fiber.Ctx) error {
 		},
 		SenderPaused:      h.mailer.SenderPaused(),
 		TrackingAvailable: h.mailer.TrackingAvailable(),
+		TrackingAlways:    h.mailer.OperatorTrackingAlways(),
 		SendCounts: SendCounts{
 			Failed:  sendCounts.Failed,
 			Sending: sendCounts.Sending,

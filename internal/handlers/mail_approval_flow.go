@@ -477,19 +477,23 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	if err := authorizeApproval(caller, view.MailApproval.SubmitterSub, action.by); err != nil {
 		return err
 	}
+	// An approved send is an operator's mail: while SkyMail tracks every
+	// person's send it is tracked, whatever the request said when it was
+	// submitted (queue does the same under the lock).
+	tracked := view.MailApproval.TrackingRequested || h.mailer.OperatorTrackingAlways()
 	var prepared approvalPrepared
 	if action.sends && view.MailApproval.MailListID != nil && !view.InternalMailList {
 		prepared, err = h.groupRecipients(ctx, *view.MailApproval.MailListID)
 		if err != nil {
 			return err
 		}
-		if view.MailApproval.TrackingRequested && prepared.groupMembers != nil {
+		if tracked && prepared.groupMembers != nil {
 			prepared.tracking = h.mailer.ResolveTracking(ctx, view.MailApproval.TemplateID, view.MailApproval.MailListID, prepared.groupMembers)
 		}
 	}
 	// People named one by one: their accounts are found by address, and core
 	// asked, before the lock too.
-	if action.sends && view.MailApproval.TrackingRequested && view.MailApproval.MailListID == nil && view.MailApproval.FormSourceID == nil {
+	if action.sends && tracked && view.MailApproval.MailListID == nil && view.MailApproval.FormSourceID == nil {
 		prepared.tracking = h.mailer.ResolvePeopleTracking(ctx, view.MailApproval.TemplateID, recipientsOfView(view))
 	}
 	if action.check != nil {
@@ -722,6 +726,11 @@ func (h *mailApprovalHandlerImpl) queue(ctx context.Context, q *database.Queries
 		}
 		return []uuid.UUID{id}, nil
 	}
+	// While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR)
+	// it is tracked whatever the request asked when it was submitted.
+	if h.mailer.OperatorTrackingAlways() {
+		a.TrackingRequested = true
+	}
 	if a.MailListID == nil {
 		return queueToPeople(ctx, q, sends, a, prepared.tracking)
 	}
@@ -884,7 +893,8 @@ func (h *mailApprovalHandlerImpl) resubmit(ctx context.Context, q *database.Quer
 		MailListID:        send.mailListID,
 		FormSourceID:      send.formSourceID,
 		BodyVariables:     send.variables,
-		TrackingRequested: send.tracking && h.mailer.TrackingApplies(ctx, checked.template.ID, send.mailListID),
+		// A Forms source's send is never tracked (address-only respondents).
+		TrackingRequested: send.formSourceID == nil && operatorTracking(ctx, h.mailer, send.tracking, checked.template.ID, send.mailListID),
 		At:                now,
 		DeadlineAt:        now.Add(mailApprovalDeadline),
 		ID:                a.ID,
