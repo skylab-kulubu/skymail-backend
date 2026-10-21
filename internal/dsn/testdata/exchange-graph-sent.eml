@@ -1,0 +1,57 @@
+Received: from DB9PR01MB0003.eurprd01.prod.outlook.com (2603:10a6::3) by
+ DB9PR01MB0004.eurprd01.prod.outlook.com with mapi id 15.20.8000.10; Tue, 20 Oct
+ 2026 11:00:01 +0000
+MIME-Version: 1.0
+From: Microsoft Outlook
+	<MicrosoftExchange329e71ec88ae4615bbc36ab6ce41109e@kulup.onmicrosoft.example>
+To: <hesap@bildirim.kulup.example>
+Date: Tue, 20 Oct 2026 11:00:01 +0000
+Content-Type: multipart/report; report-type=delivery-status;
+	boundary="5a1c2e3f-4b5d-4e6f-8a9b-0c1d2e3f4a5c"
+X-MS-Exchange-Message-Is-Ndr:
+Content-Language: tr-TR
+Message-ID:
+ <a1b2c3d4-0000-4000-8000-ndr000000002@DB9PR01MB0004.eurprd01.prod.outlook.com>
+In-Reply-To:
+ <DB9PR01MB0003F1E2D3C4B5A69788EXCH0001@DB9PR01MB0003.eurprd01.prod.outlook.com>
+References:
+ <DB9PR01MB0003F1E2D3C4B5A69788EXCH0001@DB9PR01MB0003.eurprd01.prod.outlook.com>
+Subject: =?utf-8?B?VGVzbGltIEVkaWxlbWVkaTogR2lyaXMga29kdW4=?=
+Auto-Submitted: auto-replied
+
+--5a1c2e3f-4b5d-4e6f-8a9b-0c1d2e3f4a5c
+Content-Type: text/plain; charset="utf-8"
+
+Ileti teslim edilemedi.
+
+--5a1c2e3f-4b5d-4e6f-8a9b-0c1d2e3f4a5c
+Content-Type: message/delivery-status
+
+Reporting-MTA: dns;DB9PR01MB0004.eurprd01.prod.outlook.com
+Arrival-Date: Tue, 20 Oct 2026 11:00:00 +0000
+
+Original-Recipient: rfc822;yok@std.example.org
+Final-Recipient: rfc822;yok@std.example.org
+Action: failed
+Status: 5.1.10
+Diagnostic-Code: smtp;550 5.1.10 RESOLVER.ADR.RecipientNotFound; Recipient
+ yok@std.example.org not found by SMTP address lookup
+
+
+--5a1c2e3f-4b5d-4e6f-8a9b-0c1d2e3f4a5c
+Content-Type: text/rfc822-headers
+
+Received: from DB9PR01MB0003.eurprd01.prod.outlook.com by
+ DB9PR01MB0004.eurprd01.prod.outlook.com; Tue, 20 Oct 2026 11:00:00 +0000
+MIME-Version: 1.0
+From: SKY LAB Hesap <hesap@bildirim.kulup.example>
+To: Yok <yok@std.example.org>
+Reply-To: <info@kulup.example>
+Subject: Giris kodun
+Message-ID:
+ <DB9PR01MB0003F1E2D3C4B5A69788EXCH0001@DB9PR01MB0003.eurprd01.prod.outlook.com>
+X-SkyMail-Queue-Id: <7e2d1c0b-3a49-4f5e-8d6c-1b2a3c4d5e6f@mail.example.org>
+Date: Tue, 20 Oct 2026 11:00:00 +0000
+Content-Type: text/html; charset="utf-8"
+
+--5a1c2e3f-4b5d-4e6f-8a9b-0c1d2e3f4a5c--

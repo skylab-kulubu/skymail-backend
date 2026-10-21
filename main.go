@@ -22,6 +22,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/docs"
 	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skymail-backend/internal/bounce"
 	"github.com/skylab-kulubu/skymail-backend/internal/config"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/erasuretoken"
@@ -106,6 +107,13 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid mail send budget configuration")
 	}
+	// Which mailbox each kind of mail goes out from and how: every lane off
+	// (SMTP_FROM over SMTP AUTH, as always) unless SKYMAIL_SEND_<LANE> says
+	// graph or xoauth2 (README, sender lanes).
+	sendLanes, err := mailer.SendLanesFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid sender lane configuration")
+	}
 	keycloakAdminURL, err := keycloak.ParseAdminURL(cfg.KeycloakAdminURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid Keycloak configuration")
@@ -184,6 +192,7 @@ func main() {
 		Msg("open and click tracking (SKYMAIL_TRACKING)")
 	log.Info().Str("mode", string(trackingRetention)).Int("event_retention_days", tracking.EventRetentionDays).Int64("max_rows", trackingRetentionMaxRows).
 		Msg("open and click tracking retention (SKYMAIL_TRACKING_RETENTION)")
+	logSendLanes(sendLanes)
 	db := database.NewStore(conn)
 	mailerService := mailer.NewMailer(db, mailer.SMTPConfig{
 		FromEmail: cfg.SMTPFrom,
@@ -195,9 +204,11 @@ func main() {
 		Plain:     cfg.SMTPPlain,
 	}, mailSender, mailer.WithQueueLease(queueLease), mailer.WithRateBudget(rateBudget),
 		mailer.WithReservedDomainsRefused(),
+		mailer.WithSendLanes(sendLanes),
 		mailer.WithTracking(mailer.Tracking{
 			Config:      trackingConfig,
 			Preferences: tracking.NewCoreClient(trackingConfig.CoreURL, kcClient, nil),
+			Accounts:    kcClient,
 		}))
 
 	log.Info().Str("mode", string(audienceMode)).Str("audience", cfg.KeycloakClientID).Msg("v1 token audience check (V1_TOKEN_AUDIENCE_MODE)")
@@ -272,6 +283,7 @@ func main() {
 	registerMailTaskRoutes(api, authMiddleware, mailHandler)
 	registerMailApprovalRoutes(api, authMiddleware, approvalHandler)
 	registerNotificationRoutes(api, authMiddleware, handlers.NewNotificationHandler(db, mailerService, kcClient))
+	registerSuppressionRoutes(api, authMiddleware, handlers.NewSuppressionHandler(db))
 
 	// The background work's context: shutdown cancels it only after the
 	// mailer has stopped (or its time ran out), which cuts off a send still
@@ -337,6 +349,35 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("error starting server")
 	}
+}
+
+// logSendLanes writes how each sender lane sends: its transport and From,
+// the Reply-To, and the certificate's thumbprint and expiry. Nothing secret.
+func logSendLanes(lanes mailer.SendLanes) {
+	line := log.Info()
+	for _, lane := range mailer.Lanes {
+		config := lanes.Lane(lane)
+		line = line.Str(string(lane), string(config.Transport))
+		if config.From != nil {
+			line = line.Str(string(lane)+"_from", config.From.Address)
+		}
+	}
+	if lanes.ReplyTo != nil {
+		line = line.Str("reply_to", lanes.ReplyTo.Address)
+	}
+	if creds := lanes.Credentials; creds != nil {
+		line = line.Str("graph_client_id", creds.ClientID).Str("certificate_x5t_s256", creds.Thumbprint()).
+			Time("certificate_not_after", creds.NotAfter())
+		switch left := time.Until(creds.NotAfter()); {
+		case left <= 0:
+			log.Warn().Time("certificate_not_after", creds.NotAfter()).
+				Msg("sender lanes: the skymail-posta certificate has expired: Entra refuses its tokens, the lanes that are on cannot send; renew it (ops/wizards/skymail-posta-app-kaydi.sh)")
+		case left < 30*24*time.Hour:
+			log.Warn().Time("certificate_not_after", creds.NotAfter()).
+				Msg("sender lanes: the skymail-posta certificate expires within 30 days; renew it (ops/wizards/skymail-posta-app-kaydi.sh)")
+		}
+	}
+	line.Msg("sender lanes (SKYMAIL_SEND_HESAP, SKYMAIL_SEND_BILGI, SKYMAIL_SEND_DUYURU)")
 }
 
 // trackingConfigFromEnv validates tracking before any service starts. Routes
@@ -432,7 +473,8 @@ const viewSweepBatch = 500
 // startup and every interval after (docs/data-lifecycle.md, sent mail
 // content). It runs while the sender is paused too: it touches no row still
 // to go out. Then it deletes the records of who opened a masked mail older
-// than viewRetentionDays. It logs counts only.
+// than viewRetentionDays, and the bounces older than a year
+// (bounce.RetentionDays). It logs counts only.
 func clearMailContent(ctx context.Context, db *database.Store, retentionDays, viewRetentionDays int, interval time.Duration) {
 	log.Info().Int("retention_days", retentionDays).Int("view_retention_days", viewRetentionDays).
 		Msg("mail content sweep (MAIL_CONTENT_RETENTION_DAYS, SENT_CONTENT_VIEWS_RETENTION_DAYS)")
@@ -463,6 +505,13 @@ func clearMailContent(ctx context.Context, db *database.Store, retentionDays, vi
 		}
 		if views > 0 {
 			log.Info().Int64("views", views).Msg("deleted the records of masked mail openings past retention")
+		}
+		bounces, err := db.DeleteMailBounces(ctx, bounce.RetentionDays, viewSweepBatch)
+		if err != nil && ctx.Err() == nil {
+			log.Error().Err(err).Msg("bounce sweep failed")
+		}
+		if bounces > 0 {
+			log.Info().Int64("bounces", bounces).Msg("deleted the bounces past retention")
 		}
 		select {
 		case <-ctx.Done():
@@ -547,6 +596,15 @@ func registerMailApprovalRoutes(api fiber.Router, auth middlewares.AuthMiddlewar
 	requests.Post("/:id/accept", approvals.Accept)
 	requests.Post("/:id/decline", approvals.Decline)
 	requests.Post("/:id/resubmit", approvals.Resubmit)
+}
+
+// registerSuppressionRoutes serves the suppression list to operators with
+// skymail:suppressions:manage (README, "Geri dönen posta ve bastırma
+// listesi").
+func registerSuppressionRoutes(api fiber.Router, auth middlewares.AuthMiddleware, suppressions handlers.SuppressionHandler) {
+	group := api.Group("/suppressions")
+	group.Get("/", auth.RequireAnyPermission(handlers.SuppressionsManageRole), suppressions.List)
+	group.Delete("/:id", auth.RequireAnyPermission(handlers.SuppressionsManageRole), suppressions.Delete)
 }
 
 // registerNotificationRoutes serves POST /notifications to services (hub

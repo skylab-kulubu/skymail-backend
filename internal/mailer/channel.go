@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skymail-backend/internal/dsn"
 	"github.com/wneessen/go-mail"
 )
 
@@ -64,8 +67,9 @@ func unknownChannel(channel string) error {
 	return permanentError{fmt.Errorf("no sender for channel %q", channel)}
 }
 
-// emailSender is a worker's e-mail channel: its own SMTP client, each send a
-// connection of its own, bounded by the send budget from its dial.
+// emailSender is a worker's e-mail channel: its own SMTP clients, each send
+// a connection of its own, bounded by the send budget from its dial. Which
+// mailbox a mail goes out from, and how, is its sender lane's (lanes.go).
 type emailSender struct {
 	client *mail.Client
 	config SMTPConfig
@@ -74,6 +78,20 @@ type emailSender struct {
 	// mail (outgoingHTML, tracking.go); without db no mail is tracked.
 	db       *database.Store
 	tracking Tracking
+
+	// lanes are the sender lanes; templateKey reads a send's template, which
+	// picks a mail's lane, only while a lane is on.
+	lanes       SendLanes
+	templateKey templateKeyOf
+	// xoauth2 is the worker's SMTP client for the lanes sent with XOAUTH2:
+	// its username and token are set before each send. nil while none is.
+	xoauth2        *mail.Client
+	exchangeTokens tokenSource
+	// graphTokens, graphURL and graphClient are the lanes sent with Graph.
+	graphTokens tokenSource
+	graphURL    string
+	graphClient *http.Client
+	sendBudget  time.Duration
 }
 
 func (m *mailerImpl) newEmailSender() (ChannelSender, error) {
@@ -81,44 +99,121 @@ func (m *mailerImpl) newEmailSender() (ChannelSender, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &emailSender{client: client, config: m.smtpConfig, logger: m.logger, db: m.db, tracking: m.tracking}, nil
+	sender := &emailSender{
+		client: client, config: m.smtpConfig, logger: m.logger, db: m.db, tracking: m.tracking,
+		lanes: m.lanes, templateKey: m.templateKey,
+		exchangeTokens: m.exchangeTokens, graphTokens: m.graphTokens, graphURL: m.graphURL, graphClient: m.graphClient,
+		sendBudget: m.sendBudget,
+	}
+	if m.lanes.uses(TransportXOAUTH2) {
+		if sender.xoauth2, err = m.newXOAUTH2Client(); err != nil {
+			return nil, err
+		}
+	}
+	return sender, nil
 }
 
-// newSMTPClient is a worker's SMTP client: STARTTLS required, each send
-// bounded by sendBudget from its dial.
-func (m *mailerImpl) newSMTPClient() (*mail.Client, error) {
-	authType := mail.SMTPAuthLogin
-	if m.smtpConfig.Plain {
-		authType = mail.SMTPAuthPlain
-	}
-	options := append([]mail.Option{
+// smtpOptions are the options every SMTP client of a worker has: STARTTLS
+// required, each send bounded by sendBudget from its dial.
+func (m *mailerImpl) smtpOptions() []mail.Option {
+	return []mail.Option{
 		mail.WithDialContextFunc(dialWithin(m.sendBudget)),
 		mail.WithPort(m.smtpConfig.Port),
-		mail.WithSMTPAuth(authType),
-		mail.WithUsername(m.smtpConfig.User),
-		mail.WithPassword(m.smtpConfig.Password),
 		mail.WithTLSPolicy(mail.TLSMandatory),
 		// go-mail otherwise says NOOP before the mail and again after the
 		// relay took it (before RSET): one more round trip that can only
 		// fail a send that has gone through.
 		mail.WithoutNoop(),
-	}, m.clientOptions...)
-	return mail.NewClient(m.smtpConfig.Host, options...)
+	}
 }
 
+// newSMTPClient is a worker's SMTP client of the off path: AUTH LOGIN (or
+// PLAIN) as SMTP_USER.
+func (m *mailerImpl) newSMTPClient() (*mail.Client, error) {
+	authType := mail.SMTPAuthLogin
+	if m.smtpConfig.Plain {
+		authType = mail.SMTPAuthPlain
+	}
+	options := append(m.smtpOptions(),
+		mail.WithSMTPAuth(authType),
+		mail.WithUsername(m.smtpConfig.User),
+		mail.WithPassword(m.smtpConfig.Password),
+	)
+	return mail.NewClient(m.smtpConfig.Host, append(options, m.clientOptions...)...)
+}
+
+// newXOAUTH2Client is a worker's SMTP client of the XOAUTH2 lanes, to the
+// same relay: AUTH XOAUTH2, always, after the tests' options too.
+func (m *mailerImpl) newXOAUTH2Client() (*mail.Client, error) {
+	options := append(m.smtpOptions(), m.clientOptions...)
+	return mail.NewClient(m.smtpConfig.Host, append(options, mail.WithSMTPAuth(mail.SMTPAuthXOAUTH2))...)
+}
+
+// Send sends job from its lane's mailbox the way the lane says; with every
+// lane off, as SkyMail always has, without reading the send's template.
 func (s *emailSender) Send(ctx context.Context, job database.MailQueue) error {
+	lane, config, err := s.laneOf(ctx, job)
+	if err != nil {
+		return err
+	}
+	switch config.Transport {
+	case TransportGraph:
+		if s.graphTokens == nil || config.From == nil {
+			return fmt.Errorf("send failed: the %s lane is graph without the application's credentials", lane)
+		}
+		return s.sendGraph(ctx, job, lane, config)
+	case TransportXOAUTH2:
+		if s.exchangeTokens == nil || s.xoauth2 == nil || config.From == nil {
+			return fmt.Errorf("send failed: the %s lane is xoauth2 without the application's credentials", lane)
+		}
+		return s.sendXOAUTH2(ctx, job, lane, config)
+	default:
+		msg, err := s.message(ctx, job, s.config.FromEmail, false)
+		if err != nil {
+			return err
+		}
+		return s.sendSMTP(ctx, job, s.client, msg)
+	}
+}
+
+// laneOf is job's sender lane and its configuration. The send's template is
+// read only while a lane is on; failing to read it is tried again later.
+func (s *emailSender) laneOf(ctx context.Context, job database.MailQueue) (Lane, LaneConfig, error) {
+	if !s.lanes.anyOn() {
+		return "", LaneConfig{Transport: TransportOff}, nil
+	}
+	key, system, err := s.templateKey(ctx, job.TaskID)
+	if err != nil {
+		return "", LaneConfig{}, fmt.Errorf("read the send's template for its sender lane: %w", err)
+	}
+	lane := LaneOf(key, system, Priority(job.Priority))
+	return lane, s.lanes.Lane(lane), nil
+}
+
+// message is job's mail from from. queueHeader adds X-SkyMail-Queue-Id, which
+// the lanes write (graph.go); the off path writes the mail as it always has,
+// with SMTP_REPLY_TO's Reply-To when it is set.
+func (s *emailSender) message(ctx context.Context, job database.MailQueue, from string, withQueueHeader bool) (*mail.Msg, error) {
 	msg := mail.NewMsg()
-	if err := msg.From(s.config.FromEmail); err != nil {
-		return permanentError{fmt.Errorf("invalid from email: %w", err)}
+	if err := msg.From(from); err != nil {
+		return nil, permanentError{fmt.Errorf("invalid from email: %w", err)}
 	}
 	if err := msg.To(fmt.Sprintf("%s <%s>", job.RecipientFullName, job.RecipientEmail)); err != nil {
 		// Only the class: go-mail's error quotes the name and the address it
 		// could not parse, and net/mail's may echo part of them, while the
 		// row's error is logged and shown on the send's page.
-		return permanentError{errors.New(invalidRecipientError)}
+		return nil, permanentError{errors.New(invalidRecipientError)}
+	}
+	if s.lanes.ReplyTo != nil {
+		if err := msg.ReplyTo(s.lanes.ReplyTo.String()); err != nil {
+			return nil, permanentError{fmt.Errorf("invalid reply-to: %w", err)}
+		}
 	}
 
 	msg.SetGenHeader(mail.HeaderMessageID, fmt.Sprintf("<%s@%s>", job.ID.String(), s.config.FQDN))
+	if withQueueHeader {
+		msg.SetGenHeader(mail.Header(dsn.QueueIDHeader), queueHeader(job, s.config.FQDN))
+	}
 
 	msg.Subject(job.Subject)
 	msg.SetBodyString(mail.TypeTextPlain, job.Body)
@@ -126,18 +221,56 @@ func (s *emailSender) Send(ctx context.Context, job database.MailQueue) error {
 	if job.BodyHtml != nil {
 		msg.AddAlternativeString(mail.TypeTextHTML, s.outgoingHTML(ctx, job))
 	}
+	return msg, nil
+}
 
+// sendXOAUTH2 sends job from lane's mailbox over SMTP, AUTH XOAUTH2 with an
+// Exchange Online token for the application. The token is dropped when the
+// connection or the AUTH fails, so the next try asks for a new one.
+func (s *emailSender) sendXOAUTH2(ctx context.Context, job database.MailQueue, lane Lane, config LaneConfig) error {
+	msg, err := s.message(ctx, job, config.From.String(), true)
+	if err != nil {
+		return err
+	}
+	// The token's wait is bounded by the send budget, as Graph's is: a slow
+	// Entra must not hold a row past its lease.
+	waiting, cancel := context.WithTimeout(ctx, s.sendBudget)
+	token, err := s.exchangeTokens.Token(waiting)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("send failed: exchange token: %w", err)
+	}
+	s.xoauth2.SetUsername(config.From.Address)
+	s.xoauth2.SetPassword(token)
+	err = s.sendSMTP(ctx, job, s.xoauth2, msg)
+	s.xoauth2.SetPassword("")
+	var dial dialError
+	if errors.As(err, &dial) {
+		s.exchangeTokens.Invalidate(token)
+	}
+	return err
+}
+
+// dialError is a send that failed before the mail: the connection, STARTTLS
+// or AUTH.
+type dialError struct{ err error }
+
+func (e dialError) Error() string { return "dial failed: " + e.err.Error() }
+func (e dialError) Unwrap() error { return e.err }
+
+// sendSMTP sends msg over client, a connection of its own.
+func (s *emailSender) sendSMTP(ctx context.Context, job database.MailQueue, client *mail.Client, msg *mail.Msg) error {
 	// The send's own context, ended when the send returns: the connection
 	// is closed when it ends (withSend), on ctx's cancellation as on any
 	// other way out, a failed dial included.
 	send, done := context.WithCancel(ctx)
 	defer done()
-	smtpClient, err := s.client.DialToSMTPClientWithContext(withSend(send))
+	smtpClient, err := client.DialToSMTPClientWithContext(withSend(send))
 	if err != nil {
-		return fmt.Errorf("dial failed: %w", err)
+		return dialError{err}
 	}
-	defer func() { _ = s.client.CloseWithSMTPClient(smtpClient) }()
-	if err := s.client.SendWithSMTPClient(smtpClient, msg); err != nil {
+	defer func() { _ = client.CloseWithSMTPClient(smtpClient) }()
+	if err := client.SendWithSMTPClient(smtpClient, msg); err != nil {
 		if !msg.IsDelivered() {
 			// A 5xx fails the row at once, anything else is tried again
 			// (smtpFailure).

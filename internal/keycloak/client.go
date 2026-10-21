@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Nerzal/gocloak/v13"
+	"github.com/google/uuid"
 )
 
 // ErrGroupNotFound is GetGroupMembers' answer for a group Keycloak does not
@@ -34,6 +35,11 @@ type Client interface {
 	// GetUser reads one user by id (the Keycloak sub): enabled, e-mail and
 	// whether it is verified, names. A user that is not there is nil, nil.
 	GetUser(ctx context.Context, id string) (*gocloak.User, error)
+	// VerifiedAccountByEmail finds the account of an address
+	// (tracking.Accounts): the one enabled user whose primary e-mail is
+	// address, compared whole and case-insensitively, with it verified; nil
+	// when there is none or more than one. Only the primary e-mail is read.
+	VerifiedAccountByEmail(ctx context.Context, address string) (*uuid.UUID, error)
 }
 
 type clientImpl struct {
@@ -261,6 +267,51 @@ func (c *clientImpl) GetUser(ctx context.Context, id string) (*gocloak.User, err
 		return nil, err
 	}
 	return user, nil
+}
+
+func (c *clientImpl) VerifiedAccountByEmail(ctx context.Context, address string) (*uuid.UUID, error) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return nil, nil
+	}
+	token, err := c.getToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Two are enough to tell one account from several.
+	users, err := c.gc.GetUsers(ctx, token, c.realm, gocloak.GetUsersParams{
+		Email: &address, Exact: gocloak.BoolP(true), Max: gocloak.IntP(2), BriefRepresentation: gocloak.BoolP(true),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ExactVerifiedAccount(address, users), nil
+}
+
+// ExactVerifiedAccount is the account of address among users, as Keycloak's
+// exact e-mail search gave them: the only one whose primary e-mail equals
+// address case-insensitively, if it is enabled and its e-mail verified. None
+// such, or several (a realm that allowed duplicate e-mails), is nil.
+func ExactVerifiedAccount(address string, users []*gocloak.User) *uuid.UUID {
+	address = strings.TrimSpace(address)
+	var found *gocloak.User
+	for _, user := range users {
+		if user == nil || !strings.EqualFold(strings.TrimSpace(gocloak.PString(user.Email)), address) {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = user
+	}
+	if found == nil || !gocloak.PBool(found.Enabled) || !gocloak.PBool(found.EmailVerified) {
+		return nil
+	}
+	id, err := uuid.Parse(gocloak.PString(found.ID))
+	if err != nil {
+		return nil
+	}
+	return &id
 }
 
 func (c *clientImpl) GetGroupMembers(ctx context.Context, id string) ([]*gocloak.User, error) {

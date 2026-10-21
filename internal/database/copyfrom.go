@@ -39,6 +39,7 @@ func (r iteratorForCreateMailQueueItems) Values() ([]interface{}, error) {
 		r.rows[0].RecipientSub,
 		r.rows[0].TrackingToken,
 		r.rows[0].TrackingSkipReason,
+		r.rows[0].SuppressedButSent,
 	}, nil
 }
 
@@ -52,7 +53,7 @@ func (r iteratorForCreateMailQueueItems) Err() error {
 // tracking_token is the recipient's token when the row is tracked, and
 // tracking_skip_reason why not when the send asked for tracking.
 func (q *Queries) CreateMailQueueItems(ctx context.Context, arg []CreateMailQueueItemsParams) (int64, error) {
-	return q.db.CopyFrom(ctx, []string{"mail_queue"}, []string{"task_id", "recipient_full_name", "recipient_email", "subject", "body", "body_html", "priority", "recipient_sub", "tracking_token", "tracking_skip_reason"}, &iteratorForCreateMailQueueItems{rows: arg})
+	return q.db.CopyFrom(ctx, []string{"mail_queue"}, []string{"task_id", "recipient_full_name", "recipient_email", "subject", "body", "body_html", "priority", "recipient_sub", "tracking_token", "tracking_skip_reason", "suppressed_but_sent"}, &iteratorForCreateMailQueueItems{rows: arg})
 }
 
 // iteratorForCreateMailTaskLinks implements pgx.CopyFromSource.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type AuthoringMode string
@@ -305,6 +306,23 @@ type MailApprovalTask struct {
 	TaskID     uuid.UUID `json:"task_id"`
 }
 
+// What a delivery status notification or a relay's refusal said about a queue row: kind, action and codes. No address, no text. Kept a year.
+type MailBounce struct {
+	ID        int64       `json:"id"`
+	QueueID   uuid.UUID   `json:"queue_id"`
+	Source    string      `json:"source"`
+	Kind      string      `json:"kind"`
+	Action    string      `json:"action"`
+	Status    *string     `json:"status"`
+	SmtpCode  pgtype.Int2 `json:"smtp_code"`
+	ExoAsCode *string     `json:"exo_as_code"`
+	// Whether the report named the row's own address; a report that named another (a forwarding, an alias) never suppresses.
+	RecipientMatched bool `json:"recipient_matched"`
+	// SHA-256 (hex) of the report's own id (Graph internetMessageId): one report is recorded once. NULL for a relay's refusal.
+	NdrIDSha256 *string   `json:"ndr_id_sha256"`
+	ReceivedAt  time.Time `json:"received_at"`
+}
+
 type MailFormSource struct {
 	ID                 uuid.UUID  `json:"id"`
 	OwnerSub           string     `json:"owner_sub"`
@@ -359,6 +377,8 @@ type MailQueue struct {
 	TrackingSkipReason *string `json:"tracking_skip_reason"`
 	// When the relay took the mail; null for a row not sent, or sent by an image from before it.
 	SentAt *time.Time `json:"sent_at"`
+	// Account mail (keycloak.*, account.*) queued to a suppressed address: sent anyway, flagged.
+	SuppressedButSent bool `json:"suppressed_but_sent"`
 }
 
 type MailSendWindow struct {
@@ -366,6 +386,33 @@ type MailSendWindow struct {
 	StartsAt    time.Time `json:"starts_at"`
 	Lane        int16     `json:"lane"`
 	Taken       int       `json:"taken"`
+}
+
+// Addresses a permanent failure was recorded for: mail to them is not sent, account mail is sent and flagged. Removed by an operator or Account erasure, never by itself.
+type MailSuppression struct {
+	Address      string     `json:"address"`
+	ID           uuid.UUID  `json:"id"`
+	RecipientSub *uuid.UUID `json:"recipient_sub"`
+	Source       string     `json:"source"`
+	// The codes of the last permanent failure: 5.1.10, 5.4.1 AS(201806281), RCPT TO 550 5.1.1. Never the text.
+	ReasonCode  string     `json:"reason_code"`
+	FirstSeen   time.Time  `json:"first_seen"`
+	LastSeen    time.Time  `json:"last_seen"`
+	Count       int        `json:"count"`
+	LastQueueID *uuid.UUID `json:"last_queue_id"`
+	// When account mail (keycloak.*, account.*) was last sent to the address anyway, flagged.
+	ExemptFlaggedAt *time.Time `json:"exempt_flagged_at"`
+}
+
+// Who removed a suppression and when, with what it said (source, code, count, first seen). No address; Account erasure replaces the actor.
+type MailSuppressionRemoval struct {
+	ID         int64     `json:"id"`
+	RemovedAt  time.Time `json:"removed_at"`
+	ActorSub   string    `json:"actor_sub"`
+	Source     string    `json:"source"`
+	ReasonCode string    `json:"reason_code"`
+	Count      int       `json:"count"`
+	FirstSeen  time.Time `json:"first_seen"`
 }
 
 type MailTask struct {

@@ -1,0 +1,13 @@
+From: Uye <uye@uzak.example.net>
+To: bildirim@kulup.example
+Subject: Otomatik yanit: Duyuru
+Auto-Submitted: auto-replied
+In-Reply-To: <9c8b7a6d-5e4f-4321-8fed-cba987654321@mail.example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Final-Recipient: rfc822;uye@uzak.example.net
+Action: failed
+Status: 5.1.1
+
+Izindeyim, 1 Kasim'da donecegim.

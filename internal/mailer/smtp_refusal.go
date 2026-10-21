@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 
+	"github.com/skylab-kulubu/skymail-backend/internal/dsn"
 	"github.com/wneessen/go-mail"
 )
 
@@ -64,24 +64,10 @@ func (r smtpReply) permanent() bool {
 }
 
 // recipientAddressStatus says an enhanced code is a permanent status of the
-// recipient's address: 5.1.0 to 5.1.6 (RFC 3463: other, bad mailbox, bad
-// system, bad syntax, ambiguous, valid, moved) or 5.1.10 (null MX, RFC 7505;
-// Exchange Online's RecipientNotFound). The rest of 5.1.x is not: 5.1.7 and
-// 5.1.8 are the sender's mailbox and system (RFC 3463), which Postfix
-// answers at RCPT TO by default (smtpd_delay_reject), and Exchange Online
-// gives 5.1.8 to a blocked sending account and 5.1.90 when it has reached its
-// daily recipient limit; 5.1.9 and any code not listed are unknown here.
-// Each would fail every recipient of a list at once.
+// recipient's address (dsn.RecipientAddressStatus: 5.1.0 to 5.1.6, 5.1.10).
+// A delivery status notification is classified by the same list.
 func recipientAddressStatus(enhanced string) bool {
-	detail, ok := strings.CutPrefix(enhanced, "5.1.")
-	if !ok {
-		return false
-	}
-	n, err := strconv.Atoi(detail)
-	if err != nil || n < 0 {
-		return false
-	}
-	return n <= 6 || n == 10
+	return dsn.RecipientAddressStatus(enhanced)
 }
 
 // enhancedCode finds an RFC 3463 code right after the reply code, for a relay

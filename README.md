@@ -155,7 +155,8 @@ Bir kuyruk satırı bir kişiye bir kanaldan bir teslimdir. Motor (kira, deneme,
 göndericisine verir (`internal/mailer/channel.go`, `ChannelSender`). Her işçi
 açılışta her kanalın kendi göndericisini kurar; e-postada bu işçinin SMTP
 istemcisidir (go-mail, STARTTLS zorunlu, `Message-ID`, gönderim başına 1
-dakika). Göndericinin hatası sonucu söyler: hata yok gönderildi, kalıcı hata
+dakika); hangi kutudan ve nasıl gideceğini gönderen şeridi seçer (aşağıda,
+"Gönderen şeritleri"). Göndericinin hatası sonucu söyler: hata yok gönderildi, kalıcı hata
 hemen düşer (`failed`), ötekiler yeniden denenir (en çok 5 deneme; 30 sn,
 1, 2, 4 dakika arayla).
 
@@ -180,7 +181,9 @@ Satırın `error`'ı yalnız adım ve kodlardır, ör. `smtp_rejected: RCPT TO 5
 5.1.1` (kalıcı) ya da `smtp_deferred: MAIL FROM 554 5.2.0` (geçici). Relay'in
 metni yazılmaz, çünkü adresi tekrarlayabilir; bu hata hem loglanır hem
 gönderimin sayfasında görünür. Bir alıcının kalıcı reddi öteki alıcıları
-beklemez, bütçeden de yalnız o tek denemeyi yer.
+beklemez, bütçeden de yalnız o tek denemeyi yer. Kalıcı ret adresi bastırma
+listesine de alır: aynı adrese sonraki gönderim relay'e gitmez (Geri dönen
+posta ve bastırma listesi).
 
 RFC 2606/6761'in ayrılmış alan adlarındaki alıcı (`example.com`, `example.net`,
 `example.org` ve altları; `.example`, `.test`, `.invalid`, `.localhost`;
@@ -209,6 +212,181 @@ bilinen gönderimlerde (liste, adla yazılan kişiler, `POST /mail_tasks/single`
 boştur. Hesap silme kişinin satırlarını adresleriyle ve `sub`'ıyla bulur;
 silinen satırda `recipient_sub` da boşalır. `GET /v1/mail_tasks/{id}/queue`
 her satırın `channel`'ını döner.
+
+## Gönderen şeritleri (`SKYMAIL_SEND_HESAP`, `SKYMAIL_SEND_BILGI`, `SKYMAIL_SEND_DUYURU`)
+
+Her posta türüne göre üç paylaşılan kutudan birinden çıkar (hub bileti
+skymail-bounce-isleme 10; Yusuf, 2026-10-20). Kural `internal/mailer/lanes.go`
+`LaneOf`'tadır, gönderimin şablonuna ve satırın şeridine bakar:
+
+| Şerit | Ne | Kural | Kararlaştırılan yol |
+|---|---|---|---|
+| `hesap` | giriş/kayıt kodu, e-posta doğrulama, şifre sıfırlama | şablon **sistem** şablonu ve anahtarı `keycloak.*` ya da `account.*` (`AccountMail`, bastırma muafiyetiyle aynı kural); hangi öncelik şeridinde olursa olsun | `graph` |
+| `duyuru` | operatörün kitleye postası | toplu şerit (`priority = 0`): liste, Keycloak grubu, Forms formunun yanıtlayanları, onaylı gönderim, toplu bildirim türü, takip isteyen tekil posta | `xoauth2` |
+| `bilgi` | geri kalan işlem postası | sistem şeridi (`priority = 1`): Forms onayı, Mail onayı bildirimi, etkinlik ve öteki sistem bildirimleri | `graph` |
+
+Her şeridin kendi anahtarı vardır; üçü de varsayılan olarak `off`'tur:
+
+| Değer | Nasıl gider |
+|---|---|
+| `off` (ya da boş) | bugünkü gibi: `SMTP_FROM`'dan, `SMTP_USER`/`SMTP_PASS` ile SMTP AUTH (LOGIN, `SMTP_PLAIN=true` ise PLAIN). Gönderimin şablonu okunmaz, `X-SkyMail-Queue-Id` yazılmaz |
+| `graph` | Microsoft Graph `POST /users/{kutu}/sendMail`, `saveToSentItems: false`: kutunun Gönderilmiş Öğeler'ine kopya düşmez |
+| `xoauth2` | `SMTP_HOST:SMTP_PORT` (`smtp.office365.com:587`, STARTTLS), `AUTH XOAUTH2` kutu adına, uygulamanın token'ıyla. Exchange kopyayı Gönderilmiş Öğeler'e koyar (duyuru kutusunda MRM 1 gün) |
+
+Başka bir değer açılışı durdurur. Şerit açıkken:
+
+- `SKYMAIL_FROM_<ŞERİT>` zorunlu: görünen ad ve kutu, ör.
+  `SKY LAB Hesap <hesap@bildirim.yildizskylab.com>`. Graph'ta `from` bu
+  kutudur (gönderim de bu kutunun adına yapılır), SMTP'de `From` ve zarf
+  göndericisi.
+- Uygulamanın (Entra `skymail-posta`, yalnız sertifika) kimliği zorunlu:
+  `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_KEY` (özel anahtar,
+  PKCS#8 PEM'in tek satır base64'ü; OpenBao'da, Dokploy'da `${{vault…}}`) ve
+  `GRAPH_CLIENT_CERT` (açık sertifika; PEM ya da `.cer`'in base64'ü, sır değil).
+  Açılışta anahtarın sertifikaya ait olduğu denetlenir; bozuk ya da eksik değer
+  açılışı durdurur, hata değeri yazmaz. Bu paket (`internal/msauth`) NDR
+  okuyucusuyla (bilet 04) ortaktır.
+- Token: client credentials, sertifikalı client assertion (RFC 7523): PS256 +
+  `x5t#S256`; token ucu reddederse RS256 + `x5t`. Kapsam Graph için
+  `https://graph.microsoft.com/.default`, XOAUTH2 için
+  `https://outlook.office365.com/.default`. Token kapsam başına bütün işçilerce
+  paylaşılır, süresi bitmeden 5 dakika önce yenilenir (yanıtta `expires_in`
+  yoksa 10 dakikalık sayılır). Yenileme sürerken öteki işçiler beklemez,
+  eski token'ı alır; yenileme başarısızsa 30 saniye yeniden denenmez, eski
+  token son 30 saniyesine kadar kullanılır. XOAUTH2'de token beklemesi de
+  Graph'taki gibi gönderim bütçesiyle (1 dakika) sınırlıdır. Graph 401 ya da
+  başarısız SMTP AUTH token'ı düşürür, sonraki deneme yenisini alır. Token, anahtar ve token ucunun
+  açıklama metni hiçbir yere yazılmaz; hata yalnız HTTP durumu, OAuth kodu ve
+  AADSTS numaralarıdır.
+- Açılış logu her şeridin yolunu ve kutusunu, Reply-To'yu, sertifikanın
+  `x5t#S256`'sını ve bitişini yazar; bitişe 30 günden az kaldıysa ya da
+  sertifikanın süresi geçtiyse uyarır (açılışı durdurmaz: kapalı şeritler
+  etkilenmesin).
+
+`SMTP_REPLY_TO` (isteğe bağlı, ör. `info@yildizskylab.com`) her postaya,
+kapalı şeritlerinkine de, `Reply-To` koyar; yoksa `Reply-To` yazılmaz.
+
+**Bounce eşlemesi.** Şeritler her postaya `X-SkyMail-Queue-Id:
+<kuyruk id@SMTP_FQDN>` yazar (`Message-ID` ile aynı değer). Graph `sendMail`
+`202` döner, gövdesi yoktur: postanın kimliğini ya da `Message-ID`'sini
+vermez. `internetMessageId` yalnız taslakta yazılabilir, taslak gönderilince
+Gönderilmiş Öğeler'e düşer; bu yüzden Graph'la giden postanın `Message-ID`'si
+Exchange'in kendisinindir. NDR geri dönen başlıkları ekler; `internal/dsn`
+önce onların `Message-ID`'sine, sonra `X-SkyMail-Queue-Id`'sine bakar
+(aynı `<uuid@SMTP_FQDN>` kuralı). Graph yanıtının `request-id`'si satırın
+kimliğiyle debug loguna yazılır (Microsoft desteği için); istek
+`client-request-id` olarak satırın kimliğini taşır.
+
+**Graph'ın yanıtı** (`internal/mailer/graph.go`): her `2xx` gönderildi
+sayılır (Graph `202` döner; başka bir `2xx`'i yeniden denemek postayı iki kez
+gönderirdi). SMTP'deki gibi yalnız alıcıya özgü ret kalıcıdır: `400 ErrorInvalidRecipients` (adres Exchange'in
+gönderebileceği bir adres değil; hiçbir şey gitmediği için bastırılmaz) ve
+`413` (posta istek sınırını aşıyor; 4 MB'ı aşan istek Graph'a hiç
+gönderilmez, aynı kalıcı hatayla düşer) satırı hemen düşürür. Öteki her yanıt
+(`401`, `403` ör. Mail.Send henüz verilmemiş ya da RBAC kapsamı yayılıyor,
+`404`, başka `400`, `429`, `5xx`) yeniden denenir; `429`/`503`'ün `Retry-After`'ı
+beklenir (en çok 1 saat; ilk denemelerin 30 sn'si yerine). Satırın hatası yalnız
+durum ve koddur, ör. `graph_rejected: 400 ErrorInvalidRecipients`,
+`graph_deferred: 429 ApplicationThrottled retry-after 30s`; Graph'ın mesaj
+metni adresi tekrarlayabildiği için yazılmaz.
+
+**JSON gövde.** Graph'ın JSON postasında tek gövde vardır: HTML'i olan posta
+HTML gider (düz metin alternatifini Exchange kendisi üretir), olmayan düz
+metin. Takip pikseli ve bağlantıları SMTP'deki gibi yerleştirilir. HTML
+JSON'da kaçırılmaz (`<` olduğu gibi). Exchange `from`'un görünen adını
+kutunun dizindeki adıyla ezebilir: kutuların `DisplayName`'i
+`SKYMAIL_FROM_*` adlarıyla aynı tutulur.
+
+**`List-Unsubscribe`.** SkyMail bugün bu başlığı yazmaz (bilet 11). `xoauth2`
+yolu postayı SMTP yoluyla aynı kodla kurar; başlık eklendiğinde duyuru
+kutusundan da gider. Graph JSON'u yalnız `X-` önekli başlık taşır. Şerit
+kuyruk önceliğinden türer: bilet 11 başlığı şeride değil gönderim türüne
+(liste, grup, onaylı gönderim, toplu bildirim) bağlamalı; duyuru@'dan giden
+takipli tekil postaya abonelik başlığı anlamsızdır.
+
+Gönderim bütçesi (`SKYMAIL_RATE_PER_MINUTE`) şeritlerden bağımsız, hepsi için
+ortaktır; Exchange'in dakikada 30 ileti sınırı kutu başınadır.
+
+## Geri dönen posta ve bastırma listesi (`mail_bounces`, `mail_suppressions`)
+
+Exchange Online dış alıcıyı `RCPT TO`'da reddetmez, postayı alır ve sonra
+gönderen kutusuna bir teslim raporu (NDR, RFC 3464) yollar. Bu raporları
+okuyan `internal/bounce` (`Process`) bir raporu kuyruk satırına bağlar ve
+kaydeder; raporu kutudan çeken okuyucu ayrı iştir (hub bileti
+skymail-bounce-isleme 04), bu sürümde yoktur. Bugün listeyi dolduran yol
+relay'in senkron kalıcı reddidir (aşağıda).
+
+- **Ayrıştırma** (`internal/dsn`, yalnız stdlib): üst tür `multipart/report;
+  report-type=delivery-status` olmalı; yalnız `message/delivery-status`
+  bölümü ve geri dönen postanın başlıkları okunur. Konu, insan metni ve HTML
+  hiç okunmaz (Exchange bunları dile göre yazar). Düz metin bounce ve
+  otomatik yanıt `dsn_degil` sayılır. `Diagnostic-Code`'dan yalnız yanıt kodu,
+  ek kod ve Exchange'in `AS(…)` belirteci alınır, metin saklanmaz.
+- **Eşleme** (beşi birden; sahte rapora karşı): geri dönen başlıklardaki
+  `Message-ID`, o değilse `X-SkyMail-Queue-Id` (Graph'la giden posta;
+  Gönderen şeritleri) (geri dönen başlık yoksa raporun `In-Reply-To`'su, sonra
+  `References`) `<kuyruk id@SMTP_FQDN>` olmalı; satır var, `email`, `sent` ve rapor
+  `sent_at`'ten sonra gelmiş olmalı (iki saat arasındaki fark için 2 dakika
+  pay); rapor satırın adresini (`Final-Recipient` ya da `Original-Recipient`)
+  adlandırmalı; rapor daha önce kaydedilmemiş olmalı (kimliğinin SHA-256'sı
+  tekil). Kuyruk id'si rastgele UUID olduğu için dışarıdan atılan bir rapor
+  satırın id'sini ve alıcısını birlikte bilmeden bir şey bastıramaz. Başka bir
+  adresi adlandıran rapor (yönlendirme, takma ad) kaydedilir
+  (`recipient_matched = false`), bastırmaz.
+- **Sınıf**: `Action: failed` ve ek kod 5.1.0–5.1.6 ya da 5.1.10 (SMTP
+  yolundaki kalıcı retle aynı liste) ya da `5.4.1` + `AS(201806281)`
+  (Exchange'in Directory-Based Edge Blocking'i: alıcı yok) **kalıcıdır**:
+  adres tek seferde `mail_suppressions`'a girer. Öteki her ret (5.2.x dolu
+  kutu, 5.7.x politika, 4.x.x süre aşımı) yumuşaktır, `delayed` gecikmedir:
+  ikisi de yalnız `mail_bounces`'a yazılır. Kendiliğinden düşme yoktur.
+- **Kayıt**: `mail_bounces` kuyruk satırına bağlıdır (`ON DELETE CASCADE`),
+  adres ve metin tutmaz: tür, `Action`, ek kod, SMTP kodu, `AS` belirteci,
+  zaman, rapor kimliğinin SHA-256'sı. Bir yıl saklanır (içerik süpürmesi her
+  5 dakikada eskileri siler). `mail_suppressions` küçük harfli adres (anahtar),
+  biliniyorsa `recipient_sub`, kaynak (`dsn` ya da `smtp`), kod, ilk/son
+  görülme, sayı ve son kuyruk satırıdır. Adres satırın kendi adresidir,
+  raporunki değil.
+- **Hesap silme**: kişinin bastırılmış adresleri (adresle, `sub`'la ya da son
+  reddedilen postası kişinin olanla) silinir, sayaç `suppressions_deleted`.
+  Bounce satırı kişinin temizlenen kuyruk satırıyla kalır, adres tutmaz.
+  Kayıt satırı kilitleyerek (`FOR SHARE`) yazar: silme ile aynı anda gelen
+  rapor ya onu bekler ve satırı boş bulur ya da silme onu bekler ve yazdığı
+  bastırmayı siler.
+- **Senkron ret**: relay'in adrese özgü kalıcı reddi (`smtp_rejected`,
+  Kanallar tablosu) satırı `failed` yazdıktan sonra adresi de bastırır
+  (`source = smtp`, kod `RCPT TO 550 5.1.1` biçiminde) ve `mail_bounces`'a
+  `smtp` kaydı düşer. Geçici retler (`smtp_deferred`) bastırmaz.
+- **Kuyruğa alırken**: bastırılmış adresteki alıcı (büyük/küçük harf ve baştaki
+  boşluk fark etmez) `failed` yazılır, `error = suppressed: <kaynak> <kod>`
+  (ör. `suppressed: dsn 5.1.10`), deneme 0; relay'e ve bütçeye gitmez,
+  gönderimin öteki alıcıları kuyruğa girer. Ayrılmış alan adı gibi atlanmış
+  sayılır: gönderimin durumunu "Başarısız" yapmaz (`mail_task_status()`,
+  `20261021090100`); bütün alıcıları atlanan gönderim (bastırılmış adrese tek
+  posta) "Başarısız"dır. Tek posta (`/single`) reddedilmez, kabul edilir.
+- **Muafiyet (yalnız hesap postaları)**: şablon anahtarı `keycloak.*` ya da
+  `account.*` olan **ve** sistem şablonu (`system = true`, Template seed'inki)
+  olan gönderim (giriş/kayıt kodu, e-posta doğrulama, şifre sıfırlama)
+  bastırılmış adrese yine gider; anahtar tek başına yetmez (önekler ayrılmış
+  değil, sistem olmayan bir `account.x` şablonu bastırılır); satır `suppressed_but_sent = true`,
+  bastırma satırı `exempt_flagged_at` alır. Forms, Mail onayı, listeler ve
+  öteki her şey bastırılır. Muafiyet şeritle değil anahtarla: sistem
+  şeridinde Forms ve Mail onayı bildirimleri de var.
+- **Sayılar**: `GET /v1/mail_tasks` ve `/{id}` `recipient_counts`'ta
+  `suppressed` (kuyruğa alırken bastırılan, `failed` içinde de),
+  `suppressed_but_sent` ve `undelivered` (gönderildi, sonra rapor adresin
+  olmadığını söyledi; `sent` içinde de) döner. `GET
+  /v1/mail_tasks/{id}/queue` her satırda `suppressed_but_sent` ve
+  `undelivered` döner.
+- **Operatör uçları** (`skymail:suppressions:manage`, `skymail` istemci
+  rolü, gruba verilir): `GET /v1/suppressions?q=&_start=&_end=` (son
+  ret en yeni önce, `q` adresin bir parçası, sayfa en çok 100, `X-Total-Count`)
+  ve `DELETE /v1/suppressions/{id}` (`204`; yoksa `404`). Satır listenin opak
+  `id`'siyle adlandırılır, adres hiçbir URL'de olmaz (hata logu yolu yazar).
+  Kaldırma `mail_suppression_removals`'a kim, ne zaman, kaynak, kod, sayı ve
+  ilk görülme olarak yazılır; adres yazılmaz. Kaldırılan adrese yeniden
+  gönderilir. Kendiliğinden düşme yoktur.
+- **Loglar**: adres ve rapor metni yazılmaz; kuyruk id'si, kaynak ve kod
+  yazılır.
 
 ## Bildirimler (`POST /v1/notifications`)
 
@@ -439,13 +617,16 @@ Hatalı adres, değeri değil değişkeni söyleyerek açılışı durdurur. Aç
 saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
 
 - **Kim takip edilir (gönderim kuyruğa yazılırken sabitlenir):** bayrak açık;
-  gönderim `tracking: true` istedi (`POST /v1/mail_tasks`, Mail onayı isteği);
-  satır toplu şeritte; şablon System değil ve hassas değil
-  (`mail_task_content_sensitive()`, içerik panelinin tek tanımı). Bayrak
-  kapalıyken ya da şablon System/hassasken alan yok sayılır: yanıt, gönderim
-  ve onay isteği `tracking: false` der, satırlara neden yazılmaz. Sonra
-  alıcının Keycloak `sub`'ı biliniyor
-  (`recipient_sub`: yalnız Keycloak grubu üyeleri) ve core izin veriyor.
+  gönderim `tracking: true` istedi (`POST /v1/mail_tasks`, bir kişinin
+  `POST /v1/mail_tasks/single` gönderimi, listeye ya da kişilere Mail onayı
+  isteği); satır toplu şeritte; şablon System değil ve hassas değil
+  (`mail_task_content_sensitive()`, içerik panelinin tek tanımı; kişilere
+  giden gönderimde içeriği hakkında bir şey söylemeyen şablon hassas
+  sayılır). Bayrak kapalıyken ya da şablon System/hassasken alan yok
+  sayılır: yanıt, gönderim ve onay isteği `tracking: false` der, satırlara
+  neden yazılmaz. Sonra alıcının Keycloak `sub`'ı biliniyor
+  (`recipient_sub`: Keycloak grubu üyeleri ve kişilere tek tek gönderimde
+  adresten bulunan hesap, aşağıda) ve core izin veriyor.
   core'a gönderimin veritabanı işlemi **başlamadan önce** sorulur (Mail
   onayında istek kilitlenmeden önce, grup üyeleriyle birlikte); SkyMail core'u
   hiçbir zaman işlem ya da kilit tutarken beklemez. O yanıtta olmayan kişi
@@ -456,6 +637,29 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   `inactive`, `not_allowed`, `preference_unavailable`, `flag_off`. Gönderim
   takip istemediyse ya da takip edilemezse (`tracking: false`) ikisi de
   boştur. (`transactional` kısıtta duruyor, yazılmıyor.)
+- **Kişilere tek tek gönderim (Yusuf, 2026-10-20):** gönderim formunun
+  kişileri (`/single`) ve kişilere Mail onayı isteği de takip isteyebilir;
+  her alıcı yukarıdaki kuralla tek tek değerlendirilir. Bu kişiler adresle
+  gelir; hesapları gönderimin veritabanı işlemi **başlamadan önce** (onayda
+  istek kilitlenmeden önce) Keycloak'ta aranır: realm'in tam e-posta araması
+  (`GET /admin/realms/<realm>/users?email=…&exact=true&max=2`), yalnız
+  birincil `email` alanı, büyük/küçük harf duyarsız tam eşitlik, kullanıcı
+  etkin ve `emailVerified=true`. Tam bir eşleşme yoksa (ya da birden fazla
+  varsa) `no_account`; okul adresi gibi ikincil öznitelikler okunmaz. İnternal
+  listenin ve grubun adres-yalnız alıcıları aranmaz (`no_account`). Realm
+  `duplicateEmailsAllowed=false` (e-skylab-keycloak `account-center-realm.json`,
+  uzlaştırıcı doğrular). Arama en çok 5 eşzamanlı, gönderim başına toplam
+  5 saniye; Keycloak'ın yanıtlamadığı adres `preference_unavailable` alır,
+  gönderim durmaz (`"event":"tracking_accounts_unavailable"` satırı adres
+  yazmaz, yalnız sayar). Bulunan hesap satırın `recipient_sub`'ı olur ve core
+  ona grup üyeleri gibi sorulur; geri alma ve hesap silme bu satırları da
+  kapsar. Servis hesabı Keycloak'ta kullanıcı okuyabilmeli (`view-users`;
+  `GET /users/{id}` için zaten gerekiyor). Takip isteyen ve alabilen
+  `/single` gönderimi toplu şeride girer (operatör postası); sistem şeridi
+  hiçbir zaman takip edilmez. Bir servisin token'ıyla gelen `/single`
+  (Keycloak, core, Forms: hesap ve işlem postaları) takip istese de
+  `tracking: false` alır, sistem şeridinde kalır. Forms kaynağı gönderimi
+  değişmedi: takip istemez, `tracking: false` der.
 - **core'a ulaşılamazsa** (5 saniye, hata ya da sözleşme dışı yanıt) o
   gönderimde kimse takip edilmez (`preference_unavailable`), gönderim durmaz.
   Uyarı satırı `"event":"tracking_preferences_unavailable"` (`"cause":"core"`
@@ -486,8 +690,8 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   sonra kapatıldıysa posta temiz gider ve belirteç `flag_off` ile kapanır.
   `mail_queue.sent_at` relay'in postayı aldığı an.
 - **Okuma:** `GET /v1/mail_tasks/summary` → `tracking_available` (gönderim
-  formu kutuyu yalnız bu `true` iken gösterir); gönderim satırları ve Mail
-  onayı isteği `tracking` alanı taşır.
+  formu kutuyu yalnız bu `true` iken gösterir); gönderim satırları, Mail
+  onayı isteği ve `POST /v1/mail_tasks/single` yanıtı `tracking` alanı taşır.
 - **Hesap silme** kişiye giden satırların olaylarını siler, belirteçlerini
   kapatır, kişiyi adlandıran (yazıldığı gibi ya da URL çözülmüş) ya da yalnız
   ona giden gönderimin bağlantılarının adresini boşaltır; sayaçlar

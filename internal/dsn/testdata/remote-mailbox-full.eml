@@ -1,0 +1,45 @@
+Return-Path: <>
+From: Mail Delivery System <MAILER-DAEMON@mx.uzak.example.net>
+To: bildirim@kulup.example
+Subject: Undelivered Mail Returned to Sender
+Auto-Submitted: auto-replied
+MIME-Version: 1.0
+Content-Type: multipart/report; report-type=delivery-status;
+	boundary="5A1B2C3D4E.1760954400/mx.uzak.example.net"
+Message-Id: <20261020100000.5A1B2C3D4E@mx.uzak.example.net>
+
+This is a MIME-encapsulated message.
+
+--5A1B2C3D4E.1760954400/mx.uzak.example.net
+Content-Description: Notification
+Content-Type: text/plain; charset=us-ascii
+
+I'm sorry to have to inform you that your message could not
+be delivered to one or more recipients.
+
+--5A1B2C3D4E.1760954400/mx.uzak.example.net
+Content-Description: Delivery report
+Content-Type: message/delivery-status
+
+Reporting-MTA: dns; mx.uzak.example.net
+X-Postfix-Queue-ID: 5A1B2C3D4E
+X-Postfix-Sender: rfc822; bildirim@kulup.example
+Arrival-Date: Tue, 20 Oct 2026 09:59:58 +0000 (UTC)
+
+Final-Recipient: rfc822; dolu@uzak.example.net
+Original-Recipient: rfc822;dolu@uzak.example.net
+Action: failed
+Status: 5.2.2
+Diagnostic-Code: X-Postfix; mailbox dolu@uzak.example.net is full
+
+--5A1B2C3D4E.1760954400/mx.uzak.example.net
+Content-Description: Undelivered Message Headers
+Content-Type: text/rfc822-headers
+
+Return-Path: <bildirim@kulup.example>
+Message-ID: <9c8b7a6d-5e4f-4321-8fed-cba987654321@mail.example.org>
+From: SKY LAB <bildirim@kulup.example>
+To: Dolu <dolu@uzak.example.net>
+Subject: Duyuru
+
+--5A1B2C3D4E.1760954400/mx.uzak.example.net--
