@@ -485,6 +485,27 @@ type MailTrackingEvent struct {
 	ClassifierVersion int16     `json:"classifier_version"`
 }
 
+// Addresses that left a broadcast stream (duyuru) through SkyMail's link: that stream's mail is not sent to them. Removed by the person, by an operator at their request, or by Account erasure; never by itself.
+type MailUnsubscribe struct {
+	Address   string    `json:"address"`
+	Stream    string    `json:"stream"`
+	ID        uuid.UUID `json:"id"`
+	Source    string    `json:"source"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Who reversed an unsubscribe (the person, or an operator with a reason) and when, with what the record said. No address; Account erasure replaces the actor.
+type MailUnsubscribeReactivation struct {
+	ID             int64     `json:"id"`
+	ReactivatedAt  time.Time `json:"reactivated_at"`
+	Actor          string    `json:"actor"`
+	ActorSub       *string   `json:"actor_sub"`
+	Reason         *string   `json:"reason"`
+	Stream         string    `json:"stream"`
+	Source         string    `json:"source"`
+	UnsubscribedAt time.Time `json:"unsubscribed_at"`
+}
+
 type MailingList struct {
 	ID          uuid.UUID  `json:"id"`
 	Name        string     `json:"name"`

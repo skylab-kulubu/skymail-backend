@@ -907,18 +907,28 @@ func (q *Queries) CountSends(ctx context.Context, arg CountSendsParams) error {
 	return err
 }
 
-const countSuppressions = `-- name: CountSuppressions :one
-SELECT count(*)
-FROM mail_suppressions
-WHERE $1::text IS NULL
-   OR strpos(address, lower($1::text)) > 0
+const countSuppressionEntries = `-- name: CountSuppressionEntries :one
+SELECT ((SELECT count(*)
+        FROM mail_suppressions s
+        WHERE ($1::text IS NULL OR $1::text = 'bounce')
+          AND ($2::text IS NULL OR strpos(s.address, lower($2::text)) > 0))
+           + (SELECT count(*)
+              FROM mail_unsubscribes u
+              WHERE ($1::text IS NULL OR $1::text = 'unsubscribed')
+                AND ($2::text IS NULL OR strpos(u.address, lower($2::text)) > 0)))::bigint
+           AS total
 `
 
-func (q *Queries) CountSuppressions(ctx context.Context, search *string) (int64, error) {
-	row := q.db.QueryRow(ctx, countSuppressions, search)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+type CountSuppressionEntriesParams struct {
+	Reason *string `json:"reason"`
+	Search *string `json:"search"`
+}
+
+func (q *Queries) CountSuppressionEntries(ctx context.Context, arg CountSuppressionEntriesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSuppressionEntries, arg.Reason, arg.Search)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
 }
 
 const countTemplateContentSensitiveEvents = `-- name: CountTemplateContentSensitiveEvents :one
@@ -961,6 +971,18 @@ WHERE archived_at IS NULL
 
 func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, countTemplates)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUnsubscribeReactivations = `-- name: CountUnsubscribeReactivations :one
+SELECT count(*)
+FROM mail_unsubscribe_reactivations
+`
+
+func (q *Queries) CountUnsubscribeReactivations(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnsubscribeReactivations)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1560,6 +1582,48 @@ func (q *Queries) DeleteSuppression(ctx context.Context, id uuid.UUID) (DeleteSu
 		&i.Count,
 		&i.FirstSeen,
 	)
+	return i, err
+}
+
+const deleteUnsubscribe = `-- name: DeleteUnsubscribe :execrows
+DELETE
+FROM mail_unsubscribes
+WHERE id = $1
+`
+
+func (q *Queries) DeleteUnsubscribe(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUnsubscribe, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteUnsubscribeOf = `-- name: DeleteUnsubscribeOf :one
+DELETE
+FROM mail_unsubscribes
+WHERE address = $1::text
+  AND stream = $2::text
+RETURNING stream, source, created_at
+`
+
+type DeleteUnsubscribeOfParams struct {
+	Address string `json:"address"`
+	Stream  string `json:"stream"`
+}
+
+type DeleteUnsubscribeOfRow struct {
+	Stream    string    `json:"stream"`
+	Source    string    `json:"source"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Removes the address's unsubscribe from a stream: the person resubscribed.
+// What it said is returned for the reactivation's record, never the address.
+func (q *Queries) DeleteUnsubscribeOf(ctx context.Context, arg DeleteUnsubscribeOfParams) (DeleteUnsubscribeOfRow, error) {
+	row := q.db.QueryRow(ctx, deleteUnsubscribeOf, arg.Address, arg.Stream)
+	var i DeleteUnsubscribeOfRow
+	err := row.Scan(&i.Stream, &i.Source, &i.CreatedAt)
 	return i, err
 }
 
@@ -2595,6 +2659,19 @@ func (q *Queries) GetSuppressedAddresses(ctx context.Context, addresses []string
 	return items, nil
 }
 
+const getSuppressionID = `-- name: GetSuppressionID :one
+SELECT id
+FROM mail_suppressions
+WHERE id = $1
+`
+
+func (q *Queries) GetSuppressionID(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getSuppressionID, id)
+	var id_2 uuid.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const getTemplateById = `-- name: GetTemplateById :one
 SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 FROM templates
@@ -2874,6 +2951,123 @@ func (q *Queries) GetTrackingReport(ctx context.Context, arg GetTrackingReportPa
 	return report, err
 }
 
+const getUnsubscribe = `-- name: GetUnsubscribe :one
+SELECT id, address, stream, source, created_at
+FROM mail_unsubscribes
+WHERE address = $1::text
+  AND stream = $2::text
+`
+
+type GetUnsubscribeParams struct {
+	Address string `json:"address"`
+	Stream  string `json:"stream"`
+}
+
+type GetUnsubscribeRow struct {
+	ID        uuid.UUID `json:"id"`
+	Address   string    `json:"address"`
+	Stream    string    `json:"stream"`
+	Source    string    `json:"source"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// The address's unsubscribe from a stream, if it has one.
+func (q *Queries) GetUnsubscribe(ctx context.Context, arg GetUnsubscribeParams) (GetUnsubscribeRow, error) {
+	row := q.db.QueryRow(ctx, getUnsubscribe, arg.Address, arg.Stream)
+	var i GetUnsubscribeRow
+	err := row.Scan(
+		&i.ID,
+		&i.Address,
+		&i.Stream,
+		&i.Source,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getUnsubscribedAddresses = `-- name: GetUnsubscribedAddresses :many
+
+SELECT address
+FROM mail_unsubscribes
+WHERE stream = $1::text
+  AND address = ANY ($2::text[])
+`
+
+type GetUnsubscribedAddressesParams struct {
+	Stream    string   `json:"stream"`
+	Addresses []string `json:"addresses"`
+}
+
+// The unsubscribe record of the duyuru stream (ADR 0072; hub ticket
+// abonelik-cikisi 02; README, "Tek tık çıkış ucu").
+// The unsubscribed among a send's recipients (lower-cased addresses) in a
+// stream: what queueing writes failed when the send is in that stream.
+func (q *Queries) GetUnsubscribedAddresses(ctx context.Context, arg GetUnsubscribedAddressesParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, getUnsubscribedAddresses, arg.Stream, arg.Addresses)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var address string
+		if err := rows.Scan(&address); err != nil {
+			return nil, err
+		}
+		items = append(items, address)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getUnsubscribedClaimedRows = `-- name: GetUnsubscribedClaimedRows :many
+SELECT q.id, t.key, coalesce(t.system, false)::boolean AS system
+FROM mail_queue q
+         JOIN mail_unsubscribes u ON u.address = lower(btrim(q.recipient_email)) AND u.stream = 'duyuru'
+         LEFT JOIN mail_tasks mt ON mt.id = q.task_id
+         LEFT JOIN templates t ON t.id = mt.template_id
+WHERE q.id = ANY ($1::uuid[])
+  AND q.channel = 'email'
+  AND q.status = 'processing'
+  AND q.claimed_by = $2::text
+`
+
+type GetUnsubscribedClaimedRowsParams struct {
+	Ids       []uuid.UUID `json:"ids"`
+	ClaimedBy string      `json:"claimed_by"`
+}
+
+type GetUnsubscribedClaimedRowsRow struct {
+	ID     uuid.UUID `json:"id"`
+	Key    *string   `json:"key"`
+	System bool      `json:"system"`
+}
+
+// The e-mail rows among ids, claimed by claimed_by, whose address left the
+// duyuru stream, with their send's template's key and whether it is a system
+// template (mailer.LaneOf: account mail is never in the duyuru stream).
+func (q *Queries) GetUnsubscribedClaimedRows(ctx context.Context, arg GetUnsubscribedClaimedRowsParams) ([]GetUnsubscribedClaimedRowsRow, error) {
+	rows, err := q.db.Query(ctx, getUnsubscribedClaimedRows, arg.Ids, arg.ClaimedBy)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetUnsubscribedClaimedRowsRow
+	for rows.Next() {
+		var i GetUnsubscribedClaimedRowsRow
+		if err := rows.Scan(&i.ID, &i.Key, &i.System); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertInboxItems = `-- name: InsertInboxItems :execrows
 INSERT INTO inbox_items (user_id, notification_id, notification_type, title, summary, link, expires_at)
 SELECT person, $1::uuid, $2::text, $3::text,
@@ -3136,6 +3330,55 @@ func (q *Queries) InsertTrackingEvent(ctx context.Context, arg InsertTrackingEve
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const insertUnsubscribe = `-- name: InsertUnsubscribe :execrows
+INSERT INTO mail_unsubscribes (address, stream, source)
+VALUES ($1::text, $2::text, $3::text)
+ON CONFLICT (address, stream) DO NOTHING
+`
+
+type InsertUnsubscribeParams struct {
+	Address string `json:"address"`
+	Stream  string `json:"stream"`
+	Source  string `json:"source"`
+}
+
+// Records an unsubscribe; an address already out of the stream keeps its
+// first record (0 rows).
+func (q *Queries) InsertUnsubscribe(ctx context.Context, arg InsertUnsubscribeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertUnsubscribe, arg.Address, arg.Stream, arg.Source)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertUnsubscribeReactivation = `-- name: InsertUnsubscribeReactivation :exec
+INSERT INTO mail_unsubscribe_reactivations (actor, actor_sub, reason, stream, source, unsubscribed_at)
+VALUES ($1::text, $2::text, $3::text, $4::text,
+        $5::text, $6::timestamptz)
+`
+
+type InsertUnsubscribeReactivationParams struct {
+	Actor          string    `json:"actor"`
+	ActorSub       *string   `json:"actor_sub"`
+	Reason         *string   `json:"reason"`
+	Stream         string    `json:"stream"`
+	Source         string    `json:"source"`
+	UnsubscribedAt time.Time `json:"unsubscribed_at"`
+}
+
+func (q *Queries) InsertUnsubscribeReactivation(ctx context.Context, arg InsertUnsubscribeReactivationParams) error {
+	_, err := q.db.Exec(ctx, insertUnsubscribeReactivation,
+		arg.Actor,
+		arg.ActorSub,
+		arg.Reason,
+		arg.Stream,
+		arg.Source,
+		arg.UnsubscribedAt,
+	)
+	return err
 }
 
 const isJSXSource = `-- name: IsJSXSource :one
@@ -3920,24 +4163,36 @@ func (q *Queries) ListQueueRowsToMask(ctx context.Context, arg ListQueueRowsToMa
 	return items, nil
 }
 
-const listSuppressions = `-- name: ListSuppressions :many
-SELECT id, address, recipient_sub, source, reason_code, first_seen, last_seen, count, last_queue_id, exempt_flagged_at
-FROM mail_suppressions
-WHERE $1::text IS NULL
-   OR strpos(address, lower($1::text)) > 0
-ORDER BY last_seen DESC, address
-LIMIT $3::int OFFSET $2::int
+const listSuppressionEntries = `-- name: ListSuppressionEntries :many
+SELECT e.id, e.address, e.reason, e.stream, e.recipient_sub, e.source, e.reason_code, e.first_seen, e.last_seen,
+       e.count, e.last_queue_id, e.exempt_flagged_at
+FROM (SELECT s.id, s.address, 'bounce'::text AS reason, 'all'::text AS stream, s.recipient_sub, s.source,
+             s.reason_code, s.first_seen, s.last_seen, s.count, s.last_queue_id, s.exempt_flagged_at
+      FROM mail_suppressions s
+      WHERE $1::text IS NULL OR $1::text = 'bounce'
+      UNION ALL
+      SELECT u.id, u.address, 'unsubscribed'::text, u.stream, NULL::uuid, u.source, ''::text, u.created_at,
+             u.created_at, 1, NULL::uuid, NULL::timestamptz
+      FROM mail_unsubscribes u
+      WHERE $1::text IS NULL OR $1::text = 'unsubscribed') e
+WHERE $2::text IS NULL
+   OR strpos(e.address, lower($2::text)) > 0
+ORDER BY e.last_seen DESC, e.address, e.reason
+LIMIT $4::int OFFSET $3::int
 `
 
-type ListSuppressionsParams struct {
+type ListSuppressionEntriesParams struct {
+	Reason    *string `json:"reason"`
 	Search    *string `json:"search"`
 	RowOffset int     `json:"row_offset"`
 	RowLimit  int     `json:"row_limit"`
 }
 
-type ListSuppressionsRow struct {
+type ListSuppressionEntriesRow struct {
 	ID              uuid.UUID  `json:"id"`
 	Address         string     `json:"address"`
+	Reason          string     `json:"reason"`
+	Stream          string     `json:"stream"`
 	RecipientSub    *uuid.UUID `json:"recipient_sub"`
 	Source          string     `json:"source"`
 	ReasonCode      string     `json:"reason_code"`
@@ -3948,20 +4203,29 @@ type ListSuppressionsRow struct {
 	ExemptFlaggedAt *time.Time `json:"exempt_flagged_at"`
 }
 
-// The suppression list, newest first, those whose address contains search
-// (case-insensitively) when it is given.
-func (q *Queries) ListSuppressions(ctx context.Context, arg ListSuppressionsParams) ([]ListSuppressionsRow, error) {
-	rows, err := q.db.Query(ctx, listSuppressions, arg.Search, arg.RowOffset, arg.RowLimit)
+// The suppression list and the unsubscribe record as one list, most recent
+// first: reason bounce (mail_suppressions, every stream) or unsubscribed
+// (mail_unsubscribes, its stream). reason, when given, keeps one of them;
+// search keeps the addresses that contain it, case-insensitively.
+func (q *Queries) ListSuppressionEntries(ctx context.Context, arg ListSuppressionEntriesParams) ([]ListSuppressionEntriesRow, error) {
+	rows, err := q.db.Query(ctx, listSuppressionEntries,
+		arg.Reason,
+		arg.Search,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListSuppressionsRow
+	var items []ListSuppressionEntriesRow
 	for rows.Next() {
-		var i ListSuppressionsRow
+		var i ListSuppressionEntriesRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Address,
+			&i.Reason,
+			&i.Stream,
 			&i.RecipientSub,
 			&i.Source,
 			&i.ReasonCode,
@@ -4249,6 +4513,48 @@ func (q *Queries) ListTrackingRecipients(ctx context.Context, arg ListTrackingRe
 	var recipients []byte
 	err := row.Scan(&recipients)
 	return recipients, err
+}
+
+const listUnsubscribeReactivations = `-- name: ListUnsubscribeReactivations :many
+SELECT id, reactivated_at, actor, actor_sub, reason, stream, source, unsubscribed_at
+FROM mail_unsubscribe_reactivations
+ORDER BY reactivated_at DESC, id DESC
+LIMIT $2::int OFFSET $1::int
+`
+
+type ListUnsubscribeReactivationsParams struct {
+	RowOffset int `json:"row_offset"`
+	RowLimit  int `json:"row_limit"`
+}
+
+// The reactivations, newest first.
+func (q *Queries) ListUnsubscribeReactivations(ctx context.Context, arg ListUnsubscribeReactivationsParams) ([]MailUnsubscribeReactivation, error) {
+	rows, err := q.db.Query(ctx, listUnsubscribeReactivations, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MailUnsubscribeReactivation
+	for rows.Next() {
+		var i MailUnsubscribeReactivation
+		if err := rows.Scan(
+			&i.ID,
+			&i.ReactivatedAt,
+			&i.Actor,
+			&i.ActorSub,
+			&i.Reason,
+			&i.Stream,
+			&i.Source,
+			&i.UnsubscribedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const lockBounceQueueRow = `-- name: LockBounceQueueRow :one
@@ -4544,6 +4850,35 @@ func (q *Queries) LockTrackingRecipient(ctx context.Context, trackingToken []byt
 		&i.TaskID,
 		&i.SentAt,
 		&i.At,
+	)
+	return i, err
+}
+
+const lockUnsubscribe = `-- name: LockUnsubscribe :one
+SELECT id, address, stream, source, created_at
+FROM mail_unsubscribes
+WHERE id = $1
+    FOR UPDATE
+`
+
+type LockUnsubscribeRow struct {
+	ID        uuid.UUID `json:"id"`
+	Address   string    `json:"address"`
+	Stream    string    `json:"stream"`
+	Source    string    `json:"source"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// The unsubscribe the operator API names by id, locked until it is removed.
+func (q *Queries) LockUnsubscribe(ctx context.Context, id uuid.UUID) (LockUnsubscribeRow, error) {
+	row := q.db.QueryRow(ctx, lockUnsubscribe, id)
+	var i LockUnsubscribeRow
+	err := row.Scan(
+		&i.ID,
+		&i.Address,
+		&i.Stream,
+		&i.Source,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -5931,6 +6266,31 @@ func (q *Queries) ShareLockTemplate(ctx context.Context, id uuid.UUID) (Template
 	return i, err
 }
 
+const skipUnsubscribedClaimedRows = `-- name: SkipUnsubscribedClaimedRows :execrows
+UPDATE mail_queue
+SET status = 'failed',
+    error  = $1::text
+WHERE id = ANY ($2::uuid[])
+  AND status = 'processing'
+  AND claimed_by = $3::text
+`
+
+type SkipUnsubscribedClaimedRowsParams struct {
+	Error     string      `json:"error"`
+	Ids       []uuid.UUID `json:"ids"`
+	ClaimedBy string      `json:"claimed_by"`
+}
+
+// Writes failed the claimed rows whose address left the stream after they
+// were queued: skipped, never sent, nothing tried (attempts stays).
+func (q *Queries) SkipUnsubscribedClaimedRows(ctx context.Context, arg SkipUnsubscribedClaimedRowsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, skipUnsubscribedClaimedRows, arg.Error, arg.Ids, arg.ClaimedBy)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const startLeaseOnUnclaimedJobs = `-- name: StartLeaseOnUnclaimedJobs :execrows
 UPDATE mail_queue
 SET claimed_at = NOW()
@@ -6101,6 +6461,17 @@ func (q *Queries) TrackingTaskAccess(ctx context.Context, id uuid.UUID) (Trackin
 		&i.SystemLane,
 	)
 	return i, err
+}
+
+const unsubscribeExists = `-- name: UnsubscribeExists :one
+SELECT EXISTS (SELECT 1 FROM mail_unsubscribes WHERE id = $1)::boolean AS found
+`
+
+func (q *Queries) UnsubscribeExists(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, unsubscribeExists, id)
+	var found bool
+	err := row.Scan(&found)
+	return found, err
 }
 
 const updateMailingList = `-- name: UpdateMailingList :one

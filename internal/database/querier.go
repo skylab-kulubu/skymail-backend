@@ -93,10 +93,11 @@ type Querier interface {
 	// Counts taken rows of one lane in the minute starting at minute_start and
 	// the hour starting at hour_start.
 	CountSends(ctx context.Context, arg CountSendsParams) error
-	CountSuppressions(ctx context.Context, search *string) (int64, error)
+	CountSuppressionEntries(ctx context.Context, arg CountSuppressionEntriesParams) (int64, error)
 	CountTemplateContentSensitiveEvents(ctx context.Context, templateID uuid.UUID) (int64, error)
 	CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error)
 	CountTemplates(ctx context.Context) (int64, error)
+	CountUnsubscribeReactivations(ctx context.Context) (int64, error)
 	// A recipient whose mail did not render, say a template that slices an empty
 	// full name, is written failed, with the render error the send's page shows:
 	// the send's other recipients are queued and mail_task_status reports the
@@ -160,6 +161,10 @@ type Querier interface {
 	// Removes a suppression: the address is mailed again. What it said is
 	// returned for the removal's record, never the address.
 	DeleteSuppression(ctx context.Context, id uuid.UUID) (DeleteSuppressionRow, error)
+	DeleteUnsubscribe(ctx context.Context, id uuid.UUID) (int64, error)
+	// Removes the address's unsubscribe from a stream: the person resubscribed.
+	// What it said is returned for the reactivation's record, never the address.
+	DeleteUnsubscribeOf(ctx context.Context, arg DeleteUnsubscribeOfParams) (DeleteUnsubscribeOfRow, error)
 	// Discards a draft: it stays in the history, but it is nobody's draft in
 	// progress any more and it is never published. A draft discarded already
 	// keeps the time it was. The caller holds the template row's lock and has
@@ -222,6 +227,7 @@ type Querier interface {
 	// The suppressed among a send's recipients (lower-cased addresses): what
 	// queueing writes failed, or sends flagged when the send is account mail.
 	GetSuppressedAddresses(ctx context.Context, addresses []string) ([]GetSuppressedAddressesRow, error)
+	GetSuppressionID(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	GetTemplateById(ctx context.Context, id uuid.UUID) (Template, error)
 	GetTemplateByIdIncludingArchived(ctx context.Context, id uuid.UUID) (Template, error)
 	GetTemplateByKey(ctx context.Context, key *string) (Template, error)
@@ -239,6 +245,17 @@ type Querier interface {
 	// people into the HTTP process. Link URLs are omitted: one-recipient sends
 	// can have personal URLs and the summary only requires mails:read.
 	GetTrackingReport(ctx context.Context, arg GetTrackingReportParams) ([]byte, error)
+	// The address's unsubscribe from a stream, if it has one.
+	GetUnsubscribe(ctx context.Context, arg GetUnsubscribeParams) (GetUnsubscribeRow, error)
+	// The unsubscribe record of the duyuru stream (ADR 0072; hub ticket
+	// abonelik-cikisi 02; README, "Tek tık çıkış ucu").
+	// The unsubscribed among a send's recipients (lower-cased addresses) in a
+	// stream: what queueing writes failed when the send is in that stream.
+	GetUnsubscribedAddresses(ctx context.Context, arg GetUnsubscribedAddressesParams) ([]string, error)
+	// The e-mail rows among ids, claimed by claimed_by, whose address left the
+	// duyuru stream, with their send's template's key and whether it is a system
+	// template (mailer.LaneOf: account mail is never in the duyuru stream).
+	GetUnsubscribedClaimedRows(ctx context.Context, arg GetUnsubscribedClaimedRowsParams) ([]GetUnsubscribedClaimedRowsRow, error)
 	// One notification's inbox item for each person, its text rendered once:
 	// gone in 90 days, or at expires_at when that is sooner. A person already
 	// holding the notification's item is left as they are.
@@ -262,6 +279,10 @@ type Querier interface {
 	// Limits live in SQL as well as the process-wide recording budget. There
 	// are at most 20 opens and 50 clicks per recipient across every replica.
 	InsertTrackingEvent(ctx context.Context, arg InsertTrackingEventParams) (int64, error)
+	// Records an unsubscribe; an address already out of the stream keeps its
+	// first record (0 rows).
+	InsertUnsubscribe(ctx context.Context, arg InsertUnsubscribeParams) (int64, error)
+	InsertUnsubscribeReactivation(ctx context.Context, arg InsertUnsubscribeReactivationParams) error
 	// Whether text is a JSX source by the rule the migration and the old panel's
 	// writes read react_email_content with: something other than whitespace and
 	// comments is left in it.
@@ -306,9 +327,11 @@ type Querier interface {
 	// between the reading and the writing (a row it is emptying is waited for and
 	// read again: emptied, it is not taken).
 	ListQueueRowsToMask(ctx context.Context, arg ListQueueRowsToMaskParams) ([]ListQueueRowsToMaskRow, error)
-	// The suppression list, newest first, those whose address contains search
-	// (case-insensitively) when it is given.
-	ListSuppressions(ctx context.Context, arg ListSuppressionsParams) ([]ListSuppressionsRow, error)
+	// The suppression list and the unsubscribe record as one list, most recent
+	// first: reason bounce (mail_suppressions, every stream) or unsubscribed
+	// (mail_unsubscribes, its stream). reason, when given, keeps one of them;
+	// search keeps the addresses that contain it, case-insensitively.
+	ListSuppressionEntries(ctx context.Context, arg ListSuppressionEntriesParams) ([]ListSuppressionEntriesRow, error)
 	// A template's content_sensitive changes, newest first.
 	ListTemplateContentSensitiveEvents(ctx context.Context, arg ListTemplateContentSensitiveEventsParams) ([]TemplateContentSensitiveEvent, error)
 	// Each operator's draft in progress on the given templates, newest first: the
@@ -330,6 +353,8 @@ type Querier interface {
 	// than their recipient's one-year window (tracking.EventRetentionDays) never
 	// reappear while retention is disabled or catching up. No tracking token or link target is selected.
 	ListTrackingRecipients(ctx context.Context, arg ListTrackingRecipientsParams) ([]byte, error)
+	// The reactivations, newest first.
+	ListUnsubscribeReactivations(ctx context.Context, arg ListUnsubscribeReactivationsParams) ([]MailUnsubscribeReactivation, error)
 	// Bounces and the suppression list (hub spec skymail-bounce-isleme; README,
 	// "Geri dönen posta ve bastırma listesi").
 	// The queue row a delivery status notification names, locked FOR SHARE until
@@ -369,6 +394,8 @@ type Querier interface {
 	// statements after the lock take a fresh READ COMMITTED snapshot, so two
 	// replicas cannot both pass the per-recipient caps on a stale snapshot.
 	LockTrackingRecipient(ctx context.Context, trackingToken []byte) (LockTrackingRecipientRow, error)
+	// The unsubscribe the operator API names by id, locked until it is removed.
+	LockUnsubscribe(ctx context.Context, id uuid.UUID) (LockUnsubscribeRow, error)
 	// Every item of the person's inbox (archived ones left out) not yet seen, or
 	// with read not yet read, marked so.
 	MarkAllInboxItems(ctx context.Context, arg MarkAllInboxItemsParams) (int64, error)
@@ -525,6 +552,9 @@ type Querier interface {
 	// Keeps a template from being published over, archived or changed while a
 	// send of it is checked and queued; other sends of it share the lock.
 	ShareLockTemplate(ctx context.Context, id uuid.UUID) (Template, error)
+	// Writes failed the claimed rows whose address left the stream after they
+	// were queued: skipped, never sent, nothing tried (attempts stays).
+	SkipUnsubscribedClaimedRows(ctx context.Context, arg SkipUnsubscribedClaimedRowsParams) (int64, error)
 	// A processing row without claimed_at was taken by an image from before the
 	// lease, or comes from a dump made before it. Its lease starts now, the first
 	// time a process sees it: the image that took it may be sending it still.
@@ -550,6 +580,7 @@ type Querier interface {
 	// person's tracked send is in the bulk lane, and the system lane is never
 	// tracked as a person asks. Its people are read with the role only.
 	TrackingTaskAccess(ctx context.Context, id uuid.UUID) (TrackingTaskAccessRow, error)
+	UnsubscribeExists(ctx context.Context, id uuid.UUID) (bool, error)
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
 	UpdateRecipient(ctx context.Context, arg UpdateRecipientParams) (Recipient, error)
 	UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) (Template, error)
