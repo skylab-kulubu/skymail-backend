@@ -229,13 +229,21 @@ her satırın `channel`'ını döner.
 
 Her posta türüne göre üç paylaşılan kutudan birinden çıkar (hub bileti
 skymail-bounce-isleme 10; Yusuf, 2026-10-20). Kural `internal/mailer/lanes.go`
-`LaneOf`'tadır, gönderimin şablonuna ve satırın şeridine bakar:
+`LaneOf`'tadır, gönderimin şablonuna, gönderimin **amacına**
+(`mail_tasks.purpose`, ADR 0072 karar 2; aşağıda "Gönderim amacı ve
+kategori") ve satırın şeridine bakar. Amaç yalnız `SKYMAIL_MAIL_PURPOSE=on`
+iken okunur; kapalıyken ve amacı olmayan eski satırda kural bugünkü gibidir
+(toplu şerit `duyuru`, sistem şeridi `bilgi`):
 
 | Şerit | Ne | Kural | Kararlaştırılan yol |
 |---|---|---|---|
-| `hesap` | giriş/kayıt kodu, e-posta doğrulama, şifre sıfırlama | şablon **sistem** şablonu ve anahtarı `keycloak.*` ya da `account.*` (`AccountMail`, bastırma muafiyetiyle aynı kural); hangi öncelik şeridinde olursa olsun | `graph` |
-| `duyuru` | operatörün kitleye postası | toplu şerit (`priority = 0`): liste, Keycloak grubu, Forms formunun yanıtlayanları, onaylı gönderim, toplu bildirim türü, takip isteyen tekil posta | `xoauth2` |
-| `bilgi` | geri kalan işlem postası | sistem şeridi (`priority = 1`): Forms onayı, Mail onayı bildirimi, etkinlik ve öteki sistem bildirimleri | `graph` |
+| `hesap` | giriş/kayıt kodu, e-posta doğrulama, şifre sıfırlama | şablon **sistem** şablonu ve anahtarı `keycloak.*` ya da `account.*` (`AccountMail`, bastırma muafiyetiyle aynı kural); amacı ve öncelik şeridi ne olursa olsun | `graph` |
+| `duyuru` | operatörün kitleye postası (duyuru akışı) | amaç `duyuru`: liste, Keycloak grubu ve varsayılan olarak Forms yanıtlayanları, onaylı gönderim, takipli tekil posta; amacı yoksa toplu şerit (`priority = 0`), toplu bildirim türü dahil | `xoauth2` |
+| `bilgi` | geri kalan işlem postası (işlem akışı) | amaç `islem`: servisin tekil postası, operatörün beyanla işlem dediği posta (toplu öncelikte beklese de); amacı yoksa sistem şeridi (`priority = 1`): Forms onayı, Mail onayı bildirimi, etkinlik ve öteki sistem bildirimleri | `graph` |
+
+Kuyruk önceliği akıştan ayrıdır: operatörün işlem amaçlı Forms ya da onaylı
+gönderimi toplu öncelikte (bütçenin toplu payında) bekler ama `bilgi@`'dan,
+başlıksız çıkar; duyuru amaçlı her gönderim toplu öncelikte kuyruğa girer.
 
 Her şeridin kendi anahtarı vardır; üçü de varsayılan olarak `off`'tur:
 
@@ -444,6 +452,109 @@ relay'in senkron kalıcı reddidir (aşağıda).
 - **Loglar**: adres ve rapor metni yazılmaz; kuyruk id'si, kaynak ve kod
   yazılır.
 
+## Gönderim amacı ve kategori (`SKYMAIL_MAIL_PURPOSE`)
+
+Her posta bir gönderim akışındadır ve akışı gönderimin **amacı** belirler,
+kuyruk önceliği belirlemez (ADR 0072 karar 2 ve 8; hub bileti abonelik-cikisi
+03). `islem` akışı `hesap@` ve `bilgi@`'dır: tercihe ve çıkış kaydına bakmaz,
+`List-Unsubscribe` taşımaz. Takip amaca bağlı değildir, takip kurallarına
+tabidir (`SKYMAIL_TRACKING`, `_OPERATOR`, `_SYSTEM`; Yusuf: bütün postalar
+takipli). `duyuru` akışı duyuru kutusudur:
+her posta core'un bir kategorisini taşır, tercihe (bilet 09) ve çıkış kaydına
+uyar, tek tık başlığını ve gövdede görünür bağlantıyı taşır.
+
+| `SKYMAIL_MAIL_PURPOSE` | |
+|---|---|
+| `off` (ya da boş, varsayılan) | alanlar yok sayılır, hiçbir gönderime amaç yazılmaz, akışı bugünkü gibi öncelik belirler, künye satırı eklenmez |
+| `on` | kişinin her gönderimi ve onay isteği amaçla yazılır; akışı amaç belirler; künye satırı eklenir |
+
+Başka değer açılışı durdurur; açılış logu `mail_purpose` alanını yazar.
+Arayüz bayrağı `GET /v1/mail_tasks/tracking-mode` ve `/summary`'nin
+`purpose_available` alanından okur.
+
+**İstek alanları** (`POST /v1/mail_tasks`, `/single`, `/form-source`,
+`POST /v1/mail_approvals`, `POST /v1/mail_approvals/{id}/resubmit`):
+
+| Alan | |
+|---|---|
+| `purpose` | `islem` ya da `duyuru` |
+| `category` | `duyuru`'da zorunlu, `islem`'de yasak: `club:duyuru`, `club:haber`, `team:<Keycloak grup id>:duyuru`, `team:<id>:haber`. Grup id'si UUID'dir, küçük harfle yazılır. Grubun gerçekten ekip olup olmadığını core söyler (bilet 09) |
+| `transactional_statement` | `islem`'de zorunlu ve `true`: "bu posta alıcının kendi başvurusu ya da işlemi hakkındadır". `duyuru`'da yok sayılır |
+| `commercial_content_absent` | "ticari içerik yok" beyanı. `false` her amaçta reddedilir: ticari ileti 6563'e göre İYS onayı ister, kulübün o yolu yok (ADR 0072 karar 9). `duyuru`'da `true` saklanır, yokluğunun reddi bilet 09'un `SKYMAIL_BULK_PREFERENCE` bayrağıyla gelir. `islem`'de `true` yok sayılır |
+
+**Kurallar** (Yusuf, 2026-10-21; hepsi `400`, hiçbir şey kuyruğa girmez):
+
+| Durum | Kod |
+|---|---|
+| liste ya da Keycloak grubuna (doğrudan ya da onay isteğiyle) `islem` | `mail_task.purpose_not_allowed` |
+| `islem` ama `transactional_statement` yok ya da `false` | `mail_task.transactional_statement_required` |
+| `commercial_content_absent: false` (her amaçta) | `mail_task.commercial_content_not_allowed` |
+| `islem` + `category` | `mail_task.category_not_allowed` |
+| `duyuru` ama `category` yok | `mail_task.category_required` |
+| `category` core'un biçiminde değil | `mail_task.category_invalid` |
+| `purpose` olmadan `category` ya da bir beyan | `mail_task.purpose_required` |
+| `purpose` `islem`/`duyuru` dışında | `mail_task.purpose_invalid` |
+
+Denetim sırası: önce `purpose_required`, sonra `commercial_content_not_allowed`,
+sonra `purpose_invalid`, en son amacın kendi kuralları (`islem`: hedef,
+kategori, beyan; `duyuru`: kategori). Bilet 09 kategorinin core'da gerçekten
+bir ekip olduğunu sorar; olmayan ekip orada `400 mail_task.category_unknown`
+döner. Forms kaynağının birebir tekrarı aynı amacı taşımalıdır: amacı
+değişen tekrar başka bir istektir, `409 form_source.consumed` döner. Liste ya
+da gruba giden onay isteği onaylanırken saklı amaç yeniden denetlenir:
+`duyuru` değilse `duyuru` + `club:duyuru` gider.
+
+`islem` yalnız iki hedefte seçilebilir: kişilere tek tek (`/single`, kişilere
+onay isteği) ve Forms yanıtlayanlarına (`/form-source`, Forms kaynaklı onay
+isteği). `islem` gönderim de öteki operatör gönderimleri gibi takip edilir
+(`SKYMAIL_TRACKING_OPERATOR=on` iken her zaman; gizli/hassas şablon ve
+alıcıdan yapılan bağlantı kuralları aynı). Servisin `islem` postası
+`SKYMAIL_TRACKING_SYSTEM` kuralıyla kalır.
+
+**Varsayılanlar.** Alanları göndermeyen kişi gönderimi `duyuru` +
+`club:duyuru` yazılır (ADR 0072 karar 2: "Seçmezse posta duyurudur"): liste,
+grup, Forms kaynağı, onay isteği ve kişinin `/single`'ı, takipli de takipsiz
+de. Bayrak açıkken eski arayüzün takipsiz `/single`'ı bu yüzden toplu şeride
+ve `duyuru@`'ya geçer.
+Servis token'ıyla (Keycloak, core, Forms) gelen `/single` her zaman
+`islem`'dir, alanları yok sayılır. Bayrak kapalıyken gönderilmiş onay isteği
+(amaçsız) bayrak açıkken onaylanırsa `duyuru` + `club:duyuru` gider.
+`POST /v1/notifications` amaç yazmaz (öncelik kuralı; toplu tür `duyuru`).
+
+**Kuyruk.** Takipsiz `islem` tekil posta sistem şeridine, takipli `islem` ve
+her `duyuru` tekil posta (takipsiz de) toplu şeride girer (takip yalnız toplu
+şeritte planlanır; takipli `islem` yine `bilgi@`'dan çıkar); liste, grup, Forms ve onaylı gönderim her zaman toplu
+şerittedir. Çıkış kaydı (`mail_unsubscribes`) yalnız `duyuru` akışına
+uygulanır: işlem amaçlı Forms gönderiminin alıcısı çıkış yapmış olsa da alır.
+
+**Raporda.** `GET /v1/mail_tasks`, `/{id}`, ana sayfanın son gönderimleri ve
+Mail onayı istekleri (`GET /v1/mail_approvals`, `/{id}`) `purpose`,
+`category`, `transactional_statement` ve `commercial_content_absent` döner;
+bayraktan önceki ya da bayrak kapalıyken yazılmış gönderimde dördü de `null`'dur.
+Gönderim yanıtı (`CreatedMailTask`) `purpose` ve `category` döner.
+
+**Künye satırı.** Bayrak açıkken, `duyuru` akışındaki ve satırında çıkış
+bağlantısı (`list_unsubscribe_url`) olan postanın HTML'inde ya da düz
+metninde bağlantı yoksa, gönderim anında sona kısa bir satır eklenir
+(`internal/mailer/footer.go`): HTML'de son `</body>`'den önce
+`SKY LAB duyurularını almak istemiyorsan: <a href="…">Abonelikten çık</a>`,
+düz metinde `SKY LAB duyurularını almak istemiyorsan: Abonelikten çık <…>`.
+Her parça ayrı denetlenir; şablon `{{.UnsubscribeUrl}}`'yi kendisi yazıyorsa
+(bilet 05'in künyesi) eklenmez. Satır kuyruktaki satıra ve gönderilen içerik
+ekranına yazılmaz, bağlantısı tıklama adresi almaz. Bağlantıyı bu bayrak
+üretmez: bugün yalnız `POST /v1/notifications`'ın `unsubscribe_url`'i verir;
+bilet 09'dan sonra her duyuru satırı taşır.
+
+**Göç** (`20261023100000`, yalnız ekleme): `mail_tasks` ve `mail_approvals`'a
+`purpose`, `category`, `transactional_statement`, `commercial_content_absent`
+(nullable), `NOT VALID` denetimlerle: amaç değeri, kategori biçimi, her alanın
+kendi amacına ait olması ve (yalnız `mail_tasks`) listeye/gruba giden
+gönderimin `islem` olmaması. Eski imaj bu sütunları okumaz, yazmaz.
+
+**Geri dönüş.** `SKYMAIL_MAIL_PURPOSE=off` + yeniden dağıtım: amaç okunmaz,
+kuyrukta bekleyen işlem amaçlı toplu satır da yeniden `duyuru@`'dan gider,
+künye satırı eklenmez. İmajı geri almak da güvenlidir; sütunlar kalır.
+
 ## Tek tık çıkış ucu (`SKYMAIL_UNSUBSCRIBE_LINK`, `mail_unsubscribes`)
 
 Hesabı olmayan adresin duyuru akışından çıktığı yer (ADR 0072 karar 4–7; hub
@@ -464,8 +575,8 @@ olana, panel kişinin isteğiyle geri alana ya da hesap silinene kadar durur.
 
 **Uygulama.** Kayıt bayraktan bağımsız her zaman uygulanır: bayrağı kapatmak
 çıkmış adrese posta göndermez.
-- **Kuyruğa alırken**: gönderen şeridi `duyuru` olan gönderimde (`LaneOf`;
-  bilet 03'ten sonra amaç) kayıttaki alıcı `failed` yazılır,
+- **Kuyruğa alırken**: gönderen şeridi `duyuru` olan gönderimde (`LaneOf`:
+  `SKYMAIL_MAIL_PURPOSE=on` iken amaç, kapalıyken öncelik) kayıttaki alıcı `failed` yazılır,
   `error = suppressed: unsubscribed`, deneme 0; relay'e ve bütçeye gitmez.
   Bounce gibi atlanmış sayılır, gönderimi "Başarısız" yapmaz
   (`mail_task_status()`).
@@ -1044,7 +1155,9 @@ kalabilir, ayrı ayrı geri alınır.
   isteğin tekrarı kimseyi yeniden sormaz.
 - **Şerit:** her operatör postası toplu şerittedir (gönderen şeridi
   `duyuru`); bayrak kapalıyken kutusuz giden tekil posta sistem şeridine
-  (`bilgi`) giderdi. Sistem şeridindeki bir posta bu bayrakla hiçbir zaman
+  (`bilgi`) giderdi. `SKYMAIL_MAIL_PURPOSE=on` iken `islem` amaçlı
+  operatör gönderimi de takiplidir, toplu şeritte bekler ve `bilgi@`'dan
+  çıkar (yukarıda "Gönderim amacı ve kategori"). Sistem şeridindeki bir posta bu bayrakla hiçbir zaman
   takip edilmez (kişi raporu kuralı buna dayanır, yukarıda).
 - **Geri dönüş:** `SKYMAIL_TRACKING_OPERATOR=off` + yeniden dağıtım: form
   kutuyu yeniden gösterir, yeni gönderim yalnız isterse takip edilir.

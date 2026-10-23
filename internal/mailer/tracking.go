@@ -40,6 +40,8 @@ func WithTracking(t Tracking) Option {
 // that asks for tracking gets it.
 func (m *mailerImpl) TrackingAvailable() bool { return m.tracking.Config.On() }
 
+func (m *mailerImpl) PurposeAvailable() bool { return m.lanes.Purpose }
+
 // SystemTrackingAvailable reports whether SKYMAIL_TRACKING_SYSTEM is on with
 // SKYMAIL_TRACKING: whether the mail services send without asking is
 // tracked (EnqueueSystemSingle, EnqueueWithRecipientsParams.System).

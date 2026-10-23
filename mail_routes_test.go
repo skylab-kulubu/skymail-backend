@@ -31,6 +31,7 @@ func (idleMailer) TrackingApplies(context.Context, uuid.UUID, *uuid.UUID) bool {
 func (idleMailer) SystemTrackingAvailable() bool { return false }
 
 func (idleMailer) OperatorTrackingAlways() bool { return false }
+func (idleMailer) PurposeAvailable() bool       { return false }
 
 func (idleMailer) EnqueueSystemSingle(context.Context, database.CreateSingleMailTaskParams, *mailer.TrackingPreferences) (uuid.UUID, bool, error) {
 	return uuid.Nil, false, nil
