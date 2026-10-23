@@ -28,10 +28,10 @@ import (
 // Account mail is hesap in either lane. Each lane has its own switch: off (the
 // default) sends it the way SkyMail always has, SMTP AUTH as SMTP_USER from
 // SMTP_FROM; graph sends it through Microsoft Graph sendMail without a copy in
-// Sent Items (the decided path for hesap and bilgi); xoauth2 sends it over
-// SMTP with an OAuth token (the decided path for duyuru, whose
-// List-Unsubscribe header Graph cannot carry). Both use the skymail-posta
-// application's certificate (internal/msauth).
+// Sent Items; xoauth2 sends it over SMTP with an OAuth token. Both use the
+// skymail-posta application's certificate (internal/msauth). A duyuru mail
+// with a List-Unsubscribe link goes either way (list_unsubscribe.go): Graph
+// sends it as MIME, which keeps the header and a copy in Sent Items.
 
 // Lane is which sender mailbox a mail goes out from.
 type Lane string
@@ -78,6 +78,10 @@ type SendLanes struct {
 	// Credentials are the skymail-posta application's (GRAPH_*), read when
 	// a lane is not off.
 	Credentials *msauth.Credentials
+	// ListUnsubscribe is SKYMAIL_LIST_UNSUBSCRIBE: the duyuru lane's mail
+	// whose row has an unsubscribe link carries List-Unsubscribe and
+	// List-Unsubscribe-Post (list_unsubscribe.go). Off by default.
+	ListUnsubscribe bool
 }
 
 // Lane is lane's configuration: off when it has none.
@@ -121,10 +125,15 @@ const ReplyToEnv = "SMTP_REPLY_TO"
 // <hesap@bildirim.yildizskylab.com>"), and the application's credentials
 // (GRAPH_TENANT_ID, GRAPH_CLIENT_ID, GRAPH_CLIENT_KEY, GRAPH_CLIENT_CERT).
 // SMTP_REPLY_TO, optional, is an address with or without a display name.
-// Anything else stops startup, so a typo cannot quietly send from the wrong
-// mailbox.
+// SKYMAIL_LIST_UNSUBSCRIBE is off (also when unset) or on. Anything else stops
+// startup, so a typo cannot quietly send from the wrong mailbox.
 func SendLanesFromEnv(getenv func(string) string) (SendLanes, error) {
 	lanes := SendLanes{Lanes: make(map[Lane]LaneConfig, len(Lanes))}
+	listUnsubscribe, err := listUnsubscribeFromEnv(getenv)
+	if err != nil {
+		return SendLanes{}, err
+	}
+	lanes.ListUnsubscribe = listUnsubscribe
 	for _, lane := range Lanes {
 		raw := strings.ToLower(strings.TrimSpace(getenv(sendEnv(lane))))
 		transport := Transport(raw)

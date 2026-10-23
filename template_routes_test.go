@@ -51,6 +51,10 @@ func templateRoutesApp(t *testing.T, roles ...string) (*fiber.App, database.Temp
 	api.Use(func(c fiber.Ctx) error {
 		c.Locals("user_id", "31ef736f-72da-4a40-8791-d523199cf9f0")
 		c.Locals("roles", roles)
+		// Another caller's token: X-Test-Roles names its roles.
+		if other := c.Get("X-Test-Roles"); other != "" {
+			c.Locals("roles", strings.Split(other, ","))
+		}
 		return c.Next()
 	})
 	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
@@ -353,10 +357,140 @@ func TestMalformedRequiredVariableNamesAreRefused(t *testing.T) {
 	}
 }
 
+// seedRoles are the skymail roles of the Template seed's service account
+// (skymail-seed): the template roles and skymail:templates:system.
+var seedRoles = []string{"skymail:access", "skymail:templates:read", "skymail:templates:write", handlers.TemplatesSystemRole}
+
+// operatorRoles are an operator's who writes templates: no system mark.
+const operatorRoles = "skymail:access,skymail:templates:read,skymail:templates:write"
+
+// sendJSONWithRoles is sendJSON with another caller's roles.
+func sendJSONWithRoles(t *testing.T, app *fiber.App, roles, method, path string, body any) (int, []byte) {
+	t.Helper()
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(method, path, bytes.NewReader(payload))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Test-Roles", roles)
+	response, err := app.Test(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(response.Body)
+	return response.StatusCode, raw
+}
+
+// Being a system template is a privilege: an account.* or keycloak.* one goes
+// past the suppression list. So only skymail:templates:system — the seed's —
+// makes a template one or takes it away, through the by-key upsert. Without
+// it the upsert still rewrites a system template's content, as the operator
+// could before, sending the mark it has; any other mark is refused 403
+// server.forbidden in the API's shape, before a seed conflict, and nothing is
+// written.
+func TestOnlyTheSystemRoleChangesTheSystemMark(t *testing.T) {
+	app, _ := templateRoutesApp(t, seedRoles...)
+	const path = "/v1/templates/by-key/account.login-code"
+	body := func(html string, system bool) map[string]any {
+		return map[string]any{
+			"name": "Giriş kodu", "subject": "Giriş kodun", "html_content": html, "plain_text_content": "{{.code}}",
+			"react_email_content": "// kaynak", "system": system,
+		}
+	}
+	type forbidden struct {
+		Code   string `json:"code"`
+		Params struct {
+			MissingRoles []string `json:"missing_roles"`
+			Field        string   `json:"field"`
+			System       *bool    `json:"system"`
+		} `json:"params"`
+	}
+	refused := func(t *testing.T, status int, raw []byte, system bool) {
+		t.Helper()
+		var answer forbidden
+		if err := json.Unmarshal(raw, &answer); err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if status != fiber.StatusForbidden || answer.Code != "server.forbidden" ||
+			len(answer.Params.MissingRoles) != 1 || answer.Params.MissingRoles[0] != handlers.TemplatesSystemRole ||
+			answer.Params.Field != "system" || answer.Params.System == nil || *answer.Params.System != system {
+			t.Fatalf("= %d %s, want 403 server.forbidden naming %s, field system and system %v", status, raw, handlers.TemplatesSystemRole, system)
+		}
+	}
+	served := func(t *testing.T) database.Template {
+		t.Helper()
+		status, raw := sendJSON(t, app, fiber.MethodGet, path, nil)
+		if status != fiber.StatusOK {
+			t.Fatalf("GET %s = %d %s", path, status, raw)
+		}
+		var template database.Template
+		if err := json.Unmarshal(raw, &template); err != nil {
+			t.Fatal(err)
+		}
+		return template
+	}
+
+	// A new key: an operator cannot make it a system template, and nothing is written.
+	status, raw := sendJSONWithRoles(t, app, operatorRoles, fiber.MethodPut, path, body("<p>{{.code}}</p>", true))
+	refused(t, status, raw, false)
+	if status, raw := sendJSON(t, app, fiber.MethodGet, path, nil); status != fiber.StatusNotFound {
+		t.Fatalf("after the refusal GET = %d %s, want 404: nothing written", status, raw)
+	}
+
+	// The seed can.
+	if status, raw := sendJSON(t, app, fiber.MethodPut, path, body("<p>{{.code}}</p>", true)); status != fiber.StatusOK {
+		t.Fatalf("seed = %d %s", status, raw)
+	}
+	if !served(t).System {
+		t.Fatal("the seed's system template is not a system template")
+	}
+
+	// An operator still rewrites its content here, sending the mark it has.
+	if status, raw := sendJSONWithRoles(t, app, operatorRoles, fiber.MethodPut, path, body("<p>Kodun: {{.code}}</p>", true)); status != fiber.StatusOK {
+		t.Fatalf("operator rewrite keeping the mark = %d %s, want 200", status, raw)
+	}
+	kept := served(t)
+	if !kept.System || kept.HtmlContent != "<p>Kodun: {{.code}}</p>" {
+		t.Fatalf("after the operator's rewrite system %v, html %q", kept.System, kept.HtmlContent)
+	}
+
+	// An operator's change makes the next upsert a seed conflict; taking the
+	// mark away is refused first, and nothing is written.
+	if status, raw := sendJSONWithRoles(t, app, operatorRoles, fiber.MethodPatch, "/v1/templates/"+kept.ID.String(), map[string]any{
+		"name": kept.Name, "subject": "Kodun geldi", "html_content": kept.HtmlContent,
+		"plain_text_content": kept.PlainTextContent, "react_email_content": kept.ReactEmailContent, "key": "account.login-code",
+	}); status != fiber.StatusOK {
+		t.Fatalf("operator edit = %d %s", status, raw)
+	}
+	for _, force := range []string{"", "?force=true"} {
+		status, raw = sendJSONWithRoles(t, app, operatorRoles, fiber.MethodPut, path+force, body("<p>Yeni {{.code}}</p>", false))
+		refused(t, status, raw, true)
+	}
+	after := served(t)
+	if !after.System || after.Subject != "Kodun geldi" || after.HtmlContent != kept.HtmlContent {
+		t.Fatalf("after the refusals system %v, subject %q, html %q: want them unchanged", after.System, after.Subject, after.HtmlContent)
+	}
+
+	// The seed takes the mark away (forced over the operator's change).
+	if status, raw := sendJSON(t, app, fiber.MethodPut, path+"?force=true", body("<p>{{.code}}</p>", false)); status != fiber.StatusOK {
+		t.Fatalf("seed unmarking = %d %s", status, raw)
+	}
+	if served(t).System {
+		t.Fatal("the seed did not take the system mark away")
+	}
+	// And an operator cannot put it back.
+	status, raw = sendJSONWithRoles(t, app, operatorRoles, fiber.MethodPut, path, body("<p>{{.code}}</p>", true))
+	refused(t, status, raw, false)
+	if served(t).System {
+		t.Fatal("an operator made the template a system template")
+	}
+}
+
 // The seed sends each contract variable with its reason; the seed on main
 // today sends names alone. Production's JSON decoder takes both, in one list.
 func TestTheSeedSendsContractVariablesWithOrWithoutReasons(t *testing.T) {
-	app, _ := templateRoutesApp(t, "skymail:access", "skymail:templates:write", "skymail:templates:read")
+	app, _ := templateRoutesApp(t, seedRoles...)
 
 	status, body := sendJSON(t, app, fiber.MethodPut, "/v1/templates/by-key/keycloak.reset-password", map[string]any{
 		"name": "Parola", "subject": "Parola", "html_content": `<a href="{{.link}}">{{.firstName}}</a>`, "plain_text_content": "{{.link}}",
@@ -389,7 +523,7 @@ func TestTheSeedSendsContractVariablesWithOrWithoutReasons(t *testing.T) {
 // force it. force passes through the route as a query parameter, and anything
 // but a boolean there is refused like any invalid field.
 func TestARefusedSeedAnswersInTheAPIsErrorShape(t *testing.T) {
-	app, _ := templateRoutesApp(t, "skymail:access", "skymail:templates:write", "skymail:templates:read")
+	app, _ := templateRoutesApp(t, seedRoles...)
 	const path = "/v1/templates/by-key/core.welcome"
 	seed := func(html string) map[string]any {
 		return map[string]any{

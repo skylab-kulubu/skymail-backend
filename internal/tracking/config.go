@@ -27,6 +27,20 @@ const (
 // Config is open and click tracking as the environment sets it.
 type Config struct {
 	Mode Mode
+	// System is SKYMAIL_TRACKING_SYSTEM (Yusuf, 2026-10-21: every mail is
+	// tracked): whether the mail services send without asking — Keycloak's
+	// and core's account and transaction mail, Forms' confirmations, core's
+	// notifications, SkyMail's own approval notices — is tracked too. It
+	// counts only with Mode on (SystemOn), so turning SKYMAIL_TRACKING off
+	// turns it off as well.
+	System Mode
+	// Operator is SKYMAIL_TRACKING_OPERATOR (Yusuf, 2026-10-21: the panel's
+	// mail is always tracked): whether every send a person queues — an
+	// operator's mail to a list, a group, people or through Mail onayı — is
+	// tracked whether it asked or not, whatever its template, under the
+	// system's link rule. Off, a person's send is tracked only when it asks
+	// (the send form's box). It counts only with Mode on (OperatorOn).
+	Operator Mode
 	// BaseURL is where SkyMail's /t/ addresses are served to the public, with
 	// no trailing slash (T6: https://api.yildizskylab.com/api/skymail). Every
 	// tracked mail carries it.
@@ -39,25 +53,35 @@ type Config struct {
 // On reports whether tracking is on.
 func (c Config) On() bool { return c.Mode == ModeOn }
 
+// SystemOn reports whether the mail services send is tracked: tracking and
+// SKYMAIL_TRACKING_SYSTEM both on.
+func (c Config) SystemOn() bool { return c.On() && c.System == ModeOn }
+
+// OperatorOn reports whether every send a person queues is tracked:
+// tracking and SKYMAIL_TRACKING_OPERATOR both on.
+func (c Config) OperatorOn() bool { return c.On() && c.Operator == ModeOn }
+
 // ConfigFromEnv reads SKYMAIL_TRACKING (off, the default, or on),
-// SKYMAIL_TRACKING_BASE_URL and CORE_URL. On needs both addresses. A mode
-// other than off or on, or an address set but not well formed, is an error
-// that stops startup, so a typo can neither turn tracking on nor send mail
-// with addresses that lead nowhere. Errors name the variable; an address's
-// value is never in them.
+// SKYMAIL_TRACKING_SYSTEM and SKYMAIL_TRACKING_OPERATOR (each off, the
+// default, or on), SKYMAIL_TRACKING_BASE_URL and CORE_URL. On needs both
+// addresses. A mode other than off or on, or an address set but not well
+// formed, is an error that stops startup, so a typo can neither turn tracking
+// on nor send mail with addresses that lead nowhere. SKYMAIL_TRACKING_SYSTEM
+// or SKYMAIL_TRACKING_OPERATOR on with SKYMAIL_TRACKING off is not an error,
+// only nothing: turning tracking off must never stop SkyMail from starting.
+// Errors name the variable; an address's value is never in them.
 func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	cfg := Config{}
-	raw := strings.TrimSpace(getenv("SKYMAIL_TRACKING"))
-	switch Mode(raw) {
-	case "", ModeOff:
-		cfg.Mode = ModeOff
-	case ModeOn:
-		cfg.Mode = ModeOn
-	default:
-		return Config{}, fmt.Errorf("SKYMAIL_TRACKING must be off or on, not %q", raw)
-	}
-
 	var err error
+	if cfg.Mode, err = modeOf("SKYMAIL_TRACKING", getenv("SKYMAIL_TRACKING")); err != nil {
+		return Config{}, err
+	}
+	if cfg.System, err = modeOf("SKYMAIL_TRACKING_SYSTEM", getenv("SKYMAIL_TRACKING_SYSTEM")); err != nil {
+		return Config{}, err
+	}
+	if cfg.Operator, err = modeOf("SKYMAIL_TRACKING_OPERATOR", getenv("SKYMAIL_TRACKING_OPERATOR")); err != nil {
+		return Config{}, err
+	}
 	if cfg.BaseURL, err = baseURL("SKYMAIL_TRACKING_BASE_URL", getenv("SKYMAIL_TRACKING_BASE_URL"), true); err != nil {
 		return Config{}, err
 	}
@@ -71,6 +95,18 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, errors.New("SKYMAIL_TRACKING=on needs CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
 	}
 	return cfg, nil
+}
+
+// modeOf reads an off|on variable: unset, empty or off is off.
+func modeOf(name, raw string) (Mode, error) {
+	raw = strings.TrimSpace(raw)
+	switch Mode(raw) {
+	case "", ModeOff:
+		return ModeOff, nil
+	case ModeOn:
+		return ModeOn, nil
+	}
+	return "", fmt.Errorf("%s must be off or on, not %q", name, raw)
 }
 
 // baseURL checks an address SkyMail adds paths to: absolute, https when

@@ -192,12 +192,28 @@ func (m *mailerImpl) budgetNow(ctx context.Context, q *database.Queries) (time.T
 // room for and counts what it took, all in one transaction: another process
 // takes its bulk rows only after, against this count. When another process
 // holds the lock it takes nothing and does not wait. A failure takes
-// nothing.
+// nothing. A row whose address left the duyuru stream is written failed in
+// the same transaction and not taken (skipUnsubscribed).
 func (m *mailerImpl) claimBulk(ctx context.Context, logger *zerolog.Logger, maxRows int) []database.MailQueue {
-	if m.budget.Off() {
-		return m.claim(ctx, logger, false, maxRows)
-	}
 	var taken []database.MailQueue
+	if m.budget.Off() {
+		err := m.db.InTx(ctx, func(q *database.Queries) error {
+			rows, err := q.ProcessBulkQueueItems(ctx, database.ProcessBulkQueueItemsParams{
+				ClaimedBy: m.claimant,
+				MaxRows:   maxRows,
+			})
+			if err != nil {
+				return err
+			}
+			taken, err = m.skipUnsubscribed(ctx, q, logger, rows)
+			return err
+		})
+		if err != nil {
+			logger.Err(err).Bool("system_lane", false).Msg("Failed to process queue items")
+			return nil
+		}
+		return taken
+	}
 	err := m.db.InTx(ctx, func(q *database.Queries) error {
 		locked, err := q.LockSendBudget(ctx)
 		if err != nil {
@@ -232,6 +248,11 @@ func (m *mailerImpl) claimBulk(ctx context.Context, logger *zerolog.Logger, maxR
 			MaxRows:   room,
 		})
 		if err != nil || len(rows) == 0 {
+			return err
+		}
+		// An address that left the duyuru stream since its mail was queued
+		// is skipped here, before the count: it never takes the budget.
+		if rows, err = m.skipUnsubscribed(ctx, q, logger, rows); err != nil || len(rows) == 0 {
 			return err
 		}
 		if err := countSends(ctx, q, at, PriorityBulk, len(rows)); err != nil {

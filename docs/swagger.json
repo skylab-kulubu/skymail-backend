@@ -178,11 +178,11 @@
             "handlers.ChannelResult": {
                 "properties": {
                     "failed": {
-                        "description": "Recipients whose message did not render: written failed on the send.",
+                        "description": "Recipients whose message did not render: for e-mail written failed on the send, for inbox no item.",
                         "type": "integer"
                     },
                     "queued": {
-                        "description": "Recipients queued on the channel.",
+                        "description": "Recipients queued on the channel; for inbox, the items written.",
                         "type": "integer"
                     },
                     "skipped": {
@@ -263,7 +263,7 @@
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Whether the send asked for open and click tracking and got it: false when it did not ask, when SkyMail's tracking is off (GET /mail_tasks/summary tracking_available), or when its template is a System template or sensitive, which are never tracked.",
+                        "description": "Whether the send is tracked. A person's send: it asked for open and click tracking and got it — false when it did not ask, when SkyMail's tracking is off (GET /mail_tasks/summary tracking_available), or when its template is a System template or sensitive — or SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then true whatever it asked and whatever its template. A service's single mail does not ask: true only when SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) and its recipient is tracked (has an account core lets be tracked).",
                         "type": "boolean"
                     }
                 },
@@ -315,6 +315,94 @@
                     },
                     "skipped_count": {
                         "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.InboxCounts": {
+                "properties": {
+                    "unread": {
+                        "description": "Items not yet read (archived ones left out).",
+                        "type": "integer"
+                    },
+                    "unseen": {
+                        "description": "Items not yet seen (archived ones left out).",
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.InboxItem": {
+                "properties": {
+                    "archived_at": {
+                        "type": "string"
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "link": {
+                        "description": "What the item opens: an in-app path, or an https address on yildizskylab.com or a subdomain; null when none.",
+                        "example": "/events/6f1c2d3e",
+                        "type": "string"
+                    },
+                    "read_at": {
+                        "type": "string"
+                    },
+                    "seen_at": {
+                        "type": "string"
+                    },
+                    "summary": {
+                        "type": "string"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "description": "The notification type's key.",
+                        "example": "event.cancelled",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.InboxPage": {
+                "properties": {
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.InboxItem"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "next_cursor": {
+                        "description": "The next page's cursor; null on the last page.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.InboxUpdated": {
+                "properties": {
+                    "updated": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.InboxVariant": {
+                "description": "The type's inbox text; null when the type does not go to the inbox.",
+                "properties": {
+                    "link": {
+                        "type": "string"
+                    },
+                    "summary": {
+                        "type": "string"
+                    },
+                    "title": {
+                        "type": "string"
                     }
                 },
                 "type": "object"
@@ -403,7 +491,7 @@
                         "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
                     },
                     "tracking": {
-                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive); the approved send gets it if that still holds.",
+                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyMail tracks every person's send, it is tracked whatever this says.",
                         "type": "boolean"
                     },
                     "updated_at": {
@@ -546,7 +634,7 @@
                         "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
                     },
                     "tracking": {
-                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive); the approved send gets it if that still holds.",
+                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyMail tracks every person's send, it is tracked whatever this says.",
                         "type": "boolean"
                     },
                     "updated_at": {
@@ -713,7 +801,7 @@
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Whether the send asked for open and click tracking and got it: SkyMail's tracking was on when it was queued and its template may be tracked (not System, not sensitive).",
+                        "description": "Whether the send is tracked: it asked for open and click tracking, SkyMail's tracking was on when it was queued and its template may be tracked (not System, not sensitive); or it is a person's send queued while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); or it is a service's mail queued while SkyMail tracked system mail (SKYMAIL_TRACKING_SYSTEM).",
                         "type": "boolean"
                     }
                 },
@@ -792,6 +880,9 @@
                         "type": "array",
                         "uniqueItems": false
                     },
+                    "inbox": {
+                        "$ref": "#/components/schemas/handlers.InboxVariant"
+                    },
                     "key": {
                         "type": "string"
                     },
@@ -851,6 +942,59 @@
                     "undelivered": {
                         "description": "Sent, then a delivery status notification said the address does not exist (in sent too).",
                         "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.ReactivateRequest": {
+                "properties": {
+                    "reason": {
+                        "description": "10 to 500 printable characters, without an address (no @): what the\nperson asked, or what went wrong. Recorded with who and when.",
+                        "example": "Kişi bilgi kutusuna yazıp yeniden abone olmak istedi.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.Reactivation": {
+                "properties": {
+                    "actor": {
+                        "description": "recipient: the person, on their link's page; operator: the panel.",
+                        "enum": [
+                            "recipient",
+                            "operator"
+                        ],
+                        "type": "string"
+                    },
+                    "actor_sub": {
+                        "description": "The operator's Keycloak subject (Silinmiş kullanıcı's after Account\nerasure); null for the person.",
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "integer"
+                    },
+                    "reactivated_at": {
+                        "type": "string"
+                    },
+                    "reason": {
+                        "description": "The operator's reason; null for the person.",
+                        "type": "string"
+                    },
+                    "source": {
+                        "enum": [
+                            "link"
+                        ],
+                        "type": "string"
+                    },
+                    "stream": {
+                        "enum": [
+                            "duyuru"
+                        ],
+                        "type": "string"
+                    },
+                    "unsubscribed_at": {
+                        "description": "When the unsubscribe reversed had been made.",
+                        "type": "string"
                     }
                 },
                 "type": "object"
@@ -1112,6 +1256,10 @@
                         "example": "Europe/Istanbul",
                         "type": "string"
                     },
+                    "tracking_always": {
+                        "description": "True while SKYMAIL_TRACKING_OPERATOR=on with SKYMAIL_TRACKING=on: every person's send (a list, a group, people, a Forms source, a Mail onayı request) is tracked whether it asked or not, of any template. The send form then shows no tracking box: a send's tracking field is ignored.",
+                        "type": "boolean"
+                    },
                     "tracking_available": {
                         "description": "True while SKYMAIL_TRACKING=on: a send may ask for open and click tracking. The send form shows its tracking box only then.",
                         "type": "boolean"
@@ -1171,7 +1319,7 @@
                         "type": "string"
                     },
                     "count": {
-                        "description": "How many permanent failures were recorded.",
+                        "description": "How many permanent failures were recorded; 1 for an unsubscribe.",
                         "type": "integer"
                     },
                     "exempt_flagged_at": {
@@ -1179,10 +1327,11 @@
                         "type": "string"
                     },
                     "first_seen": {
+                        "description": "When it was first recorded; for an unsubscribe, when it was made.",
                         "type": "string"
                     },
                     "id": {
-                        "description": "What DELETE /suppressions/{id} names it by.",
+                        "description": "What DELETE /suppressions/{id} (bounce) or POST\n/suppressions/{id}/reactivate (unsubscribed) names it by; ids of the\ntwo never collide (random UUIDs).",
                         "type": "string"
                     },
                     "last_queue_id": {
@@ -1192,20 +1341,37 @@
                     "last_seen": {
                         "type": "string"
                     },
+                    "reason": {
+                        "description": "bounce: a permanent failure, mail of every stream is held (account\nmail is sent, flagged); unsubscribed: the address left a stream\nthrough SkyMail's link, only that stream's mail is held.",
+                        "enum": [
+                            "bounce",
+                            "unsubscribed"
+                        ],
+                        "type": "string"
+                    },
                     "reason_code": {
-                        "description": "The codes of the last permanent failure, never its text: 5.1.10,\n5.4.1 AS(201806281), RCPT TO 550 5.1.1.",
+                        "description": "The codes of the last permanent failure, never its text: 5.1.10,\n5.4.1 AS(201806281), RCPT TO 550 5.1.1. Empty for an unsubscribe.",
                         "example": "5.1.10",
                         "type": "string"
                     },
                     "recipient_sub": {
-                        "description": "The recipient's Keycloak subject, when the mail refused knew it.",
+                        "description": "The recipient's Keycloak subject, when the mail refused knew it; null\nfor an unsubscribe.",
                         "type": "string"
                     },
                     "source": {
-                        "description": "dsn: a delivery status notification said the address does not exist;\nsmtp: the relay refused it when the mail was sent.",
+                        "description": "dsn: a delivery status notification said the address does not exist;\nsmtp: the relay refused it when the mail was sent; link: the address\nunsubscribed through SkyMail's link (the one-click POST or its page).",
                         "enum": [
                             "dsn",
-                            "smtp"
+                            "smtp",
+                            "link"
+                        ],
+                        "type": "string"
+                    },
+                    "stream": {
+                        "description": "The stream held: all for a bounce, duyuru for an unsubscribe.",
+                        "enum": [
+                            "all",
+                            "duyuru"
                         ],
                         "type": "string"
                     }
@@ -1507,6 +1673,19 @@
                 },
                 "type": "object"
             },
+            "handlers.TrackingMode": {
+                "properties": {
+                    "tracking_always": {
+                        "description": "True while SKYMAIL_TRACKING_OPERATOR=on too: every person's send is tracked, the send form shows no box and a send's tracking field is ignored.",
+                        "type": "boolean"
+                    },
+                    "tracking_available": {
+                        "description": "True while SKYMAIL_TRACKING=on: a send may ask for open and click tracking.",
+                        "type": "boolean"
+                    }
+                },
+                "type": "object"
+            },
             "handlers.TrackingPoint": {
                 "properties": {
                     "at": {
@@ -1635,6 +1814,9 @@
                         "type": "boolean"
                     },
                     "tracking_requested": {
+                        "type": "boolean"
+                    },
+                    "withheld": {
                         "type": "boolean"
                     }
                 },
@@ -1817,6 +1999,30 @@
                 },
                 "type": "object"
             },
+            "requests.InboxVariant": {
+                "description": "The type's inbox text: required when default_channels holds inbox, refused otherwise.",
+                "properties": {
+                    "link": {
+                        "description": "What the item opens: an in-app path (/events/..., /news/...; one / first) or an https address on yildizskylab.com or a subdomain, its host written out (a variable may fill the path, never the host). Empty: no link.",
+                        "maxLength": 2048,
+                        "type": "string"
+                    },
+                    "summary": {
+                        "description": "A line or two under it; at most 1000 characters rendered.",
+                        "maxLength": 4000,
+                        "type": "string"
+                    },
+                    "title": {
+                        "description": "The item's title; must not render empty, at most 200 characters rendered.",
+                        "maxLength": 1000,
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "title"
+                ],
+                "type": "object"
+            },
             "requests.MailApprovalRecipient": {
                 "properties": {
                     "email": {
@@ -1860,6 +2066,12 @@
                     "sub": {
                         "description": "The person's Keycloak subject.",
                         "example": "31ef736f-72da-4a40-8791-d523199cf9f0",
+                        "type": "string"
+                    },
+                    "unsubscribe_url": {
+                        "description": "The person's one-click unsubscribe link as core signed it (core's /v1/communication-preferences/unsubscribe?t=…), for an optional type of the bulk lane only: the e-mail renders it as .UnsubscribeUrl and, while SKYMAIL_LIST_UNSUBSCRIBE is on, carries it in List-Unsubscribe and List-Unsubscribe-Post from the duyuru mailbox. An https URL of visible ASCII, at most 960 characters, without \u003c \u003e , or \".",
+                        "example": "https://api.yildizskylab.com/v1/communication-preferences/unsubscribe?t=AQEB",
+                        "maxLength": 960,
                         "type": "string"
                     }
                 },
@@ -1917,16 +2129,20 @@
                         "type": "string"
                     },
                     "default_channels": {
-                        "description": "The channels the type goes by. Today only email.",
+                        "description": "The channels the type goes by: email, inbox. inbox goes whatever the person's preferences say.",
                         "example": [
-                            "email"
+                            "email",
+                            "inbox"
                         ],
                         "items": {
                             "type": "string"
                         },
                         "minItems": 1,
                         "type": "array",
-                        "uniqueItems": false
+                        "uniqueItems": true
+                    },
+                    "inbox": {
+                        "$ref": "#/components/schemas/requests.InboxVariant"
                     },
                     "lane": {
                         "description": "The queue lane: system (never waits behind a bulk send) or bulk.",
@@ -2053,6 +2269,11 @@
             },
             "requests.SendNotification": {
                 "properties": {
+                    "expires_at": {
+                        "description": "When what the notification is about ends (an event that is over): its inbox items go then rather than after 90 days. Must be in the future; left out, 90 days.",
+                        "example": "2026-11-01T18:00:00Z",
+                        "type": "string"
+                    },
                     "recipients": {
                         "description": "The people, each once (a sub named again is counted in duplicates and left out).",
                         "items": {
@@ -2102,7 +2323,7 @@
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Open and click tracking for a mail a person sends (the compose form's people). Ignored (and answered false) for a service's token — account and transaction mail is never tracked — while SkyMail's tracking is off, and for a System template or a sensitive one (a template that says nothing counts as sensitive for one person). The recipient's account is looked up in Keycloak by address before the send is queued: the one enabled user whose primary e-mail equals it (case-insensitively) and is verified; none such is no_account, Keycloak not answering is preference_unavailable, and core decides for the account found.",
+                        "description": "Open and click tracking for a mail a person sends (the compose form's people). Ignored (and answered false) while SkyMail's tracking is off, and for a System template or a sensitive one (a template that says nothing counts as sensitive for one person). A service's token (account and transaction mail) does not ask: the field is ignored, and its mail is tracked only while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM), in the system lane, with no click address on a link a variable fills and none at all in a sensitive mail. The recipient's account is looked up in Keycloak by address before the send is queued: the one enabled user whose primary e-mail equals it (case-insensitively) and is verified; none such is no_account, Keycloak not answering is preference_unavailable, and core decides for the account found.",
                         "type": "boolean"
                     }
                 },
@@ -2245,6 +2466,7 @@
                         "type": "string"
                     },
                     "system": {
+                        "description": "Whether the template is a system template: one another service sends by its key, which cannot be archived or renamed; an account.* or keycloak.* one also goes past the suppression list. Changing it — true for a new key, or other than what the template has — takes skymail:templates:system (the Template seed's service account); without it, send what the template has.",
                         "type": "boolean"
                     }
                 },
@@ -3398,7 +3620,7 @@
                 ]
             },
             "post": {
-                "description": "Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyMail's tracking is off, or for a System or sensitive template (never tracked), the field is ignored and the answer says tracking false.",
+                "description": "Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyMail's tracking is off, or for a System or sensitive template (never tracked), the field is ignored and the answer says tracking false. While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored too and every send is tracked, of any template: a sensitive one with the pixel only, any other with a click address on the links every recipient gets alike (written in the template or in the send's own variables, such as a free body), never on one made from the recipient (.Email, .FullName).",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -3469,7 +3691,7 @@
         },
         "/mail_tasks/form-source": {
             "post": {
-                "description": "The source owner holding current skymail:mails:send or skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. Tracking is false for this address-only source version.",
+                "description": "The source owner holding current skymail:mails:send or skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is no_account) and core deciding, and the answer says tracking true.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -3583,7 +3805,7 @@
         },
         "/mail_tasks/single": {
             "post": {
-                "description": "Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never for a service's token, while SkyMail's tracking is off, or for a System or sensitive template). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it.",
+                "description": "Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -3644,7 +3866,7 @@
         },
         "/mail_tasks/summary": {
             "get": {
-                "description": "Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).",
+                "description": "Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); tracking_always, true while SKYMAIL_TRACKING_OPERATOR=on too (every person's send is tracked, the field is ignored, the send form shows no box); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).",
                 "parameters": [
                     {
                         "description": "Days in the daily series, ending today in Europe/Istanbul (1-90)",
@@ -3708,6 +3930,37 @@
                     }
                 },
                 "summary": "Summarise mail sends",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
+        "/mail_tasks/tracking-mode": {
+            "get": {
+                "description": "tracking_available and tracking_always, as the summary says them, for anyone who may use SkyMail: someone who only submits a send for approval sees whether it will be tracked. It is a setting of SkyMail, not of any send.",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.TrackingMode"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    }
+                },
+                "summary": "How a person's send is tracked",
                 "tags": [
                     "Mail"
                 ]
@@ -3971,7 +4224,7 @@
         },
         "/mail_tasks/{id}/tracking": {
             "get": {
-                "description": "Requires skymail:mails:read. No identities, link tokens or target URLs. After a year only retained totals for at least 10 tracked recipients, or null. tracking_available follows the current flag.",
+                "description": "Requires skymail:mails:read. No identities, link tokens or target URLs. After a year only retained totals for at least 10 tracked recipients, or null. tracking_available follows the current flag. A send's counts tell of people when it has fewer than 10 tracked recipients (tracking.TotalsMinRecipients, the bound retained totals keep) or is mail the system sends (the system lane): then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read, or the send's own sender outside the system lane) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4).",
                 "parameters": [
                     {
                         "description": "Mail task ID",
@@ -4023,7 +4276,7 @@
         },
         "/mail_tasks/{id}/tracking/recipients": {
             "get": {
-                "description": "Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub). First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 a year after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.",
+                "description": "Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 a year after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.",
                 "parameters": [
                     {
                         "description": "Mail task ID",
@@ -4694,6 +4947,456 @@
                 ]
             }
         },
+        "/me/inbox": {
+            "get": {
+                "description": "The caller's own inbox items, newest first, a page at a time: next_cursor goes into cursor for the next page, null on the last. Archived items are left out unless archived says include or only; an item past its expiry (90 days, or sooner) is never served. Only a person's own token issued for SkyMail (aud skymail) may call it; no role is needed.",
+                "parameters": [
+                    {
+                        "description": "The next_cursor of the page before",
+                        "in": "query",
+                        "name": "cursor",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Items per page, 1 to 100",
+                        "in": "query",
+                        "name": "limit",
+                        "schema": {
+                            "default": 50,
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "exclude, include or only",
+                        "in": "query",
+                        "name": "archived",
+                        "schema": {
+                            "default": "exclude",
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.InboxPage"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "inbox.invalid_query; inbox.invalid_cursor"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.unauthorized: no live token, or one not issued for SkyMail"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "auth.person_required: a service's token"
+                    }
+                },
+                "summary": "List my inbox",
+                "tags": [
+                    "Inbox"
+                ]
+            }
+        },
+        "/me/inbox/counts": {
+            "get": {
+                "description": "What the caller's badge shows: their items not yet seen and not yet read, archived and expired ones left out.",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.InboxCounts"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.unauthorized"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "auth.person_required"
+                    }
+                },
+                "summary": "Count my unseen and unread items",
+                "tags": [
+                    "Inbox"
+                ]
+            }
+        },
+        "/me/inbox/read-all": {
+            "post": {
+                "description": "Every item of the caller's inbox not yet read (archived ones left out) is marked read, and seen. Nobody else's item changes.",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.InboxUpdated"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.unauthorized"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "auth.person_required"
+                    }
+                },
+                "summary": "Mark all my items read",
+                "tags": [
+                    "Inbox"
+                ]
+            }
+        },
+        "/me/inbox/seen-all": {
+            "post": {
+                "description": "Every item of the caller's inbox not yet seen (archived ones left out) is marked seen: the badge goes to 0. Nobody else's item changes.",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.InboxUpdated"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.unauthorized"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "auth.person_required"
+                    }
+                },
+                "summary": "Mark all my items seen",
+                "tags": [
+                    "Inbox"
+                ]
+            }
+        },
+        "/me/inbox/{id}/archive": {
+            "post": {
+                "description": "The item leaves the inbox's default list and its counts (archived=only lists it). It still goes at its expiry.",
+                "parameters": [
+                    {
+                        "description": "The item",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.InboxItem"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.unauthorized"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "auth.person_required"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.not_found: not the caller's, not there, or expired"
+                    }
+                },
+                "summary": "Archive one of my items",
+                "tags": [
+                    "Inbox"
+                ]
+            }
+        },
+        "/me/inbox/{id}/read": {
+            "post": {
+                "description": "The caller opened the item; read is seen too. A mark already there keeps its time.",
+                "parameters": [
+                    {
+                        "description": "The item",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.InboxItem"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.unauthorized"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "auth.person_required"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.not_found: not the caller's, not there, or expired"
+                    }
+                },
+                "summary": "Mark one of my items read",
+                "tags": [
+                    "Inbox"
+                ]
+            }
+        },
+        "/me/inbox/{id}/seen": {
+            "post": {
+                "description": "The item was shown to the caller. A mark already there keeps its time.",
+                "parameters": [
+                    {
+                        "description": "The item",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.InboxItem"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.unauthorized"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "auth.person_required"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.not_found: not the caller's, not there, or expired"
+                    }
+                },
+                "summary": "Mark one of my items seen",
+                "tags": [
+                    "Inbox"
+                ]
+            }
+        },
+        "/me/inbox/{id}/unread": {
+            "post": {
+                "description": "Takes the read mark off; seen stays.",
+                "parameters": [
+                    {
+                        "description": "The item",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.InboxItem"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.unauthorized"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "auth.person_required"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.not_found: not the caller's, not there, or expired"
+                    }
+                },
+                "summary": "Mark one of my items unread",
+                "tags": [
+                    "Inbox"
+                ]
+            }
+        },
         "/notification_types": {
             "get": {
                 "description": "Every notification type, archived ones included, by key: its preference category, whether it is required, its default channels and its lane.",
@@ -4779,7 +5482,7 @@
                 ]
             },
             "put": {
-                "description": "Writes the type of the key as the Template seed states it: its preference category (null: none), whether it is required (preferences not looked at), its default channels (today only email) and its queue lane. A type that exists is written over; its archive stays as it is. The type's e-mail variant is the template of the same key (PUT /templates/by-key/{key}).",
+                "description": "Writes the type of the key as the Template seed states it: its preference category (null: none), whether it is required (preferences not looked at), its default channels (email, inbox), its queue lane and, when it goes to the inbox, its inbox text (title, summary, link: Go text/template over the notification's variables; the link an in-app path starting with one /, or an https address on yildizskylab.com or one of its subdomains with the scheme and host written out). A type that exists is written over, its inbox text with it; its archive stays as it is. The type's e-mail variant is the template of the same key (PUT /templates/by-key/{key}).",
                 "parameters": [
                     {
                         "description": "The type's key, the Template key's alphabet",
@@ -4830,7 +5533,7 @@
                                 }
                             }
                         },
-                        "description": "validation.error; notification_type.invalid_category"
+                        "description": "validation.error; notification_type.invalid_category; notification_type.inbox_variant_required; notification_type.inbox_variant_unused; notification_type.inbox_variant_invalid (params.part)"
                     },
                     "403": {
                         "content": {
@@ -4851,7 +5554,7 @@
         },
         "/notifications": {
             "post": {
-                "description": "core says what happened (type) and to whom (recipients, by Keycloak sub); SkyMail picks each person's channels: the type's default channels, for an optional type only those in the person's allowed_channels (a required type ignores them), and only where the person has an address. E-mail goes to the request's address or, without one, to the person's primary e-mail in Keycloak; a person Keycloak does not know, a disabled account and an unverified address are skipped and counted. The e-mail is the template of the type's key, queued in the type's lane. The Idempotency-Key header is required: the same key from the same caller answers the first answer again (Idempotent-Replayed: true) and queues nothing; a different request with it is 422. Only a service account's token with skymail:notifications:send may call it.",
+                "description": "core says what happened (type) and to whom (recipients, by Keycloak sub); SkyMail picks each person's channels: the type's default channels, for an optional type only those in the person's allowed_channels (a required type ignores them), and only where the person has an address. E-mail goes to the request's address or, without one, to the person's primary e-mail in Keycloak; a person Keycloak does not know, a disabled account and an unverified address are skipped and counted. The e-mail is the template of the type's key, queued in the type's lane. The inbox does not look at allowed_channels: every recipient gets an item, the type's inbox text rendered with the variables, kept 90 days or until expires_at. An optional type of the bulk lane may give a recipient core's unsubscribe_url: the e-mail renders it as .UnsubscribeUrl and, while SKYMAIL_LIST_UNSUBSCRIBE is on, carries it in List-Unsubscribe and List-Unsubscribe-Post (RFC 8058) from the duyuru mailbox; any other type refuses it. The Idempotency-Key header is required: the same key from the same caller answers the first answer again (Idempotent-Replayed: true) and queues nothing; a different request with it is 422. Only a service account's token with skymail:notifications:send may call it.",
                 "parameters": [
                     {
                         "description": "The notification's own key: 1 to 255 visible ASCII characters, the same on every retry",
@@ -4910,7 +5613,7 @@
                                 }
                             }
                         },
-                        "description": "validation.error; notification.idempotency_key_required; notification.allowed_channels_required (params.recipient: its index)"
+                        "description": "validation.error; notification.idempotency_key_required; notification.allowed_channels_required, notification.unsubscribe_url_not_allowed, notification.unsubscribe_url_invalid (params.recipient: its index); notification.expires_at_past"
                     },
                     "403": {
                         "content": {
@@ -4930,7 +5633,7 @@
                                 }
                             }
                         },
-                        "description": "notification.email_variant_missing: the type goes by e-mail and has no template of its key"
+                        "description": "notification.email_variant_missing: the type goes by e-mail and has no template of its key; notification.inbox_variant_missing"
                     },
                     "422": {
                         "content": {
@@ -4961,8 +5664,20 @@
         },
         "/suppressions": {
             "get": {
-                "description": "Addresses mail is not sent to after one permanent failure (a relay's refusal of the address, or a delivery status notification saying it does not exist), most recently failed first. Account mail (keycloak.*, account.* templates) is still sent to them and flagged. Nothing leaves the list by itself: an operator removes an address, or Account erasure does. q keeps the addresses that contain it, case-insensitively; X-Total-Count counts them.",
+                "description": "One list of two records, most recent first. reason bounce: an address mail is not sent to after one permanent failure (a relay's refusal of the address, or a delivery status notification saying it does not exist), in every stream; account mail (keycloak.*, account.* templates) is still sent to it and flagged. reason unsubscribed: an address that left the duyuru stream through SkyMail's one-click link; mail of the islem stream still goes to it. Nothing leaves the list by itself: an operator removes a bounce, the person (or an operator with skymail:unsubscribes:reactivate, at their request) reverses an unsubscribe, or Account erasure does. reason keeps one of the two; q keeps the addresses that contain it, case-insensitively; X-Total-Count counts them. Needs skymail:suppressions:manage or skymail:unsubscribes:reactivate.",
                 "parameters": [
+                    {
+                        "description": "Only bounce or only unsubscribed rows",
+                        "in": "query",
+                        "name": "reason",
+                        "schema": {
+                            "enum": [
+                                "bounce",
+                                "unsubscribed"
+                            ],
+                            "type": "string"
+                        }
+                    },
                     {
                         "description": "Part of an address",
                         "in": "query",
@@ -5003,7 +5718,7 @@
                         "description": "OK",
                         "headers": {
                             "X-Total-Count": {
-                                "description": "Number of suppressed addresses matching q",
+                                "description": "Number of rows matching reason and q",
                                 "schema": {
                                     "type": "integer"
                                 }
@@ -5047,9 +5762,79 @@
                 ]
             }
         },
+        "/suppressions/reactivations": {
+            "get": {
+                "description": "Who reversed an unsubscribe and when — the person themself, or an operator with the reason they gave — newest first, without the address. Needs skymail:unsubscribes:reactivate. X-Total-Count counts them.",
+                "parameters": [
+                    {
+                        "description": "Start index",
+                        "in": "query",
+                        "name": "_start",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "End index (at most 100 rows a page)",
+                        "in": "query",
+                        "name": "_end",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "items": {
+                                        "$ref": "#/components/schemas/handlers.Reactivation"
+                                    },
+                                    "type": "array"
+                                }
+                            }
+                        },
+                        "description": "OK",
+                        "headers": {
+                            "X-Total-Count": {
+                                "description": "Number of reversals",
+                                "schema": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "List the reversals of unsubscribes",
+                "tags": [
+                    "Suppressions"
+                ]
+            }
+        },
         "/suppressions/{id}": {
             "delete": {
-                "description": "Mail is sent to the address again. The removal is recorded — who, when, and the suppression's source, code, count and first failure — without the address. The address is named by the list's id, so it is never in a URL.",
+                "description": "A bounce row only: mail is sent to the address again. The removal is recorded — who, when, and the suppression's source, code, count and first failure — without the address. The address is named by the list's id, so it is never in a URL. An unsubscribed row is 409 suppression.use_reactivate: the person left the stream themself.",
                 "parameters": [
                     {
                         "description": "Suppression ID",
@@ -5095,6 +5880,16 @@
                         },
                         "description": "Not Found"
                     },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "suppression.use_reactivate: an unsubscribe, not a bounce"
+                    },
                     "500": {
                         "content": {
                             "application/json": {
@@ -5107,6 +5902,101 @@
                     }
                 },
                 "summary": "Remove an address from the suppression list",
+                "tags": [
+                    "Suppressions"
+                ]
+            }
+        },
+        "/suppressions/{id}/reactivate": {
+            "post": {
+                "description": "Only when the person asks, or after a mistake (ADR 0072 decision 7): duyuru mail is sent to the address again. Needs skymail:unsubscribes:reactivate. The reason is required (10 to 500 printable characters) and must not contain an address. The reversal is recorded — who, when, the reason, and the record's stream, source and date — without the address. A bounce row is 409 suppression.use_delete.",
+                "parameters": [
+                    {
+                        "description": "Suppression ID (an unsubscribed row)",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/handlers.ReactivateRequest",
+                                        "summary": "body",
+                                        "description": "Why"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "Why",
+                    "required": true
+                },
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "suppression.reason_required, suppression.reason_has_address, or a malformed id"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "suppression.use_delete: a bounce, not an unsubscribe"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "Reverse an address's unsubscribe",
                 "tags": [
                     "Suppressions"
                 ]
@@ -5299,7 +6189,7 @@
                 ]
             },
             "put": {
-                "description": "The Template seed's path: creates the template when the key is new and replaces its content — the subject included — when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once; react_email_content holding a JSX source (anything but whitespace and comments, so not the seed's old pointer comment) makes it the version's JSX Main source, and otherwise the HTML content is the HTML Main source. Writes the contract Required variables when sent, and keeps them when not. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.\n\nNeither the seed nor an operator silently overwrites the other (ADR-0047). A template an operator changed since the last seed is refused with 409 template.seed_conflict and nothing is written, when any of these holds (params.rules lists each that does): published_by_operator — the version the template sends is not the last Template seed version; newer_operator_version — an operator wrote a version after the last seed version, a draft included and a discarded draft not; operator_subject — the subject sent is an operator's that the seed would overwrite: neither the one the last seed version asked for nor the one asked for now (for a template whose last seed version is the migration's first one, which does not know what the seed asked for: the seed asks for a subject other than the one sent). The refusal is kept on the template as seed_refusal until a seed goes through. A seed that would leave the template as its published version already is overwrites nothing and is never refused. force=true writes over the operator's change anyway, as a published Template seed version; their versions stay in the history and can be restored, and the answer names what was overridden in overrode (left out when nothing was).",
+                "description": "The Template seed's path: creates the template when the key is new and replaces its content — the subject included — when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once; react_email_content holding a JSX source (anything but whitespace and comments, so not the seed's old pointer comment) makes it the version's JSX Main source, and otherwise the HTML content is the HTML Main source. Writes the contract Required variables when sent, and keeps them when not. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.\n\nWhether the template is a system template (system) is changed only with skymail:templates:system, which the Template seed's service account holds: without it, system must be what the template has — false for a new key — or the write is refused with 403 server.forbidden (params.missing_roles [\"skymail:templates:system\"], params.field \"system\", params.system the mark it has) and nothing is written. So skymail:templates:write still rewrites a system template's content here, and never makes or unmakes one.\n\nNeither the seed nor an operator silently overwrites the other (ADR-0047). A template an operator changed since the last seed is refused with 409 template.seed_conflict and nothing is written, when any of these holds (params.rules lists each that does): published_by_operator — the version the template sends is not the last Template seed version; newer_operator_version — an operator wrote a version after the last seed version, a draft included and a discarded draft not; operator_subject — the subject sent is an operator's that the seed would overwrite: neither the one the last seed version asked for nor the one asked for now (for a template whose last seed version is the migration's first one, which does not know what the seed asked for: the seed asks for a subject other than the one sent). The refusal is kept on the template as seed_refusal until a seed goes through. A seed that would leave the template as its published version already is overwrites nothing and is never refused. force=true writes over the operator's change anyway, as a published Template seed version; their versions stay in the history and can be restored, and the answer names what was overridden in overrode (left out when nothing was).",
                 "parameters": [
                     {
                         "description": "Template key",
@@ -5359,6 +6249,16 @@
                             }
                         },
                         "description": "Bad Request (validation.error, force included)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.forbidden: system differs from what the template has (false for a new key) and the caller lacks skymail:templates:system; params: missing_roles, field (system), system (the mark the template has)"
                     },
                     "409": {
                         "content": {

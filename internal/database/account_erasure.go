@@ -47,6 +47,13 @@ const (
 	AccountErasureTrackingLinksCleared  = "tracking_links_cleared"
 	// The suppression list: the person's suppressed addresses deleted.
 	AccountErasureSuppressionsDeleted = "suppressions_deleted"
+	// The unsubscribe record: the person's addresses' unsubscribes deleted
+	// (ADR 0072 decision 9).
+	AccountErasureUnsubscribesDeleted = "unsubscribes_deleted"
+	// The in-app inbox: the person's own items, and anyone else's whose
+	// text names them.
+	AccountErasureInboxItemsDeleted       = "inbox_items_deleted"
+	AccountErasureInboxItemsNamingDeleted = "inbox_items_naming_deleted"
 )
 
 // ErrAccountErasureInProgress says a send to the person, or another person's
@@ -279,6 +286,7 @@ func newEraser(ctx context.Context, tx pgx.Tx, erasure AccountErasure) (*eraser,
 		AccountErasureActorColumnsReplaced, AccountErasureNotesCleared, AccountErasureChangesCleared,
 		AccountErasureApprovalRecipientsRemoved, AccountErasureApprovalPlaceholders, AccountErasureApprovalSendLinksDeleted,
 		AccountErasureTrackingEventsDeleted, AccountErasureTrackingLinksCleared, AccountErasureSuppressionsDeleted,
+		AccountErasureInboxItemsDeleted, AccountErasureInboxItemsNamingDeleted, AccountErasureUnsubscribesDeleted,
 	} {
 		counts[key] = 0
 	}
@@ -431,6 +439,23 @@ var keepNamesSteps = []erasureStep{
 		        AND ` + nameIn("body_variables::text"),
 	},
 	{
+		// The person's inbox (ADR 0070), whatever its age: items are kept
+		// by the subject alone. The subject is a canonical UUID (the
+		// handler checks it), so it is compared as one and the feed index
+		// finds the rows.
+		name:  "the person's inbox items",
+		count: AccountErasureInboxItemsDeleted,
+		sql:   `DELETE FROM inbox_items WHERE user_id = @subject::uuid`,
+	},
+	{
+		// Anyone else's inbox item whose text names the person: an item is
+		// a short notice, so it goes whole rather than being emptied.
+		name:  "inbox items naming the person",
+		count: AccountErasureInboxItemsNamingDeleted,
+		sql: `DELETE FROM inbox_items i
+		      WHERE (` + nameIn("i.title") + ` OR ` + nameIn("i.summary") + ` OR ` + nameIn("COALESCE(i.link, '')") + `)`,
+	},
+	{
 		// Queue residue: never sent. A row the dispatcher has just taken is
 		// processing by now, and is waited for below.
 		name:  "queued rows to the person",
@@ -469,6 +494,17 @@ var keepNamesSteps = []erasureStep{
 		      WHERE note IS NOT NULL
 		        AND NOT (kind = 'rejected' AND note = @erased_note::text)
 		        AND (actor_sub = @subject OR ` + nameIn("note") + `)`,
+	},
+	{
+		// An operator's reason for reversing an unsubscribe that names the
+		// person: cleared whole.
+		name:  "unsubscribe reactivation reasons",
+		count: AccountErasureNotesCleared,
+		sql: `UPDATE mail_unsubscribe_reactivations
+		      SET reason = @erased_note::text
+		      WHERE reason IS NOT NULL
+		        AND reason <> @erased_note::text
+		        AND ` + nameIn("reason"),
 	},
 	{
 		name:  "senders",
@@ -586,6 +622,13 @@ var dropNamesSteps = []erasureStep{
 		name:  "suppression removers",
 		count: AccountErasureActorColumnsReplaced,
 		sql: `UPDATE mail_suppression_removals
+		      SET actor_sub = @deleted_sub
+		      WHERE actor_sub = @subject`,
+	},
+	{
+		name:  "unsubscribe reactivators",
+		count: AccountErasureActorColumnsReplaced,
+		sql: `UPDATE mail_unsubscribe_reactivations
 		      SET actor_sub = @deleted_sub
 		      WHERE actor_sub = @subject`,
 	},
@@ -719,6 +762,14 @@ var dropAddressSteps = []erasureStep{
 		         OR s.last_queue_id IN (SELECT q.id FROM mail_queue q WHERE ` + toPerson + `)`,
 	},
 	{
+		// The person's addresses' unsubscribes: an address that becomes
+		// another person's, or is put on a list by hand, is mailed again
+		// (ADR 0072, deviation 9). Their reversals keep no address.
+		name:  "unsubscribes",
+		count: AccountErasureUnsubscribesDeleted,
+		sql:   `DELETE FROM mail_unsubscribes WHERE address = ANY (@emails::text[])`,
+	},
+	{
 		// Sent and failed mail to the person stays as a row, so every count
 		// of a send stays; everything in it about them goes.
 		name:  "mail to the person",
@@ -730,7 +781,8 @@ var dropAddressSteps = []erasureStep{
 		          body = '',
 		          body_html = NULL,
 		          error = NULL,
-		          recipient_sub = NULL
+		          recipient_sub = NULL,
+		          list_unsubscribe_url = NULL
 		      WHERE q.status IN ('sent', 'failed')
 		        AND ` + toPerson,
 	},

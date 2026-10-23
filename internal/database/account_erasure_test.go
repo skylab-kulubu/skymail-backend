@@ -115,6 +115,17 @@ INSERT INTO mail_suppression_removals (id, actor_sub, source, reason_code, count
     (2, '` + otherSub + `', 'smtp', 'RCPT TO 550 5.1.1', 2, '2026-10-02T10:00:00Z');
 INSERT INTO mail_bounces (queue_id, source, kind, action, status, smtp_code, ndr_id_sha256) VALUES
     ('50000000-0000-4000-8000-0000000000b1', 'dsn', 'soft', 'failed', '5.2.2', 552, repeat('ab', 32));
+-- The unsubscribe record: Deniz's personal address left the duyuru stream,
+-- and so did Ayşe's, which stays. Deniz reversed one unsubscribe as an
+-- operator; Ayşe reversed one with a reason naming Deniz; someone reversed
+-- their own.
+INSERT INTO mail_unsubscribes (address, stream, source) VALUES
+    ('` + erasedPersonal + `', 'duyuru', 'link'),
+    ('ayse@example.com', 'duyuru', 'link');
+INSERT INTO mail_unsubscribe_reactivations (id, actor, actor_sub, reason, stream, source, unsubscribed_at) OVERRIDING SYSTEM VALUE VALUES
+    (1, 'operator', '` + erasedSub + `', 'Kişi telefonla yeniden istedi.', 'duyuru', 'link', '2026-10-01T10:00:00Z'),
+    (2, 'operator', '` + otherSub + `', 'Deniz Yılmaz yeniden abone olmak istedi.', 'duyuru', 'link', '2026-10-02T10:00:00Z'),
+    (3, 'recipient', NULL, NULL, 'duyuru', 'link', '2026-10-03T10:00:00Z');
 -- Deniz and Ayşe each opened Keycloak's reset mail, masked.
 INSERT INTO sent_content_views (id, task_id, queue_item_id, actor_sub, actor_name, masked_by, masked_variables) VALUES
     ('13000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-00000000000b', '50000000-0000-4000-8000-0000000000b1', '` + erasedSub + `', 'Deniz Yılmaz', 'variables', '{link}'),
@@ -181,6 +192,19 @@ INSERT INTO mail_approval_events (id, approval_id, seq, kind, actor_sub, actor_n
      '[{"field": "variable", "name": "Place", "before": "Deniz kıyısı", "after": "Göl"}]', NULL, '2026-09-22T12:00:00Z'),
     ('70000000-0000-4000-8000-000000000071', '60000000-0000-4000-8000-000000000007', 1, 'submitted', '` + erasedSub + `', 'Deniz Yılmaz', NULL, NULL, NULL, '2026-09-10T10:00:00Z'),
     ('70000000-0000-4000-8000-000000000072', '60000000-0000-4000-8000-000000000007', 2, 'expired', NULL, NULL, NULL, NULL, NULL, '2026-09-17T10:00:00Z');
+
+-- The in-app inbox: Deniz's own item goes; Ayşe's item naming Deniz goes; her
+-- other item stays.
+INSERT INTO notification_types (key, default_channels) VALUES ('team.joined', '{inbox}');
+INSERT INTO notifications (id, type, sent_by, idempotency_key, request_sha256) VALUES
+    ('80000000-0000-4000-8000-000000000001', 'team.joined', 'service-account-core', 'k1', 'x');
+INSERT INTO inbox_items (id, user_id, notification_id, notification_type, title, summary, link, expires_at) VALUES
+    ('81000000-0000-4000-8000-000000000001', '` + erasedSub + `', '80000000-0000-4000-8000-000000000001', 'team.joined', 'Ekibe katıldın', '', '/teams/1', now() + interval '1 day'),
+    ('81000000-0000-4000-8000-000000000002', '` + otherSub + `', '80000000-0000-4000-8000-000000000001', 'team.joined', 'Ekibe biri katıldı', 'Deniz Yılmaz ekibe katıldı', NULL, now() + interval '1 day');
+INSERT INTO notifications (id, type, sent_by, idempotency_key, request_sha256) VALUES
+    ('80000000-0000-4000-8000-000000000002', 'team.joined', 'service-account-core', 'k2', 'x');
+INSERT INTO inbox_items (id, user_id, notification_id, notification_type, title, summary, link, expires_at) VALUES
+    ('81000000-0000-4000-8000-000000000003', '` + otherSub + `', '80000000-0000-4000-8000-000000000002', 'team.joined', 'Ekibe katıldın', '', NULL, now() + interval '1 day');
 `
 
 // erasureTables names every table erasure may touch and the key each row is
@@ -201,9 +225,12 @@ var erasureTables = map[string]string{
 	"mail_approval_events":              "id::text",
 	"mail_task_links":                   "id::text",
 	"mail_tracking_events":              "id::text",
+	"inbox_items":                       "id::text",
 	"mail_suppressions":                 "address",
 	"mail_bounces":                      "id::text",
 	"mail_suppression_removals":         "id::text",
+	"mail_unsubscribes":                 "address || '/' || stream",
+	"mail_unsubscribe_reactivations":    "id::text",
 }
 
 type tableRows map[string]map[string]string
@@ -316,15 +343,18 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 		AccountErasureQueueRowsCleared:          2 + 1,
 		AccountErasureBodiesCleared:             3,
 		AccountErasureVariablesCleared:          4 + 1,
-		AccountErasureActorColumnsReplaced:      11 + 1,
-		AccountErasureNotesCleared:              3,
+		AccountErasureActorColumnsReplaced:      11 + 1 + 1,
+		AccountErasureNotesCleared:              3 + 1,
 		AccountErasureChangesCleared:            2,
 		AccountErasureApprovalRecipientsRemoved: 5,
 		AccountErasureApprovalPlaceholders:      3,
 		AccountErasureApprovalSendLinksDeleted:  1,
 		AccountErasureTrackingEventsDeleted:     0,
 		AccountErasureTrackingLinksCleared:      0,
+		AccountErasureInboxItemsDeleted:         1,
+		AccountErasureInboxItemsNamingDeleted:   1,
 		AccountErasureSuppressionsDeleted:       2,
+		AccountErasureUnsubscribesDeleted:       1,
 	}
 	if counts := receiptCounts(t, receipt); !reflect.DeepEqual(counts, wantCounts) {
 		t.Errorf("counts = %v\nwant     %v", counts, wantCounts)
@@ -338,6 +368,8 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 		},
 		"mail_suppressions":                 {erasedSchool, "deniz.eski@example.net"},
 		"mail_suppression_removals":         {"1"},
+		"mail_unsubscribes":                 {erasedPersonal + "/duyuru"},
+		"mail_unsubscribe_reactivations":    {"1", "2"},
 		"templates":                         {"10000000-0000-4000-8000-000000000002"},
 		"mailing_lists":                     {"20000000-0000-4000-8000-000000000003"},
 		"template_versions":                 {"11000000-0000-4000-8000-000000000001"},
@@ -370,7 +402,12 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 			"70000000-0000-4000-8000-000000000032", "70000000-0000-4000-8000-000000000033",
 			"70000000-0000-4000-8000-000000000061", "70000000-0000-4000-8000-000000000071",
 		},
+		// Deniz's own item, and Ayşe's that names Deniz; her other item stays.
+		"inbox_items": {"81000000-0000-4000-8000-000000000001", "81000000-0000-4000-8000-000000000002"},
 	})
+	if n := queryCount(t, store, `SELECT count(*) FROM inbox_items WHERE id IN ('81000000-0000-4000-8000-000000000001', '81000000-0000-4000-8000-000000000002')`); n != 0 {
+		t.Errorf("inbox items to or naming the person left = %d", n)
+	}
 
 	t.Run("recipients and list memberships are deleted", func(t *testing.T) {
 		if n := queryCount(t, store, `SELECT count(*) FROM recipients WHERE lower(email) = ANY($1)`, erasedEmails); n != 0 {
@@ -395,6 +432,9 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 			{`SELECT actor_sub FROM sent_content_views WHERE id = '13000000-0000-4000-8000-000000000002'`, otherSub},
 			{`SELECT actor_sub FROM mail_approval_events WHERE id = '70000000-0000-4000-8000-000000000011'`, DeletedUserSubject},
 			{`SELECT actor_name FROM mail_approval_events WHERE id = '70000000-0000-4000-8000-000000000071'`, DeletedUserName},
+			{`SELECT actor_sub FROM mail_unsubscribe_reactivations WHERE id = 1`, DeletedUserSubject},
+			{`SELECT reason FROM mail_unsubscribe_reactivations WHERE id = 2`, ErasedNote},
+			{`SELECT actor_sub FROM mail_unsubscribe_reactivations WHERE id = 2`, otherSub},
 		} {
 			if got := queryString(t, store, check.sql); got == nil || *got != check.want {
 				t.Errorf("%s = %v, want %q", check.sql, got, check.want)
@@ -772,7 +812,7 @@ func TestEraseAccountWithoutAddressesStillReplacesTheSubject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if counts := receiptCounts(t, receipt); counts[AccountErasureActorColumnsReplaced] != 11+1 || counts[AccountErasureRecipientsDeleted] != 0 {
+	if counts := receiptCounts(t, receipt); counts[AccountErasureActorColumnsReplaced] != 11+1+1 || counts[AccountErasureRecipientsDeleted] != 0 {
 		t.Errorf("counts = %v", counts)
 	}
 	// The names the subject's own rows carry are still searched for.

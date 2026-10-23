@@ -197,7 +197,11 @@ takes the person out of them:
   recipient's Keycloak subject, when the send knew it: a Keycloak group's
   member), and `error`, which can quote the address. The mail rendered for them — `subject`, `body`,
   `body_html` — is kept only for a while: see
-  [Sent mail content](#sent-mail-content).
+  [Sent mail content](#sent-mail-content). `list_unsubscribe_url`, the
+  recipient's one-click unsubscribe link as core signed it (its token names
+  the recipient's subject; README "Tek tık çıkış"), goes with that content:
+  emptied with it (retention, the masking deadline, a send not kept) and on
+  Account erasure; the API never serves it.
 - `mail_tasks.sent_by` — who sent: the Keycloak subject of the token that
   queued the send — for an approved Mail onayı request, its submitter's — or
   `skymail` for the mail SkyMail sends of its own accord, the notice that a
@@ -240,6 +244,11 @@ takes the person out of them:
   holds no address: it belongs to a queue row.
   `mail_suppression_removals.actor_sub` — who removed an address from the
   list (the address is not kept).
+- The unsubscribe record (see [Unsubscribe record](#unsubscribe-record)):
+  `mail_unsubscribes.address` — an address that left the duyuru stream
+  through SkyMail's one-click link. `mail_unsubscribe_reactivations.actor_sub`
+  and `reason` — who reversed an unsubscribe and why (the address is not
+  kept).
 
 ## Bounces and suppression
 
@@ -262,6 +271,42 @@ sent and flagged.
 
 Logs carry the queue row's id, the outcome and the codes; never an address
 or a report's text.
+
+## Unsubscribe record
+
+An address that left the duyuru stream through SkyMail's own one-click link
+(README, "Tek tık çıkış ucu"; ADR 0072 decisions 4–9; hub ticket
+abonelik-cikisi 02). Purpose: not to mail it again from that stream (KVKK
+md. 5/2-f, legitimate interest; the one-click link is the balance's
+safeguard).
+
+| What | Kept | Then |
+|---|---|---|
+| `mail_unsubscribes` (lower-cased address, `stream` — `duyuru` —, `source` — `link` —, `created_at`) | until the person resubscribes (the link's page), an operator with `skymail:unsubscribes:reactivate` reverses it at the person's request or after a mistake, or the person is erased: nothing removes it by itself | Account erasure deletes the person's addresses' |
+| `mail_unsubscribe_reactivations` (when, `actor` — `recipient` or `operator` —, the operator's `actor_sub` and `reason`, the record's stream, source and date) — no address | without end: the record of who reversed what | Account erasure replaces the actor with Silinmiş kullanıcı, and clears a reason that names the person |
+| the link's token | never stored: it is sealed (XChaCha20-Poly1305) from the stream and the address, carries its key's version, and does not expire; it stops opening only when its key version is taken out of the ring after a leak | — |
+
+A recipient of a duyuru send whose address is in the record is written
+failed when the send is queued (`suppressed: unsubscribed`), and a row
+already queued is written so when the dispatcher takes it; never sent. Mail
+of the islem stream (account mail, Forms confirmations, notices) is sent as
+before. The record is applied whatever `SKYMAIL_UNSUBSCRIBE_LINK` says.
+
+The `/u/` endpoint keeps no IP address (its per-client limit counts in
+memory only), sets no cookie, and logs neither the path, the token nor the
+address. The edge's access log must not keep `/api/skymail/u/` paths (hub
+ticket abonelik-cikisi 06).
+
+The migration's `down` drops both tables: every unsubscribe would be lost.
+It is not run in production once the link has been on.
+
+These are kept for a fixed time, whatever happens to the account before
+erasure:
+
+- `inbox_items` — the in-app inbox (see [In-app inbox](#in-app-inbox)):
+  `user_id` (the person's Keycloak subject), the rendered `title`, `summary`
+  and `link`, which can name people, and the person's `seen_at`, `read_at`,
+  `archived_at`. At most 90 days.
 
 ## Open and click tracking
 
@@ -295,8 +340,41 @@ off).
 
 The mail kept (`body_html`) never holds the pixel or a click address: they
 are put in as the mail goes to the relay, so the content panel shows the
-mail as rendered and looking at it is never an opening. Single mail, System
-templates and sensitive templates are never tracked.
+mail as rendered and looking at it is never an opening. A person's single
+mail that does not ask, System templates and sensitive templates are never
+tracked as asked. With `SKYMAIL_TRACKING_SYSTEM=on` (off by default; Yusuf,
+2026-10-21) the mail services send — account and transaction mail, Forms
+confirmations, core's notifications, SkyMail's approval notices — is tracked
+too, with the same tables, retention and withdrawal: the pixel always, a
+click address only on a link its template writes out as it is, none at all in
+a sensitive mail; so no `mail_task_links.url` of such a send holds what a
+variable put in a link (a reset, verification or login link).
+
+## In-app inbox
+
+Hub ticket iletisim-servisi 05; ADR 0070. Contract: [`inbox.md`](inbox.md).
+
+- **What is kept.** One row per person per notification whose type goes to
+  the inbox: the type's inbox text rendered once for the notification (a
+  title, a summary, and a link: an in-app path or an https address on
+  yildizskylab.com), not a copy of the ticket, certificate or
+  news it points to. `notifications` keeps the request's counts only, no
+  person.
+- **Who sees it.** Only its owner, through `/v1/me/inbox` with their own
+  token. No operator route reads inbox items, and log lines carry the type,
+  counts and the failing part of a text, never a person, a text or a link.
+- **Retention: 90 days.** `expires_at` is the write time plus 90 days, or the
+  notification's `expires_at` when sooner (an event that is over); a `CHECK`
+  holds it within 90 days of `created_at`. From `expires_at` the item is not
+  listed, counted or marked; the inbox sweep (`sweepInbox` in `main.go`, at
+  startup and every hour, 1000 rows a statement) deletes it and logs the
+  count (`"event":"inbox_sweep"`). It runs while the sender is paused too.
+- **Account erasure** deletes the person's items whatever their age, and
+  anyone else's item whose title, summary or link names the person (see
+  below).
+- **Backup and restore.** A restored dump brings back items deleted since the
+  dump: the sweep deletes the expired ones within the hour, and core's
+  erasure replay (below) deletes an erased person's again.
 
 ## Sent mail content
 
@@ -597,7 +675,7 @@ person is cleared whole, never masked.
 | `recipients` | `email` in E | deleted, with their `mailing_list_recipients` |
 | `mail_queue`, `pending` | `recipient_email` in E or `recipient_sub` = S | deleted: never sent |
 | `mail_queue`, `processing` | `recipient_email` in E or `recipient_sub` = S | waited for (`202`) |
-| `mail_queue`, `sent`/`failed` | `recipient_email` in E or `recipient_sub` = S | `recipient_full_name` Silinmiş kullanıcı, `recipient_email`, `subject`, `body` `''`, `body_html`, `error`, `recipient_sub` NULL; the row stays for the counts |
+| `mail_queue`, `sent`/`failed` | `recipient_email` in E or `recipient_sub` = S | `recipient_full_name` Silinmiş kullanıcı, `recipient_email`, `subject`, `body` `''`, `body_html`, `error`, `recipient_sub`, `list_unsubscribe_url` NULL; the row stays for the counts |
 | `mail_queue`, anyone else's, `sent`/`failed` | `subject`, `body` or `body_html` names E or N | those three cleared (`''`, `''`, NULL) |
 | `mail_queue`, anyone else's, `pending`/`processing` | the same | waited for (`202`): it goes out as it was rendered, then it is cleared |
 | `mail_tasks` | `sent_by` = S | Silinmiş kullanıcı |
@@ -617,6 +695,11 @@ person is cleared whole, never masked.
 | `mail_suppressions` | `address` in E, `recipient_sub` = S, or its last queue row is to the person | deleted, before that row's address is cleared |
 | `mail_bounces` | of a `mail_queue` row to the person | kept with the cleared row: it holds no address, codes only |
 | `mail_suppression_removals` | `actor_sub` = S | Silinmiş kullanıcı |
+| `mail_unsubscribes` | `address` in E | deleted |
+| `mail_unsubscribe_reactivations` | `actor_sub` = S | Silinmiş kullanıcı |
+| `mail_unsubscribe_reactivations.reason` | names E or N | `[silindi]` |
+| `inbox_items` | `user_id` = S | deleted, whatever their age |
+| `inbox_items`, anyone else's | `title`, `summary` or `link` names E or N | deleted: an item is a short notice, it goes whole |
 
 Silinmiş kullanıcı is the subject `00000000-0000-4000-8000-000000000000`
 with the name `Silinmiş kullanıcı`, the same for everyone. A request's person
@@ -634,7 +717,9 @@ Template and version content, list names and the club's mail history as a
 count stay (ADR-0051: editorial record). Pending Mail onayı requests are not
 cancelled; they expire in seven days. The person's addresses leave the
 suppression list: mail to them is sent again if they are added to a list
-again. A report about their old mail that arrives later finds its row cleared
+again. Their addresses' unsubscribes go too (ADR 0072, deviation 9): an
+address put on a list again by hand is mailed from the duyuru stream until it
+leaves again. A report about their old mail that arrives later finds its row cleared
 and suppresses nothing (it locks the row first: README, "Geri dönen posta ve
 bastırma listesi").
 
@@ -653,7 +738,8 @@ bastırma listesi").
   `changes_cleared`, `approval_recipients_removed`,
   `approval_recipient_placeholders`, `approval_send_links_deleted`,
   `tracking_events_deleted`, `tracking_links_cleared`,
-  `suppressions_deleted`. The counts
+  `suppressions_deleted`, `inbox_items_deleted`,
+  `inbox_items_naming_deleted`, `unsubscribes_deleted`. The counts
   are what the completing call did; work committed by an earlier `202` call
   is not in them. A repeat, or a concurrent duplicate, returns the stored
   body without doing the work again. Other answers: `202` (above),

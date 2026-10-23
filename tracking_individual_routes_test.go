@@ -29,7 +29,8 @@ import (
 // enabled account whose verified primary e-mail is the address, and then
 // core, as for a group's members. No such account: no_account. Keycloak not
 // answering: preference_unavailable, and the send goes on. A service's
-// single mail — account and transaction mail — is never tracked, nor a
+// single mail — account and transaction mail — is never tracked as asked
+// (only by SKYMAIL_TRACKING_SYSTEM, tracking_system_routes_test.go), nor a
 // System or sensitive template.
 
 // setFreeBasic sets free.basic's System flag and content_sensitive (nil: the
@@ -340,9 +341,11 @@ func singleSendWorld(t *testing.T) (*fiber.App, *approvalWorld) {
 	return app, w
 }
 
-// A service's single mail is account or transaction mail: it is never
-// tracked, though it asks, stays in the system lane, and Keycloak is not
-// asked about its recipient. A person's token through the same chain gets it.
+// A service's single mail is account or transaction mail: with
+// SKYMAIL_TRACKING_SYSTEM off (the default) it is never tracked, though it
+// asks, stays in the system lane, and Keycloak is not asked about its
+// recipient. A person's token through the same chain gets it. (System
+// tracking on: TestAServicesSingleSendIsTrackedWithSystemTracking.)
 func TestAServicesSingleSendIsNeverTracked(t *testing.T) {
 	app, w := singleSendWorld(t)
 	for _, c := range []struct {

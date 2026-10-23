@@ -11,7 +11,8 @@ import (
 // (mail_queue.recipient_sub). Mail to Deniz at an address core no longer
 // lists is still mail to Deniz: the subject finds it. The pending row goes,
 // the sent one keeps its place in the send's counts with nothing about Deniz
-// left on it, the subject included. Ayşe's row keeps hers.
+// left on it, the subject and the unsubscribe link (core's token names the
+// subject) included. Ayşe's row keeps hers.
 func TestEraseAccountFindsMailToThePersonBySubject(t *testing.T) {
 	store := erasureStore(t)
 	ctx := context.Background()
@@ -21,7 +22,9 @@ func TestEraseAccountFindsMailToThePersonBySubject(t *testing.T) {
 		INSERT INTO mail_queue (id, task_id, recipient_full_name, recipient_email, subject, body, status, recipient_sub) VALUES
 		    ('50000000-0000-4000-8000-00000000e101', '40000000-0000-4000-8000-00000000e101', 'D. Y.', 'eski@example.org', 'Konu', 'Gövde', 'pending', '`+erasedSub+`'),
 		    ('50000000-0000-4000-8000-00000000e102', '40000000-0000-4000-8000-00000000e101', 'D. Y.', 'eski@example.org', 'Konu', 'Gövde', 'sent', '`+erasedSub+`'),
-		    ('50000000-0000-4000-8000-00000000e103', '40000000-0000-4000-8000-00000000e101', 'Ayşe Kaya', 'ayse@example.com', 'Konu', 'Gövde', 'sent', '`+otherSub+`');`); err != nil {
+		    ('50000000-0000-4000-8000-00000000e103', '40000000-0000-4000-8000-00000000e101', 'Ayşe Kaya', 'ayse@example.com', 'Konu', 'Gövde', 'sent', '`+otherSub+`');
+		UPDATE mail_queue SET list_unsubscribe_url = 'https://api.example.org/v1/communication-preferences/unsubscribe?t=AQ'
+		WHERE task_id = '40000000-0000-4000-8000-00000000e101';`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -43,6 +46,12 @@ func TestEraseAccountFindsMailToThePersonBySubject(t *testing.T) {
 	}
 	if got := queryString(t, store, `SELECT recipient_sub::text FROM mail_queue WHERE id = '50000000-0000-4000-8000-00000000e103'`); got == nil || *got != otherSub {
 		t.Errorf("Ayşe's row's subject = %v, want hers kept", shown(got))
+	}
+	if got := queryString(t, store, `SELECT list_unsubscribe_url FROM mail_queue WHERE id = '50000000-0000-4000-8000-00000000e102'`); got != nil {
+		t.Errorf("the sent row to Deniz keeps the unsubscribe link %v", shown(got))
+	}
+	if got := queryString(t, store, `SELECT list_unsubscribe_url FROM mail_queue WHERE id = '50000000-0000-4000-8000-00000000e103'`); got == nil {
+		t.Errorf("Ayşe's row lost her unsubscribe link")
 	}
 }
 

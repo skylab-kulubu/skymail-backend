@@ -102,3 +102,88 @@ func TestConfigFromEnvChecksTheAddresses(t *testing.T) {
 		t.Error("off with a bad SKYMAIL_TRACKING_BASE_URL: no error")
 	}
 }
+
+// SKYMAIL_TRACKING_SYSTEM is off unless on; any other value stops startup.
+// It counts only with SKYMAIL_TRACKING on: on beside off is not an error
+// (turning tracking off must never stop startup), only nothing.
+func TestConfigFromEnvReadsSystemTracking(t *testing.T) {
+	on := map[string]string{
+		"SKYMAIL_TRACKING":          "on",
+		"SKYMAIL_TRACKING_BASE_URL": "https://api.yildizskylab.com/api/skymail",
+		"CORE_URL":                  "http://core:8080",
+	}
+	with := func(values map[string]string, system string) map[string]string {
+		out := map[string]string{"SKYMAIL_TRACKING_SYSTEM": system}
+		for k, v := range values {
+			out[k] = v
+		}
+		return out
+	}
+	for _, raw := range []string{"", " ", "off", " off "} {
+		cfg, err := tracking.ConfigFromEnv(env(with(on, raw)))
+		if err != nil || cfg.System != tracking.ModeOff || cfg.SystemOn() || !cfg.On() {
+			t.Errorf("SKYMAIL_TRACKING_SYSTEM=%q: %+v, %v; want tracking on, system off", raw, cfg, err)
+		}
+	}
+	cfg, err := tracking.ConfigFromEnv(env(with(on, " on ")))
+	if err != nil || !cfg.SystemOn() {
+		t.Errorf("SKYMAIL_TRACKING_SYSTEM=on: %+v, %v; want system on", cfg, err)
+	}
+	for _, tracked := range []map[string]string{{}, {"SKYMAIL_TRACKING": "off"}} {
+		cfg, err := tracking.ConfigFromEnv(env(with(tracked, "on")))
+		if err != nil || cfg.System != tracking.ModeOn || cfg.SystemOn() || cfg.On() {
+			t.Errorf("SKYMAIL_TRACKING_SYSTEM=on with %v: %+v, %v; want it asked for, not on, no error", tracked, cfg, err)
+		}
+	}
+	for _, raw := range []string{"On", "true", "1", "yes", "evet"} {
+		if _, err := tracking.ConfigFromEnv(env(with(on, raw))); err == nil || !strings.Contains(err.Error(), "SKYMAIL_TRACKING_SYSTEM") {
+			t.Errorf("SKYMAIL_TRACKING_SYSTEM=%q: %v, want an error naming the variable", raw, err)
+		}
+	}
+}
+
+// SKYMAIL_TRACKING_OPERATOR, the same way: off unless on, any other value
+// stops startup, on beside SKYMAIL_TRACKING off is nothing and no error. It
+// is its own switch: system tracking neither needs nor turns it on.
+func TestConfigFromEnvReadsOperatorTracking(t *testing.T) {
+	on := map[string]string{
+		"SKYMAIL_TRACKING":          "on",
+		"SKYMAIL_TRACKING_BASE_URL": "https://api.yildizskylab.com/api/skymail",
+		"CORE_URL":                  "http://core:8080",
+	}
+	with := func(values map[string]string, extra ...string) map[string]string {
+		out := map[string]string{}
+		for k, v := range values {
+			out[k] = v
+		}
+		for i := 0; i+1 < len(extra); i += 2 {
+			out[extra[i]] = extra[i+1]
+		}
+		return out
+	}
+	for _, raw := range []string{"", " ", "off", " off "} {
+		cfg, err := tracking.ConfigFromEnv(env(with(on, "SKYMAIL_TRACKING_OPERATOR", raw)))
+		if err != nil || cfg.Operator != tracking.ModeOff || cfg.OperatorOn() || !cfg.On() {
+			t.Errorf("SKYMAIL_TRACKING_OPERATOR=%q: %+v, %v; want tracking on, operator off", raw, cfg, err)
+		}
+	}
+	cfg, err := tracking.ConfigFromEnv(env(with(on, "SKYMAIL_TRACKING_OPERATOR", " on ")))
+	if err != nil || !cfg.OperatorOn() || cfg.SystemOn() {
+		t.Errorf("SKYMAIL_TRACKING_OPERATOR=on: %+v, %v; want operator on, system off", cfg, err)
+	}
+	cfg, err = tracking.ConfigFromEnv(env(with(on, "SKYMAIL_TRACKING_SYSTEM", "on")))
+	if err != nil || cfg.OperatorOn() || !cfg.SystemOn() {
+		t.Errorf("SKYMAIL_TRACKING_SYSTEM=on alone: %+v, %v; want system on, operator off", cfg, err)
+	}
+	for _, tracked := range []map[string]string{{}, {"SKYMAIL_TRACKING": "off"}} {
+		cfg, err := tracking.ConfigFromEnv(env(with(tracked, "SKYMAIL_TRACKING_OPERATOR", "on")))
+		if err != nil || cfg.Operator != tracking.ModeOn || cfg.OperatorOn() || cfg.On() {
+			t.Errorf("SKYMAIL_TRACKING_OPERATOR=on with %v: %+v, %v; want it asked for, not on, no error", tracked, cfg, err)
+		}
+	}
+	for _, raw := range []string{"On", "always", "true", "1", "evet"} {
+		if _, err := tracking.ConfigFromEnv(env(with(on, "SKYMAIL_TRACKING_OPERATOR", raw))); err == nil || !strings.Contains(err.Error(), "SKYMAIL_TRACKING_OPERATOR") {
+			t.Errorf("SKYMAIL_TRACKING_OPERATOR=%q: %v, want an error naming the variable", raw, err)
+		}
+	}
+}

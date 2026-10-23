@@ -84,3 +84,56 @@ func TestCommonLinksStopAtTheLimit(t *testing.T) {
 		t.Fatalf("%d links, first %q; want the first %d", len(got), got[0], tracking.MaxLinksPerSend)
 	}
 }
+
+// A service's mail counts clicks only on the links its template writes out
+// as they are (Yusuf, 2026-10-21): an href a template action is part of — a
+// password reset, an e-mail verification or a login link, any address with
+// a variable — is never a literal link, wherever the action sits in it, and
+// neither is one marked data-skymail-notrack or one Trackable refuses. A
+// link inside an HTML comment is no link.
+func TestLiteralLinksAreTheOnesTheTemplateWritesOut(t *testing.T) {
+	template := `<!DOCTYPE html><html><body>
+<p>Merhaba {{.FullName}},</p>
+<a href="https://yildizskylab.com/etkinlikler?a=1&amp;b=2">Etkinlikler</a>
+<a href="{{.link}}">Parolanı sıfırla</a>
+<a href="https://my.yildizskylab.com/reset?token={{.token}}">Sıfırla</a>
+<a href="https://my.yildizskylab.com/{{.path}}/onay">Onayla</a>
+<a href={{.loginUrl}}>Giriş</a>
+<a href="https://my.yildizskylab.com/verify?k={{/* yorum */}}x">Yorumlu</a>
+<a href="https://yildizskylab.com/gizli" data-skymail-notrack>İşaretli</a>
+<a href="mailto:info@yildizskylab.com">Yaz</a>
+<a href="https://my.yildizskylab.com/communication-preferences">Tercihler</a>
+<!-- <a href="https://yildizskylab.com/yorumda">Yorumda</a> -->
+{{if .event}}<a title="{{.event}}" href=" https://yildizskylab.com/takvim ">Takvim</a>{{end}}
+</body></html>`
+	got := tracking.LiteralLinks(template, base)
+	want := []string{"https://yildizskylab.com/etkinlikler?a=1&b=2", "https://yildizskylab.com/takvim"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("LiteralLinks = %q\nwant %q", got, want)
+	}
+}
+
+// The links of a service's mail a click is counted on are those every mail
+// has and the template writes out; a reset link in a single mail — the only
+// mail of its send, so CommonLinks alone would count it — is not.
+func TestCommonLiteralLinksLeaveOutWhatAVariableMade(t *testing.T) {
+	template := `<body><a href="https://yildizskylab.com/">Site</a><a href="{{.link}}">Sıfırla</a><a href="https://yildizskylab.com/yardim">Yardım</a></body>`
+	mail := `<body><a href="https://yildizskylab.com/">Site</a><a href="https://e.yildizskylab.com/realms/e-skylab/login-actions/action-token?key=eyJhbGciOi.gizli">Sıfırla</a><a href="https://yildizskylab.com/yardim">Yardım</a></body>`
+	if got := tracking.CommonLinks([]string{mail}, base); len(got) != 3 {
+		t.Fatalf("CommonLinks of a single mail = %q, want all three", got)
+	}
+	got := tracking.CommonLiteralLinks([]string{mail}, template, base)
+	want := []string{"https://yildizskylab.com/", "https://yildizskylab.com/yardim"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("CommonLiteralLinks = %q, want %q", got, want)
+	}
+	// A variable that happens to print a literal link's address is that
+	// address: nothing of its own goes to /t/.
+	same := `<body><a href="https://yildizskylab.com/">Site</a><a href="https://yildizskylab.com/yardim">Sıfırla</a></body>`
+	if got := tracking.CommonLiteralLinks([]string{same}, template, base); !slices.Equal(got, want) {
+		t.Fatalf("CommonLiteralLinks = %q, want %q", got, want)
+	}
+	if got := tracking.CommonLiteralLinks([]string{mail}, `<body>{{safeHTML .BodyHtml}}</body>`, base); len(got) != 0 {
+		t.Fatalf("a template that writes no link out counts %q", got)
+	}
+}

@@ -33,6 +33,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
 	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skymail-backend/internal/unsubscribe"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 	"github.com/yokeTH/gofiber-scalar/scalar/v3"
 )
@@ -152,6 +153,12 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid open and click tracking retention configuration")
 	}
+	// SkyMail's own one-click unsubscribe link: off unless
+	// SKYMAIL_UNSUBSCRIBE_LINK=on; its key ring (README, "Tek tık çıkış ucu").
+	unsubscribeConfig, err := unsubscribe.ConfigFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid unsubscribe link configuration")
+	}
 	if migrationConfig.Mode == migrations.ModeApply {
 		// A stop signal ends a wait for another process's migrations, never
 		// a migration under way.
@@ -190,9 +197,12 @@ func main() {
 
 	log.Info().Str("mode", string(trackingConfig.Mode)).Str("base_url", trackingConfig.BaseURL).Str("core_url", trackingConfig.CoreURL).
 		Msg("open and click tracking (SKYMAIL_TRACKING)")
+	logSystemTracking(trackingConfig)
+	logOperatorTracking(trackingConfig)
 	log.Info().Str("mode", string(trackingRetention)).Int("event_retention_days", tracking.EventRetentionDays).Int64("max_rows", trackingRetentionMaxRows).
 		Msg("open and click tracking retention (SKYMAIL_TRACKING_RETENTION)")
 	logSendLanes(sendLanes)
+	logUnsubscribeLink(unsubscribeConfig)
 	db := database.NewStore(conn)
 	mailerService := mailer.NewMailer(db, mailer.SMTPConfig{
 		FromEmail: cfg.SMTPFrom,
@@ -258,8 +268,12 @@ func main() {
 	*/
 
 	handlers.NewTrackingPublicHandler(db, trackingConfig).Register(app)
+	handlers.NewUnsubscribePublicHandler(db, unsubscribeConfig).Register(app)
 	registerPublicRoutes(app, accountAccessGate, readiness)
 	registerInternalRoutes(app, erasureHandler, withdrawalHandler)
+	// Before protectedAPI: /v1/me is a person's own, with no role, and must
+	// not go through /v1's skymail:access chain.
+	registerInboxRoutes(app, authMiddleware, accountAccessGate, handlers.NewInboxHandler(db))
 
 	api := protectedAPI(app, authMiddleware, accountAccessGate)
 
@@ -301,6 +315,11 @@ func main() {
 		defer close(contentSweepStopped)
 		clearMailContent(workers, db, contentRetentionDays, viewRetentionDays, contentSweepInterval)
 	}()
+	inboxSweepStopped := make(chan struct{})
+	go func() {
+		defer close(inboxSweepStopped)
+		sweepInbox(workers, db, inboxSweepInterval)
+	}()
 	trackingRetentionStopped := make(chan struct{})
 	go func() {
 		defer close(trackingRetentionStopped)
@@ -331,6 +350,7 @@ func main() {
 		Wait: []stopping{
 			{name: "the mail approval expiry sweep", done: approvalsStopped},
 			{name: "the mail content sweep", done: contentSweepStopped},
+			{name: "the inbox sweep", done: inboxSweepStopped},
 			{name: "the tracking retention run", done: trackingRetentionStopped},
 			{name: "the mailer's sends", done: mailerService.Stopped()},
 		},
@@ -356,6 +376,10 @@ func logSendLanes(lanes mailer.SendLanes) {
 	if lanes.ReplyTo != nil {
 		line = line.Str("reply_to", lanes.ReplyTo.Address)
 	}
+	line = line.Bool("list_unsubscribe", lanes.ListUnsubscribe)
+	if lanes.ListUnsubscribe && lanes.Lane(mailer.LaneDuyuru).Transport == mailer.TransportOff {
+		log.Warn().Msg("sender lanes: SKYMAIL_LIST_UNSUBSCRIBE is on but the duyuru lane is off: no mail carries List-Unsubscribe until SKYMAIL_SEND_DUYURU is graph or xoauth2")
+	}
 	if creds := lanes.Credentials; creds != nil {
 		line = line.Str("graph_client_id", creds.ClientID).Str("certificate_x5t_s256", creds.Thumbprint()).
 			Time("certificate_not_after", creds.NotAfter())
@@ -368,7 +392,40 @@ func logSendLanes(lanes mailer.SendLanes) {
 				Msg("sender lanes: the skymail-posta certificate expires within 30 days; renew it (ops/wizards/skymail-posta-app-kaydi.sh)")
 		}
 	}
-	line.Msg("sender lanes (SKYMAIL_SEND_HESAP, SKYMAIL_SEND_BILGI, SKYMAIL_SEND_DUYURU)")
+	line.Msg("sender lanes (SKYMAIL_SEND_HESAP, SKYMAIL_SEND_BILGI, SKYMAIL_SEND_DUYURU, SKYMAIL_LIST_UNSUBSCRIBE)")
+}
+
+// logSystemTracking says at startup whether the mail services send is
+// tracked (SKYMAIL_TRACKING_SYSTEM): mode is what applies, on only with
+// SKYMAIL_TRACKING on. Asked for with tracking off, it warns: nothing is
+// tracked, and SkyMail starts all the same.
+func logSystemTracking(cfg tracking.Config) {
+	mode := tracking.ModeOff
+	if cfg.SystemOn() {
+		mode = tracking.ModeOn
+	}
+	event := log.Info()
+	if cfg.System == tracking.ModeOn && !cfg.On() {
+		event = log.Warn()
+	}
+	event.Str("mode", string(mode)).Str("requested", string(cfg.System)).
+		Msg("open and click tracking of system mail (SKYMAIL_TRACKING_SYSTEM; on only with SKYMAIL_TRACKING=on)")
+}
+
+// logOperatorTracking says at startup whether every send a person queues is
+// tracked (SKYMAIL_TRACKING_OPERATOR), as logSystemTracking does for the
+// mail services send: mode is what applies, on only with SKYMAIL_TRACKING on.
+func logOperatorTracking(cfg tracking.Config) {
+	mode := tracking.ModeOff
+	if cfg.OperatorOn() {
+		mode = tracking.ModeOn
+	}
+	event := log.Info()
+	if cfg.Operator == tracking.ModeOn && !cfg.On() {
+		event = log.Warn()
+	}
+	event.Str("mode", string(mode)).Str("requested", string(cfg.Operator)).
+		Msg("open and click tracking of every operator send (SKYMAIL_TRACKING_OPERATOR; on only with SKYMAIL_TRACKING=on)")
 }
 
 // trackingConfigFromEnv validates tracking before any service starts. Routes
@@ -434,6 +491,8 @@ func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, m
 	tasks.Get("/", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTasks)
 	// Before /:id, which would otherwise take "summary" for a task id.
 	tasks.Get("/summary", auth.RequireAnyPermission("skymail:mails:read"), mail.GetSummary)
+	// A setting, not a send: anyone who may use SkyMail (skymail:access).
+	tasks.Get("/tracking-mode", mail.GetTrackingMode)
 	tasks.Get("/:id", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTask)
 	tasks.Get("/:id/tracking", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTracking)
 	tasks.Get("/:id/tracking/recipients", mail.GetTrackingRecipients)
@@ -589,13 +648,17 @@ func registerMailApprovalRoutes(api fiber.Router, auth middlewares.AuthMiddlewar
 	requests.Post("/:id/resubmit", approvals.Resubmit)
 }
 
-// registerSuppressionRoutes serves the suppression list to operators with
-// skymail:suppressions:manage (README, "Geri dönen posta ve bastırma
-// listesi").
+// registerSuppressionRoutes serves the suppression list and the unsubscribe
+// record (README, "Geri dönen posta ve bastırma listesi", "Tek tık çıkış
+// ucu"): a bounce is removed with skymail:suppressions:manage, an
+// unsubscribe reversed only with skymail:unsubscribes:reactivate, which also
+// reads the reversals; either role reads the list.
 func registerSuppressionRoutes(api fiber.Router, auth middlewares.AuthMiddleware, suppressions handlers.SuppressionHandler) {
 	group := api.Group("/suppressions")
-	group.Get("/", auth.RequireAnyPermission(handlers.SuppressionsManageRole), suppressions.List)
+	group.Get("/", auth.RequireAnyPermission(handlers.SuppressionsManageRole, handlers.UnsubscribesReactivateRole), suppressions.List)
+	group.Get("/reactivations", auth.RequireAnyPermission(handlers.UnsubscribesReactivateRole), suppressions.Reactivations)
 	group.Delete("/:id", auth.RequireAnyPermission(handlers.SuppressionsManageRole), suppressions.Delete)
+	group.Post("/:id/reactivate", auth.RequireAnyPermission(handlers.UnsubscribesReactivateRole), suppressions.Reactivate)
 }
 
 // registerNotificationRoutes serves POST /notifications to services (hub
@@ -608,6 +671,54 @@ func registerNotificationRoutes(api fiber.Router, auth middlewares.AuthMiddlewar
 	types.Get("/", auth.RequireAnyPermission("skymail:templates:read"), notifications.ListTypes)
 	types.Get("/:key", auth.RequireAnyPermission("skymail:templates:read"), notifications.GetType)
 	types.Put("/:key", auth.RequireAnyPermission("skymail:templates:write"), notifications.PutType)
+}
+
+// registerInboxRoutes serves a person's own inbox (hub ticket
+// iletisim-servisi 05; ADR 0070) at /v1/me/inbox: a person's own token issued
+// for SkyMail (aud skymail), no role, the account access gate as on /v1. Each
+// route ends its chain, so /v1's skymail:access chain, registered after
+// these, never runs for them.
+func registerInboxRoutes(app *fiber.App, auth middlewares.AuthMiddleware, gate accessgate.Reader, inbox handlers.InboxHandler) {
+	me := app.Group("/v1/me/inbox")
+	person, gated := auth.AuthenticatePerson, middlewares.AccountAccessGate(gate)
+	me.Get("/", person, gated, inbox.List)
+	me.Get("/counts", person, gated, inbox.Counts)
+	me.Post("/read-all", person, gated, inbox.ReadAll)
+	me.Post("/seen-all", person, gated, inbox.SeenAll)
+	me.Post("/:id/seen", person, gated, inbox.Seen)
+	me.Post("/:id/read", person, gated, inbox.Read)
+	me.Post("/:id/unread", person, gated, inbox.Unread)
+	me.Post("/:id/archive", person, gated, inbox.Archive)
+}
+
+// inboxSweepInterval is how often the inbox sweep runs: an item is gone
+// within it of its expiry (reads leave it out from the moment it expires).
+const inboxSweepInterval = time.Hour
+
+// inboxSweepBatch is how many inbox items one statement of the sweep deletes.
+const inboxSweepBatch = 1000
+
+// sweepInbox deletes the inbox items past their expiry — 90 days after they
+// were written, or sooner (ADR 0070; ADR-0062: each service deletes its own
+// data with its own job) — at startup and every interval after. It logs the
+// count only.
+func sweepInbox(ctx context.Context, db *database.Store, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		deleted, err := db.DeleteExpiredInbox(ctx, time.Now(), inboxSweepBatch)
+		if err != nil && ctx.Err() == nil {
+			log.Error().Err(err).Str("event", "inbox_sweep_failed").Msg("inbox sweep failed")
+		}
+		if deleted > 0 {
+			log.Info().Str("event", "inbox_sweep").Int64("items", deleted).Msg("deleted inbox items past their expiry")
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // expireMailApprovals expires the requests left undecided past their deadline

@@ -64,6 +64,18 @@ sunmak, sunulanı okumayı ister: `skymail:templates:read`, listeye sunmak için
 ayrıca `skymail:lists:read`. Eksik olana 403 döner ve `params.missing_roles`
 eksik rolleri sayar.
 
+Bir şablonu **sistem şablonu** yapmak ya da bu işareti kaldırmak (`PUT
+/v1/templates/by-key/{key}` gövdesindeki `system`) ayrı bir rol ister:
+`skymail:templates:system`. Onu yalnız Template seed'in servis hesabı
+(`skymail-seed`) taşır, hiçbir kişi ya da grup taşımaz; çünkü `account.*` ya
+da `keycloak.*` sistem şablonu bastırma listesini atlar ve hesap şeridinden
+gider. Rolü olmayan (`skymail:templates:write` sahibi operatör) aynı uçla
+sistem şablonunun içeriğini yine yeniden yazabilir, ama `system` şablonda ne
+ise onu göndermelidir (yeni anahtar için `false`); başkasını gönderirse
+`403 server.forbidden` döner (`params.missing_roles:
+["skymail:templates:system"]`, `params.field: "system"`, `params.system`
+şablonun bugünkü işareti) ve hiçbir şey yazılmaz.
+
 `KEYCLOAK_SERVICE_CLIENT_ID` (`skymail-backend`) istemcisinin service
 account'u Keycloak'tan okur: gönderim ve listeler için grupları ve üyelerini,
 mail onayında da `skymail:mails:approve` rolünü kimin taşıdığını (doğrudan ya
@@ -198,7 +210,9 @@ kabul edilir ve alıcısı `failed` olur. Bu kuralı `main.go`
 (`WithReservedDomainsRefused`) açar. Testler sahte relay ile `example.com`'a
 gönderdiği için kural varsayılan olarak kapalıdır.
 
-Bugün tek kanal `email`'dir: `recipient_email` kanalın adresidir. Var olan ve
+Kuyruktaki tek kanal `email`'dir: `recipient_email` kanalın adresidir
+(uygulama içi kutu kuyruğa girmez, öğesini bildirimin işleminde yazar;
+[`docs/inbox.md`](docs/inbox.md)). Var olan ve
 eski imajın yazdığı satırlar varsayılanla `email` olur; `CHECK` başka kanalı
 reddeder, yeni bir kanal kendi migration'ında eklenir. Bu sürecin göndericisi
 olmayan bir kanalın satırı (daha yeni bir imajın yazdığı, geri dönülmüşse)
@@ -211,7 +225,7 @@ boştur. Hesap silme kişinin satırlarını adresleriyle ve `sub`'ıyla bulur;
 silinen satırda `recipient_sub` da boşalır. `GET /v1/mail_tasks/{id}/queue`
 her satırın `channel`'ını döner.
 
-## Gönderen şeritleri (`SKYMAIL_SEND_HESAP`, `SKYMAIL_SEND_BILGI`, `SKYMAIL_SEND_DUYURU`)
+## Gönderen şeritleri (`SKYMAIL_SEND_HESAP`, `SKYMAIL_SEND_BILGI`, `SKYMAIL_SEND_DUYURU`, `SKYMAIL_LIST_UNSUBSCRIBE`)
 
 Her posta türüne göre üç paylaşılan kutudan birinden çıkar (hub bileti
 skymail-bounce-isleme 10; Yusuf, 2026-10-20). Kural `internal/mailer/lanes.go`
@@ -295,12 +309,48 @@ JSON'da kaçırılmaz (`<` olduğu gibi). Exchange `from`'un görünen adını
 kutunun dizindeki adıyla ezebilir: kutuların `DisplayName`'i
 `SKYMAIL_FROM_*` adlarıyla aynı tutulur.
 
-**`List-Unsubscribe`.** SkyMail bugün bu başlığı yazmaz (bilet 11). `xoauth2`
-yolu postayı SMTP yoluyla aynı kodla kurar; başlık eklendiğinde duyuru
-kutusundan da gider. Graph JSON'u yalnız `X-` önekli başlık taşır. Şerit
-kuyruk önceliğinden türer: bilet 11 başlığı şeride değil gönderim türüne
-(liste, grup, onaylı gönderim, toplu bildirim) bağlamalı; duyuru@'dan giden
-takipli tekil postaya abonelik başlığı anlamsızdır.
+**Tek tık çıkış (`SKYMAIL_LIST_UNSUBSCRIBE`, RFC 8058; hub bileti
+skymail-bounce-isleme 11).** Çıkış bağlantısı core'undur: tercih core'da
+(`communication_preferences`, ekranı Hesap Merkezi'nde), belirteci core imzalar
+(`GET|POST /v1/communication-preferences/unsubscribe?t=…`; GET yalnız sayfa,
+POST `List-Unsubscribe=One-Click` bağlantının kategorilerini kapatır). SkyMail
+anahtarı tutmaz, kendi tercih kaydı yoktur; core'un verdiği bağlantıyı satırda
+(`mail_queue.list_unsubscribe_url`) taşır. Bugün bağlantıyı veren tek yol
+`POST /v1/notifications` alıcısının `unsubscribe_url`'idir (yalnız isteğe bağlı
+ve `bulk` şeritli türde; [`docs/notifications.md`](docs/notifications.md)).
+Liste, grup, Forms ve onaylı gönderimin satırında bağlantı yoktur: bu postalar
+core tercihine bakmaz, çıkış başlığı onurlandırılamaz.
+
+| `SKYMAIL_LIST_UNSUBSCRIBE` | |
+|---|---|
+| `off` (ya da boş, varsayılan) | hiçbir postada başlık yok; her şey bugünkü gibi |
+| `on` | şeridi `duyuru` olan, duyuru kutusundan (`graph` ya da `xoauth2`) giden ve satırında bağlantı olan posta `List-Unsubscribe: <bağlantı>` ve `List-Unsubscribe-Post: List-Unsubscribe=One-Click` taşır |
+
+Başka değer açılışı durdurur; açılış logu `list_unsubscribe` alanını yazar,
+duyuru şeridi `off` iken `on` ise uyarır. `hesap` ve `bilgi` hiçbir zaman
+başlık yazmaz, `off` yolu (eski `SMTP_FROM`) da yazmaz.
+
+- **Graph'ta MIME.** Graph JSON'u yalnız `X-` önekli başlık taşır. Bağlantılı
+  duyuru postası aynı `sendMail`'e MIME olarak gider: SMTP yolunun kurduğu
+  ileti (Reply-To, `Message-ID`, `X-SkyMail-Queue-Id`, düz metin ve HTML),
+  base64, `Content-Type: text/plain`; 4 MB sınırı kodlanmış gövdeye uygulanır.
+  MIME'da `saveToSentItems` yoktur: Exchange kopyayı Gönderilmiş Öğeler'e
+  koyar (duyuru kutusunda MRM 1 gün). Bağlantısız posta bugünkü gibi JSON,
+  kopyasız gider.
+- **Başlık güvenliği.** Bağlantı mutlak `https` adresi, host'lu, kullanıcısız,
+  en çok 960 karakter (başlık tek satır yazılır, RFC 5322 998), yalnız
+  görünür ASCII; `<`, `>`, virgül ve tırnak yok. Veritabanı denetimi
+  `https://` ve uzunluğu ayrıca tutar; kuralı tutmayan eski bir satır
+  başlıksız gider.
+- **Gövdede bağlantı.** Kişinin bağlantısı şablona `.UnsubscribeUrl` olarak
+  girer (`.Email`, `.FullName` gibi; gönderimin aynı adlı değişkenini ezer).
+- **Saklama.** Bağlantı API'de hiç sunulmaz (`json:"-"`); satırın kişisel
+  içeriğiyle birlikte boşaltılır (saklama süresi, maskeleme son tarihi,
+  saklanmayan gönderim) ve hesap silmede satırla gider.
+- **DKIM.** RFC 8058 iki başlığın DKIM imzasında (`h=`) olmasını ister.
+  Exchange Online'ın MIME `sendMail`'de bunları imzaya alıp almadığı
+  belgelenmemiştir; açılışta gelen postanın `DKIM-Signature: h=` satırı okunur
+  (hub bileti 11'in açılış runbook'u).
 
 Gönderim bütçesi (`SKYMAIL_RATE_PER_MINUTE`) şeritlerden bağımsız, hepsi için
 ortaktır; Exchange'in dakikada 30 ileti sınırı kutu başınadır.
@@ -365,7 +415,9 @@ relay'in senkron kalıcı reddidir (aşağıda).
   `account.*` olan **ve** sistem şablonu (`system = true`, Template seed'inki)
   olan gönderim (giriş/kayıt kodu, e-posta doğrulama, şifre sıfırlama)
   bastırılmış adrese yine gider; anahtar tek başına yetmez (önekler ayrılmış
-  değil, sistem olmayan bir `account.x` şablonu bastırılır); satır `suppressed_but_sent = true`,
+  değil, sistem olmayan bir `account.x` şablonu bastırılır); sistem işaretini
+  de yalnız `skymail:templates:system` (seed'in servis hesabı) koyar ya da
+  kaldırır, `skymail:templates:write` yetmez (bkz. Keycloak); satır `suppressed_but_sent = true`,
   bastırma satırı `exempt_flagged_at` alır. Forms, Mail onayı, listeler ve
   öteki her şey bastırılır. Muafiyet şeritle değil anahtarla: sistem
   şeridinde Forms ve Mail onayı bildirimleri de var.
@@ -376,15 +428,137 @@ relay'in senkron kalıcı reddidir (aşağıda).
   /v1/mail_tasks/{id}/queue` her satırda `suppressed_but_sent` ve
   `undelivered` döner.
 - **Operatör uçları** (`skymail:suppressions:manage`, `skymail` istemci
-  rolü, gruba verilir): `GET /v1/suppressions?q=&_start=&_end=` (son
-  ret en yeni önce, `q` adresin bir parçası, sayfa en çok 100, `X-Total-Count`)
-  ve `DELETE /v1/suppressions/{id}` (`204`; yoksa `404`). Satır listenin opak
+  rolü, gruba verilir): `GET /v1/suppressions?reason=&q=&_start=&_end=` (en
+  yeni önce, `q` adresin bir parçası, sayfa en çok 100, `X-Total-Count`)
+  ve `DELETE /v1/suppressions/{id}` (`204`; yoksa `404`). Liste bastırma
+  listesiyle [çıkış kaydını](#tek-tık-çıkış-ucu-skymail_unsubscribe_link-mail_unsubscribes)
+  birlikte döner: her satırda `reason` (`bounce` | `unsubscribed`) ve `stream`
+  (`all` | `duyuru`); `?reason=` biriyle süzer; liste
+  `skymail:unsubscribes:reactivate` ile de okunur. Satır listenin opak
   `id`'siyle adlandırılır, adres hiçbir URL'de olmaz (hata logu yolu yazar).
-  Kaldırma `mail_suppression_removals`'a kim, ne zaman, kaynak, kod, sayı ve
-  ilk görülme olarak yazılır; adres yazılmaz. Kaldırılan adrese yeniden
+  `DELETE` yalnız bounce satırını kaldırır; çıkış satırında
+  `409 suppression.use_reactivate` döner. Kaldırma
+  `mail_suppression_removals`'a kim, ne zaman, kaynak, kod, sayı ve ilk
+  görülme olarak yazılır; adres yazılmaz. Kaldırılan adrese yeniden
   gönderilir. Kendiliğinden düşme yoktur.
 - **Loglar**: adres ve rapor metni yazılmaz; kuyruk id'si, kaynak ve kod
   yazılır.
+
+## Tek tık çıkış ucu (`SKYMAIL_UNSUBSCRIBE_LINK`, `mail_unsubscribes`)
+
+Hesabı olmayan adresin duyuru akışından çıktığı yer (ADR 0072 karar 4–7; hub
+bileti abonelik-cikisi 02). Postmark'ın broadcast stream suppression'ı gibi:
+kayıt **akış başınadır** ve yalnız `duyuru` akışını durdurur; tercih değildir,
+kategori ya da ekip taşımaz. Kimliği olan kişinin tercihi core'dadır ve
+SkyMail'e kopyalanmaz. Satırlara bağlantıyı koymak ve core'a sormak bilet
+09'undur; bu bölüm kaydı, ucu ve bağlantının üreticisini anlatır
+(`unsubscribe.Config.Link`).
+
+**Kayıt.** `mail_unsubscribes`: küçük harfli adres, `stream` (`duyuru`),
+`source` (`link`), `created_at`, opak `id`; anahtar `(address, stream)`.
+`mail_suppressions`'ın kardeşidir, ona sütun eklenmez: eski imaj
+`mail_suppressions`'ın her satırını bounce sayar ve çıkmış adrese Forms onayı
+dahil her postayı durdururdu; yeni tabloyu hiç okumaz (göç testi bunu eski
+imajın sorgularıyla kanıtlar). Kendiliğinden düşme yoktur: kişi yeniden abone
+olana, panel kişinin isteğiyle geri alana ya da hesap silinene kadar durur.
+
+**Uygulama.** Kayıt bayraktan bağımsız her zaman uygulanır: bayrağı kapatmak
+çıkmış adrese posta göndermez.
+- **Kuyruğa alırken**: gönderen şeridi `duyuru` olan gönderimde (`LaneOf`;
+  bilet 03'ten sonra amaç) kayıttaki alıcı `failed` yazılır,
+  `error = suppressed: unsubscribed`, deneme 0; relay'e ve bütçeye gitmez.
+  Bounce gibi atlanmış sayılır, gönderimi "Başarısız" yapmaz
+  (`mail_task_status()`).
+- **Göndermeden hemen önce**: dağıtıcı bulk satırlarını aldığı işlemde kaydı
+  yeniden okur (alınan satırlar üzerinde tek indeksli sorgu); kuyruğa
+  alındıktan sonra çıkan adresin satırı aynı hatayla `failed` olur, gönderilmez
+  ve bütçeye sayılmaz.
+- `hesap` (hesap postaları, liste olarak gönderilse de) ve `bilgi` (Forms
+  onayı, bildirimler) kayda bakmaz. Bounce kuralları değişmez: iki kayıt
+  birden olan adreste ikisi de geçerlidir.
+
+**Uç.** `GET|HEAD|POST /u/{belirteç}`, herkese açık kökte
+(`https://api.yildizskylab.com/api/skymail/u/…`), `/t/` ile aynı katman
+(OpenAPI: [unsubscribe-public.openapi.yaml](docs/unsubscribe-public.openapi.yaml)).
+- `GET` hiçbir şey yazmaz (tarayıcılar ve posta tarayıcıları açar): "Bu adres
+  SKY LAB duyuru postalarından çıkarılsın mı?", maskeli adres (`a…@example.com`),
+  tek düğme; kayıt varsa "Çıkarıldı" ve "Yeniden abone ol". Hesap Merkezi'nin
+  iletişim tercihleri bağlantısı (`SKYMAIL_UNSUBSCRIBE_ACCOUNT_URL`, varsayılan
+  `https://my.yildizskylab.com/communication-preferences`).
+- `POST` gövdesi `List-Unsubscribe=One-Click` (form-encoded ya da multipart):
+  kaydı yazar (`source = link`), `200 ok`. Sayfa düğmesi `eylem=cikis` ile
+  aynısını yapar; `eylem=geri` kaydı siler ve
+  `mail_unsubscribe_reactivations`'a `actor = recipient` yazar (adres yok).
+  Alanın adı `eylem`'dir, `islem` akış adıyla karışmasın diye. Tekrar
+  edilebilir: ikinci POST aynı sonucu verir. Başka gövde `400`.
+- Değiştirilmiş, kesilmiş belirteç ya da halkada olmayan sürüm `400` ("Bağlantı
+  geçersiz"; tek tıkta `invalid link`). Halka boşsa `503`. Bayrak `off` iken
+  `/u/` `404`; başka yöntem `405`, başka yol `404`.
+- Çerez, oturum, yönlendirme yok. Her yanıt `Cache-Control: no-store`,
+  `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`,
+  `X-Content-Type-Options: nosniff`, betiksiz CSP.
+- İstemci adresi başına dakikada 120 GET ve 600 POST, yalnız bellekte (`429`,
+  `Retry-After: 60`); IP yazılmaz.
+- Log istek başına tek satırdır: yöntem ve sonuç. Yol, belirteç, adres ve IP
+  yazılmaz; `/u` önekinin tamamı genel hata işleyicisine (yolu yazar) hiç
+  ulaşmaz. Kenarın erişim logu `/api/skymail/u/` yolunu tutmamalıdır (bilet 06).
+
+**Belirteç ve anahtar halkası.** Belirteç sürüm baytı (anahtar kimliği), 24
+baytlık rastgele nonce ve XChaCha20-Poly1305 ile şifrelenmiş (akış etiketi,
+normalize adres)'tir, unpadded base64url; sürüm ek veriye bağlıdır. Adres
+URL'de açık durmaz. Süresizdir ve satıra bağlı değildir: saklama süreleri
+bağlantıyı bozmaz. Yeni belirteç geçerli sürümle mühürlenir; eski sürümler
+yalnız açmada kullanılır. Halka tam olarak tanımlı `V<n>` değişkenleridir.
+
+Döndürme (orkestratör kararı, 2026-10-21; core bilet 13 ile aynı):
+- **Planlı döndürme:** yeni `V<n>` eklenir ve `CURRENT` ona çekilir. Eski sürüm
+  açmada **süresiz** kalır, eski postaların bağlantıları çalışmaya devam eder.
+- **Sızıntı:** sızan sürümün değişkeni **hemen** kaldırılır, yeni sürüm
+  `CURRENT` olur ve deploy edilir. O sürümle giden bağlantılar artık açılmaz:
+  sayfa `400` "Bağlantı artık geçerli değil" der ve kişiyi Hesap Merkezi'nin
+  iletişim tercihlerine yollar; tek tık `invalid link` alır.
+- Bir sürüm numarası başka bir anahtara verilmez.
+
+| Değişken | |
+|---|---|
+| `SKYMAIL_UNSUBSCRIBE_LINK` | `off` (ya da boş, varsayılan): `/u/` `404`, üretici bağlantı vermez, kayıt yine uygulanır. `on`: uç açık. Başka değer açılışı durdurur |
+| `SKYMAIL_UNSUBSCRIBE_BASE_URL` | `/u/`'nun herkese açık kökü, `https` (ör. `https://api.yildizskylab.com/api/skymail`); `on` bunu ister |
+| `SKYMAIL_UNSUBSCRIBE_ACCOUNT_URL` | sayfanın Hesap Merkezi bağlantısı (isteğe bağlı) |
+| `SKYMAIL_UNSUBSCRIBE_KEY_CURRENT` | yeni bağlantının sürümü (1–255) |
+| `SKYMAIL_UNSUBSCRIBE_KEY_V<n>` | `n` sürümünün anahtarı: 32 rastgele bayt, base64 ya da base64url; her biri ayrı OpenBao referansı (ADR-0049) |
+
+Anahtar varken `CURRENT` yoksa, `CURRENT` var olmayan bir sürümü gösteriyorsa
+(ör. sızıntıda kaldırılan sürüm), anahtar 32 bayt
+değilse ya da iki sürüm aynı anahtarı tutuyorsa açılış durur; hata yalnız
+değişkenin adını yazar. `on` ve boş halka hata değildir: uç `503` döner,
+açılış logu uyarır (`key_current`, `key_versions`; anahtar hiç yazılmaz). Bilet
+09'un bayrağı açılışta halkayı zorunlu tutar. Anahtarı OpenBao'ya ve yeni
+sürümü halkaya wizard koyar (bilet 06).
+
+**Panel.** `POST /v1/suppressions/{id}/reactivate`, gövde `{"reason": "…"}`:
+kişinin çıkışını yalnız kişi isteyince ya da bir hata olunca geri alır.
+- Yalnız `skymail:unsubscribes:reactivate` (`skymail` istemci rolü, gruba
+  verilir; Keycloak'ta bilet 10). Rol yoksa `403`; canlıda rol verilene kadar
+  kimseye açık değildir.
+- Gerekçe zorunlu: 10–500 karakter yazdırılabilir metin, satır sonu yok
+  (`400 suppression.reason_required`). Adres içeremez: `@` geçen ya da satırın
+  adresini içeren gerekçe `400 suppression.reason_has_address`.
+- Bounce satırında `409 suppression.use_delete`; yoksa `404`.
+- Başarıda `204`; `mail_unsubscribe_reactivations`'a `actor = operator`, kim
+  (`actor_sub`), ne zaman, gerekçe, kaydın akışı, kaynağı ve ilk tarihi yazılır;
+  adres yazılmaz. Hesap silme `actor_sub`'ı Silinmiş kullanıcı yapar, kişiyi
+  adlandıran gerekçeyi `[silindi]` yapar.
+- `GET /v1/suppressions/reactivations?_start=&_end=` aynı rolle geri almaları
+  en yeni önce döner (`X-Total-Count`).
+
+**Hesap silme.** Kişinin adreslerinin çıkış kayıtları silinir, sayaç
+`unsubscribes_deleted` ([`docs/data-lifecycle.md`](docs/data-lifecycle.md)).
+
+**Geri alma (rollback).** Önce bayrakla yapılır (bilet 08): `off` kaydı korur ve
+uygulamaya devam eder. Eski imaj kaydı bilmez: imaj geri alınırsa o süre
+çıkmış adreslere duyuru gidebilir, bu yüzden o süre panelden duyuru
+gönderilmez. Göçün `down`'ı iki tabloyu siler ve bütün çıkışları kaybettirir:
+production'da **kullanılmaz**.
 
 ## Bildirimler (`POST /v1/notifications`)
 
@@ -392,8 +566,23 @@ core kişiye (Keycloak `sub`) bir Bildirim türüyle yazar; SkyMail kişi başı
 kanalı seçer (tür varsayılanı ∩ core'un izin verdiği kanallar ∩ adres) ve
 kuyruğa alır. `Idempotency-Key` zorunlu; yalnız servis hesabı ve
 `skymail:notifications:send`. Türleri Template seed yazar
-(`PUT /v1/notification_types/{key}`). Bugün tek kanal e-posta. Sözleşme:
-[`docs/notifications.md`](docs/notifications.md).
+(`PUT /v1/notification_types/{key}`). Kanallar e-posta ve uygulama içi kutu.
+Sözleşme: [`docs/notifications.md`](docs/notifications.md).
+
+## Uygulama içi kutu (`/v1/me/inbox`)
+
+Türün kanallarında `inbox` varsa her alıcıya, tercihine bakılmadan, bir kutu
+öğesi yazılır (türün kutu metni, bildirim başına bir kez render edilir; kuyruğa
+girmez). Kişi kendi öğelerini kendi token'ıyla okur ve işaretler:
+`GET /v1/me/inbox` (imleçli, yeniden eskiye), `GET /v1/me/inbox/counts`,
+`POST /v1/me/inbox/{id}/seen|read|unread|archive`, `POST /v1/me/inbox/read-all`,
+`POST /v1/me/inbox/seen-all`. Token `aud`'unda `skymail` olmalı
+(`V1_TOKEN_AUDIENCE_MODE`'dan bağımsız) ve kişi token'ı olmalı; rol, ve
+`skymail:access`, istenmez. Başkasının öğesi `404`. Öğe en çok 90 gün kalır
+(bildirimin `expires_at`'i daha erken silebilir); kutu süpürmesi saatte bir
+siler, hesap silme kişinin bütün öğelerini siler. Bu sürümden önceki imaja
+dönmeden önce `inbox`'ı türlerden çıkarın. Sözleşme:
+[`docs/inbox.md`](docs/inbox.md).
 
 ## Mail kuyruğu kirası (`MAIL_QUEUE_LEASE`)
 
@@ -589,6 +778,8 @@ diyordu). Olay yazımı, raporlar ve saklama işi aynı sabiti kullanır.
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
 | `SKYMAIL_TRACKING` | `off` | `off` ya da `on`; başka değer açılışı durdurur |
+| `SKYMAIL_TRACKING_SYSTEM` | `off` | servislerin postaları (hesap ve işlem postaları, bildirimler): `off` ya da `on`; başka değer açılışı durdurur; yalnız `SKYMAIL_TRACKING=on` iken etkili (aşağıda, "Sistem postaları") |
+| `SKYMAIL_TRACKING_OPERATOR` | `off` | panelin (operatörün) gönderimleri: `off` kutuyla (yalnız isteyen), `on` her zaman takipli, kutu yok; başka değer açılışı durdurur; yalnız `SKYMAIL_TRACKING=on` iken etkili (aşağıda, "Operatör postaları") |
 | `SKYMAIL_TRACKING_BASE_URL` | yok | `/t/`'nin herkese açık adresi (`https://api.yildizskylab.com/api/skymail`); yalnız https, kimlik bilgisi, sorgu ve parça yok; `on` iken zorunlu |
 | `CORE_URL` | yok | core'un Docker ağındaki adresi (`http://core-backend:8080`); `on` iken zorunlu |
 | `SKYMAIL_TRACKING_RETENTION` | `off` | saklama işi: `off`, `dry-run`, `apply` ya da `purge`; başka değer açılışı durdurur; `purge` için `SKYMAIL_TRACKING=off` zorunlu |
@@ -596,6 +787,10 @@ diyordu). Olay yazımı, raporlar ve saklama işi aynı sabiti kullanır.
 
 Hatalı adres, değeri değil değişkeni söyleyerek açılışı durdurur. Açılışta
 `open and click tracking (SKYMAIL_TRACKING)` satırı kipi ve adresleri,
+`open and click tracking of system mail (SKYMAIL_TRACKING_SYSTEM; …)` satırı
+sistem postalarının geçerli kipini (`mode`) ve istenen değeri (`requested`),
+`open and click tracking of every operator send (SKYMAIL_TRACKING_OPERATOR; …)`
+satırı aynısını operatör postaları için,
 `open and click tracking retention (SKYMAIL_TRACKING_RETENTION)` satırı
 saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
 
@@ -605,8 +800,12 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   isteği); satır toplu şeritte; şablon System değil ve hassas değil
   (`mail_task_content_sensitive()`, içerik panelinin tek tanımı; kişilere
   giden gönderimde içeriği hakkında bir şey söylemeyen şablon hassas
-  sayılır). Bayrak kapalıyken ya da şablon System/hassasken alan yok
-  sayılır: yanıt, gönderim ve onay isteği `tracking: false` der, satırlara
+  sayılır). Servislerin postaları bu kurala değil `SKYMAIL_TRACKING_SYSTEM`'e
+  bağlıdır (aşağıda, "Sistem postaları"); `SKYMAIL_TRACKING_OPERATOR=on`
+  iken bir kişinin her gönderimi istese de istemese de takip edilir ve bu
+  paragrafın şablon ve bağlantı kuralı yerine sistem postalarınınki geçer
+  (aşağıda, "Operatör postaları"). Bayrak kapalıyken ya da şablon
+  System/hassasken alan yok sayılır: yanıt, gönderim ve onay isteği `tracking: false` der, satırlara
   neden yazılmaz. Sonra alıcının Keycloak `sub`'ı biliniyor
   (`recipient_sub`: Keycloak grubu üyeleri ve kişilere tek tek gönderimde
   adresten bulunan hesap, aşağıda) ve core izin veriyor.
@@ -639,10 +838,12 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   kapsar. Servis hesabı Keycloak'ta kullanıcı okuyabilmeli (`view-users`;
   `GET /users/{id}` için zaten gerekiyor). Takip isteyen ve alabilen
   `/single` gönderimi toplu şeride girer (operatör postası); sistem şeridi
-  hiçbir zaman takip edilmez. Bir servisin token'ıyla gelen `/single`
-  (Keycloak, core, Forms: hesap ve işlem postaları) takip istese de
-  `tracking: false` alır, sistem şeridinde kalır. Forms kaynağı gönderimi
-  değişmedi: takip istemez, `tracking: false` der.
+  istekle hiçbir zaman takip edilmez. Bir servisin token'ıyla gelen
+  `/single` (Keycloak, core, Forms: hesap ve işlem postaları) takip isteyemez:
+  alan yok sayılır, posta sistem şeridinde kalır ve yalnız
+  `SKYMAIL_TRACKING_SYSTEM=on` iken takip edilir (aşağıda). Forms kaynağı
+  gönderimi takip istemez, `tracking: false` der; yalnız
+  `SKYMAIL_TRACKING_OPERATOR=on` iken takiplidir ("Operatör postaları").
 - **core'a ulaşılamazsa** (5 saniye, hata ya da sözleşme dışı yanıt) o
   gönderimde kimse takip edilmez (`preference_unavailable`), gönderim durmaz.
   Uyarı satırı `"event":"tracking_preferences_unavailable"` (`"cause":"core"`
@@ -673,13 +874,185 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   sonra kapatıldıysa posta temiz gider ve belirteç `flag_off` ile kapanır.
   `mail_queue.sent_at` relay'in postayı aldığı an.
 - **Okuma:** `GET /v1/mail_tasks/summary` → `tracking_available` (gönderim
-  formu kutuyu yalnız bu `true` iken gösterir); gönderim satırları, Mail
-  onayı isteği ve `POST /v1/mail_tasks/single` yanıtı `tracking` alanı taşır.
+  formu kutuyu yalnız bu `true` iken gösterir) ve `tracking_always`
+  (`SKYMAIL_TRACKING_OPERATOR=on` iken `true`: her gönderim takipli, form
+  kutuyu hiç göstermez); aynı iki alan `GET /v1/mail_tasks/tracking-mode`'da
+  yalnız `skymail:access` ile okunur (bir ayardır, gönderim değil:
+  `mails:read`'i olmayan, yalnız onaya sunan kişi de görür); gönderim
+  satırları, Mail onayı isteği ve `POST /v1/mail_tasks/single` yanıtı
+  `tracking` alanı taşır.
 - **Hesap silme** kişiye giden satırların olaylarını siler, belirteçlerini
   kapatır, kişiyi adlandıran (yazıldığı gibi ya da URL çözülmüş) ya da yalnız
   ona giden gönderimin bağlantılarının adresini boşaltır; sayaçlar
   `tracking_events_deleted`, `tracking_links_cleared`
   ([`docs/data-lifecycle.md`](docs/data-lifecycle.md#open-and-click-tracking)).
+
+### Sistem postaları (`SKYMAIL_TRACKING_SYSTEM`)
+
+Yusuf, 2026-10-21: takip bütün postalarda (avukat onayı); gizli anahtarlı
+bağlantılar takibe girmez. **Varsayılan kapalı**; açılış, KVKK aydınlatma
+metni bu kapsamla yayımlandıktan sonra (hub
+`notes/hukuki/kvkk-aydinlatma-metni-YENI-20261021-s3-taslak.md`). Yalnız
+`SKYMAIL_TRACKING=on` iken etkilidir: `on` + `SKYMAIL_TRACKING=off` hata
+değildir, hiçbir şey yapmaz, açılış satırı uyarır (takibi kapatmak SkyMail'in
+açılmasını hiçbir zaman engellemez).
+
+- **Hangi postalar:** servislerin istemeden gönderdiği postalar: bir servisin
+  token'ıyla gelen `POST /v1/mail_tasks/single` (Keycloak'ın giriş/kayıt
+  kodu, doğrulama, parola sıfırlama; core; Forms onayları), core'un
+  bildirimleri (`POST /v1/notifications`, her iki şeritte) ve SkyMail'in
+  kendi Mail onayı bildirimleri. Şablonun System ya da hassas olması takibi
+  engellemez. Bir kişinin (operatörün) gönderimi bu bayrağa bağlı değildir:
+  `SKYMAIL_TRACKING_OPERATOR` kapalıyken kutuyu işaretlemediyse takip
+  edilmez, işaretlediyse yukarıdaki kuralla; açıkken her zaman (aşağıda,
+  "Operatör postaları"). Forms kaynağı gönderimi (yanıtlayanlara operatör
+  postası) de o bayrağa bağlıdır.
+- **Şerit değişmez:** posta kendi şeridinde kalır (tekil posta ve sistem
+  bildirimi sistem şeridinde, toplu bildirim toplu şeritte); gönderen
+  şeridi (`LaneOf`) ve gönderim katmanı aynıdır, piksel ve tıklama adresi
+  her yolda gönderim anında yerleştirilir.
+- **Kim:** her alıcı yukarıdaki kuralla: `sub`'ı bilinen (bildirim) core'a
+  sorulur; yalnız adresi bilinen (tekil posta, onay bildirimi) önce
+  Keycloak'ta tam doğrulanmış birincil e-postayla aranır, hesap yoksa
+  `no_account` (ör. henüz doğrulanmamış kayıt adresi), varsa core karar
+  verir. Keycloak ve core gönderimin veritabanı işlemi başlamadan önce,
+  **ikisi birlikte en çok 2 saniye** sorulur (giriş kodunu bekleyen biri
+  var); süre dolarsa ya da yanıt yoksa `preference_unavailable`, posta
+  gider. Mail onayı bildirimlerinde bütün onaycılar tek seferde sorulur
+  (Keycloak en çok 5 eşzamanlı, core bir kez), sonra her bildirim kuyruğa
+  yazılır: işlem onaycı sayısından bağımsız en çok 2 saniye bekler.
+- **Gizli bağlantı hiçbir zaman `/t/`'den geçmez:**
+  - İçeriği hassas posta (`mail_task_content_sensitive()`: kodu ya da tek
+    kullanımlık bağlantıyı maskelenen posta; `keycloak.*`, `account.*`,
+    `auth.*` ve kilitli anahtar sözcükleri, hassas işaretli şablon, içeriği
+    hakkında bir şey söylemeyen tekil posta): **yalnız piksel**, hiçbir
+    bağlantı yeniden yazılmaz, `mail_task_links`'e hiçbir şey yazılmaz.
+    (Saklama işinin D7 kuralı da hassas gönderimin bağlantı adreslerini
+    boşaltır.)
+  - Öteki sistem postası: piksel, ve tıklama adresi **yalnız şablonun
+    kendisinin olduğu gibi yazdığı** bağlantılarda: `href`'inde hiçbir
+    şablon eylemi (`{{…}}`) olmayan, dolayısıyla her alıcının postasında
+    aynı olan adres (`tracking.LiteralLinks`). Değişkenin doldurduğu ya da
+    içine değişken giren her bağlantı (sıfırlama, doğrulama, giriş
+    bağlantısı, `?davet=` gibi kişiye özel kod) olduğu gibi gider ve
+    kaydedilmez; tek alıcılı gönderimin "değişkenli bağlantı da kaydedilir"
+    istisnası burada yoktur. Serbest gövdeli şablonun (`safeHTML .BodyHtml`)
+    gövdesindeki bağlantılar da değişkenden geldiği için yazılmaz.
+  - `data-skymail-notrack` ve öteki kurallar (`mailto:`, `unsubscribe`,
+    `communication-preferences`, `/t/`) her postada geçerlidir.
+  - Emsal: SendGrid parola sıfırlama gibi postalarda `clicktracking`'i
+    kapatmayı, Postmark bağlantı başına `data-pm-no-track`'i önerir; burada
+    varsayılan güvenli taraftır: emin olunamayan bağlantı takibe girmez.
+- **Kayıt:** gönderim `tracking_requested = true` olur; tekil postanın
+  `POST /v1/mail_tasks/single` yanıtı alıcı gerçekten takip ediliyorsa
+  (belirteç aldıysa) `tracking: true`, `no_account`, `preference_off`,
+  `preference_unavailable` gibi bir nedenle edilmiyorsa `tracking: false`
+  der. Satır nedenleri, raporlar, geri alma, hesap silme ve saklama aynıdır.
+- **Kişi raporu yalnız rolle:** sistem şeridindeki gönderimin
+  (`mail_queue.priority > 0`: servis tekil postası, SkyMail'in Mail onayı
+  bildirimi) kişileri `GET /v1/mail_tasks/{id}/tracking/recipients`'te
+  yalnız `skymail:mails:tracking:read` ile okunur; `sent_by` bir kişiyi
+  (bildirimi doğuran isteyen ya da karar veren) adlandırsa da o kişi
+  okuyamaz (KVKK aydınlatma metni s3 §4: sistemin gönderdiği postalardaki
+  kişi bilgisini yalnız YK, DK ve sistem yöneticileri görür). Kişinin
+  takipli gönderimi her zaman toplu şerittedir (sistem şeridi istekle ya da
+  `SKYMAIL_TRACKING_OPERATOR` ile hiçbir zaman takip edilmez), gönderen
+  onu okumaya devam eder. Bu kural bayrağa bağlı değildir; bugün sistem
+  şeridinde takipli gönderim olmadığı için birleşmeyle görünür bir şey
+  değişmez.
+- **Geri dönüş:** `SKYMAIL_TRACKING_SYSTEM=off` + yeniden dağıtım: yeni
+  sistem postaları takipsiz. Bilinen sınır: kapatmadan önce kuyruğa girmiş
+  (saniyeler içinde giden) sistem postası takipli gider, daha önce gitmiş
+  sistem postalarının açılması `SKYMAIL_TRACKING=on` kaldıkça yazılmaya
+  devam eder. **Tam geri dönüş için `SKYMAIL_TRACKING=off`:** kuyrukta
+  bekleyen takipli satır da temiz gider (belirteci `flag_off` ile kapanır),
+  yeni olay yazılmaz; silme için saklama işinin `purge` kipi (aşağıda).
+  Eski imaja dönüş açılışı bozmaz: `SKYMAIL_TRACKING_SYSTEM` ve
+  `SKYMAIL_TRACKING_OPERATOR` değerleri `off|on` dışına çıkmaz, eski imaj
+  `SKYMAIL_TRACKING_OPERATOR`'ı hiç okumaz.
+
+### Operatör postaları (`SKYMAIL_TRACKING_OPERATOR`)
+
+Yusuf, 2026-10-21: panelden giden postalarda takip **her zaman açık**;
+gönderim formunda "takip et" kutusu ya da sorusu yok, gönderim başına
+kapatılamaz. Sektörden bilinçli sapma: Mailchimp, HubSpot, Dynamics 365
+Customer Insights ve SendGrid takibi varsayılan açık tutar ama kampanya ya
+da gönderim başına kapatmaya izin verir; burada kapatma yalnız alıcı
+tarafında (my.'daki itiraz ayarı, core `tracking:resolve`) vardır.
+**Varsayılan kapalı**; açılış, KVKK aydınlatma metni bu kapsamla
+yayımlandıktan sonra (hub
+`notes/hukuki/kvkk-aydinlatma-metni-YENI-20261021-s3-taslak.md`). Yalnız
+`SKYMAIL_TRACKING=on` iken etkilidir; `on` + `SKYMAIL_TRACKING=off` hata
+değildir, hiçbir şey yapmaz, açılış satırı uyarır.
+`SKYMAIL_TRACKING_SYSTEM`'den bağımsızdır: biri açılıp öteki kapalı
+kalabilir, ayrı ayrı geri alınır.
+
+- **Hangi postalar:** bir kişinin token'ıyla kuyruğa giren her gönderim:
+  `POST /v1/mail_tasks` (internal liste, Keycloak grubu),
+  `POST /v1/mail_tasks/single` (gönderim formunun kişileri),
+  `POST /v1/mail_tasks/form-source` (Forms yanıtlayanları) ve onaylanan
+  Mail onayı isteği (liste, grup, kişiler, Forms kaynağı). İstekteki
+  `tracking` alanı yok sayılır (`false` da); yanıt, gönderim satırı ve onay
+  isteği `tracking: true` der (Forms kaynağının tekrarı, ilk gönderimin
+  takibini). Onay isteği takipsiz gönderilmiş olsa da bayrak açıkken
+  onaylanırsa takipli gider. Servislerin postaları ve SkyMail'in
+  bildirimleri bu bayrağa değil `SKYMAIL_TRACKING_SYSTEM`'e bağlıdır.
+- **Şablon fark etmez; hassas postada yalnız piksel:** System ya da hassas
+  şablon da takip edilir; içeriği hassas gönderim (`mail_task_content_sensitive()`:
+  hassas işaretli ya da kilitli anahtarlı şablon, kişiye giden gönderimde
+  içeriği hakkında bir şey söylemeyen şablon) **yalnız piksel** alır.
+- **Bağlantılar: bütün alıcılara aynı gidenler** (orkestratör, 2026-10-21;
+  Mailchimp, HubSpot ve Dynamics kampanya gövdesindeki her bağlantıyı
+  sayar, istisna işaretli bağlantıdır): öteki gönderimde tıklama adresi,
+  her alıcının postasında aynı olan ve alıcıdan hiçbir şey almayan
+  bağlantılara konur: şablonda düz yazılmış, ya da gönderimin kendi
+  değişkeninden gelen (serbest gövdeli şablonun `safeHTML .BodyHtml`
+  gövdesindeki bağlantılar, herkese bir kez yazılmış adres, `href`'te
+  kısmen gönderim değişkeni). Alıcıdan gelen (`.Email`, `.FullName`,
+  `.UnsubscribeUrl`, tamamen ya da kısmen) hiçbir bağlantı `/t/`'den
+  geçmez, tek kişiye gönderimde de: #85'in "tek alıcılı gönderimde
+  değişkenli bağlantı da kaydedilir" istisnası bu bayrak açıkken yoktur.
+  Kural, postanın gönderimin değişkenleriyle iki uydurma alıcı için
+  (`.invalid` ve `.example` alanlarında, RFC 2606) yeniden işlenmesiyle
+  uygulanır: iki uydurma postada ve her gerçek postada aynı olan bağlantı
+  alıcıya bağlı değildir. İki uydurma alıcının adı, adresi ve abonelik
+  adresi uzunlukta, ilk ve son karakterde, adres yerel kısımda ve alanda
+  da farklıdır; `{{len .Email}}` ya da `{{slice .Email 0 1}}` gibi bir
+  türevden yapılan bağlantı da iki uydurma postada ayrışır, kaydedilmez. Uydurma posta işlenemezse yalnız
+  şablonda düz yazılmış bağlantılar sayılır. Gövde değişkeni şablon olarak
+  yorumlanmaz: gövdeye yazılan `{{.Email}}` metindir, alıcının adresine
+  dönüşmez. `data-skymail-notrack` öteki kurallarla her zaman geçerlidir;
+  serbest gövdede de: temizleyici `<a>` üzerinde boş ya da `true` değerli
+  `data-skymail-notrack`'i geçirir (başka öznitelik geçmez), panel
+  düzenleyicisindeki "Bu bağlantıyı sayma" anahtarı bunu yazar. Kişiye
+  özel ya da tek kullanımlık bir bağlantı (kişisel davet, toplantı
+  adresi) böylece `/t/`'den geçmez ve `mail_task_links`'e yazılmaz
+  (SendGrid `clicktracking=off`, Postmark `data-pm-no-track`, Mandrill
+  `mc:disable-tracking` gibi). Yalnız bağlantı başına; gönderimin tamamı
+  için kapatma yoktur. Sistem postalarının kuralı değişmedi: orada yalnız şablonda
+  düz yazılmış bağlantı sayılır, çünkü servisin değişkeni gizli anahtar
+  taşıyabilir.
+- **Kim:** her alıcı yukarıdaki kuralla: grup üyeleri `sub`'larıyla core'a
+  sorulur; gönderim formunun kişileri, onay isteğinin kişileri ve Forms
+  yanıtlayanları önce Keycloak'ta aranır (hassas şablonda da), hesap yoksa
+  `no_account`; internal listenin adres-yalnız alıcıları aranmaz,
+  `no_account`. Bütçeler kişi gönderimininkidir: bir gönderimin bütün
+  adresleri tek seferde, en çok 5 eşzamanlı aramayla **toplam 5 sn**
+  içinde, sonra core bir kez (5 sn). Forms kaynağında arama kaynağı
+  kilitleyen işlemden önce yapılır (kaynak değişmez); süre içinde yanıt
+  gelmeyen adres `preference_unavailable` olur, gönderim beklemez. Aynı
+  isteğin tekrarı kimseyi yeniden sormaz.
+- **Şerit:** her operatör postası toplu şerittedir (gönderen şeridi
+  `duyuru`); bayrak kapalıyken kutusuz giden tekil posta sistem şeridine
+  (`bilgi`) giderdi. Sistem şeridindeki bir posta bu bayrakla hiçbir zaman
+  takip edilmez (kişi raporu kuralı buna dayanır, yukarıda).
+- **Geri dönüş:** `SKYMAIL_TRACKING_OPERATOR=off` + yeniden dağıtım: form
+  kutuyu yeniden gösterir, yeni gönderim yalnız isterse takip edilir.
+  Bayrak açıkken gönderilmiş, henüz onaylanmamış onay isteği `tracking: true`
+  taşır ve onaylanınca istemiş gibi gider (System/hassas şablonda takipsiz;
+  Forms kaynağı takipsiz).
+  Kuyrukta bekleyen takipli satır için ve tam geri dönüş için yukarıdaki
+  `SKYMAIL_TRACKING=off`.
 
 ### Piksel, tıklama ve raporlar
 
@@ -709,7 +1082,7 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   Referer saklanmaz. `/t/o` ve `/t/c` hata/bozuk yol dahil kendi yanıtını
   üretir: günlük yalnız uç adı, sonuç sınıfı ve süre taşır.
 - `GET /v1/mail_tasks/{id}/tracking` (`skymail:mails:read`) yanıtı
-  `{tracking_available, tracking_requested, retained, report}`. Raporda
+  `{tracking_available, tracking_requested, retained, withheld, report}`. Raporda
   `tracked_recipients`, `untracked_by_reason`, `unique_opens`,
   `unique_likely_human_opens` (otomatik olmayan tıklamadan çıkarım dahil),
   `automated_only_recipients`, `unique_clickers`, `clicks_by_link`
@@ -720,9 +1093,19 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   (tek alıcılı hedef kişiyi adlandırabilir). Son postadan 1 yıl sonra
 `retained: true`:
   yalnız ≥10 alıcılı kişisiz toplam, yoksa `report: null`; seri dönmez.
+  **Küçük gönderim ve sistem postası:** takipli alıcısı 10'dan az
+  (`tracking.TotalsMinRecipients`, saklanan toplamın eşiği) ya da sistem
+  şeridindeki bir gönderimin sayıları kişiye dair bilgidir ("1/1 açıldı,
+  14:00"; alıcı `GET /{id}/queue`'da görünür). Bu sayıları yalnız kişi
+  raporunu okuyabilen (aşağıdaki kural: `skymail:mails:tracking:read` ya
+  da sistem şeridi dışında gönderimin kendi göndereni) alır; başka bir
+  `mails:read` sahibine `withheld: true` ve `report: null` döner (KVKK
+  aydınlatma metni s3 §4).
 - `GET /v1/mail_tasks/{id}/tracking/recipients` rolü
   `skymail:mails:tracking:read` **ya da** `sent_by = token sub` ister;
-  `mails:read` tek başına yetmez, gönderen için ayrıca gerekmez. Parametreler
+  `mails:read` tek başına yetmez, gönderen için ayrıca gerekmez. Servis
+  token'ı ve sistem şeridindeki gönderim (servis tekil postası, Mail onayı
+  bildirimi) yalnız rolle okunur ("Sistem postaları"). Parametreler
   `filter=opened|not_opened|clicked|automated_only`, `page` (1–1000000) ve
   `page_size` (1–100, varsayılan 25). Yanıt
   `{tracking_available, page, page_size, total, items}`; kişi satırı `id`,

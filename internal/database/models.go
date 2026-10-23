@@ -243,6 +243,23 @@ type AccountErasureReceipt struct {
 	Counts      []byte    `json:"counts"`
 }
 
+// One item in one person's in-app inbox: the type's inbox variant rendered for one notification, the person's seen/read/archived marks; gone at expires_at (at most 90 days) or with the person's account erasure.
+type InboxItem struct {
+	ID uuid.UUID `json:"id"`
+	// The person's Keycloak subject. Only that person reads or marks the item.
+	UserID           uuid.UUID  `json:"user_id"`
+	NotificationID   uuid.UUID  `json:"notification_id"`
+	NotificationType string     `json:"notification_type"`
+	Title            string     `json:"title"`
+	Summary          string     `json:"summary"`
+	Link             *string    `json:"link"`
+	CreatedAt        time.Time  `json:"created_at"`
+	SeenAt           *time.Time `json:"seen_at"`
+	ReadAt           *time.Time `json:"read_at"`
+	ArchivedAt       *time.Time `json:"archived_at"`
+	ExpiresAt        time.Time  `json:"expires_at"`
+}
+
 type MailApproval struct {
 	ID                       uuid.UUID         `json:"id"`
 	SubmitterSub             string            `json:"submitter_sub"`
@@ -362,6 +379,8 @@ type MailQueue struct {
 	SentAt *time.Time `json:"sent_at"`
 	// Account mail (keycloak.*, account.*) queued to a suppressed address: sent anyway, flagged.
 	SuppressedButSent bool `json:"suppressed_but_sent"`
+	// The recipient's one-click unsubscribe link, as core signed it; null for a row without one. Never served.
+	ListUnsubscribeUrl *string `json:"-"`
 }
 
 type MailSendWindow struct {
@@ -466,6 +485,27 @@ type MailTrackingEvent struct {
 	ClassifierVersion int16     `json:"classifier_version"`
 }
 
+// Addresses that left a broadcast stream (duyuru) through SkyMail's link: that stream's mail is not sent to them. Removed by the person, by an operator at their request, or by Account erasure; never by itself.
+type MailUnsubscribe struct {
+	Address   string    `json:"address"`
+	Stream    string    `json:"stream"`
+	ID        uuid.UUID `json:"id"`
+	Source    string    `json:"source"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Who reversed an unsubscribe (the person, or an operator with a reason) and when, with what the record said. No address; Account erasure replaces the actor.
+type MailUnsubscribeReactivation struct {
+	ID             int64     `json:"id"`
+	ReactivatedAt  time.Time `json:"reactivated_at"`
+	Actor          string    `json:"actor"`
+	ActorSub       *string   `json:"actor_sub"`
+	Reason         *string   `json:"reason"`
+	Stream         string    `json:"stream"`
+	Source         string    `json:"source"`
+	UnsubscribedAt time.Time `json:"unsubscribed_at"`
+}
+
 type MailingList struct {
 	ID          uuid.UUID  `json:"id"`
 	Name        string     `json:"name"`
@@ -504,6 +544,16 @@ type NotificationType struct {
 	ArchivedAt      *time.Time `json:"archived_at"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+// A notification type's text on a channel other than e-mail (inbox: title, summary, in-app link; Go text/template over the variables). The e-mail variant is the template of the type's key.
+type NotificationVariant struct {
+	Type      string    `json:"type"`
+	Channel   string    `json:"channel"`
+	Title     string    `json:"title"`
+	Summary   string    `json:"summary"`
+	Link      string    `json:"link"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type Recipient struct {

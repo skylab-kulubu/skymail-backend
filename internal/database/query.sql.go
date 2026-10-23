@@ -255,12 +255,13 @@ WITH due AS (SELECT mt.id
              ORDER BY mt.created_at
              LIMIT $2::int FOR UPDATE OF mt SKIP LOCKED),
      rows AS (UPDATE mail_queue q
-         SET subject   = '',
-             body      = '',
-             body_html = NULL
+         SET subject              = '',
+             body                 = '',
+             body_html            = NULL,
+             list_unsubscribe_url = NULL
          FROM due
          WHERE q.task_id = due.id
-           AND (q.subject <> '' OR q.body <> '' OR q.body_html IS NOT NULL)
+           AND (q.subject <> '' OR q.body <> '' OR q.body_html IS NOT NULL OR q.list_unsubscribe_url IS NOT NULL)
          RETURNING q.task_id)
 UPDATE mail_tasks mt
 SET body_variables     = '{}',
@@ -338,7 +339,7 @@ func (q *Queries) ClearMailTaskTracking(ctx context.Context, taskID uuid.UUID) e
 
 const clearSendContent = `-- name: ClearSendContent :exec
 WITH emptied AS (UPDATE mail_queue
-    SET subject = '', body = '', body_html = NULL
+    SET subject = '', body = '', body_html = NULL, list_unsubscribe_url = NULL
     WHERE mail_queue.task_id = $1
     RETURNING mail_queue.id)
 UPDATE mail_tasks
@@ -369,9 +370,10 @@ WITH due AS (SELECT mt.id, mt.content_mask_failing_since
              ORDER BY mt.content_mask_failing_since
              LIMIT $2::int FOR UPDATE OF mt SKIP LOCKED),
      emptied AS (UPDATE mail_queue q
-         SET subject   = '',
-             body      = '',
-             body_html = NULL
+         SET subject              = '',
+             body                 = '',
+             body_html            = NULL,
+             list_unsubscribe_url = NULL
          FROM due
          WHERE q.task_id = due.id
          RETURNING q.task_id)
@@ -630,6 +632,28 @@ func (q *Queries) CountArchivedTemplates(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countInboxItems = `-- name: CountInboxItems :one
+SELECT count(*) FILTER (WHERE seen_at IS NULL) AS unseen,
+       count(*) FILTER (WHERE read_at IS NULL) AS unread
+FROM inbox_items
+WHERE user_id = $1::uuid
+  AND archived_at IS NULL
+  AND expires_at > now()
+`
+
+type CountInboxItemsRow struct {
+	Unseen int64 `json:"unseen"`
+	Unread int64 `json:"unread"`
+}
+
+// A person's unseen and unread items, archived and expired ones left out.
+func (q *Queries) CountInboxItems(ctx context.Context, userID uuid.UUID) (CountInboxItemsRow, error) {
+	row := q.db.QueryRow(ctx, countInboxItems, userID)
+	var i CountInboxItemsRow
+	err := row.Scan(&i.Unseen, &i.Unread)
+	return i, err
+}
+
 const countMailApprovals = `-- name: CountMailApprovals :one
 SELECT count(*)
 FROM mail_approvals a
@@ -883,18 +907,28 @@ func (q *Queries) CountSends(ctx context.Context, arg CountSendsParams) error {
 	return err
 }
 
-const countSuppressions = `-- name: CountSuppressions :one
-SELECT count(*)
-FROM mail_suppressions
-WHERE $1::text IS NULL
-   OR strpos(address, lower($1::text)) > 0
+const countSuppressionEntries = `-- name: CountSuppressionEntries :one
+SELECT ((SELECT count(*)
+        FROM mail_suppressions s
+        WHERE ($1::text IS NULL OR $1::text = 'bounce')
+          AND ($2::text IS NULL OR strpos(s.address, lower($2::text)) > 0))
+           + (SELECT count(*)
+              FROM mail_unsubscribes u
+              WHERE ($1::text IS NULL OR $1::text = 'unsubscribed')
+                AND ($2::text IS NULL OR strpos(u.address, lower($2::text)) > 0)))::bigint
+           AS total
 `
 
-func (q *Queries) CountSuppressions(ctx context.Context, search *string) (int64, error) {
-	row := q.db.QueryRow(ctx, countSuppressions, search)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+type CountSuppressionEntriesParams struct {
+	Reason *string `json:"reason"`
+	Search *string `json:"search"`
+}
+
+func (q *Queries) CountSuppressionEntries(ctx context.Context, arg CountSuppressionEntriesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSuppressionEntries, arg.Reason, arg.Search)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
 }
 
 const countTemplateContentSensitiveEvents = `-- name: CountTemplateContentSensitiveEvents :one
@@ -937,6 +971,18 @@ WHERE archived_at IS NULL
 
 func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, countTemplates)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUnsubscribeReactivations = `-- name: CountUnsubscribeReactivations :one
+SELECT count(*)
+FROM mail_unsubscribe_reactivations
+`
+
+func (q *Queries) CountUnsubscribeReactivations(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnsubscribeReactivations)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1119,6 +1165,7 @@ type CreateMailQueueItemsParams struct {
 	TrackingToken      []byte     `json:"-"`
 	TrackingSkipReason *string    `json:"tracking_skip_reason"`
 	SuppressedButSent  bool       `json:"suppressed_but_sent"`
+	ListUnsubscribeUrl *string    `json:"-"`
 }
 
 const createMailTask = `-- name: CreateMailTask :many
@@ -1401,6 +1448,29 @@ func (q *Queries) DeferMaskFailure(ctx context.Context, arg DeferMaskFailurePara
 	return err
 }
 
+const deleteExpiredInboxItems = `-- name: DeleteExpiredInboxItems :execrows
+DELETE FROM inbox_items
+WHERE id IN (SELECT i.id
+             FROM inbox_items i
+             WHERE i.expires_at <= $1::timestamptz
+             ORDER BY i.expires_at, i.id
+             LIMIT $2::int FOR UPDATE SKIP LOCKED)
+`
+
+type DeleteExpiredInboxItemsParams struct {
+	At        time.Time `json:"at"`
+	BatchSize int       `json:"batch_size"`
+}
+
+// The inbox sweep: at most batch_size items past their expiry.
+func (q *Queries) DeleteExpiredInboxItems(ctx context.Context, arg DeleteExpiredInboxItemsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredInboxItems, arg.At, arg.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteExpiredMailFormSources = `-- name: DeleteExpiredMailFormSources :execrows
 DELETE FROM mail_form_sources WHERE id IN (
  SELECT fs.id FROM mail_form_sources fs WHERE fs.consumed_at IS NULL AND fs.expires_at <= $1
@@ -1419,6 +1489,22 @@ func (q *Queries) DeleteExpiredMailFormSources(ctx context.Context, arg DeleteEx
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteNotificationVariant = `-- name: DeleteNotificationVariant :exec
+DELETE FROM notification_variants
+WHERE type = $1::text
+  AND channel = $2::text
+`
+
+type DeleteNotificationVariantParams struct {
+	Type    string `json:"type"`
+	Channel string `json:"channel"`
+}
+
+func (q *Queries) DeleteNotificationVariant(ctx context.Context, arg DeleteNotificationVariantParams) error {
+	_, err := q.db.Exec(ctx, deleteNotificationVariant, arg.Type, arg.Channel)
+	return err
 }
 
 const deleteOldMailBounces = `-- name: DeleteOldMailBounces :execrows
@@ -1496,6 +1582,48 @@ func (q *Queries) DeleteSuppression(ctx context.Context, id uuid.UUID) (DeleteSu
 		&i.Count,
 		&i.FirstSeen,
 	)
+	return i, err
+}
+
+const deleteUnsubscribe = `-- name: DeleteUnsubscribe :execrows
+DELETE
+FROM mail_unsubscribes
+WHERE id = $1
+`
+
+func (q *Queries) DeleteUnsubscribe(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUnsubscribe, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteUnsubscribeOf = `-- name: DeleteUnsubscribeOf :one
+DELETE
+FROM mail_unsubscribes
+WHERE address = $1::text
+  AND stream = $2::text
+RETURNING stream, source, created_at
+`
+
+type DeleteUnsubscribeOfParams struct {
+	Address string `json:"address"`
+	Stream  string `json:"stream"`
+}
+
+type DeleteUnsubscribeOfRow struct {
+	Stream    string    `json:"stream"`
+	Source    string    `json:"source"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Removes the address's unsubscribe from a stream: the person resubscribed.
+// What it said is returned for the reactivation's record, never the address.
+func (q *Queries) DeleteUnsubscribeOf(ctx context.Context, arg DeleteUnsubscribeOfParams) (DeleteUnsubscribeOfRow, error) {
+	row := q.db.QueryRow(ctx, deleteUnsubscribeOf, arg.Address, arg.Stream)
+	var i DeleteUnsubscribeOfRow
+	err := row.Scan(&i.Stream, &i.Source, &i.CreatedAt)
 	return i, err
 }
 
@@ -2324,6 +2452,32 @@ func (q *Queries) GetNotificationType(ctx context.Context, key string) (Notifica
 	return i, err
 }
 
+const getNotificationVariant = `-- name: GetNotificationVariant :one
+SELECT type, channel, title, summary, link, updated_at
+FROM notification_variants
+WHERE type = $1::text
+  AND channel = $2::text
+`
+
+type GetNotificationVariantParams struct {
+	Type    string `json:"type"`
+	Channel string `json:"channel"`
+}
+
+func (q *Queries) GetNotificationVariant(ctx context.Context, arg GetNotificationVariantParams) (NotificationVariant, error) {
+	row := q.db.QueryRow(ctx, getNotificationVariant, arg.Type, arg.Channel)
+	var i NotificationVariant
+	err := row.Scan(
+		&i.Type,
+		&i.Channel,
+		&i.Title,
+		&i.Summary,
+		&i.Link,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getOwnedMailFormSource = `-- name: GetOwnedMailFormSource :one
 SELECT id, owner_sub, form_id, form_title, prepared_at, expires_at, response_count, recipient_count, skipped_count, duplicate_count, snapshot_hash, invalidated_at, consumed_at, consumed_approval_id, consumed_task_id, consume_request_hash FROM mail_form_sources WHERE id=$1 AND owner_sub=$2
 `
@@ -2503,6 +2657,19 @@ func (q *Queries) GetSuppressedAddresses(ctx context.Context, addresses []string
 		return nil, err
 	}
 	return items, nil
+}
+
+const getSuppressionID = `-- name: GetSuppressionID :one
+SELECT id
+FROM mail_suppressions
+WHERE id = $1
+`
+
+func (q *Queries) GetSuppressionID(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getSuppressionID, id)
+	var id_2 uuid.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
 }
 
 const getTemplateById = `-- name: GetTemplateById :one
@@ -2784,6 +2951,161 @@ func (q *Queries) GetTrackingReport(ctx context.Context, arg GetTrackingReportPa
 	return report, err
 }
 
+const getUnsubscribe = `-- name: GetUnsubscribe :one
+SELECT id, address, stream, source, created_at
+FROM mail_unsubscribes
+WHERE address = $1::text
+  AND stream = $2::text
+`
+
+type GetUnsubscribeParams struct {
+	Address string `json:"address"`
+	Stream  string `json:"stream"`
+}
+
+type GetUnsubscribeRow struct {
+	ID        uuid.UUID `json:"id"`
+	Address   string    `json:"address"`
+	Stream    string    `json:"stream"`
+	Source    string    `json:"source"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// The address's unsubscribe from a stream, if it has one.
+func (q *Queries) GetUnsubscribe(ctx context.Context, arg GetUnsubscribeParams) (GetUnsubscribeRow, error) {
+	row := q.db.QueryRow(ctx, getUnsubscribe, arg.Address, arg.Stream)
+	var i GetUnsubscribeRow
+	err := row.Scan(
+		&i.ID,
+		&i.Address,
+		&i.Stream,
+		&i.Source,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getUnsubscribedAddresses = `-- name: GetUnsubscribedAddresses :many
+
+SELECT address
+FROM mail_unsubscribes
+WHERE stream = $1::text
+  AND address = ANY ($2::text[])
+`
+
+type GetUnsubscribedAddressesParams struct {
+	Stream    string   `json:"stream"`
+	Addresses []string `json:"addresses"`
+}
+
+// The unsubscribe record of the duyuru stream (ADR 0072; hub ticket
+// abonelik-cikisi 02; README, "Tek tık çıkış ucu").
+// The unsubscribed among a send's recipients (lower-cased addresses) in a
+// stream: what queueing writes failed when the send is in that stream.
+func (q *Queries) GetUnsubscribedAddresses(ctx context.Context, arg GetUnsubscribedAddressesParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, getUnsubscribedAddresses, arg.Stream, arg.Addresses)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var address string
+		if err := rows.Scan(&address); err != nil {
+			return nil, err
+		}
+		items = append(items, address)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getUnsubscribedClaimedRows = `-- name: GetUnsubscribedClaimedRows :many
+SELECT q.id, t.key, coalesce(t.system, false)::boolean AS system
+FROM mail_queue q
+         JOIN mail_unsubscribes u ON u.address = lower(btrim(q.recipient_email)) AND u.stream = 'duyuru'
+         LEFT JOIN mail_tasks mt ON mt.id = q.task_id
+         LEFT JOIN templates t ON t.id = mt.template_id
+WHERE q.id = ANY ($1::uuid[])
+  AND q.channel = 'email'
+  AND q.status = 'processing'
+  AND q.claimed_by = $2::text
+`
+
+type GetUnsubscribedClaimedRowsParams struct {
+	Ids       []uuid.UUID `json:"ids"`
+	ClaimedBy string      `json:"claimed_by"`
+}
+
+type GetUnsubscribedClaimedRowsRow struct {
+	ID     uuid.UUID `json:"id"`
+	Key    *string   `json:"key"`
+	System bool      `json:"system"`
+}
+
+// The e-mail rows among ids, claimed by claimed_by, whose address left the
+// duyuru stream, with their send's template's key and whether it is a system
+// template (mailer.LaneOf: account mail is never in the duyuru stream).
+func (q *Queries) GetUnsubscribedClaimedRows(ctx context.Context, arg GetUnsubscribedClaimedRowsParams) ([]GetUnsubscribedClaimedRowsRow, error) {
+	rows, err := q.db.Query(ctx, getUnsubscribedClaimedRows, arg.Ids, arg.ClaimedBy)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetUnsubscribedClaimedRowsRow
+	for rows.Next() {
+		var i GetUnsubscribedClaimedRowsRow
+		if err := rows.Scan(&i.ID, &i.Key, &i.System); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const insertInboxItems = `-- name: InsertInboxItems :execrows
+INSERT INTO inbox_items (user_id, notification_id, notification_type, title, summary, link, expires_at)
+SELECT person, $1::uuid, $2::text, $3::text,
+       $4::text, $5::text,
+       LEAST(now() + interval '90 days', COALESCE($6::timestamptz, 'infinity'::timestamptz))
+FROM unnest($7::uuid[]) AS person
+ON CONFLICT (notification_id, user_id) DO NOTHING
+`
+
+type InsertInboxItemsParams struct {
+	NotificationID   uuid.UUID   `json:"notification_id"`
+	NotificationType string      `json:"notification_type"`
+	Title            string      `json:"title"`
+	Summary          string      `json:"summary"`
+	Link             *string     `json:"link"`
+	ExpiresAt        *time.Time  `json:"expires_at"`
+	UserIds          []uuid.UUID `json:"user_ids"`
+}
+
+// One notification's inbox item for each person, its text rendered once:
+// gone in 90 days, or at expires_at when that is sooner. A person already
+// holding the notification's item is left as they are.
+func (q *Queries) InsertInboxItems(ctx context.Context, arg InsertInboxItemsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertInboxItems,
+		arg.NotificationID,
+		arg.NotificationType,
+		arg.Title,
+		arg.Summary,
+		arg.Link,
+		arg.ExpiresAt,
+		arg.UserIds,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertMailBounce = `-- name: InsertMailBounce :execrows
 INSERT INTO mail_bounces (queue_id, source, kind, action, status, smtp_code, exo_as_code, recipient_matched,
                           ndr_id_sha256, received_at)
@@ -3010,6 +3332,55 @@ func (q *Queries) InsertTrackingEvent(ctx context.Context, arg InsertTrackingEve
 	return result.RowsAffected(), nil
 }
 
+const insertUnsubscribe = `-- name: InsertUnsubscribe :execrows
+INSERT INTO mail_unsubscribes (address, stream, source)
+VALUES ($1::text, $2::text, $3::text)
+ON CONFLICT (address, stream) DO NOTHING
+`
+
+type InsertUnsubscribeParams struct {
+	Address string `json:"address"`
+	Stream  string `json:"stream"`
+	Source  string `json:"source"`
+}
+
+// Records an unsubscribe; an address already out of the stream keeps its
+// first record (0 rows).
+func (q *Queries) InsertUnsubscribe(ctx context.Context, arg InsertUnsubscribeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertUnsubscribe, arg.Address, arg.Stream, arg.Source)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertUnsubscribeReactivation = `-- name: InsertUnsubscribeReactivation :exec
+INSERT INTO mail_unsubscribe_reactivations (actor, actor_sub, reason, stream, source, unsubscribed_at)
+VALUES ($1::text, $2::text, $3::text, $4::text,
+        $5::text, $6::timestamptz)
+`
+
+type InsertUnsubscribeReactivationParams struct {
+	Actor          string    `json:"actor"`
+	ActorSub       *string   `json:"actor_sub"`
+	Reason         *string   `json:"reason"`
+	Stream         string    `json:"stream"`
+	Source         string    `json:"source"`
+	UnsubscribedAt time.Time `json:"unsubscribed_at"`
+}
+
+func (q *Queries) InsertUnsubscribeReactivation(ctx context.Context, arg InsertUnsubscribeReactivationParams) error {
+	_, err := q.db.Exec(ctx, insertUnsubscribeReactivation,
+		arg.Actor,
+		arg.ActorSub,
+		arg.Reason,
+		arg.Stream,
+		arg.Source,
+		arg.UnsubscribedAt,
+	)
+	return err
+}
+
 const isJSXSource = `-- name: IsJSXSource :one
 SELECT (template_jsx_source($1::text) IS NOT NULL)::boolean AS is_source
 `
@@ -3056,6 +3427,71 @@ func (q *Queries) LastTemplateSeedVersion(ctx context.Context, templateID uuid.U
 		&i.Name,
 	)
 	return i, err
+}
+
+const listInboxItems = `-- name: ListInboxItems :many
+SELECT id, user_id, notification_id, notification_type, title, summary, link, created_at, seen_at, read_at, archived_at, expires_at
+FROM inbox_items
+WHERE user_id = $1::uuid
+  AND expires_at > now()
+  AND CASE $2::text
+          WHEN 'include' THEN true
+          WHEN 'only' THEN archived_at IS NOT NULL
+          ELSE archived_at IS NULL END
+  AND ($3::timestamptz IS NULL
+      OR (created_at, id) < ($3::timestamptz, $4::uuid))
+ORDER BY created_at DESC, id DESC
+LIMIT $5::int
+`
+
+type ListInboxItemsParams struct {
+	UserID          uuid.UUID  `json:"user_id"`
+	Archived        string     `json:"archived"`
+	BeforeCreatedAt *time.Time `json:"before_created_at"`
+	BeforeID        *uuid.UUID `json:"before_id"`
+	PageSize        int        `json:"page_size"`
+}
+
+// A page of one person's inbox, newest first: the items after the cursor
+// (created_at, id), archived ones as archived says (exclude, include, only),
+// none past its expiry.
+func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) ([]InboxItem, error) {
+	rows, err := q.db.Query(ctx, listInboxItems,
+		arg.UserID,
+		arg.Archived,
+		arg.BeforeCreatedAt,
+		arg.BeforeID,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InboxItem
+	for rows.Next() {
+		var i InboxItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.NotificationID,
+			&i.NotificationType,
+			&i.Title,
+			&i.Summary,
+			&i.Link,
+			&i.CreatedAt,
+			&i.SeenAt,
+			&i.ReadAt,
+			&i.ArchivedAt,
+			&i.ExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listLastMailApprovalEvents = `-- name: ListLastMailApprovalEvents :many
@@ -3548,6 +3984,39 @@ func (q *Queries) ListNotificationTypes(ctx context.Context) ([]NotificationType
 	return items, nil
 }
 
+const listNotificationVariants = `-- name: ListNotificationVariants :many
+SELECT type, channel, title, summary, link, updated_at
+FROM notification_variants
+ORDER BY type, channel
+`
+
+func (q *Queries) ListNotificationVariants(ctx context.Context) ([]NotificationVariant, error) {
+	rows, err := q.db.Query(ctx, listNotificationVariants)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NotificationVariant
+	for rows.Next() {
+		var i NotificationVariant
+		if err := rows.Scan(
+			&i.Type,
+			&i.Channel,
+			&i.Title,
+			&i.Summary,
+			&i.Link,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOperatorVersionsAfter = `-- name: ListOperatorVersionsAfter :many
 SELECT id, template_id, seq, subject, requested_subject, main_mode, author_kind, author_sub, author_name, created_at, published_at, base_version_id, is_current, discarded_at, name
 FROM template_version_summaries
@@ -3637,7 +4106,7 @@ func (q *Queries) ListPublishedMainModes(ctx context.Context, templateIds []uuid
 }
 
 const listQueueRowsToMask = `-- name: ListQueueRowsToMask :many
-SELECT id, recipient_full_name, recipient_email, subject, body, body_html
+SELECT id, recipient_full_name, recipient_email, subject, body, body_html, list_unsubscribe_url
 FROM mail_queue
 WHERE task_id = $1
   AND id > $2
@@ -3653,12 +4122,13 @@ type ListQueueRowsToMaskParams struct {
 }
 
 type ListQueueRowsToMaskRow struct {
-	ID                uuid.UUID `json:"id"`
-	RecipientFullName string    `json:"recipient_full_name"`
-	RecipientEmail    string    `json:"recipient_email"`
-	Subject           string    `json:"subject"`
-	Body              string    `json:"body"`
-	BodyHtml          *string   `json:"body_html"`
+	ID                 uuid.UUID `json:"id"`
+	RecipientFullName  string    `json:"recipient_full_name"`
+	RecipientEmail     string    `json:"recipient_email"`
+	Subject            string    `json:"subject"`
+	Body               string    `json:"body"`
+	BodyHtml           *string   `json:"body_html"`
+	ListUnsubscribeUrl *string   `json:"-"`
 }
 
 // The next rows of a send that still hold a mail, after the row after, for the
@@ -3681,6 +4151,7 @@ func (q *Queries) ListQueueRowsToMask(ctx context.Context, arg ListQueueRowsToMa
 			&i.Subject,
 			&i.Body,
 			&i.BodyHtml,
+			&i.ListUnsubscribeUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -3692,24 +4163,36 @@ func (q *Queries) ListQueueRowsToMask(ctx context.Context, arg ListQueueRowsToMa
 	return items, nil
 }
 
-const listSuppressions = `-- name: ListSuppressions :many
-SELECT id, address, recipient_sub, source, reason_code, first_seen, last_seen, count, last_queue_id, exempt_flagged_at
-FROM mail_suppressions
-WHERE $1::text IS NULL
-   OR strpos(address, lower($1::text)) > 0
-ORDER BY last_seen DESC, address
-LIMIT $3::int OFFSET $2::int
+const listSuppressionEntries = `-- name: ListSuppressionEntries :many
+SELECT e.id, e.address, e.reason, e.stream, e.recipient_sub, e.source, e.reason_code, e.first_seen, e.last_seen,
+       e.count, e.last_queue_id, e.exempt_flagged_at
+FROM (SELECT s.id, s.address, 'bounce'::text AS reason, 'all'::text AS stream, s.recipient_sub, s.source,
+             s.reason_code, s.first_seen, s.last_seen, s.count, s.last_queue_id, s.exempt_flagged_at
+      FROM mail_suppressions s
+      WHERE $1::text IS NULL OR $1::text = 'bounce'
+      UNION ALL
+      SELECT u.id, u.address, 'unsubscribed'::text, u.stream, NULL::uuid, u.source, ''::text, u.created_at,
+             u.created_at, 1, NULL::uuid, NULL::timestamptz
+      FROM mail_unsubscribes u
+      WHERE $1::text IS NULL OR $1::text = 'unsubscribed') e
+WHERE $2::text IS NULL
+   OR strpos(e.address, lower($2::text)) > 0
+ORDER BY e.last_seen DESC, e.address, e.reason
+LIMIT $4::int OFFSET $3::int
 `
 
-type ListSuppressionsParams struct {
+type ListSuppressionEntriesParams struct {
+	Reason    *string `json:"reason"`
 	Search    *string `json:"search"`
 	RowOffset int     `json:"row_offset"`
 	RowLimit  int     `json:"row_limit"`
 }
 
-type ListSuppressionsRow struct {
+type ListSuppressionEntriesRow struct {
 	ID              uuid.UUID  `json:"id"`
 	Address         string     `json:"address"`
+	Reason          string     `json:"reason"`
+	Stream          string     `json:"stream"`
 	RecipientSub    *uuid.UUID `json:"recipient_sub"`
 	Source          string     `json:"source"`
 	ReasonCode      string     `json:"reason_code"`
@@ -3720,20 +4203,29 @@ type ListSuppressionsRow struct {
 	ExemptFlaggedAt *time.Time `json:"exempt_flagged_at"`
 }
 
-// The suppression list, newest first, those whose address contains search
-// (case-insensitively) when it is given.
-func (q *Queries) ListSuppressions(ctx context.Context, arg ListSuppressionsParams) ([]ListSuppressionsRow, error) {
-	rows, err := q.db.Query(ctx, listSuppressions, arg.Search, arg.RowOffset, arg.RowLimit)
+// The suppression list and the unsubscribe record as one list, most recent
+// first: reason bounce (mail_suppressions, every stream) or unsubscribed
+// (mail_unsubscribes, its stream). reason, when given, keeps one of them;
+// search keeps the addresses that contain it, case-insensitively.
+func (q *Queries) ListSuppressionEntries(ctx context.Context, arg ListSuppressionEntriesParams) ([]ListSuppressionEntriesRow, error) {
+	rows, err := q.db.Query(ctx, listSuppressionEntries,
+		arg.Reason,
+		arg.Search,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListSuppressionsRow
+	var items []ListSuppressionEntriesRow
 	for rows.Next() {
-		var i ListSuppressionsRow
+		var i ListSuppressionEntriesRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Address,
+			&i.Reason,
+			&i.Stream,
 			&i.RecipientSub,
 			&i.Source,
 			&i.ReasonCode,
@@ -4021,6 +4513,48 @@ func (q *Queries) ListTrackingRecipients(ctx context.Context, arg ListTrackingRe
 	var recipients []byte
 	err := row.Scan(&recipients)
 	return recipients, err
+}
+
+const listUnsubscribeReactivations = `-- name: ListUnsubscribeReactivations :many
+SELECT id, reactivated_at, actor, actor_sub, reason, stream, source, unsubscribed_at
+FROM mail_unsubscribe_reactivations
+ORDER BY reactivated_at DESC, id DESC
+LIMIT $2::int OFFSET $1::int
+`
+
+type ListUnsubscribeReactivationsParams struct {
+	RowOffset int `json:"row_offset"`
+	RowLimit  int `json:"row_limit"`
+}
+
+// The reactivations, newest first.
+func (q *Queries) ListUnsubscribeReactivations(ctx context.Context, arg ListUnsubscribeReactivationsParams) ([]MailUnsubscribeReactivation, error) {
+	rows, err := q.db.Query(ctx, listUnsubscribeReactivations, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MailUnsubscribeReactivation
+	for rows.Next() {
+		var i MailUnsubscribeReactivation
+		if err := rows.Scan(
+			&i.ID,
+			&i.ReactivatedAt,
+			&i.Actor,
+			&i.ActorSub,
+			&i.Reason,
+			&i.Stream,
+			&i.Source,
+			&i.UnsubscribedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const lockBounceQueueRow = `-- name: LockBounceQueueRow :one
@@ -4320,6 +4854,103 @@ func (q *Queries) LockTrackingRecipient(ctx context.Context, trackingToken []byt
 	return i, err
 }
 
+const lockUnsubscribe = `-- name: LockUnsubscribe :one
+SELECT id, address, stream, source, created_at
+FROM mail_unsubscribes
+WHERE id = $1
+    FOR UPDATE
+`
+
+type LockUnsubscribeRow struct {
+	ID        uuid.UUID `json:"id"`
+	Address   string    `json:"address"`
+	Stream    string    `json:"stream"`
+	Source    string    `json:"source"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// The unsubscribe the operator API names by id, locked until it is removed.
+func (q *Queries) LockUnsubscribe(ctx context.Context, id uuid.UUID) (LockUnsubscribeRow, error) {
+	row := q.db.QueryRow(ctx, lockUnsubscribe, id)
+	var i LockUnsubscribeRow
+	err := row.Scan(
+		&i.ID,
+		&i.Address,
+		&i.Stream,
+		&i.Source,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const markAllInboxItems = `-- name: MarkAllInboxItems :execrows
+UPDATE inbox_items
+SET seen_at = COALESCE(seen_at, now()),
+    read_at = CASE WHEN $1::boolean THEN COALESCE(read_at, now()) ELSE read_at END
+WHERE user_id = $2::uuid
+  AND archived_at IS NULL
+  AND expires_at > now()
+  AND (seen_at IS NULL OR ($1::boolean AND read_at IS NULL))
+`
+
+type MarkAllInboxItemsParams struct {
+	Read   bool      `json:"read"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+// Every item of the person's inbox (archived ones left out) not yet seen, or
+// with read not yet read, marked so.
+func (q *Queries) MarkAllInboxItems(ctx context.Context, arg MarkAllInboxItemsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markAllInboxItems, arg.Read, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markInboxItem = `-- name: MarkInboxItem :one
+UPDATE inbox_items
+SET seen_at     = CASE WHEN $1::text IN ('seen', 'read') THEN COALESCE(seen_at, now()) ELSE seen_at END,
+    read_at     = CASE $1::text
+                      WHEN 'read' THEN COALESCE(read_at, now())
+                      WHEN 'unread' THEN NULL
+                      ELSE read_at END,
+    archived_at = CASE WHEN $1::text = 'archived' THEN COALESCE(archived_at, now()) ELSE archived_at END
+WHERE id = $2::uuid
+  AND user_id = $3::uuid
+  AND expires_at > now()
+RETURNING id, user_id, notification_id, notification_type, title, summary, link, created_at, seen_at, read_at, archived_at, expires_at
+`
+
+type MarkInboxItemParams struct {
+	Mark   string    `json:"mark"`
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+// One of the person's own items, marked: seen; read (seen too); unread;
+// archived. A mark already there keeps its time. Nothing when the item is not
+// theirs, does not exist or has expired.
+func (q *Queries) MarkInboxItem(ctx context.Context, arg MarkInboxItemParams) (InboxItem, error) {
+	row := q.db.QueryRow(ctx, markInboxItem, arg.Mark, arg.ID, arg.UserID)
+	var i InboxItem
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.NotificationID,
+		&i.NotificationType,
+		&i.Title,
+		&i.Summary,
+		&i.Link,
+		&i.CreatedAt,
+		&i.SeenAt,
+		&i.ReadAt,
+		&i.ArchivedAt,
+		&i.ExpiresAt,
+	)
+	return i, err
+}
+
 const markSendMasked = `-- name: MarkSendMasked :exec
 UPDATE mail_tasks
 SET body_variables             = $1,
@@ -4407,7 +5038,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url
 `
 
 type ProcessBulkQueueItemsParams struct {
@@ -4450,6 +5081,7 @@ func (q *Queries) ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueu
 			&i.TrackingSkipReason,
 			&i.SentAt,
 			&i.SuppressedButSent,
+			&i.ListUnsubscribeUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -4473,7 +5105,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url
 `
 
 type ProcessSystemQueueItemsParams struct {
@@ -4520,6 +5152,7 @@ func (q *Queries) ProcessSystemQueueItems(ctx context.Context, arg ProcessSystem
 			&i.TrackingSkipReason,
 			&i.SentAt,
 			&i.SuppressedButSent,
+			&i.ListUnsubscribeUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -5633,6 +6266,31 @@ func (q *Queries) ShareLockTemplate(ctx context.Context, id uuid.UUID) (Template
 	return i, err
 }
 
+const skipUnsubscribedClaimedRows = `-- name: SkipUnsubscribedClaimedRows :execrows
+UPDATE mail_queue
+SET status = 'failed',
+    error  = $1::text
+WHERE id = ANY ($2::uuid[])
+  AND status = 'processing'
+  AND claimed_by = $3::text
+`
+
+type SkipUnsubscribedClaimedRowsParams struct {
+	Error     string      `json:"error"`
+	Ids       []uuid.UUID `json:"ids"`
+	ClaimedBy string      `json:"claimed_by"`
+}
+
+// Writes failed the claimed rows whose address left the stream after they
+// were queued: skipped, never sent, nothing tried (attempts stays).
+func (q *Queries) SkipUnsubscribedClaimedRows(ctx context.Context, arg SkipUnsubscribedClaimedRowsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, skipUnsubscribedClaimedRows, arg.Error, arg.Ids, arg.ClaimedBy)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const startLeaseOnUnclaimedJobs = `-- name: StartLeaseOnUnclaimedJobs :execrows
 UPDATE mail_queue
 SET claimed_at = NOW()
@@ -5770,7 +6428,8 @@ func (q *Queries) TrackingHasOpen(ctx context.Context, queueID uuid.UUID) (bool,
 const trackingTaskAccess = `-- name: TrackingTaskAccess :one
 SELECT t.id, t.sent_by, t.tracking_requested, t.tracking_closed_at,
        COALESCE((SELECT max(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS sent_at,
-       COALESCE((SELECT min(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS started_at
+       COALESCE((SELECT min(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS started_at,
+       EXISTS (SELECT 1 FROM mail_queue q WHERE q.task_id = t.id AND q.priority > 0) AS system_lane
 FROM mail_tasks t WHERE t.id = $1
 `
 
@@ -5781,8 +6440,14 @@ type TrackingTaskAccessRow struct {
 	TrackingClosedAt  *time.Time `json:"tracking_closed_at"`
 	SentAt            time.Time  `json:"sent_at"`
 	StartedAt         time.Time  `json:"started_at"`
+	SystemLane        bool       `json:"system_lane"`
 }
 
+// system_lane: a row of the send is in the system lane (priority > 0, as
+// ProcessSystemQueueItems reads it). A tracked mail there is always one the
+// system sends (a service's single mail, SkyMail's own approval notice): a
+// person's tracked send is in the bulk lane, and the system lane is never
+// tracked as a person asks. Its people are read with the role only.
 func (q *Queries) TrackingTaskAccess(ctx context.Context, id uuid.UUID) (TrackingTaskAccessRow, error) {
 	row := q.db.QueryRow(ctx, trackingTaskAccess, id)
 	var i TrackingTaskAccessRow
@@ -5793,8 +6458,20 @@ func (q *Queries) TrackingTaskAccess(ctx context.Context, id uuid.UUID) (Trackin
 		&i.TrackingClosedAt,
 		&i.SentAt,
 		&i.StartedAt,
+		&i.SystemLane,
 	)
 	return i, err
+}
+
+const unsubscribeExists = `-- name: UnsubscribeExists :one
+SELECT EXISTS (SELECT 1 FROM mail_unsubscribes WHERE id = $1)::boolean AS found
+`
+
+func (q *Queries) UnsubscribeExists(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, unsubscribeExists, id)
+	var found bool
+	err := row.Scan(&found)
+	return found, err
 }
 
 const updateMailingList = `-- name: UpdateMailingList :one
@@ -5956,6 +6633,48 @@ func (q *Queries) UpsertNotificationType(ctx context.Context, arg UpsertNotifica
 		&i.Lane,
 		&i.ArchivedAt,
 		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertNotificationVariant = `-- name: UpsertNotificationVariant :one
+INSERT INTO notification_variants (type, channel, title, summary, link)
+VALUES ($1::text, $2::text, $3::text,
+        $4::text, $5::text)
+ON CONFLICT (type, channel) DO UPDATE
+    SET title      = EXCLUDED.title,
+        summary    = EXCLUDED.summary,
+        link       = EXCLUDED.link,
+        updated_at = now()
+RETURNING type, channel, title, summary, link, updated_at
+`
+
+type UpsertNotificationVariantParams struct {
+	Type    string `json:"type"`
+	Channel string `json:"channel"`
+	Title   string `json:"title"`
+	Summary string `json:"summary"`
+	Link    string `json:"link"`
+}
+
+// A notification type's text on a channel other than e-mail (hub ticket
+// iletisim-servisi 05: inbox), as the Template seed states it with the type.
+func (q *Queries) UpsertNotificationVariant(ctx context.Context, arg UpsertNotificationVariantParams) (NotificationVariant, error) {
+	row := q.db.QueryRow(ctx, upsertNotificationVariant,
+		arg.Type,
+		arg.Channel,
+		arg.Title,
+		arg.Summary,
+		arg.Link,
+	)
+	var i NotificationVariant
+	err := row.Scan(
+		&i.Type,
+		&i.Channel,
+		&i.Title,
+		&i.Summary,
+		&i.Link,
 		&i.UpdatedAt,
 	)
 	return i, err
