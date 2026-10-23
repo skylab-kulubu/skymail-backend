@@ -890,7 +890,9 @@ ancak bu bir açılış izni değildir.
 2026-10-19 "1 yıl" kararının yerine): kişi bazındaki açılma ve tıklama
 kayıtları alıcının postasının gittiği andan (`sent_at`) 90 gün
 (`tracking.EventRetentionDays` = 90) tutulur**, sonra anonimleşir: saklama
-işi gönderimin kişisiz toplamını yazar, olayları siler ve belirteci kapatır;
+işi gönderimin kişisiz toplamını yazar, olayları siler ve alıcının
+belirtecini siler (`tracking_token` NULL; bağlantılar kendi belirteçleriyle
+yönlendirir);
 kişiye geri götüren bir şey (özet, sıra numarası) kalmaz. IP hiç
 okunmadığı için saklanacak ya da silinecek IP yoktur. Kişisiz toplam her
 gönderimde tutulur: en az 10 takipli alıcıda süresiz; 10'dan azda
@@ -1005,7 +1007,7 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   satırları, Mail onayı isteği ve `POST /v1/mail_tasks/single` yanıtı
   `tracking` alanı taşır.
 - **Hesap silme** kişiye giden satırların olaylarını siler, belirteçlerini
-  kapatır, kişiyi adlandıran (yazıldığı gibi ya da URL çözülmüş) ya da yalnız
+  siler (`tracking_token` NULL), kişiyi adlandıran (yazıldığı gibi ya da URL çözülmüş) ya da yalnız
   ona giden gönderimin bağlantılarının adresini boşaltır; sayaçlar
   `tracking_events_deleted`, `tracking_links_cleared`
   ([`docs/data-lifecycle.md`](docs/data-lifecycle.md#open-and-click-tracking)).
@@ -1269,9 +1271,10 @@ Authorization: Bearer <core istemcisinin client credentials token'ı>
 - Başarı **`204`**, gövdesiz; idempotent: tekrar çağrı da `204` döner,
   hiçbir şey değiştirmez. Bayrak açık ya da kapalı fark etmez.
 - Etki, tek işlemde: kişinin `recipient_sub`'ına giden bütün takipli
-  satırlar `ORDER BY id FOR UPDATE` kilitlenir, belirteçleri kapanır
-  (`tracking_disabled_at`; gönderilmiş ve kuyrukta bekleyen postalar dahil,
-  bekleyen posta pikselsiz gider), sonra açılma ve tıklama olayları silinir.
+  satırlar `ORDER BY id FOR UPDATE` kilitlenir, açılma ve tıklama olayları
+  silinir, sonra belirteçleri silinir (`tracking_token` NULL,
+  `tracking_disabled_at` dolar; gönderilmiş ve kuyrukta bekleyen postalar
+  dahil, bekleyen posta pikselsiz gider).
   Bağlantılara dokunulmaz: eski postaların bağlantıları yönlendirmeye devam
   eder. Daha önce yazılmış kişisiz toplamlar değişmez. Sonraki gönderimlerde
   core `tracking:resolve` ile `preference_off` der.
@@ -1315,7 +1318,10 @@ dönüş, aşağıda). Açılışta `dry-run`; 1–2 dry-run makbuzu okunur okun
      "Takipli alıcı" yalnız postası gitmiş (`status='sent'`) ve belirteci
      açık (geri almamış, silinmemiş) olandır; ötekiler toplamda
      `not_delivered` / `tracking_closed` nedeniyle görünür;
-  2. postası 90 günden eski alıcıların belirteçleri kapanır;
+  2. postası 90 günden eski alıcıların belirteçleri silinir
+     (`tracking_token` NULL, `tracking_disabled_at` dolar): eski adreslerdeki
+     `rt` artık kimseyi göstermez, tıklama bağlantının kendi belirteciyle
+     1 yıl yönlendirir;
   3. 1 yıllık bağlantıların adresi boşalır (`expired`); maskelenmiş ya da
      sonradan hassaslaşmış (`mail_task_content_sensitive()`) gönderimin
      bütün bağlantılarının adresi boşalır (`erased`, inceleme D7);
@@ -1342,7 +1348,7 @@ dönüş, aşağıda). Açılışta `dry-run`; 1–2 dry-run makbuzu okunur okun
   `sends_failed`); kişi, belirteç ya da adres yoktur. Aynı sayılar
   `"event":"tracking_retention_run"` günlük satırındadır.
 - **`purge` (tam geri dönüş):** `SKYMAIL_TRACKING=off` ister (yoksa açılış
-  durur). Bütün belirteçleri kapatır ve bütün olayları siler, yaşına
+  durur). Bütün belirteçleri siler ve bütün olayları siler, yaşına
   bakmadan; kişisiz toplamlar ve bağlantılar kalır, eski postaların
   bağlantıları yönlendirir. Her koşuda tekrarlanır (zararsız); iş bitince
   kip **`apply`'a** alınır (`off`'a değil: `off`'ta 1 yıllık bağlantı
@@ -1356,6 +1362,13 @@ dönüş, aşağıda). Açılışta `dry-run`; 1–2 dry-run makbuzu okunur okun
   yıllık takipli gönderimin şablonu tam o anda hassaslaşırsa Postgres
   birini ölü kilit diye iptal eder: saklama `sends_failed` yazıp ertesi gün
   dener, maskeleme başarısızlık sayar (hassas içerik için güvenli yön).
+- **Geri dönüş (`20261023180000`, toplam her gönderimde):** imajı eskiye
+  döndürmek yeterli, eski imaj yeni şemada çalışır (yalnız ≥10 toplam
+  yazar). Down migration yalnız eski imaj ayaktayken ya da
+  `SKYMAIL_TRACKING_RETENTION=off` iken koşulur: önce 10'dan az alıcılı
+  toplamları siler (geri gelmez), sonra CHECK'i geri koyar; yeni imajın
+  saklama işi arada 10'dan az bir toplam yazarsa CHECK düşer ve sürüm
+  `dirty` kalır. Silinen belirteçler hiçbir geri dönüşte geri gelmez.
 
 Makbuzlar (production sunucusunda, salt okunur):
 

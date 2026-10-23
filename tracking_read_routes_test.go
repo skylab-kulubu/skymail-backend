@@ -8,6 +8,7 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
+	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
 	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
 )
@@ -170,5 +171,55 @@ func TestPublicTrackingRoutesUseDatabaseWithoutGeneralErrorLogging(t *testing.T)
 	}
 	if status, _ := w.call("yusuf", "GET", "/t/c/"+rt+"/"+lt, nil, nil); status != 410 {
 		t.Fatalf("erased click=%d", status)
+	}
+}
+
+// Past the 90 days, after the retention run: the recipient's token is gone
+// (KVKK notice s6), the click on their old mail's link still redirects by
+// the link's own token for its year, and neither it nor the pixel writes an
+// event.
+func TestAClickPastTheNinetyDaysRedirectsAndRecordsNothing(t *testing.T) {
+	w, _ := trackedWorld(t, true)
+	send := w.listSend()
+	send["mail_list_id"] = w.group
+	send["tracking"] = true
+	var created struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if status, raw := w.call("yusuf", "POST", "/v1/mail_tasks", send, &created); status != 201 {
+		t.Fatalf("%d %s", status, raw)
+	}
+	ctx := context.Background()
+	if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_queue SET status='sent',sent_at=now()-interval '91 days' WHERE task_id=$1`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_tasks SET created_at=now()-interval '91 days' WHERE id=$1`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, rows := w.trackingOf(created.ID)
+	token := rows[elif.email].token
+	rt := tracking.EncodeToken(token)
+	ltBytes, _ := tracking.NewLinkToken()
+	lt := tracking.EncodeToken(ltBytes)
+	if _, err := w.store.Conn.Exec(ctx, `INSERT INTO mail_task_links(task_id,link_token,url,position) VALUES($1,$2,'https://destination.invalid/registered',99)`, created.ID, ltBytes); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.store.RunTrackingRetention(ctx, database.TrackingRetentionOptions{Mode: tracking.RetentionApply}); err != nil {
+		t.Fatal(err)
+	}
+	var bound int
+	if err := w.store.Conn.QueryRow(ctx, `SELECT count(*) FROM mail_queue WHERE tracking_token=$1`, token).Scan(&bound); err != nil || bound != 0 {
+		t.Fatalf("the old token still names %d rows (%v)", bound, err)
+	}
+	handlers.NewTrackingPublicHandler(w.store, tracking.Config{Mode: tracking.ModeOn}).Register(w.app)
+	if status, _ := w.call("yusuf", "GET", "/t/c/"+rt+"/"+lt, nil, nil); status != fiber.StatusFound {
+		t.Fatalf("click past the 90 days = %d, want 302", status)
+	}
+	if status, _ := w.call("yusuf", "GET", "/t/o/"+rt, nil, nil); status != 200 {
+		t.Fatal("pixel failed")
+	}
+	var events int
+	if err := w.store.Conn.QueryRow(ctx, `SELECT count(*) FROM mail_tracking_events WHERE task_id=$1`, created.ID).Scan(&events); err != nil || events != 0 {
+		t.Errorf("%d events written past the 90 days (%v)", events, err)
 	}
 }

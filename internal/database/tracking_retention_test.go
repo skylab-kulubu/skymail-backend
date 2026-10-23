@@ -138,7 +138,8 @@ func trackingState(t *testing.T, s *Store) map[string]string {
 	state := map[string]string{}
 	for name, sql := range map[string]string{
 		"events": `SELECT id::text, queue_id::text || '|' || kind FROM mail_tracking_events`,
-		"queue":  `SELECT id::text, COALESCE(tracking_disabled_at::text, 'open') FROM mail_queue WHERE tracking_token IS NOT NULL`,
+		"queue": `SELECT id::text, COALESCE(tracking_disabled_at::text, 'open') || CASE WHEN tracking_token IS NULL THEN '|dropped' ELSE '' END
+		           FROM mail_queue WHERE tracking_token IS NOT NULL OR tracking_disabled_at IS NOT NULL`,
 		"links":  `SELECT id::text, COALESCE(url, '') || '|' || COALESCE(url_cleared_reason, '') FROM mail_task_links`,
 		"totals": `SELECT task_id::text, tracked_recipients::text || '|' || unique_opens::text || '|' || clicks_by_link::text FROM mail_task_tracking_totals`,
 		"sends":  `SELECT id::text, COALESCE(tracking_closed_at::text, 'open') FROM mail_tasks`,
@@ -184,6 +185,15 @@ func TestWithdrawTrackingStopsThePersonsTrackingAndKeepsTheLinks(t *testing.T) {
 	if want := (TrackingWithdrawal{TokensClosed: 2, EventsDeleted: 3}); got != want {
 		t.Errorf("withdrawal = %+v, want %+v", got, want)
 	}
+	// The tokens are gone, not only closed: nothing ties Deniz's old
+	// addresses to Deniz (KVKK notice s6).
+	if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE id = ANY($1) AND tracking_token IS NULL AND tracking_disabled_at IS NOT NULL`,
+		[]uuid.UUID{announcement.rows[0], later.rows[0]}); n != 2 {
+		t.Errorf("%d of Deniz's 2 tokens dropped", n)
+	}
+	if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE tracking_token = $1`, announcement.tokens[0]); n != 0 {
+		t.Errorf("Deniz's old token still names %d rows", n)
+	}
 
 	after := trackingState(t, s)
 	for key, value := range before {
@@ -195,8 +205,8 @@ func TestWithdrawTrackingStopsThePersonsTrackingAndKeepsTheLinks(t *testing.T) {
 				t.Errorf("Deniz's %s is kept", key)
 			}
 		case strings.HasPrefix(key, "queue ") && mine:
-			if after[key] == "open" {
-				t.Errorf("Deniz's token %s is open", key)
+			if !strings.HasSuffix(after[key], "|dropped") {
+				t.Errorf("Deniz's token %s is not dropped: %q", key, after[key])
 			}
 		case changed:
 			t.Errorf("%s changed: %q -> %q", key, value, after[key])
@@ -335,7 +345,7 @@ func TestTrackingRetentionDryRunCountsWhatApplyChanges(t *testing.T) {
 	// Three tracked, a year and a day ago, rolled up and closed long since:
 	// their counts go now.
 	old := seedSend(t, s, retentionTemplate, 366, nil, tracked(366, 0, 0), tracked(366, 0, 0), tracked(366, 0, 0))
-	if _, err := s.Conn.Exec(ctx, `UPDATE mail_queue SET tracking_disabled_at = now() - interval '275 days' WHERE task_id = $1`, old.task); err != nil {
+	if _, err := s.Conn.Exec(ctx, `UPDATE mail_queue SET tracking_disabled_at = now() - interval '275 days', tracking_token = NULL WHERE task_id = $1`, old.task); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Conn.Exec(ctx, `UPDATE mail_tasks SET tracking_closed_at = now() - interval '275 days' WHERE id = $1`, old.task); err != nil {
@@ -403,6 +413,19 @@ func TestTrackingRetentionDryRunCountsWhatApplyChanges(t *testing.T) {
 	}
 	if n := queryCount(t, s, `SELECT count(*) FROM mail_tracking_events`); n != 2+1+2+3 {
 		t.Errorf("%d events left, want 8", n)
+	}
+	// The recipient bond is gone past the 90 days (KVKK notice s6): the
+	// tokens of mail past them are dropped, not only closed, and no row
+	// answers to an old token; the edge's recipient within them keeps hers.
+	for _, gone := range [][]byte{big.tokens[0], big.tokens[9], small.tokens[0], edge.tokens[1], late.tokens[0]} {
+		if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE tracking_token = $1`, gone); n != 0 {
+			t.Errorf("an old token still names %d rows", n)
+		}
+	}
+	for _, row := range []uuid.UUID{big.rows[0], small.rows[8], edge.rows[1], late.rows[2]} {
+		if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE id = $1 AND tracking_token IS NULL AND tracking_disabled_at IS NOT NULL`, row); n != 1 {
+			t.Errorf("row %s keeps its token past the 90 days", row)
+		}
 	}
 	for id, wantState := range map[int64]string{
 		big.links[0]: "|expired", big.links[1]: "|expired", edge.links[0]: "https://skylab.example/0|",
@@ -625,8 +648,8 @@ func TestTrackingRetentionPurgeDeletesEveryEvent(t *testing.T) {
 	if n := queryCount(t, s, `SELECT count(*) FROM mail_tracking_events`); n != 0 {
 		t.Errorf("%d events after purge", n)
 	}
-	if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE tracking_token IS NOT NULL AND tracking_disabled_at IS NULL`); n != 0 {
-		t.Errorf("%d tokens open after purge", n)
+	if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE tracking_token IS NOT NULL`); n != 0 {
+		t.Errorf("%d tokens left after purge", n)
 	}
 	if n := queryCount(t, s, `SELECT count(*) FROM mail_task_links WHERE url IS NOT NULL`); n != 1 {
 		t.Error("purge emptied the link")

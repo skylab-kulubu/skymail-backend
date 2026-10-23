@@ -31,9 +31,11 @@ type TrackingWithdrawal struct {
 }
 
 // WithdrawTracking stops tracking a person (core's withdrawal: they turned
-// it off on my.). Every token of mail to their subject closes — mail already
-// sent and mail still queued, which then goes out without the pixel — and
-// their openings and clicks are deleted. Their old mail's links still
+// it off on my.). Their openings and clicks are deleted and every token of
+// mail to their subject is dropped (tracking_token NULL, tracking_disabled_at
+// set) — mail already sent, whose links still redirect by their own link
+// token, and mail still queued, which then goes out without the pixel.
+// Nothing ties an address of their old mail to them any more. Their old mail's links still
 // redirect; the counts without people already kept stay. A repeat changes
 // nothing. Mail queued later asks core again and is not tracked.
 func (s *Store) WithdrawTracking(ctx context.Context, subject string) (TrackingWithdrawal, error) {
@@ -51,20 +53,22 @@ func (s *Store) WithdrawTracking(ctx context.Context, subject string) (TrackingW
 			ORDER BY q.id FOR UPDATE`, subject); err != nil {
 			return fmt.Errorf("lock the person's tracked rows: %w", err)
 		}
+		// The events first, while the tokens still find the rows; the rows
+		// are locked, so nothing is written in between.
 		tag, err := tx.Exec(ctx, `
-			UPDATE mail_queue q SET tracking_disabled_at = now()
-			WHERE q.recipient_sub = $1::uuid AND q.tracking_token IS NOT NULL AND q.tracking_disabled_at IS NULL`, subject)
-		if err != nil {
-			return fmt.Errorf("close the person's tokens: %w", err)
-		}
-		done.TokensClosed = tag.RowsAffected()
-		tag, err = tx.Exec(ctx, `
 			DELETE FROM mail_tracking_events e USING mail_queue q
 			WHERE e.queue_id = q.id AND q.recipient_sub = $1::uuid AND q.tracking_token IS NOT NULL`, subject)
 		if err != nil {
 			return fmt.Errorf("delete the person's events: %w", err)
 		}
 		done.EventsDeleted = tag.RowsAffected()
+		tag, err = tx.Exec(ctx, `
+			UPDATE mail_queue q SET tracking_disabled_at = COALESCE(q.tracking_disabled_at, now()), tracking_token = NULL
+			WHERE q.recipient_sub = $1::uuid AND q.tracking_token IS NOT NULL`, subject)
+		if err != nil {
+			return fmt.Errorf("drop the person's tokens: %w", err)
+		}
+		done.TokensClosed = tag.RowsAffected()
 		return nil
 	})
 	if err != nil {
@@ -183,7 +187,9 @@ const trackingRetentionDueSQL = `
 //     one of its recipients' mail went out EventRetention ago or more and
 //     it has none kept yet (a send with fewer than TotalsMinRecipients
 //     tracked rows only within a year of its creation);
-//  2. those recipients' tokens close;
+//  2. those recipients' tokens are dropped (tracking_token NULL,
+//     tracking_disabled_at set): their links still redirect by the link's
+//     own token, and nothing ties them to the recipient any more;
 //  3. its links a year old are emptied (expired), and every link of a send
 //     masked or sensitive now (D7) is emptied (erased);
 //  4. those recipients' events are deleted: nothing ties an opening or a
@@ -381,7 +387,8 @@ var trackingRetentionRules = []struct {
 		// of fewer than ten to who may read the send's people only.
 		sql: `WITH people AS (
 		          SELECT q.tracking_token IS NOT NULL AND q.status = 'sent' AND q.tracking_disabled_at IS NULL AS tracked,
-		                 CASE WHEN q.tracking_token IS NULL THEN COALESCE(q.tracking_skip_reason, 'not_requested')
+		                 CASE WHEN q.tracking_token IS NULL AND q.tracking_disabled_at IS NULL
+		                          THEN COALESCE(q.tracking_skip_reason, 'not_requested')
 		                      WHEN q.status <> 'sent' THEN 'not_delivered'
 		                      ELSE 'tracking_closed' END AS reason
 		          FROM mail_queue q WHERE q.task_id = @task
@@ -413,9 +420,12 @@ var trackingRetentionRules = []struct {
 		count: func(c *TrackingRetentionCounts, n int64) { c.TotalsWritten += n },
 	},
 	{
-		// 2. The tokens of mail past EventRetention.
-		sql: `UPDATE mail_queue q SET tracking_disabled_at = @now::timestamptz
-		      WHERE q.task_id = @task AND q.tracking_token IS NOT NULL AND q.tracking_disabled_at IS NULL
+		// 2. The tokens of mail past EventRetention are dropped, closed
+		// ones too: the recipient's token is in every address of their
+		// mail, and a log that kept one with an IP address must not lead
+		// back to them. Clicks redirect by the link's own token.
+		sql: `UPDATE mail_queue q SET tracking_disabled_at = COALESCE(q.tracking_disabled_at, @now::timestamptz), tracking_token = NULL
+		      WHERE q.task_id = @task AND q.tracking_token IS NOT NULL
 		        AND q.status = 'sent' AND q.sent_at <= @now::timestamptz - make_interval(days => @days::int)`,
 		count: func(c *TrackingRetentionCounts, n int64) { c.TokensClosed += n },
 	},
@@ -495,7 +505,7 @@ func (s *Store) trackingRetentionSend(ctx context.Context, task uuid.UUID, now t
 	return counts, nil
 }
 
-// purgeTracking closes every token and deletes every event, in one
+// purgeTracking drops every token and deletes every event, in one
 // transaction, the tracked queue rows locked first.
 func (s *Store) purgeTracking(ctx context.Context) (TrackingRetentionCounts, error) {
 	var counts TrackingRetentionCounts
@@ -503,16 +513,16 @@ func (s *Store) purgeTracking(ctx context.Context) (TrackingRetentionCounts, err
 		if _, err := tx.Exec(ctx, `SELECT q.id FROM mail_queue q WHERE q.tracking_token IS NOT NULL ORDER BY q.id FOR UPDATE`); err != nil {
 			return fmt.Errorf("lock tracked rows: %w", err)
 		}
-		tag, err := tx.Exec(ctx, `UPDATE mail_queue SET tracking_disabled_at = now() WHERE tracking_token IS NOT NULL AND tracking_disabled_at IS NULL`)
-		if err != nil {
-			return fmt.Errorf("close tokens: %w", err)
-		}
-		counts.TokensClosed = tag.RowsAffected()
-		tag, err = tx.Exec(ctx, `DELETE FROM mail_tracking_events`)
+		tag, err := tx.Exec(ctx, `DELETE FROM mail_tracking_events`)
 		if err != nil {
 			return fmt.Errorf("delete events: %w", err)
 		}
 		counts.EventsDeleted = tag.RowsAffected()
+		tag, err = tx.Exec(ctx, `UPDATE mail_queue SET tracking_disabled_at = COALESCE(tracking_disabled_at, now()), tracking_token = NULL WHERE tracking_token IS NOT NULL`)
+		if err != nil {
+			return fmt.Errorf("drop tokens: %w", err)
+		}
+		counts.TokensClosed = tag.RowsAffected()
 		return nil
 	})
 	return counts, err

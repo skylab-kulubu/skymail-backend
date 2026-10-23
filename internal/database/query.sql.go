@@ -2971,7 +2971,7 @@ func (q *Queries) GetTemplateVersionSummary(ctx context.Context, arg GetTemplate
 
 const getTrackingReport = `-- name: GetTrackingReport :one
 WITH people AS (
- SELECT q.id, q.tracking_token IS NOT NULL AS tracked, COALESCE(q.tracking_skip_reason,'not_requested') AS reason
+ SELECT q.id, (q.tracking_token IS NOT NULL OR q.tracking_disabled_at IS NOT NULL) AS tracked, COALESCE(q.tracking_skip_reason,'not_requested') AS reason
  FROM mail_queue q WHERE q.task_id = $1
 ), events AS (
  SELECT e.id, e.queue_id, e.task_id, e.kind, e.link_id, e.occurred_at, e.source_class, e.automated_likely, e.classifier_version FROM mail_tracking_events e JOIN mail_queue q ON q.id = e.queue_id
@@ -4562,7 +4562,7 @@ WITH clicked AS (
  GROUP BY e.queue_id,e.link_id
 ), people AS (
  SELECT q.id,q.recipient_sub,q.recipient_email,q.recipient_full_name,
-        q.tracking_token IS NOT NULL AS tracked,q.tracking_skip_reason,
+        (q.tracking_token IS NOT NULL OR q.tracking_disabled_at IS NOT NULL) AS tracked,q.tracking_skip_reason,
         min(e.occurred_at) FILTER (WHERE e.kind='open') AS first_open_at,
         min(e.occurred_at) FILTER (WHERE NOT e.automated_likely AND e.kind='open') AS human_open_at,
         min(e.occurred_at) FILTER (WHERE NOT e.automated_likely AND e.kind='click') AS human_click_at,
