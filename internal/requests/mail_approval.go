@@ -19,6 +19,8 @@ type SubmitMailApproval struct {
 	BodyVariables map[string]interface{}  `json:"body_variables"`
 	// Open and click tracking for the send once approved (as POST /mail_tasks takes it). Ignored (and kept false) while SkyMail's tracking is off, for a System or sensitive template (to people, a template that says nothing counts as sensitive) and for a Forms source. People named here are looked up in Keycloak by address when the request is sent, as POST /mail_tasks/single does: one enabled account with that verified primary e-mail, or no_account.
 	Tracking bool `json:"tracking"`
+	// The purpose of the send once approved (as POST /mail_tasks takes it): islem only to people or to a Forms source.
+	SendPurpose
 }
 
 // MailApprovalRecipient is one person a request goes to.

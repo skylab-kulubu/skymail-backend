@@ -102,7 +102,7 @@ func TestLaneOfAMail(t *testing.T) {
 		{"a priority below the bulk lane's", nil, false, mailer.Priority(-1), mailer.LaneDuyuru},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := mailer.LaneOf(tc.key, tc.system, tc.priority); got != tc.want {
+			if got := mailer.LaneOf(nil, tc.key, tc.system, tc.priority); got != tc.want {
 				t.Errorf("lane %q, want %q", got, tc.want)
 			}
 		})

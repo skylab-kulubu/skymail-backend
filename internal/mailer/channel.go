@@ -156,6 +156,9 @@ func (s *emailSender) Send(ctx context.Context, job database.MailQueue) error {
 	if err != nil {
 		return err
 	}
+	if job, err = s.withUnsubscribeFooter(ctx, lane, job); err != nil {
+		return err
+	}
 	unsubscribe := s.listUnsubscribe(lane, config, job)
 	switch config.Transport {
 	case TransportGraph:
@@ -186,12 +189,21 @@ func (s *emailSender) laneOf(ctx context.Context, job database.MailQueue) (Lane,
 	if !s.lanes.anyOn() {
 		return "", LaneConfig{Transport: TransportOff}, nil
 	}
-	key, system, err := s.templateKey(ctx, job.TaskID)
+	lane, err := s.streamOf(ctx, job)
 	if err != nil {
-		return "", LaneConfig{}, fmt.Errorf("read the send's template for its sender lane: %w", err)
+		return "", LaneConfig{}, err
 	}
-	lane := LaneOf(key, system, Priority(job.Priority))
 	return lane, s.lanes.Lane(lane), nil
+}
+
+// streamOf is job's sender lane: its send's template and purpose read
+// (LaneOf; the purpose only while SKYMAIL_MAIL_PURPOSE is on).
+func (s *emailSender) streamOf(ctx context.Context, job database.MailQueue) (Lane, error) {
+	send, err := s.templateKey(ctx, job.TaskID)
+	if err != nil {
+		return "", fmt.Errorf("read the send's template for its sender lane: %w", err)
+	}
+	return LaneOf(s.lanes.purposeOf(send.Purpose), send.Key, send.System, Priority(job.Priority)), nil
 }
 
 // message is job's mail from from. queueHeader adds X-SkyMail-Queue-Id, which

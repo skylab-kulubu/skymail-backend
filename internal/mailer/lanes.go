@@ -18,14 +18,19 @@ import (
 //     login or sign-up code, an address verification, a password reset): a
 //     System template whose key is keycloak.* or account.* (AccountMail, the
 //     same rule the suppression list exempts by).
-//   - duyuru: the bulk lane (PriorityBulk): a send to a list, a Keycloak
-//     group, a Forms form's respondents, an approved send, a bulk
-//     notification type, a single mail an operator asks tracking for. An
-//     operator's mail to an audience.
-//   - bilgi: everything else, the system lane: Forms confirmations, Mail
-//     onayı notifications, event and other system notifications.
+//   - duyuru: the broadcast stream (ADR 0072 decision 2): a send whose
+//     purpose is duyuru — a list, a Keycloak group, and by default a Forms
+//     form's respondents, an approved send and a single mail an operator
+//     asks tracking for. An operator's mail to an audience.
+//   - bilgi: the rest of the transactional stream (purpose islem): Forms
+//     confirmations, Mail onayı notifications, event and other system
+//     notifications, and an operator's mail they declared transactional.
 //
-// Account mail is hesap in either lane. Each lane has its own switch: off (the
+// The purpose (mail_tasks.purpose; Purpose*) picks the stream only while
+// SKYMAIL_MAIL_PURPOSE is on; off, and for a send without one (queued before
+// it, or while it was off), the queue priority does as before: the bulk lane
+// is duyuru, the system lane bilgi. Account mail is hesap whatever its
+// stream. Each lane has its own switch: off (the
 // default) sends it the way SkyMail always has, SMTP AUTH as SMTP_USER from
 // SMTP_FROM; graph sends it through Microsoft Graph sendMail without a copy in
 // Sent Items; xoauth2 sends it over SMTP with an OAuth token. Both use the
@@ -82,6 +87,64 @@ type SendLanes struct {
 	// whose row has an unsubscribe link carries List-Unsubscribe and
 	// List-Unsubscribe-Post (list_unsubscribe.go). Off by default.
 	ListUnsubscribe bool
+	// Purpose is SKYMAIL_MAIL_PURPOSE: a send's purpose, not its queue
+	// priority, picks its stream (LaneOf), a send may name its purpose and
+	// category, and a duyuru mail whose row has an unsubscribe link carries a
+	// visible line with it when its body has none (footer.go). Off by default:
+	// purposes are neither written nor read, and every mail goes as before.
+	Purpose bool
+}
+
+// A send's purpose (mail_tasks.purpose; ADR 0072 decision 2): which message
+// stream its mail is in.
+const (
+	// PurposeIslem is the transactional stream (hesap@, bilgi@): no
+	// preference, no unsubscribe record, no List-Unsubscribe; tracked by the
+	// tracking rules, as any mail.
+	PurposeIslem = "islem"
+	// PurposeDuyuru is the broadcast stream (duyuru@): a category, the
+	// preference, the unsubscribe record, the one-click header and a visible
+	// link.
+	PurposeDuyuru = "duyuru"
+)
+
+// SendPurpose is what a send says about its stream, as mail_tasks and
+// mail_approvals keep it: the purpose, core's category of a duyuru send, an
+// operator's statement that an islem send is about the recipient's own
+// application, and a duyuru sender's statement that it carries no
+// commercial content. The zero value is a send without a purpose, read by
+// the rule of before.
+type SendPurpose struct {
+	Purpose                 *string
+	Category                *string
+	TransactionalStatement  *bool
+	CommercialContentAbsent *bool
+}
+
+// PurposeEnv switches purposes on: off (the default, also when unset) or on.
+const PurposeEnv = "SKYMAIL_MAIL_PURPOSE"
+
+// purposeFromEnv reads SKYMAIL_MAIL_PURPOSE; anything but off, on or nothing
+// stops startup.
+func purposeFromEnv(getenv func(string) string) (bool, error) {
+	switch raw := strings.ToLower(strings.TrimSpace(getenv(PurposeEnv))); raw {
+	case "", "off":
+		return false, nil
+	case "on":
+		return true, nil
+	default:
+		return false, fmt.Errorf("%s must be off or on, not %q", PurposeEnv, raw)
+	}
+}
+
+// purposeOf is the purpose a mail's stream is read from: the send's while
+// SKYMAIL_MAIL_PURPOSE is on, none (the rule of before) while it is off, so
+// turning it off sends a mail queued while it was on as before too.
+func (l SendLanes) purposeOf(purpose *string) *string {
+	if !l.Purpose {
+		return nil
+	}
+	return purpose
 }
 
 // Lane is lane's configuration: off when it has none.
@@ -125,8 +188,9 @@ const ReplyToEnv = "SMTP_REPLY_TO"
 // <hesap@bildirim.yildizskylab.com>"), and the application's credentials
 // (GRAPH_TENANT_ID, GRAPH_CLIENT_ID, GRAPH_CLIENT_KEY, GRAPH_CLIENT_CERT).
 // SMTP_REPLY_TO, optional, is an address with or without a display name.
-// SKYMAIL_LIST_UNSUBSCRIBE is off (also when unset) or on. Anything else stops
-// startup, so a typo cannot quietly send from the wrong mailbox.
+// SKYMAIL_LIST_UNSUBSCRIBE and SKYMAIL_MAIL_PURPOSE are off (also when unset)
+// or on. Anything else stops startup, so a typo cannot quietly send from the
+// wrong mailbox.
 func SendLanesFromEnv(getenv func(string) string) (SendLanes, error) {
 	lanes := SendLanes{Lanes: make(map[Lane]LaneConfig, len(Lanes))}
 	listUnsubscribe, err := listUnsubscribeFromEnv(getenv)
@@ -134,6 +198,9 @@ func SendLanesFromEnv(getenv func(string) string) (SendLanes, error) {
 		return SendLanes{}, err
 	}
 	lanes.ListUnsubscribe = listUnsubscribe
+	if lanes.Purpose, err = purposeFromEnv(getenv); err != nil {
+		return SendLanes{}, err
+	}
 	for _, lane := range Lanes {
 		raw := strings.ToLower(strings.TrimSpace(getenv(sendEnv(lane))))
 		transport := Transport(raw)
@@ -173,14 +240,23 @@ func SendLanesFromEnv(getenv func(string) string) (SendLanes, error) {
 }
 
 // LaneOf is the sender lane of a mail: hesap for account mail (a System
-// template keyed keycloak.* or account.*), whatever its lane; otherwise
-// duyuru for the bulk lane and bilgi for the system lane. key and system are
-// the send's template's (nil and false without one); priority is the queue
-// row's.
-func LaneOf(key *string, system bool, priority Priority) Lane {
+// template keyed keycloak.* or account.*), whatever its stream; otherwise its
+// purpose's (ADR 0072 decision 2): duyuru for duyuru, bilgi for islem. A send
+// without a purpose (nil: queued before purposes, or while
+// SKYMAIL_MAIL_PURPOSE was off, or read while it is off) is read by the rule
+// of before: duyuru for the bulk lane, bilgi for the system lane. key and
+// system are the send's template's (nil and false without one); priority is
+// the queue row's. The queue priority is the send budget's, not the
+// stream's: an operator's islem send to a Forms source waits in the bulk lane
+// and goes out from bilgi@.
+func LaneOf(purpose, key *string, system bool, priority Priority) Lane {
 	switch {
 	case AccountMail(key, system):
 		return LaneHesap
+	case purpose != nil && *purpose == PurposeDuyuru:
+		return LaneDuyuru
+	case purpose != nil && *purpose == PurposeIslem:
+		return LaneBilgi
 	case priority <= PriorityBulk:
 		return LaneDuyuru
 	default:
@@ -188,21 +264,29 @@ func LaneOf(key *string, system bool, priority Priority) Lane {
 	}
 }
 
-// templateKeyOf reads a send's template's key and whether it is a System
-// template; the mailer's reads mail_tasks and templates.
-type templateKeyOf func(ctx context.Context, taskID uuid.UUID) (key *string, system bool, err error)
+// sendLane is what a mail's lane is read from: the send's template's key,
+// whether it is a System template, and the send's purpose.
+type sendLane struct {
+	Key     *string
+	System  bool
+	Purpose *string
+}
+
+// templateKeyOf reads a send's sendLane; the mailer's reads mail_tasks and
+// templates.
+type templateKeyOf func(ctx context.Context, taskID uuid.UUID) (sendLane, error)
 
 // databaseTemplateKey is templateKeyOf from the database; without one (a
-// test's SendOnce), no template.
-func (m *mailerImpl) databaseTemplateKey(ctx context.Context, taskID uuid.UUID) (*string, bool, error) {
+// test's SendOnce), no template and no purpose.
+func (m *mailerImpl) databaseTemplateKey(ctx context.Context, taskID uuid.UUID) (sendLane, error) {
 	if m.db == nil {
-		return nil, false, nil
+		return sendLane{}, nil
 	}
 	row, err := m.db.GetMailTaskTemplateKey(ctx, taskID)
 	if err != nil {
-		return nil, false, err
+		return sendLane{}, err
 	}
-	return row.Key, row.System, nil
+	return sendLane{Key: row.Key, System: row.System, Purpose: row.Purpose}, nil
 }
 
 // WithSendLanes sends each mail from its lane's mailbox the way the lane

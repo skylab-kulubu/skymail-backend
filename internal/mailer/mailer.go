@@ -141,6 +141,9 @@ type EnqueueWithRecipientsParams struct {
 	// in a caller's transaction (Queue) never asks, and tracks no one core was
 	// not asked about.
 	Preferences *TrackingPreferences
+	// Purpose is the send's purpose and category (ADR 0072 decision 2),
+	// written on the send; the zero value is none, the rule of before.
+	Purpose SendPurpose
 }
 
 type Mailer interface {
@@ -170,6 +173,10 @@ type Mailer interface {
 	// any other a click address on the links every recipient gets alike,
 	// never on one made from the recipient.
 	OperatorTrackingAlways() bool
+	// PurposeAvailable says SKYMAIL_MAIL_PURPOSE is on: a send may name its
+	// purpose and category, and its purpose picks its stream (LaneOf). Off,
+	// the fields are ignored and no send is written with one.
+	PurposeAvailable() bool
 	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error)
 	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
 	// EnqueueSystemSingle queues a mail a service sends one person (a login
@@ -582,6 +589,9 @@ type commonMailRow struct {
 	RecipientEmail    string
 	RecipientSub      *uuid.UUID
 	UnsubscribeURL    string
+	// Purpose is the send's purpose as it is queued (mail_tasks.purpose):
+	// which stream's unsubscribe record applies (unsubscribe.go).
+	Purpose *string
 }
 
 // queue writes sends through q: the pool's queries, or a transaction's, in
@@ -593,10 +603,13 @@ type queue struct {
 	tracking *Tracking
 	// refuseReserved is the mailer's (WithReservedDomainsRefused).
 	refuseReserved bool
+	// lanes are the mailer's (WithSendLanes): whether a send's purpose picks
+	// its stream (SKYMAIL_MAIL_PURPOSE).
+	lanes SendLanes
 }
 
 func (m *mailerImpl) Queue(q *database.Queries, priority Priority) Queue {
-	return &queue{q: q, logger: m.logger, priority: priority, tracking: &m.tracking, refuseReserved: m.refuseReserved}
+	return &queue{q: q, logger: m.logger, priority: priority, tracking: &m.tracking, refuseReserved: m.refuseReserved, lanes: m.lanes}
 }
 
 func (m *mailerImpl) Wake() { m.wake() }
@@ -610,7 +623,7 @@ func (m *mailerImpl) pooled(ctx context.Context, priority Priority, write func(*
 	var queued bool
 	err := m.db.InTx(ctx, func(q *database.Queries) error {
 		var err error
-		id, queued, err = write(&queue{q: q, logger: m.logger, priority: priority, tracking: &m.tracking, refuseReserved: m.refuseReserved})
+		id, queued, err = write(&queue{q: q, logger: m.logger, priority: priority, tracking: &m.tracking, refuseReserved: m.refuseReserved, lanes: m.lanes})
 		return err
 	})
 	if err != nil {
@@ -737,6 +750,7 @@ func (q *queue) enqueue(ctx context.Context, arg database.CreateMailTaskParams) 
 			PlainTextContent:  row.PlainTextContent,
 			RecipientFullName: row.RecipientFullName,
 			RecipientEmail:    row.RecipientEmail,
+			Purpose:           arg.Purpose,
 		}
 	}
 
@@ -767,6 +781,7 @@ func (q *queue) enqueueSingle(ctx context.Context, arg database.CreateSingleMail
 			PlainTextContent:  row.PlainTextContent,
 			RecipientFullName: row.RecipientFullName,
 			RecipientEmail:    row.RecipientEmail,
+			Purpose:           arg.Purpose,
 		},
 	}
 	if arg.TrackingRequested {
@@ -783,12 +798,16 @@ func (q *queue) enqueueSingle(ctx context.Context, arg database.CreateSingleMail
 func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, bool, error) {
 	kind := q.tracking.trackingOf(params.Tracking, params.System)
 	task, err := q.q.InsertMailTask(ctx, database.InsertMailTaskParams{
-		SentBy:            params.SentBy,
-		TemplateID:        &params.TemplateID,
-		MailListID:        params.MailListID,
-		FormSourceID:      params.FormSourceID,
-		BodyVariables:     params.BodyVariables,
-		TrackingRequested: kind != trackNone,
+		SentBy:                  params.SentBy,
+		TemplateID:              &params.TemplateID,
+		MailListID:              params.MailListID,
+		FormSourceID:            params.FormSourceID,
+		BodyVariables:           params.BodyVariables,
+		TrackingRequested:       kind != trackNone,
+		Purpose:                 params.Purpose.Purpose,
+		Category:                params.Purpose.Category,
+		TransactionalStatement:  params.Purpose.TransactionalStatement,
+		CommercialContentAbsent: params.Purpose.CommercialContentAbsent,
 	})
 	if err != nil {
 		return uuid.Nil, false, err
@@ -819,6 +838,7 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 			RecipientEmail:    r.Email,
 			RecipientSub:      sub,
 			UnsubscribeURL:    r.UnsubscribeURL,
+			Purpose:           params.Purpose.Purpose,
 		})
 	}
 
@@ -893,8 +913,9 @@ type Rendered struct {
 // Render renders a Mail template's subject, plain text and HTML for one
 // recipient exactly as a send renders what it queues: the send's variables —
 // a JSON object, as a mail task keeps them — with the recipient's Email and
-// FullName over them, and UnsubscribeUrl when the recipient has a link. A
-// part that does not parse is a *ParseError.
+// FullName over them, and UnsubscribeUrl as the recipient's link (empty
+// when they have none, whatever the send's variables say). A part that does
+// not parse is a *ParseError.
 func Render(subject, plainText, html string, variables []byte, recipient RecipientInfo) (Rendered, error) {
 	parsed, err := parseMailTemplates(subject, plainText, html)
 	if err != nil {
@@ -924,9 +945,9 @@ func (t mailTemplates) renderWith(textVars, htmlVars map[string]interface{}, rec
 		}
 		data["Email"] = recipient.Email
 		data["FullName"] = recipient.FullName
-		if recipient.UnsubscribeURL != "" {
-			data["UnsubscribeUrl"] = recipient.UnsubscribeURL
-		}
+		// Always the recipient's, empty when they have none: a send's own
+		// UnsubscribeUrl variable never reaches the footer's link.
+		data["UnsubscribeUrl"] = recipient.UnsubscribeURL
 		return data
 	}
 	textData, htmlData := withRecipient(textVars), withRecipient(htmlVars)

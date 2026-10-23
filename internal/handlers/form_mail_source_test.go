@@ -6,17 +6,18 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 )
 
 func TestFormSourceCanonicalConsumeHashBindsTargetContentAndTracking(t *testing.T) {
 	id := uuid.New()
-	a, err := formSourceRequestHash("approval", id, []byte(`{"a":1,"b":{"z":2,"x":3}}`), false)
+	a, err := formSourceRequestHash("approval", id, []byte(`{"a":1,"b":{"z":2,"x":3}}`), false, mailer.SendPurpose{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := formSourceRequestHash("approval", id, []byte(`{ "b":{"x":3,"z":2},"a":1 }`), false)
+	b, err := formSourceRequestHash("approval", id, []byte(`{ "b":{"x":3,"z":2},"a":1 }`), false, mailer.SendPurpose{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +29,7 @@ func TestFormSourceCanonicalConsumeHashBindsTargetContentAndTracking(t *testing.
 		body     []byte
 		tracking bool
 	}{{"direct", []byte(`{"a":1,"b":{"x":3,"z":2}}`), false}, {"approval", []byte(`{"a":2}`), false}, {"approval", []byte(`{"a":1,"b":{"x":3,"z":2}}`), true}} {
-		h, err := formSourceRequestHash(other.kind, id, other.body, other.tracking)
+		h, err := formSourceRequestHash(other.kind, id, other.body, other.tracking, mailer.SendPurpose{})
 		if err != nil {
 			t.Fatal(err)
 		}
