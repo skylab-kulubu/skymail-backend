@@ -351,7 +351,7 @@ type SendPurposeFields struct {
 	Category *string `json:"category"`
 	// true on an islem send whose sender stated that the mail is about the recipient's own application or transaction; null otherwise (a service's mail, a send from an older client, every duyuru send).
 	TransactionalStatement *bool `json:"transactional_statement"`
-	// On a duyuru send, the sender's statement that it carries no commercial content, as given; null when none was given, and on every islem send.
+	// On a duyuru send, the sender's statement that its main purpose is not promotion (a short sponsor thanks or logo is allowed; KVKK notice s6 §5.10), as given; null when none was given, and on every islem send.
 	CommercialContentAbsent *bool `json:"commercial_content_absent"`
 }
 

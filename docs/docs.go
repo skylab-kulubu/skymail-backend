@@ -440,7 +440,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "On a duyuru send, the sender's statement that it carries no commercial content, as given; null when none was given, and on every islem send.",
+                        "description": "On a duyuru send, the sender's statement that its main purpose is not promotion (a short sponsor thanks or logo is allowed; KVKK notice s6 §5.10), as given; null when none was given, and on every islem send.",
                         "type": "boolean"
                     },
                     "created_at": {
@@ -626,7 +626,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "On a duyuru send, the sender's statement that it carries no commercial content, as given; null when none was given, and on every islem send.",
+                        "description": "On a duyuru send, the sender's statement that its main purpose is not promotion (a short sponsor thanks or logo is allowed; KVKK notice s6 §5.10), as given; null when none was given, and on every islem send.",
                         "type": "boolean"
                     },
                     "created_at": {
@@ -827,7 +827,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "On a duyuru send, the sender's statement that it carries no commercial content, as given; null when none was given, and on every islem send.",
+                        "description": "On a duyuru send, the sender's statement that its main purpose is not promotion (a short sponsor thanks or logo is allowed; KVKK notice s6 §5.10), as given; null when none was given, and on every islem send.",
                         "type": "boolean"
                     },
                     "content_access": {
@@ -2024,7 +2024,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "The sender's statement that the mail carries no commercial content (no sponsor promotion, paid ticket, company job advert or draw; ADR 0072 decision 9). false is refused with either purpose (400 mail_task.commercial_content_not_allowed: commercial mail needs İYS consent under 6563, which the club cannot have). With duyuru, true is kept; a later version requires it. Ignored with islem.",
+                        "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false is refused with either purpose (400 mail_task.commercial_content_not_allowed: promotional mail goes only to those who opted in, which SkyMail does not send). With duyuru, true is kept; a later version requires it. Ignored with islem.",
                         "type": "boolean"
                     },
                     "mail_list_id": {
@@ -2365,7 +2365,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "The sender's statement that the mail carries no commercial content (no sponsor promotion, paid ticket, company job advert or draw; ADR 0072 decision 9). false is refused with either purpose (400 mail_task.commercial_content_not_allowed: commercial mail needs İYS consent under 6563, which the club cannot have). With duyuru, true is kept; a later version requires it. Ignored with islem.",
+                        "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false is refused with either purpose (400 mail_task.commercial_content_not_allowed: promotional mail goes only to those who opted in, which SkyMail does not send). With duyuru, true is kept; a later version requires it. Ignored with islem.",
                         "type": "boolean"
                     },
                     "form_source_id": {
@@ -2445,7 +2445,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "The sender's statement that the mail carries no commercial content (no sponsor promotion, paid ticket, company job advert or draw; ADR 0072 decision 9). false is refused with either purpose (400 mail_task.commercial_content_not_allowed: commercial mail needs İYS consent under 6563, which the club cannot have). With duyuru, true is kept; a later version requires it. Ignored with islem.",
+                        "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false is refused with either purpose (400 mail_task.commercial_content_not_allowed: promotional mail goes only to those who opted in, which SkyMail does not send). With duyuru, true is kept; a later version requires it. Ignored with islem.",
                         "type": "boolean"
                     },
                     "purpose": {
@@ -2506,7 +2506,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "The sender's statement that the mail carries no commercial content (no sponsor promotion, paid ticket, company job advert or draw; ADR 0072 decision 9). false is refused with either purpose (400 mail_task.commercial_content_not_allowed: commercial mail needs İYS consent under 6563, which the club cannot have). With duyuru, true is kept; a later version requires it. Ignored with islem.",
+                        "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false is refused with either purpose (400 mail_task.commercial_content_not_allowed: promotional mail goes only to those who opted in, which SkyMail does not send). With duyuru, true is kept; a later version requires it. Ignored with islem.",
                         "type": "boolean"
                     },
                     "form_source_id": {
