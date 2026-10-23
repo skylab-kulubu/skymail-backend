@@ -2076,6 +2076,18 @@ WHERE id IN (SELECT b.id
              ORDER BY b.received_at
              LIMIT sqlc.arg(batch_size)::int FOR UPDATE SKIP LOCKED);
 
+-- Deletes up to batch_size of the oldest records of a reversed unsubscribe
+-- three years after they were written (KVKK notice s6; hub ticket
+-- kvkk-s6-yayin-oncesi 14): the content sweep's step.
+-- name: DeleteOldUnsubscribeReactivations :execrows
+DELETE
+FROM mail_unsubscribe_reactivations
+WHERE id IN (SELECT r.id
+             FROM mail_unsubscribe_reactivations r
+             WHERE r.reactivated_at < now() - interval '3 years'
+             ORDER BY r.reactivated_at
+             LIMIT sqlc.arg(batch_size)::int FOR UPDATE SKIP LOCKED);
+
 -- The suppressed among a send's recipients (lower-cased addresses): what
 -- queueing writes failed, or sends flagged when the send is account mail.
 -- name: GetSuppressedAddresses :many

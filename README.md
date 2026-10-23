@@ -661,6 +661,9 @@ kişinin çıkışını yalnız kişi isteyince ya da bir hata olunca geri alır
   (`actor_sub`), ne zaman, gerekçe, kaydın akışı, kaynağı ve ilk tarihi yazılır;
   adres yazılmaz. Hesap silme `actor_sub`'ı Silinmiş kullanıcı yapar, kişiyi
   adlandıran gerekçeyi `[silindi]` yapar.
+- Geri alma kaydı (kişinin kendi geri alması da) yazılmasından 3 yıl sonra
+  içerik süpürücüsünce silinir (KVKK aydınlatma metni s6; süre sabit, env
+  yok).
 - `GET /v1/suppressions/reactivations?_start=&_end=` aynı rolle geri almaları
   en yeni önce döner (`X-Total-Count`).
 
@@ -864,7 +867,7 @@ docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | 
 - `skymail:system-mails:read` SkyMail istemcisinin rolüdür (yönetici: YK, DK,
   ADMIN).
 - Süpürücü beş dakikada bir önce hassasları maskeler, sonra
-  `MAIL_CONTENT_RETENTION_DAYS` (varsayılan `3650`, 1–3650) dolmuş
+  `MAIL_CONTENT_RETENTION_DAYS` (varsayılan `365`, 1–3650) dolmuş
   gönderimlerin içeriğini boşaltır, sonra
   `SENT_CONTENT_VIEWS_RETENTION_DAYS`'ten (varsayılan `730`, 1–3650; Yusuf,
   2026-10-14: 2 yıl) eski `sent_content_views` satırlarını siler. Geçersiz
