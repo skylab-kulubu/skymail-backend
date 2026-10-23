@@ -3212,7 +3212,7 @@ paths:
         go out, or sent in the last minutes): not shown; restricted — shown to the
         send''s sender, for a send to a list, a group or an approved request to holders
         of skymail:mails:write, and to holders of skymail:system-mails:read; expired
-        — past MAIL_CONTENT_RETENTION_DAYS (3650 by default) and no longer kept; not_kept
+        — past MAIL_CONTENT_RETENTION_DAYS (365 by default) and no longer kept; not_kept
         — a sensitive send whose content was emptied (before sensitive content was
         kept, 2026-10-13, or because it could not be masked for certain), which does
         not come back; unavailable — holds nothing (Account erasure emptied it, or
