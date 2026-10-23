@@ -128,7 +128,7 @@ func operatorTracking(ctx context.Context, m mailer.Mailer, asked bool, template
 //	@Produce		json
 //	@Param			task	body		requests.CreateMailTask	true	"Mail task details"
 //	@Success		201		{object}	handlers.CreatedMailTask
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
+//	@Failure		400		{object}	apperrors.AppError	"Bad Request. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_required, mail_task.category_invalid"
 //	@Failure		422		{object}	apperrors.AppError	"mail.audience_unavailable: the Keycloak group is unknown or gone"
 //	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/mail_tasks [post]
@@ -228,13 +228,13 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 // SendSingle godoc
 //
 //	@Summary		Send a single email
-//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): a person's send may be islem (with transactional_statement true; bilgi@; tracked as any person's send, in the bulk lane then, else the system lane) or duyuru with a category (the bulk lane, duyuru@); without a purpose, islem when untracked and duyuru when tracked. A service's token is always islem; its fields are ignored.
+//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): a person's send may be islem (with transactional_statement true; bilgi@; tracked as any person's send, in the bulk lane then, else the system lane) or duyuru with a category (the bulk lane, duyuru@); without a purpose, duyuru, club:duyuru, tracked or not. A service's token is always islem; its fields are ignored.
 //	@Tags			Mail
 //	@Accept			json
 //	@Produce		json
 //	@Param			mail	body		requests.SendSingleMail	true	"Mail details"
 //	@Success		201		{object}	handlers.CreatedMailTask
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
+//	@Failure		400		{object}	apperrors.AppError	"Bad Request. A person's purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid (duyuru)"
 //	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/mail_tasks/single [post]
 func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
@@ -275,13 +275,12 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 		}
 	}
 	tracking := !service && operatorTracking(c.Context(), h.mailer, params.Tracking, templateID, nil)
-	switch {
-	case service:
+	// A person's send that names no purpose is duyuru (ADR 0072 decision 2:
+	// "Seçmezse posta duyurudur"), tracked or not.
+	if service {
 		purpose = purposeOrDefault(purposesOn, mailer.SendPurpose{}, islemByDefault)
-	case tracking:
+	} else {
 		purpose = purposeOrDefault(purposesOn, purpose, duyuruByDefault)
-	default:
-		purpose = purposeOrDefault(purposesOn, purpose, islemByDefault)
 	}
 	arg := database.CreateSingleMailTaskParams{
 		SentBy:                  sentBy,

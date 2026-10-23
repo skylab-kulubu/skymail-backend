@@ -351,7 +351,7 @@ func (h *mailHandlerImpl) GetFormSource(c fiber.Ctx) error {
 //	@Produce		json
 //	@Success		201	{object}	handlers.CreatedMailTask	"New task"
 //	@Success		200	{object}	handlers.CreatedMailTask	"Same task for an exact retry"
-//	@Failure		400	{object}	apperrors.AppError			"Invalid request or caller-supplied recipient/metadata fields"
+//	@Failure		400	{object}	apperrors.AppError			"Invalid request or caller-supplied recipient/metadata fields. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid (duyuru). A retry whose purpose differs is not the same request: 409 form_source.consumed"
 //	@Failure		403	{object}	apperrors.AppError			"Current send-or-write permission required"
 //	@Failure		404	{object}	apperrors.AppError			"No such source owned by the caller"
 //	@Failure		409	{object}	apperrors.AppError			"Source invalidated, consumed differently or busy"

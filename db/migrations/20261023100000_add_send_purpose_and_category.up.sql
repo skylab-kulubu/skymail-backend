@@ -52,7 +52,12 @@ ALTER TABLE mail_tasks
             WHEN 'islem' THEN category IS NULL AND commercial_content_absent IS NULL
             ELSE category IS NULL AND transactional_statement IS NULL AND commercial_content_absent IS NULL
             END
-        ) NOT VALID;
+        ) NOT VALID,
+    -- A send to a list or a Keycloak group is never islem (decision 2). An
+    -- older image never writes purpose, so it cannot break this; it is not
+    -- put on mail_approvals, whose audience an older image's resubmit
+    -- rewrites (the approval queues such a request as duyuru instead).
+    ADD CONSTRAINT mail_tasks_purpose_audience_check CHECK (purpose IS DISTINCT FROM 'islem' OR mail_list_id IS NULL) NOT VALID;
 
 ALTER TABLE mail_approvals
     ADD COLUMN purpose                   TEXT,

@@ -2473,7 +2473,12 @@ paths:
             exactly_one_of); more than 100 people (recipients, max_length); a missing
             or malformed address (recipients[i].email, required or invalid_email);
             an address twice (recipients[i].email, duplicate, params.first naming
-            the first; or, for an address only Postgres finds twice, recipients, duplicate)'
+            the first; or, for an address only Postgres finds twice, recipients, duplicate).
+            Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE):
+            mail_task.purpose_required, mail_task.commercial_content_not_allowed,
+            mail_task.purpose_invalid, then the purpose''s own: mail_task.purpose_not_allowed
+            (islem to a list or a group), mail_task.category_not_allowed, mail_task.transactional_statement_required
+            (islem); mail_task.category_required, mail_task.category_invalid (duyuru)'
         "403":
           content:
             application/json:
@@ -2843,7 +2848,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/apperrors.AppError'
-          description: validation.error
+          description: 'validation.error, or the purpose as POST /mail_approvals checks
+            it: mail_task.purpose_required, mail_task.commercial_content_not_allowed,
+            mail_task.purpose_invalid, mail_task.purpose_not_allowed, mail_task.category_not_allowed,
+            mail_task.transactional_statement_required, mail_task.category_required,
+            mail_task.category_invalid'
         "403":
           content:
             application/json:
@@ -3057,7 +3066,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/apperrors.AppError'
-          description: Bad Request
+          description: 'Bad Request. Purpose, checked in this order, while purposes
+            are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed,
+            mail_task.purpose_invalid, then the purpose''s own: mail_task.purpose_not_allowed
+            (islem to a list or a group), mail_task.category_required, mail_task.category_invalid'
         "422":
           content:
             application/json:
@@ -3399,7 +3411,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/apperrors.AppError'
-          description: Invalid request or caller-supplied recipient/metadata fields
+          description: 'Invalid request or caller-supplied recipient/metadata fields.
+            Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE):
+            mail_task.purpose_required, mail_task.commercial_content_not_allowed,
+            mail_task.purpose_invalid, then the purpose''s own: mail_task.category_not_allowed,
+            mail_task.transactional_statement_required (islem); mail_task.category_required,
+            mail_task.category_invalid (duyuru). A retry whose purpose differs is
+            not the same request: 409 form_source.consumed'
         "403":
           content:
             application/json:
@@ -3463,8 +3481,8 @@ paths:
         amacı ve kategori"): a person''s send may be islem (with transactional_statement
         true; bilgi@; tracked as any person''s send, in the bulk lane then, else the
         system lane) or duyuru with a category (the bulk lane, duyuru@); without a
-        purpose, islem when untracked and duyuru when tracked. A service''s token
-        is always islem; its fields are ignored.'
+        purpose, duyuru, club:duyuru, tracked or not. A service''s token is always
+        islem; its fields are ignored.'
       requestBody:
         content:
           application/json:
@@ -3488,7 +3506,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/apperrors.AppError'
-          description: Bad Request
+          description: 'Bad Request. A person''s purpose, checked in this order, while
+            purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed,
+            mail_task.purpose_invalid, then the purpose''s own: mail_task.category_not_allowed,
+            mail_task.transactional_statement_required (islem); mail_task.category_required,
+            mail_task.category_invalid (duyuru)'
         "500":
           content:
             application/json:

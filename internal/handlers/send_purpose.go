@@ -25,10 +25,10 @@ import (
 //     which the club cannot have; ADR 0072 decision 9);
 //   - a duyuru send names core's category;
 //   - a service's single mail is always islem, whatever it says;
-//   - a body that names no purpose (an older client) gets the one it has
-//     always had: duyuru, club:duyuru, for a list, a group, a Forms source
-//     and a Mail onayı request; for a single mail duyuru when it is tracked,
-//     islem when not.
+//   - a person's send whose body names no purpose (an older client) is
+//     duyuru, club:duyuru: a list, a group, a Forms source, a Mail onayı
+//     request and a single mail, tracked or not (ADR 0072 decision 2: "Seçmezse
+//     posta duyurudur").
 //
 // While it is off the fields are ignored and nothing is written: every send
 // goes as before.
@@ -75,9 +75,8 @@ func duyuruByDefault() mailer.SendPurpose {
 	return mailer.SendPurpose{Purpose: &purpose, Category: &category}
 }
 
-// islemByDefault is the purpose of a service's mail, and of a person's
-// untracked single mail whose body names none: transactional, without a
-// statement (none was asked for).
+// islemByDefault is the purpose of a service's mail: transactional, without
+// a statement (none was asked for).
 func islemByDefault() mailer.SendPurpose {
 	purpose := mailer.PurposeIslem
 	return mailer.SendPurpose{Purpose: &purpose}

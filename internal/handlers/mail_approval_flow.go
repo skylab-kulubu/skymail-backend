@@ -218,13 +218,20 @@ func storedPurpose(a database.MailApproval) mailer.SendPurpose {
 // queuedPurpose is the purpose a request's send is queued with: the one it
 // was written with, or — submitted while purposes were off — duyuru,
 // club:duyuru, as an approved send has always been. None while purposes
-// are off: the send goes as before.
+// are off: the send goes as before. The stored purpose is checked again
+// against the audience the request names now: a request to a list or a
+// Keycloak group is duyuru whatever it holds (an older image's resubmit
+// rewrites the audience and leaves the purpose).
 func (h *mailApprovalHandlerImpl) queuedPurpose(a database.MailApproval) mailer.SendPurpose {
 	on := h.mailer.PurposeAvailable()
 	if !on {
 		return mailer.SendPurpose{}
 	}
-	return purposeOrDefault(on, storedPurpose(a), duyuruByDefault)
+	stored := storedPurpose(a)
+	if a.MailListID != nil && (stored.Purpose == nil || *stored.Purpose != mailer.PurposeDuyuru) {
+		return duyuruByDefault()
+	}
+	return purposeOrDefault(on, stored, duyuruByDefault)
 }
 
 // errNotOneAudience refuses a submission that names no audience, or both a

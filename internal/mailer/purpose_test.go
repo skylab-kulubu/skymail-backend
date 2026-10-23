@@ -269,3 +269,29 @@ func textParts(t *testing.T, raw string) (plain, htmlPart string) {
 	walk(msg.Header.Get("Content-Type"), msg.Header.Get("Content-Transfer-Encoding"), msg.Body)
 	return plain, htmlPart
 }
+
+// The line goes before </body> in the original bytes: a Turkish İ (two bytes,
+// one when lower-cased), a Kelvin sign K (three bytes, one lower-cased) or
+// an Ⱥ (two bytes, three lower-cased) before it never shifts where it goes,
+// and the tag is found in any ASCII case.
+func TestTheVisibleLineGoesBeforeTheBodyTagInTurkishMail(t *testing.T) {
+	link := "https://x.example.org/u/a"
+	line := `<p style="margin:24px 0 0;font-size:12px;line-height:18px;color:#6b7280">SKY LAB duyurularını almak istemiyorsan: <a href="` + link + `" style="color:#6b7280">Abonelikten çık</a></p>`
+	for _, head := range []string{
+		"<html><body><p>İyi günler, İLETİŞİM için bize yazın. Şimdi ğ ı ş ü ö ç.</p></div>",
+		"<html><BODY><p>\u212a KELVİN İİİ Ⱥ</p>",
+		"<html><Body><p>ıİşğ</p>",
+	} {
+		for _, tag := range []string{"</body>", "</BODY>", "</Body >"} {
+			body := head + tag + "</html>"
+			if got, want := mailer.HTMLWithUnsubscribeFooter(body, link), head+line+tag+"</html>"; got != want {
+				t.Errorf("%q:\n got %q\nwant %q", body, got, want)
+			}
+		}
+	}
+	// Only the last </body> counts; one inside an earlier part does not.
+	body := "<p>İ</body></p><div>İ</div></body>"
+	if got, want := mailer.HTMLWithUnsubscribeFooter(body, link), "<p>İ</body></p><div>İ</div>"+line+"</body>"; got != want {
+		t.Errorf("last tag:\n got %q\nwant %q", got, want)
+	}
+}

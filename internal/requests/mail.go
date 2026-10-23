@@ -7,10 +7,9 @@ import (
 // SendPurpose is what a send says about its stream (ADR 0072 decision 2),
 // read only while SkyMail's purposes are on (SKYMAIL_MAIL_PURPOSE; GET
 // /mail_tasks/tracking-mode purpose_available) and ignored while they are off.
-// Leave all four out and the send gets the purpose it has always had: duyuru
-// (category club:duyuru) for a list, a Keycloak group, a Forms source and a
-// Mail onayı request, and for a single mail duyuru when it is tracked, islem
-// when it is not. category and the two statements come only with a purpose.
+// Leave all four out and the send is duyuru (category club:duyuru): a list, a
+// Keycloak group, a Forms source, a Mail onayı request and a person's single
+// mail alike. category and the two statements come only with a purpose.
 type SendPurpose struct {
 	// islem: about the recipient's own application or transaction, only to people one by one (POST /mail_tasks/single, a Mail onayı request to people) or to a Forms source's respondents, with transactional_statement true, never with a category, tracked as any send; it goes out from bilgi@ without List-Unsubscribe and skips the unsubscribe record. duyuru: an announcement to an audience, with a category; it goes out from duyuru@ and follows the preference and the unsubscribe record. A list or a Keycloak group is always duyuru.
 	Purpose *string `json:"purpose" enums:"islem,duyuru"`

@@ -146,6 +146,18 @@ func TestSendsKeepTheirPurposeAndCategory(t *testing.T) {
 		}
 	}
 
+	// A send to a list is never islem.
+	if _, err := database.Pool.Exec(ctx, `
+		INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, purpose, transactional_statement)
+		VALUES ('sub', $1, gen_random_uuid(), '{}', 'islem', true)`, templateID); err == nil || !strings.Contains(err.Error(), "mail_tasks_purpose_audience_check") {
+		t.Errorf("islem to a list: %v, want mail_tasks_purpose_audience_check", err)
+	}
+	if _, err := database.Pool.Exec(ctx, `
+		INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, purpose, category)
+		VALUES ('sub', $1, gen_random_uuid(), '{}', 'duyuru', 'club:duyuru')`, templateID); err != nil {
+		t.Errorf("duyuru to a list: %v", err)
+	}
+
 	if err := runner.Migrate(unsubscribes); err != nil {
 		t.Fatalf("down: %v", err)
 	}

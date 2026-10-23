@@ -10,6 +10,7 @@ ALTER TABLE mail_approvals
     DROP COLUMN IF EXISTS purpose;
 
 ALTER TABLE mail_tasks
+    DROP CONSTRAINT IF EXISTS mail_tasks_purpose_audience_check,
     DROP CONSTRAINT IF EXISTS mail_tasks_purpose_fields_check,
     DROP CONSTRAINT IF EXISTS mail_tasks_category_check,
     DROP CONSTRAINT IF EXISTS mail_tasks_purpose_check,

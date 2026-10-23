@@ -74,7 +74,7 @@ func PlainWithUnsubscribeFooter(body, link string) string {
 }
 
 // HTMLWithUnsubscribeFooter is a mail's HTML with the unsubscribe line
-// before its last </body> (at its end when it has none), or as it is when it
+// before its last </body> (lastBodyClose; at its end when it has none), or as it is when it
 // carries link already: as written, or with & escaped, as html/template
 // writes a URL into an attribute.
 func HTMLWithUnsubscribeFooter(body, link string) string {
@@ -85,8 +85,45 @@ func HTMLWithUnsubscribeFooter(body, link string) string {
 	line := `<p style="margin:24px 0 0;font-size:12px;line-height:18px;color:#6b7280">` +
 		html.EscapeString(footerText) + ` <a href="` + escaped + `" style="color:#6b7280">` +
 		html.EscapeString(footerLinkLabel) + `</a></p>`
-	if at := strings.LastIndex(strings.ToLower(body), "</body>"); at >= 0 {
+	if at := lastBodyClose(body); at >= 0 {
 		return body[:at] + line + body[at:]
 	}
 	return body + line
+}
+
+// lastBodyClose is the byte offset in body of its last </body> end tag (any
+// ASCII case, white space allowed before the >), or -1. It compares bytes
+// and folds ASCII letters only: lower-casing the whole body would move every
+// offset after a letter whose lower case has another length in UTF-8 (a
+// Turkish İ is two bytes, its i one).
+func lastBodyClose(body string) int {
+	const tag = "</body"
+	for at := len(body) - len(tag); at >= 0; at-- {
+		if !asciiFoldEqual(body[at:at+len(tag)], tag) {
+			continue
+		}
+		end := at + len(tag)
+		for end < len(body) && (body[end] == ' ' || body[end] == '\t' || body[end] == '\n' || body[end] == '\r' || body[end] == '\f') {
+			end++
+		}
+		if end < len(body) && body[end] == '>' {
+			return at
+		}
+	}
+	return -1
+}
+
+// asciiFoldEqual says s equals lower, a lower-case ASCII string, with ASCII
+// letters compared in either case; any other byte must be the same.
+func asciiFoldEqual(s, lower string) bool {
+	for i := 0; i < len(lower); i++ {
+		c := s[i]
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != lower[i] {
+			return false
+		}
+	}
+	return true
 }

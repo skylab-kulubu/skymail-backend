@@ -495,6 +495,15 @@ Arayüz bayrağı `GET /v1/mail_tasks/tracking-mode` ve `/summary`'nin
 | `purpose` olmadan `category` ya da bir beyan | `mail_task.purpose_required` |
 | `purpose` `islem`/`duyuru` dışında | `mail_task.purpose_invalid` |
 
+Denetim sırası: önce `purpose_required`, sonra `commercial_content_not_allowed`,
+sonra `purpose_invalid`, en son amacın kendi kuralları (`islem`: hedef,
+kategori, beyan; `duyuru`: kategori). Bilet 09 kategorinin core'da gerçekten
+bir ekip olduğunu sorar; olmayan ekip orada `400 mail_task.category_unknown`
+döner. Forms kaynağının birebir tekrarı aynı amacı taşımalıdır: amacı
+değişen tekrar başka bir istektir, `409 form_source.consumed` döner. Liste ya
+da gruba giden onay isteği onaylanırken saklı amaç yeniden denetlenir:
+`duyuru` değilse `duyuru` + `club:duyuru` gider.
+
 `islem` yalnız iki hedefte seçilebilir: kişilere tek tek (`/single`, kişilere
 onay isteği) ve Forms yanıtlayanlarına (`/form-source`, Forms kaynaklı onay
 isteği). `islem` gönderim de öteki operatör gönderimleri gibi takip edilir
@@ -502,9 +511,11 @@ isteği). `islem` gönderim de öteki operatör gönderimleri gibi takip edilir
 alıcıdan yapılan bağlantı kuralları aynı). Servisin `islem` postası
 `SKYMAIL_TRACKING_SYSTEM` kuralıyla kalır.
 
-**Varsayılanlar.** Alanları göndermeyen istemci bugünkü gibi çalışır, amaç
-yazılır: liste, grup, Forms kaynağı ve onay isteği `duyuru` + `club:duyuru`;
-kişinin takipsiz `/single`'ı `islem`, takiplisi `duyuru` + `club:duyuru`.
+**Varsayılanlar.** Alanları göndermeyen kişi gönderimi `duyuru` +
+`club:duyuru` yazılır (ADR 0072 karar 2: "Seçmezse posta duyurudur"): liste,
+grup, Forms kaynağı, onay isteği ve kişinin `/single`'ı, takipli de takipsiz
+de. Bayrak açıkken eski arayüzün takipsiz `/single`'ı bu yüzden toplu şeride
+ve `duyuru@`'ya geçer.
 Servis token'ıyla (Keycloak, core, Forms) gelen `/single` her zaman
 `islem`'dir, alanları yok sayılır. Bayrak kapalıyken gönderilmiş onay isteği
 (amaçsız) bayrak açıkken onaylanırsa `duyuru` + `club:duyuru` gider.
@@ -536,8 +547,9 @@ bilet 09'dan sonra her duyuru satırı taşır.
 
 **Göç** (`20261023100000`, yalnız ekleme): `mail_tasks` ve `mail_approvals`'a
 `purpose`, `category`, `transactional_statement`, `commercial_content_absent`
-(nullable), üç `NOT VALID` denetimle: amaç değeri, kategori biçimi ve her
-alanın kendi amacına ait olması. Eski imaj bu sütunları okumaz, yazmaz.
+(nullable), `NOT VALID` denetimlerle: amaç değeri, kategori biçimi, her alanın
+kendi amacına ait olması ve (yalnız `mail_tasks`) listeye/gruba giden
+gönderimin `islem` olmaması. Eski imaj bu sütunları okumaz, yazmaz.
 
 **Geri dönüş.** `SKYMAIL_MAIL_PURPOSE=off` + yeniden dağıtım: amaç okunmaz,
 kuyrukta bekleyen işlem amaçlı toplu satır da yeniden `duyuru@`'dan gider,

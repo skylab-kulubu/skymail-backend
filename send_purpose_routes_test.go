@@ -122,10 +122,9 @@ func TestThePurposeRulesRefuseASend(t *testing.T) {
 	}
 }
 
-// A body that names no purpose (an older client) is sent as it always was,
-// now written with that purpose: a list, a group and a Forms source duyuru,
-// club:duyuru, in the bulk lane; an untracked single mail islem, in the
-// system lane.
+// A person's send whose body names no purpose (an older client) is duyuru,
+// club:duyuru (ADR 0072 decision 2), in the bulk lane: a list, a group, a
+// Forms source, and an untracked single mail too.
 func TestAnOlderClientsSendGetsThePurposeItAlwaysHad(t *testing.T) {
 	w := newFormSourceWorld(t, purposesOn())
 	group := w.listSend()
@@ -144,7 +143,7 @@ func TestAnOlderClientsSendGetsThePurposeItAlwaysHad(t *testing.T) {
 		{"a list", "yusuf", "/v1/mail_tasks", w.listSend(), "duyuru", "club:duyuru", mailer.PriorityBulk},
 		{"a Keycloak group", "yusuf", "/v1/mail_tasks", group, "duyuru", "club:duyuru", mailer.PriorityBulk},
 		{"a Forms source", "source-sender", "/v1/mail_tasks/form-source", sourceSend(w, source.ID), "duyuru", "club:duyuru", mailer.PriorityBulk},
-		{"an untracked single mail", "yusuf", "/v1/mail_tasks/single", single, "islem", "<nil>", mailer.PrioritySystem},
+		{"an untracked single mail", "yusuf", "/v1/mail_tasks/single", single, "duyuru", "club:duyuru", mailer.PriorityBulk},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var created createdPurpose
@@ -365,5 +364,34 @@ func TestPurposesOffIgnoreTheFields(t *testing.T) {
 		if status, raw := c.w.call("baska", http.MethodGet, "/v1/mail_tasks/summary", nil, &summary); status != fiber.StatusOK || summary.PurposeAvailable != c.want {
 			t.Errorf("summary = %d %s, want purpose_available %v", status, raw, c.want)
 		}
+	}
+}
+
+// A request to a list holding islem (an older image's resubmit rewrites the
+// audience and leaves the purpose) is queued as duyuru, club:duyuru.
+func TestAnApprovedRequestToAListIsNeverIslem(t *testing.T) {
+	w := newFormSourceWorld(t, purposesOn())
+	people := w.listSend()
+	delete(people, "mail_list_id")
+	people["recipients"] = []map[string]any{{"email": "ayse@example.com", "full_name": "Ayşe Kaya"}}
+	var submitted struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if status, raw := w.call("okur", http.MethodPost, "/v1/mail_approvals", with(people, islemFields), &submitted); status != fiber.StatusCreated {
+		t.Fatalf("submit = %d %s", status, raw)
+	}
+	if _, err := w.store.Conn.Exec(context.Background(), `
+		BEGIN;
+		DELETE FROM mail_approval_recipients WHERE approval_id = '`+submitted.ID.String()+`';
+		UPDATE mail_approvals SET mail_list_id = '`+w.list.ID.String()+`' WHERE id = '`+submitted.ID.String()+`';
+		COMMIT;`); err != nil {
+		t.Fatal(err)
+	}
+	status, answer, failure := w.act("fatih", submitted.ID, "approve", nil)
+	if status != fiber.StatusOK || answer.send() == uuid.Nil {
+		t.Fatalf("approve = %d %+v", status, failure)
+	}
+	if got := w.purposeOf(answer.send()); str(got.purpose) != "duyuru" || str(got.category) != "club:duyuru" || got.transactional != nil {
+		t.Errorf("approved list send written %s %s %v, want duyuru club:duyuru", str(got.purpose), str(got.category), got.transactional)
 	}
 }
