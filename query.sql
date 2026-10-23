@@ -871,9 +871,10 @@ WITH active_source AS (
       AND ml.archived_at IS NULL
 ), inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send,
-                            tracking_requested)
+                            tracking_requested, purpose, category, transactional_statement, commercial_content_absent)
         SELECT sqlc.arg(sent_by), template_id, mail_list_id, sqlc.arg(body_variables), content_sensitive,
-               sqlc.arg(tracking_requested)::boolean
+               sqlc.arg(tracking_requested)::boolean, sqlc.narg(purpose)::text, sqlc.narg(category)::text,
+               sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean
         FROM active_source
         RETURNING *
 )
@@ -1289,10 +1290,11 @@ RETURNING mt.id, (SELECT count(*) FROM rows WHERE rows.task_id = mt.id) AS rows_
 -- mail_task_content_sensitive() reads it first (20261020120000).
 -- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, form_source_id, body_variables, content_sensitive_at_send,
-                        tracking_requested)
+                        tracking_requested, purpose, category, transactional_statement, commercial_content_absent)
 SELECT sqlc.arg(sent_by), sqlc.arg(template_id), sqlc.narg(mail_list_id), sqlc.narg(form_source_id), sqlc.arg(body_variables),
        CASE WHEN template_key_content_locked(templates.key) THEN 'true' ELSE COALESCE(templates.content_sensitive::text, 'unset') END,
-       sqlc.arg(tracking_requested)::boolean
+       sqlc.arg(tracking_requested)::boolean, sqlc.narg(purpose)::text, sqlc.narg(category)::text,
+       sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean
 FROM templates
 WHERE templates.id = sqlc.arg(template_id)
   AND archived_at IS NULL
@@ -1311,8 +1313,11 @@ WITH active_template AS (
     WHERE templates.id = sqlc.narg(template_id)::uuid
       AND archived_at IS NULL
 ), inserted_task AS (
-    INSERT INTO mail_tasks (sent_by, template_id, body_variables, content_sensitive_at_send, tracking_requested)
-        SELECT sqlc.arg(sent_by), id, sqlc.arg(body_variables), content_sensitive, sqlc.arg(tracking_requested)::boolean
+    INSERT INTO mail_tasks (sent_by, template_id, body_variables, content_sensitive_at_send, tracking_requested,
+                            purpose, category, transactional_statement, commercial_content_absent)
+        SELECT sqlc.arg(sent_by), id, sqlc.arg(body_variables), content_sensitive, sqlc.arg(tracking_requested)::boolean,
+               sqlc.narg(purpose)::text, sqlc.narg(category)::text,
+               sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean
         FROM active_template
         RETURNING *
 )
@@ -1393,7 +1398,11 @@ SELECT mt.id,
        mail_task_content_sensitive(mt.id)::boolean AS content_sensitive,
        mt.content_cleared_at,
        mt.content_masked_at,
-       mt.tracking_requested
+       mt.tracking_requested,
+       mt.purpose,
+       mt.category,
+       mt.transactional_statement,
+       mt.commercial_content_absent
 FROM page
          JOIN mail_tasks mt ON mt.id = page.id
          LEFT JOIN templates t ON mt.template_id = t.id
@@ -1445,11 +1454,13 @@ WHERE (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(st
 -- name: CreateMailApproval :one
 INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, submitter_email_unverified, template_id,
                             template_version_id, mail_list_id, form_source_id, body_variables, created_at, submitted_at, deadline_at,
-                            updated_at, tracking_requested)
+                            updated_at, tracking_requested, purpose, category, transactional_statement,
+                            commercial_content_absent)
 VALUES (sqlc.arg(submitter_sub), sqlc.narg(submitter_name), sqlc.narg(submitter_email),
         sqlc.arg(submitter_email_unverified), sqlc.arg(template_id),
         sqlc.arg(template_version_id), sqlc.narg(mail_list_id), sqlc.narg(form_source_id), sqlc.arg(body_variables), sqlc.arg(at), sqlc.arg(at),
-        sqlc.arg(deadline_at), sqlc.arg(at), sqlc.arg(tracking_requested)::boolean)
+        sqlc.arg(deadline_at), sqlc.arg(at), sqlc.arg(tracking_requested)::boolean, sqlc.narg(purpose)::text,
+        sqlc.narg(category)::text, sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean)
 RETURNING *;
 
 -- The people a request goes to, in the order submitted, replacing whoever it
@@ -1527,6 +1538,10 @@ SET state               = 'pending',
     form_source_id      = sqlc.narg(form_source_id),
     body_variables      = sqlc.arg(body_variables),
     tracking_requested  = sqlc.arg(tracking_requested)::boolean,
+    purpose                   = sqlc.narg(purpose)::text,
+    category                  = sqlc.narg(category)::text,
+    transactional_statement   = sqlc.narg(transactional_statement)::boolean,
+    commercial_content_absent = sqlc.narg(commercial_content_absent)::boolean,
     submitted_at        = sqlc.arg(at),
     deadline_at         = sqlc.arg(deadline_at),
     updated_at          = sqlc.arg(at)
@@ -2069,9 +2084,10 @@ FROM mail_suppressions
 WHERE address = ANY (sqlc.arg(addresses)::text[]);
 
 -- The key of a send's template and whether it is a system template, which
--- together say whether it is account mail (mailer.AccountMail).
+-- together say whether it is account mail (mailer.AccountMail), and the
+-- send's purpose, which says its stream (mailer.LaneOf).
 -- name: GetMailTaskTemplateKey :one
-SELECT t.key, coalesce(t.system, false)::boolean AS system
+SELECT t.key, coalesce(t.system, false)::boolean AS system, mt.purpose
 FROM mail_tasks mt
          LEFT JOIN templates t ON t.id = mt.template_id
 WHERE mt.id = sqlc.arg(task_id);
@@ -2115,7 +2131,7 @@ WHERE stream = sqlc.arg(stream)::text
 -- duyuru stream, with their send's template's key and whether it is a system
 -- template (mailer.LaneOf: account mail is never in the duyuru stream).
 -- name: GetUnsubscribedClaimedRows :many
-SELECT q.id, t.key, coalesce(t.system, false)::boolean AS system
+SELECT q.id, t.key, coalesce(t.system, false)::boolean AS system, mt.purpose
 FROM mail_queue q
          JOIN mail_unsubscribes u ON u.address = lower(btrim(q.recipient_email)) AND u.stream = 'duyuru'
          LEFT JOIN mail_tasks mt ON mt.id = q.task_id

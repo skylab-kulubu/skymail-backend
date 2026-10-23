@@ -126,7 +126,12 @@ func formSnapshotHash(owner string, formID uuid.UUID, title string, to []mailer.
 	return sum[:]
 }
 
-func formSourceRequestHash(kind string, template uuid.UUID, variables []byte, tracking bool) ([]byte, error) {
+// formSourceRequestHash is what an exact retry of a Forms source's send or
+// request repeats. purpose is the purpose its body named (choosePurpose), not
+// the default a body naming none gets: none hashes as before purposes, so a
+// retry across the release, or across turning them on, is still the same
+// request.
+func formSourceRequestHash(kind string, template uuid.UUID, variables []byte, tracking bool, purpose mailer.SendPurpose) ([]byte, error) {
 	var values map[string]interface{}
 	if len(variables) > 0 {
 		if err := json.Unmarshal(variables, &values); err != nil {
@@ -137,11 +142,15 @@ func formSourceRequestHash(kind string, template uuid.UUID, variables []byte, tr
 		values = map[string]interface{}{}
 	}
 	data, err := json.Marshal(struct {
-		Kind      string
-		Template  uuid.UUID
-		Variables map[string]interface{}
-		Tracking  bool
-	}{kind, template, values, tracking})
+		Kind                    string
+		Template                uuid.UUID
+		Variables               map[string]interface{}
+		Tracking                bool
+		Purpose                 *string `json:",omitempty"`
+		Category                *string `json:",omitempty"`
+		TransactionalStatement  *bool   `json:",omitempty"`
+		CommercialContentAbsent *bool   `json:",omitempty"`
+	}{kind, template, values, tracking, purpose.Purpose, purpose.Category, purpose.TransactionalStatement, purpose.CommercialContentAbsent})
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +344,7 @@ func (h *mailHandlerImpl) GetFormSource(c fiber.Ctx) error {
 // SendFormSource godoc
 //
 //	@Summary		Send to an immutable Forms audience
-//	@Description	The source owner holding current skymail:mails:send or skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is no_account) and core deciding, and the answer says tracking true.
+//	@Description	The source owner holding current skymail:mails:send or skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is no_account) and core deciding, and the answer says tracking true. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): duyuru with a category by default; islem with transactional_statement true when the mail is about each respondent's own application: never tracked, queued in the bulk lane, sent from bilgi@ without List-Unsubscribe. The purpose is part of an exact retry.
 //	@Tags			Mail
 //	@Param			send	body	requests.SendFormSource	true	"Prepared source and mail content"
 //	@Accept			json
@@ -370,12 +379,23 @@ func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 	if p.BodyVariables == nil {
 		variables = []byte(`{}`)
 	}
-	hash, err := formSourceRequestHash("direct", p.TemplateID, variables, p.Tracking)
+	// A Forms source's respondents get duyuru unless the sender declares the
+	// mail about their own application (islem): then it is never tracked.
+	purposesOn := m.PurposeAvailable()
+	named, err := choosePurpose(purposesOn, p.SendPurpose, targetFormSource, p.Tracking)
 	if err != nil {
 		return err
 	}
-	tracked := m.OperatorTrackingAlways()
-	preferences := formSourceTracking(c.Context(), h.db, m, p.FormSourceID, owner, p.TemplateID, true)
+	purpose := purposeOrDefault(purposesOn, named, duyuruByDefault)
+	hash, err := formSourceRequestHash("direct", p.TemplateID, variables, p.Tracking, named)
+	if err != nil {
+		return err
+	}
+	tracked := m.OperatorTrackingAlways() && !isIslem(purpose)
+	var preferences *mailer.TrackingPreferences
+	if tracked {
+		preferences = formSourceTracking(c.Context(), h.db, m, p.FormSourceID, owner, p.TemplateID, true)
+	}
 	var id uuid.UUID
 	repeated := false
 	err = h.db.InTx(c.Context(), func(q *database.Queries) error {
@@ -401,7 +421,7 @@ func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 		}
 		id, err = m.Queue(q, mailer.PriorityBulk).EnqueueWithRecipients(c.Context(), mailer.EnqueueWithRecipientsParams{
 			SentBy: owner, TemplateID: p.TemplateID, FormSourceID: &source.ID, BodyVariables: variables, Recipients: to,
-			Tracking: tracked, Preferences: preferences,
+			Tracking: tracked, Preferences: preferences, Purpose: purpose,
 		})
 		if err != nil {
 			return err
@@ -416,20 +436,27 @@ func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 	status := fiber.StatusCreated
 	if repeated {
 		status = fiber.StatusOK
-		// The send the retry returns is as tracked as it was queued.
-		task, err := h.db.TrackingTaskAccess(c.Context(), id)
+		// The send the retry returns is as tracked, and has the purpose, it
+		// was queued with.
+		task, err := h.db.GetMailTaskById(c.Context(), id)
 		if err != nil {
 			return err
 		}
 		tracked = task.TrackingRequested
+		purpose = mailer.SendPurpose{Purpose: task.Purpose, Category: task.Category}
 	} else {
 		m.Wake()
 	}
-	return c.Status(status).JSON(CreatedMailTask{ID: id, Tracking: tracked})
+	return c.Status(status).JSON(createdMailTask(id, tracked, purpose))
 }
 
 func (h *mailApprovalHandlerImpl) submitFormSource(c fiber.Ctx, caller approvalCaller, p requests.SubmitMailApproval, send approvalSend) error {
-	hash, err := formSourceRequestHash("approval", p.TemplateID, send.variables, p.Tracking)
+	// Checked already (approvalPurpose): what the body named, for the hash.
+	named, err := choosePurpose(h.mailer.PurposeAvailable(), send.askedPurpose, targetFormSource, send.tracking)
+	if err != nil {
+		return err
+	}
+	hash, err := formSourceRequestHash("approval", p.TemplateID, send.variables, p.Tracking, named)
 	if err != nil {
 		return err
 	}
@@ -463,7 +490,9 @@ func (h *mailApprovalHandlerImpl) submitFormSource(c fiber.Ctx, caller approvalC
 		a, err := q.CreateMailApproval(c.Context(), database.CreateMailApprovalParams{
 			SubmitterSub: caller.sub, SubmitterName: caller.name, SubmitterEmail: caller.email, SubmitterEmailUnverified: caller.emailUnverified,
 			TemplateID: p.TemplateID, TemplateVersionID: checked.versionID, FormSourceID: &source.ID, BodyVariables: send.variables,
-			At: now, DeadlineAt: now.Add(mailApprovalDeadline), TrackingRequested: h.mailer.OperatorTrackingAlways(),
+			At: now, DeadlineAt: now.Add(mailApprovalDeadline), TrackingRequested: h.mailer.OperatorTrackingAlways() && !isIslem(send.purpose),
+			Purpose: send.purpose.Purpose, Category: send.purpose.Category,
+			TransactionalStatement: send.purpose.TransactionalStatement, CommercialContentAbsent: send.purpose.CommercialContentAbsent,
 		})
 		if err != nil {
 			return err
@@ -516,6 +545,6 @@ func queueToFormSource(ctx context.Context, q *database.Queries, sends mailer.Qu
 	}
 	return sends.EnqueueWithRecipients(ctx, mailer.EnqueueWithRecipientsParams{
 		SentBy: a.SubmitterSub, TemplateID: a.TemplateID, FormSourceID: a.FormSourceID, BodyVariables: a.BodyVariables, Recipients: to,
-		Tracking: a.TrackingRequested, Preferences: preferences,
+		Tracking: a.TrackingRequested, Preferences: preferences, Purpose: storedPurpose(a),
 	})
 }

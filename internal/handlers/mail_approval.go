@@ -208,8 +208,10 @@ type MailApprovalItem struct {
 	TaskIDs []uuid.UUID `json:"task_ids"`
 	// What happened to it last.
 	LastEvent *MailApprovalEvent `json:"last_event"`
-	// The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyMail tracks every person's send, it is tracked whatever this says.
+	// The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyMail tracks every person's send, it is tracked whatever this says, unless it is islem: never tracked.
 	Tracking bool `json:"tracking"`
+	// The purpose of the send once approved, as submitted. Null for a request submitted while SkyMail's purposes were off: approved while they are on, it goes as duyuru, club:duyuru.
+	SendPurposeFields
 }
 
 // MailApprovalRecipient is someone a request goes to, or a preview is
@@ -320,7 +322,7 @@ func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc ke
 // Submit godoc
 //
 //	@Summary		Submit a send for approval
-//	@Description	Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Submitting takes skymail:templates:read, and skymail:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing — before the body is checked, when templates:read is missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent.
+//	@Description	Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Submitting takes skymail:templates:read, and skymail:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing — before the body is checked, when templates:read is missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori") on the request and on its sends once approved: islem only to people or a Forms source (400 mail_task.purpose_not_allowed for a list or a group); a request without one is duyuru, club:duyuru.
 //	@Description
 //	@Description	Alternatively, form_source_id selects the caller's immutable Forms snapshot instead of mail_list_id or manual recipients. Choose exactly one audience. This source does not need lists:read; its configured recipient limit is separate from the manual 100-person limit. Submission atomically binds the source to one pending request without expanding its recipients. An exact retry returns 200 with the same request, including after preparation TTL. Source ownership is checked before returning metadata; another owner's source is 404. An unconsumed expired source is 410; invalidated, differently consumed or busy source is 409. Source recipients and form metadata cannot be supplied by the browser. This source version requests no recipient tracking.
 //	@Description
@@ -361,6 +363,9 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 	if err := caller.mayRead(send); err != nil {
 		return err
 	}
+	if send.purpose, err = h.approvalPurpose(send); err != nil {
+		return err
+	}
 	if send.formSourceID != nil {
 		if err := bindFormSourceBody(c, &params); err != nil {
 			return err
@@ -386,7 +391,11 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 			BodyVariables:            send.variables,
 			At:                       now,
 			DeadlineAt:               now.Add(mailApprovalDeadline),
-			TrackingRequested:        operatorTracking(c.Context(), h.mailer, send.tracking, checked.template.ID, send.mailListID),
+			TrackingRequested:        !isIslem(send.purpose) && operatorTracking(c.Context(), h.mailer, send.tracking, checked.template.ID, send.mailListID),
+			Purpose:                  send.purpose.Purpose,
+			Category:                 send.purpose.Category,
+			TransactionalStatement:   send.purpose.TransactionalStatement,
+			CommercialContentAbsent:  send.purpose.CommercialContentAbsent,
 		})
 		if err != nil {
 			return err
@@ -755,6 +764,9 @@ func (h *mailApprovalHandlerImpl) Resubmit(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if send.purpose, err = h.approvalPurpose(send); err != nil {
+		return err
+	}
 	return h.act(c, approvalAction{
 		by:   bySubmitter,
 		from: []database.MailApprovalState{database.MailApprovalStateRejected, database.MailApprovalStateDeclined},
@@ -768,6 +780,7 @@ func (h *mailApprovalHandlerImpl) Resubmit(c fiber.Ctx) error {
 				}
 				hydrated := sendOfView(view)
 				hydrated.templateID, hydrated.variables, hydrated.tracking = send.templateID, send.variables, false
+				hydrated.askedPurpose, hydrated.purpose = send.askedPurpose, send.purpose
 				send = hydrated
 			}
 			if err := caller.mayRead(send); err != nil {

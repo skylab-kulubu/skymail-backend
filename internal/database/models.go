@@ -278,6 +278,11 @@ type MailApproval struct {
 	// The submitter asked for open and click tracking; the approved send asks for it if SKYMAIL_TRACKING is on then.
 	TrackingRequested bool       `json:"tracking_requested"`
 	FormSourceID      *uuid.UUID `json:"form_source_id"`
+	// The purpose of the send the request would queue (mail_tasks.purpose).
+	Purpose                 *string `json:"purpose"`
+	Category                *string `json:"category"`
+	TransactionalStatement  *bool   `json:"transactional_statement"`
+	CommercialContentAbsent *bool   `json:"commercial_content_absent"`
 }
 
 type MailApprovalEvent struct {
@@ -447,6 +452,12 @@ type MailTask struct {
 	TrackingClosedAt *time.Time `json:"tracking_closed_at"`
 	FormSourceID     *uuid.UUID `json:"form_source_id"`
 	NotificationID   *uuid.UUID `json:"notification_id"`
+	// islem or duyuru: the message stream (ADR 0072 decision 2). NULL: read by the rule of before (the bulk priority duyuru, any other islem).
+	Purpose *string `json:"purpose"`
+	// core's category of a duyuru send (club:duyuru, club:haber, team:<group id>:duyuru|haber); NULL for any other.
+	Category                *string `json:"category"`
+	TransactionalStatement  *bool   `json:"transactional_statement"`
+	CommercialContentAbsent *bool   `json:"commercial_content_absent"`
 }
 
 // A send's links that are the same for every recipient, each with its random token: the only addresses /t/c redirects to.

@@ -190,10 +190,12 @@ type SendSummary struct {
 	// True while SKYMAIL_TRACKING=on: a send may ask for open and click tracking. The send form shows its tracking box only then.
 	TrackingAvailable bool `json:"tracking_available"`
 	// True while SKYMAIL_TRACKING_OPERATOR=on with SKYMAIL_TRACKING=on: every person's send (a list, a group, people, a Forms source, a Mail onayı request) is tracked whether it asked or not, of any template. The send form then shows no tracking box: a send's tracking field is ignored.
-	TrackingAlways bool           `json:"tracking_always"`
-	SendCounts     SendCounts     `json:"send_counts"`
-	DailySent      []DailySent    `json:"daily_sent"`
-	RecentSends    []MailTaskItem `json:"recent_sends"`
+	TrackingAlways bool `json:"tracking_always"`
+	// True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru) and a duyuru send its category, and the purpose picks the mailbox it goes out from. The send form shows its purpose, category and statements only then; while it is false they are ignored.
+	PurposeAvailable bool           `json:"purpose_available"`
+	SendCounts       SendCounts     `json:"send_counts"`
+	DailySent        []DailySent    `json:"daily_sent"`
+	RecentSends      []MailTaskItem `json:"recent_sends"`
 }
 
 // TrackingMode is how SkyMail tracks a person's send: what the send form needs
@@ -204,19 +206,21 @@ type TrackingMode struct {
 	TrackingAvailable bool `json:"tracking_available"`
 	// True while SKYMAIL_TRACKING_OPERATOR=on too: every person's send is tracked, the send form shows no box and a send's tracking field is ignored.
 	TrackingAlways bool `json:"tracking_always"`
+	// True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru), a duyuru send its category, and an islem send is never tracked (even with tracking_always). False: the fields are ignored.
+	PurposeAvailable bool `json:"purpose_available"`
 }
 
 // GetTrackingMode godoc
 //
 //	@Summary		How a person's send is tracked
-//	@Description	tracking_available and tracking_always, as the summary says them, for anyone who may use SkyMail: someone who only submits a send for approval sees whether it will be tracked. It is a setting of SkyMail, not of any send.
+//	@Description	tracking_available, tracking_always and purpose_available, as the summary says them, for anyone who may use SkyMail: someone who only submits a send for approval sees whether it will be tracked and whether it names a purpose. It is a setting of SkyMail, not of any send.
 //	@Tags			Mail
 //	@Produce		json
 //	@Success		200	{object}	handlers.TrackingMode
 //	@Failure		403	{object}	apperrors.AppError	"Forbidden"
 //	@Router			/mail_tasks/tracking-mode [get]
 func (h *mailHandlerImpl) GetTrackingMode(c fiber.Ctx) error {
-	return c.JSON(TrackingMode{TrackingAvailable: h.mailer.TrackingAvailable(), TrackingAlways: h.mailer.OperatorTrackingAlways()})
+	return c.JSON(TrackingMode{TrackingAvailable: h.mailer.TrackingAvailable(), TrackingAlways: h.mailer.OperatorTrackingAlways(), PurposeAvailable: h.mailer.PurposeAvailable()})
 }
 
 // GetSummary godoc
@@ -283,6 +287,7 @@ func (h *mailHandlerImpl) GetSummary(c fiber.Ctx) error {
 		SenderPaused:      h.mailer.SenderPaused(),
 		TrackingAvailable: h.mailer.TrackingAvailable(),
 		TrackingAlways:    h.mailer.OperatorTrackingAlways(),
+		PurposeAvailable:  h.mailer.PurposeAvailable(),
 		SendCounts: SendCounts{
 			Failed:  sendCounts.Failed,
 			Sending: sendCounts.Sending,
@@ -330,6 +335,12 @@ func (h *mailHandlerImpl) mailTaskItems(ctx context.Context, caller contentCalle
 			RecipientCounts:  recipientCounts(send),
 			Audience:         sendAudience(send, groupNames),
 			Tracking:         send.TrackingRequested,
+			SendPurposeFields: SendPurposeFields{
+				Purpose:                 send.Purpose,
+				Category:                send.Category,
+				TransactionalStatement:  send.TransactionalStatement,
+				CommercialContentAbsent: send.CommercialContentAbsent,
+			},
 		}
 	}
 	return items

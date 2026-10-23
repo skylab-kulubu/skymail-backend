@@ -259,7 +259,19 @@
             },
             "handlers.CreatedMailTask": {
                 "properties": {
+                    "category": {
+                        "description": "core's category of a duyuru send; null for any other.",
+                        "type": "string"
+                    },
                     "id": {
+                        "type": "string"
+                    },
+                    "purpose": {
+                        "description": "The send's purpose (ADR 0072 decision 2): islem or duyuru, as written on the send; null while SkyMail's purposes are off (GET /mail_tasks/tracking-mode purpose_available false).",
+                        "enum": [
+                            "islem",
+                            "duyuru"
+                        ],
                         "type": "string"
                     },
                     "tracking": {
@@ -416,6 +428,14 @@
                         "description": "The variables it is sent with: as submitted, or as an approver edited them.",
                         "type": "object"
                     },
+                    "category": {
+                        "description": "core's category of a duyuru send (club:duyuru, club:haber, team:\u003cgroup id\u003e:duyuru|haber); null for any other.",
+                        "type": "string"
+                    },
+                    "commercial_content_absent": {
+                        "description": "On a duyuru send, the sender's statement that it carries no commercial content, as given; null when none was given, and on every islem send.",
+                        "type": "boolean"
+                    },
                     "created_at": {
                         "type": "string"
                     },
@@ -447,6 +467,14 @@
                     },
                     "preview_recipient": {
                         "$ref": "#/components/schemas/handlers.MailApprovalRecipient"
+                    },
+                    "purpose": {
+                        "description": "islem or duyuru. Null for a send queued while SkyMail's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).",
+                        "enum": [
+                            "islem",
+                            "duyuru"
+                        ],
+                        "type": "string"
                     },
                     "recipient_count": {
                         "description": "How many it would reach now: its people, a list's members, a Keycloak group's members with an address. Null when Keycloak did not say in time.",
@@ -491,7 +519,11 @@
                         "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
                     },
                     "tracking": {
-                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyMail tracks every person's send, it is tracked whatever this says.",
+                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyMail tracks every person's send, it is tracked whatever this says, unless it is islem: never tracked.",
+                        "type": "boolean"
+                    },
+                    "transactional_statement": {
+                        "description": "true on an islem send whose sender stated that the mail is about the recipient's own application or transaction; null otherwise (a service's mail, a send from an older client, every duyuru send).",
                         "type": "boolean"
                     },
                     "updated_at": {
@@ -582,6 +614,14 @@
                         "description": "The variables it is sent with: as submitted, or as an approver edited them.",
                         "type": "object"
                     },
+                    "category": {
+                        "description": "core's category of a duyuru send (club:duyuru, club:haber, team:\u003cgroup id\u003e:duyuru|haber); null for any other.",
+                        "type": "string"
+                    },
+                    "commercial_content_absent": {
+                        "description": "On a duyuru send, the sender's statement that it carries no commercial content, as given; null when none was given, and on every islem send.",
+                        "type": "boolean"
+                    },
                     "created_at": {
                         "type": "string"
                     },
@@ -594,6 +634,14 @@
                     },
                     "last_event": {
                         "$ref": "#/components/schemas/handlers.MailApprovalEvent"
+                    },
+                    "purpose": {
+                        "description": "islem or duyuru. Null for a send queued while SkyMail's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).",
+                        "enum": [
+                            "islem",
+                            "duyuru"
+                        ],
+                        "type": "string"
                     },
                     "recipients": {
                         "description": "The people it goes to, in the order submitted; empty when it goes to a mailing list. audience reads as a send's: single for one person, whom recipient_email and recipient_full_name name too; people for several.",
@@ -634,7 +682,11 @@
                         "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
                     },
                     "tracking": {
-                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyMail tracks every person's send, it is tracked whatever this says.",
+                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyMail tracks every person's send, it is tracked whatever this says, unless it is islem: never tracked.",
+                        "type": "boolean"
+                    },
+                    "transactional_statement": {
+                        "description": "true on an islem send whose sender stated that the mail is about the recipient's own application or transaction; null otherwise (a service's mail, a send from an older client, every duyuru send).",
                         "type": "boolean"
                     },
                     "updated_at": {
@@ -763,6 +815,14 @@
                         "type": "array",
                         "uniqueItems": false
                     },
+                    "category": {
+                        "description": "core's category of a duyuru send (club:duyuru, club:haber, team:\u003cgroup id\u003e:duyuru|haber); null for any other.",
+                        "type": "string"
+                    },
+                    "commercial_content_absent": {
+                        "description": "On a duyuru send, the sender's statement that it carries no commercial content, as given; null when none was given, and on every islem send.",
+                        "type": "boolean"
+                    },
                     "content_access": {
                         "$ref": "#/components/schemas/handlers.ContentAccess"
                     },
@@ -780,6 +840,14 @@
                         "type": "string"
                     },
                     "mail_list_name": {
+                        "type": "string"
+                    },
+                    "purpose": {
+                        "description": "islem or duyuru. Null for a send queued while SkyMail's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).",
+                        "enum": [
+                            "islem",
+                            "duyuru"
+                        ],
                         "type": "string"
                     },
                     "recipient_counts": {
@@ -802,6 +870,10 @@
                     },
                     "tracking": {
                         "description": "Whether the send is tracked: it asked for open and click tracking, SkyMail's tracking was on when it was queued and its template may be tracked (not System, not sensitive); or it is a person's send queued while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); or it is a service's mail queued while SkyMail tracked system mail (SKYMAIL_TRACKING_SYSTEM).",
+                        "type": "boolean"
+                    },
+                    "transactional_statement": {
+                        "description": "true on an islem send whose sender stated that the mail is about the recipient's own application or transaction; null otherwise (a service's mail, a send from an older client, every duyuru send).",
                         "type": "boolean"
                     }
                 },
@@ -1234,6 +1306,10 @@
                         },
                         "type": "array",
                         "uniqueItems": false
+                    },
+                    "purpose_available": {
+                        "description": "True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru) and a duyuru send its category, and the purpose picks the mailbox it goes out from. The send form shows its purpose, category and statements only then; while it is false they are ignored.",
+                        "type": "boolean"
                     },
                     "queue_counts": {
                         "$ref": "#/components/schemas/handlers.QueueCounts"
@@ -1675,6 +1751,10 @@
             },
             "handlers.TrackingMode": {
                 "properties": {
+                    "purpose_available": {
+                        "description": "True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru), a duyuru send its category, and an islem send is never tracked (even with tracking_always). False: the fields are ignored.",
+                        "type": "boolean"
+                    },
                     "tracking_always": {
                         "description": "True while SKYMAIL_TRACKING_OPERATOR=on too: every person's send is tracked, the send form shows no box and a send's tracking field is ignored.",
                         "type": "boolean"
@@ -1931,7 +2011,24 @@
                         "additionalProperties": {},
                         "type": "object"
                     },
+                    "category": {
+                        "description": "core's category of a duyuru send: club:duyuru, club:haber, team:\u003cKeycloak group id\u003e:duyuru or team:\u003cid\u003e:haber. Required with duyuru, refused with islem. Whether the group is a team is core's to say (a later version).",
+                        "example": "club:duyuru",
+                        "type": "string"
+                    },
+                    "commercial_content_absent": {
+                        "description": "With duyuru: the sender's statement that the mail carries no commercial content (no sponsor promotion, paid ticket, company job advert or draw; ADR 0072 decision 9). Kept as given; a later version requires it true. Ignored with islem.",
+                        "type": "boolean"
+                    },
                     "mail_list_id": {
+                        "type": "string"
+                    },
+                    "purpose": {
+                        "description": "islem: about the recipient's own application or transaction, only to people one by one (POST /mail_tasks/single, a Mail onayı request to people) or to a Forms source's respondents, with transactional_statement true, never tracked, never with a category; it goes out from bilgi@ without List-Unsubscribe and skips the unsubscribe record. duyuru: an announcement to an audience, with a category; it goes out from duyuru@ and follows the preference and the unsubscribe record. A list or a Keycloak group is always duyuru.",
+                        "enum": [
+                            "islem",
+                            "duyuru"
+                        ],
                         "type": "string"
                     },
                     "template_id": {
@@ -1939,6 +2036,10 @@
                     },
                     "tracking": {
                         "description": "Open and click tracking: each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links. Ignored (and answered false) while SkyMail's tracking is off and for a System or sensitive template, which are never tracked; a mailing list's address-only recipients are not tracked (no_account).",
+                        "type": "boolean"
+                    },
+                    "transactional_statement": {
+                        "description": "With islem, required and true: the sender's statement that the mail is about the recipient's own application or transaction (a changed place or time, a missing document, a result). Ignored with duyuru.",
                         "type": "boolean"
                     }
                 },
@@ -2251,13 +2352,34 @@
                         "additionalProperties": {},
                         "type": "object"
                     },
+                    "category": {
+                        "description": "core's category of a duyuru send: club:duyuru, club:haber, team:\u003cKeycloak group id\u003e:duyuru or team:\u003cid\u003e:haber. Required with duyuru, refused with islem. Whether the group is a team is core's to say (a later version).",
+                        "example": "club:duyuru",
+                        "type": "string"
+                    },
+                    "commercial_content_absent": {
+                        "description": "With duyuru: the sender's statement that the mail carries no commercial content (no sponsor promotion, paid ticket, company job advert or draw; ADR 0072 decision 9). Kept as given; a later version requires it true. Ignored with islem.",
+                        "type": "boolean"
+                    },
                     "form_source_id": {
+                        "type": "string"
+                    },
+                    "purpose": {
+                        "description": "islem: about the recipient's own application or transaction, only to people one by one (POST /mail_tasks/single, a Mail onayı request to people) or to a Forms source's respondents, with transactional_statement true, never tracked, never with a category; it goes out from bilgi@ without List-Unsubscribe and skips the unsubscribe record. duyuru: an announcement to an audience, with a category; it goes out from duyuru@ and follows the preference and the unsubscribe record. A list or a Keycloak group is always duyuru.",
+                        "enum": [
+                            "islem",
+                            "duyuru"
+                        ],
                         "type": "string"
                     },
                     "template_id": {
                         "type": "string"
                     },
                     "tracking": {
+                        "type": "boolean"
+                    },
+                    "transactional_statement": {
+                        "description": "With islem, required and true: the sender's statement that the mail is about the recipient's own application or transaction (a changed place or time, a missing document, a result). Ignored with duyuru.",
                         "type": "boolean"
                     }
                 },
@@ -2310,6 +2432,23 @@
                         "additionalProperties": {},
                         "type": "object"
                     },
+                    "category": {
+                        "description": "core's category of a duyuru send: club:duyuru, club:haber, team:\u003cKeycloak group id\u003e:duyuru or team:\u003cid\u003e:haber. Required with duyuru, refused with islem. Whether the group is a team is core's to say (a later version).",
+                        "example": "club:duyuru",
+                        "type": "string"
+                    },
+                    "commercial_content_absent": {
+                        "description": "With duyuru: the sender's statement that the mail carries no commercial content (no sponsor promotion, paid ticket, company job advert or draw; ADR 0072 decision 9). Kept as given; a later version requires it true. Ignored with islem.",
+                        "type": "boolean"
+                    },
+                    "purpose": {
+                        "description": "islem: about the recipient's own application or transaction, only to people one by one (POST /mail_tasks/single, a Mail onayı request to people) or to a Forms source's respondents, with transactional_statement true, never tracked, never with a category; it goes out from bilgi@ without List-Unsubscribe and skips the unsubscribe record. duyuru: an announcement to an audience, with a category; it goes out from duyuru@ and follows the preference and the unsubscribe record. A list or a Keycloak group is always duyuru.",
+                        "enum": [
+                            "islem",
+                            "duyuru"
+                        ],
+                        "type": "string"
+                    },
                     "recipient_email": {
                         "type": "string"
                     },
@@ -2324,6 +2463,10 @@
                     },
                     "tracking": {
                         "description": "Open and click tracking for a mail a person sends (the compose form's people). Ignored (and answered false) while SkyMail's tracking is off, and for a System template or a sensitive one (a template that says nothing counts as sensitive for one person). A service's token (account and transaction mail) does not ask: the field is ignored, and its mail is tracked only while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM), in the system lane, with no click address on a link a variable fills and none at all in a sensitive mail. The recipient's account is looked up in Keycloak by address before the send is queued: the one enabled user whose primary e-mail equals it (case-insensitively) and is verified; none such is no_account, Keycloak not answering is preference_unavailable, and core decides for the account found.",
+                        "type": "boolean"
+                    },
+                    "transactional_statement": {
+                        "description": "With islem, required and true: the sender's statement that the mail is about the recipient's own application or transaction (a changed place or time, a missing document, a result). Ignored with duyuru.",
                         "type": "boolean"
                     }
                 },
@@ -2350,12 +2493,29 @@
                         "additionalProperties": {},
                         "type": "object"
                     },
+                    "category": {
+                        "description": "core's category of a duyuru send: club:duyuru, club:haber, team:\u003cKeycloak group id\u003e:duyuru or team:\u003cid\u003e:haber. Required with duyuru, refused with islem. Whether the group is a team is core's to say (a later version).",
+                        "example": "club:duyuru",
+                        "type": "string"
+                    },
+                    "commercial_content_absent": {
+                        "description": "With duyuru: the sender's statement that the mail carries no commercial content (no sponsor promotion, paid ticket, company job advert or draw; ADR 0072 decision 9). Kept as given; a later version requires it true. Ignored with islem.",
+                        "type": "boolean"
+                    },
                     "form_source_id": {
                         "description": "An immutable snapshot prepared by Forms for this caller. Never with a\nlist or browser-supplied recipients. Manual recipients retain max=100.",
                         "type": "string"
                     },
                     "mail_list_id": {
                         "description": "An internal mailing list or a Keycloak group. Choose exactly one of this,\nmanual recipients or form_source_id.",
+                        "type": "string"
+                    },
+                    "purpose": {
+                        "description": "islem: about the recipient's own application or transaction, only to people one by one (POST /mail_tasks/single, a Mail onayı request to people) or to a Forms source's respondents, with transactional_statement true, never tracked, never with a category; it goes out from bilgi@ without List-Unsubscribe and skips the unsubscribe record. duyuru: an announcement to an audience, with a category; it goes out from duyuru@ and follows the preference and the unsubscribe record. A list or a Keycloak group is always duyuru.",
+                        "enum": [
+                            "islem",
+                            "duyuru"
+                        ],
                         "type": "string"
                     },
                     "recipients": {
@@ -2372,6 +2532,10 @@
                     },
                     "tracking": {
                         "description": "Open and click tracking for the send once approved (as POST /mail_tasks takes it). Ignored (and kept false) while SkyMail's tracking is off, for a System or sensitive template (to people, a template that says nothing counts as sensitive) and for a Forms source. People named here are looked up in Keycloak by address when the request is sent, as POST /mail_tasks/single does: one enabled account with that verified primary e-mail, or no_account.",
+                        "type": "boolean"
+                    },
+                    "transactional_statement": {
+                        "description": "With islem, required and true: the sender's statement that the mail is about the recipient's own application or transaction (a changed place or time, a missing document, a result). Ignored with duyuru.",
                         "type": "boolean"
                     }
                 },
@@ -2736,7 +2900,7 @@
                 ]
             },
             "post": {
-                "description": "Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Submitting takes skymail:templates:read, and skymail:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing — before the body is checked, when templates:read is missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent.\n\nAlternatively, form_source_id selects the caller's immutable Forms snapshot instead of mail_list_id or manual recipients. Choose exactly one audience. This source does not need lists:read; its configured recipient limit is separate from the manual 100-person limit. Submission atomically binds the source to one pending request without expanding its recipients. An exact retry returns 200 with the same request, including after preparation TTL. Source ownership is checked before returning metadata; another owner's source is 404. An unconsumed expired source is 410; invalidated, differently consumed or busy source is 409. Source recipients and form metadata cannot be supplied by the browser. This source version requests no recipient tracking.\n\nEvery approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.",
+                "description": "Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Submitting takes skymail:templates:read, and skymail:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing — before the body is checked, when templates:read is missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, \"Gönderim amacı ve kategori\") on the request and on its sends once approved: islem only to people or a Forms source (400 mail_task.purpose_not_allowed for a list or a group); a request without one is duyuru, club:duyuru.\n\nAlternatively, form_source_id selects the caller's immutable Forms snapshot instead of mail_list_id or manual recipients. Choose exactly one audience. This source does not need lists:read; its configured recipient limit is separate from the manual 100-person limit. Submission atomically binds the source to one pending request without expanding its recipients. An exact retry returns 200 with the same request, including after preparation TTL. Source ownership is checked before returning metadata; another owner's source is 404. An unconsumed expired source is 410; invalidated, differently consumed or busy source is 409. Source recipients and form metadata cannot be supplied by the browser. This source version requests no recipient tracking.\n\nEvery approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -3620,7 +3784,7 @@
                 ]
             },
             "post": {
-                "description": "Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyMail's tracking is off, or for a System or sensitive template (never tracked), the field is ignored and the answer says tracking false. While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored too and every send is tracked, of any template: a sensitive one with the pixel only, any other with a click address on the links every recipient gets alike (written in the template or in the send's own variables, such as a free body), never on one made from the recipient (.Email, .FullName).",
+                "description": "Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyMail's tracking is off, or for a System or sensitive template (never tracked), the field is ignored and the answer says tracking false. While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored too and every send is tracked, of any template: a sensitive one with the pixel only, any other with a click address on the links every recipient gets alike (written in the template or in the send's own variables, such as a free body), never on one made from the recipient (.Email, .FullName). Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, \"Gönderim amacı ve kategori\"); a list or a Keycloak group is always duyuru with core's category (club:duyuru by default), islem is refused with 400 mail_task.purpose_not_allowed.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -3691,7 +3855,7 @@
         },
         "/mail_tasks/form-source": {
             "post": {
-                "description": "The source owner holding current skymail:mails:send or skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is no_account) and core deciding, and the answer says tracking true.",
+                "description": "The source owner holding current skymail:mails:send or skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is no_account) and core deciding, and the answer says tracking true. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, \"Gönderim amacı ve kategori\"): duyuru with a category by default; islem with transactional_statement true when the mail is about each respondent's own application: never tracked, queued in the bulk lane, sent from bilgi@ without List-Unsubscribe. The purpose is part of an exact retry.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -3805,7 +3969,7 @@
         },
         "/mail_tasks/single": {
             "post": {
-                "description": "Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked.",
+                "description": "Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, \"Gönderim amacı ve kategori\"): a person's send may be islem (with transactional_statement true; never tracked, 400 mail_task.tracking_not_allowed when it asks; the system lane, bilgi@) or duyuru with a category (the bulk lane, duyuru@); without a purpose, islem when untracked and duyuru when tracked. A service's token is always islem; its fields are ignored.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -3937,7 +4101,7 @@
         },
         "/mail_tasks/tracking-mode": {
             "get": {
-                "description": "tracking_available and tracking_always, as the summary says them, for anyone who may use SkyMail: someone who only submits a send for approval sees whether it will be tracked. It is a setting of SkyMail, not of any send.",
+                "description": "tracking_available, tracking_always and purpose_available, as the summary says them, for anyone who may use SkyMail: someone who only submits a send for approval sees whether it will be tracked and whether it names a purpose. It is a setting of SkyMail, not of any send.",
                 "responses": {
                     "200": {
                         "content": {

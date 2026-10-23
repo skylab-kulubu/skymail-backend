@@ -95,6 +95,15 @@ type CreatedMailTask struct {
 	ID uuid.UUID `json:"id"`
 	// Whether the send is tracked. A person's send: it asked for open and click tracking and got it — false when it did not ask, when SkyMail's tracking is off (GET /mail_tasks/summary tracking_available), or when its template is a System template or sensitive — or SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then true whatever it asked and whatever its template. A service's single mail does not ask: true only when SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) and its recipient is tracked (has an account core lets be tracked).
 	Tracking bool `json:"tracking"`
+	// The send's purpose (ADR 0072 decision 2): islem or duyuru, as written on the send; null while SkyMail's purposes are off (GET /mail_tasks/tracking-mode purpose_available false).
+	Purpose *string `json:"purpose" enums:"islem,duyuru"`
+	// core's category of a duyuru send; null for any other.
+	Category *string `json:"category"`
+}
+
+// createdMailTask is the answer to a send just queued.
+func createdMailTask(id uuid.UUID, tracking bool, purpose mailer.SendPurpose) CreatedMailTask {
+	return CreatedMailTask{ID: id, Tracking: tracking, Purpose: purpose.Purpose, Category: purpose.Category}
 }
 
 // operatorTracking is whether a person's send (an operator's mail) of
@@ -113,7 +122,7 @@ func operatorTracking(ctx context.Context, m mailer.Mailer, asked bool, template
 // CreateTask godoc
 //
 //	@Summary		Create a new mail task
-//	@Description	Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyMail's tracking is off, or for a System or sensitive template (never tracked), the field is ignored and the answer says tracking false. While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored too and every send is tracked, of any template: a sensitive one with the pixel only, any other with a click address on the links every recipient gets alike (written in the template or in the send's own variables, such as a free body), never on one made from the recipient (.Email, .FullName).
+//	@Description	Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyMail's tracking is off, or for a System or sensitive template (never tracked), the field is ignored and the answer says tracking false. While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored too and every send is tracked, of any template: a sensitive one with the pixel only, any other with a click address on the links every recipient gets alike (written in the template or in the send's own variables, such as a free body), never on one made from the recipient (.Email, .FullName). Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"); a list or a Keycloak group is always duyuru with core's category (club:duyuru by default), islem is refused with 400 mail_task.purpose_not_allowed.
 //	@Tags			Mail
 //	@Accept			json
 //	@Produce		json
@@ -128,6 +137,13 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 	if err := c.Bind().Body(&params); err != nil {
 		return err
 	}
+	// A list or a Keycloak group is always duyuru.
+	purposesOn := h.mailer.PurposeAvailable()
+	purpose, err := choosePurpose(purposesOn, params.SendPurpose, targetAudience, params.Tracking)
+	if err != nil {
+		return err
+	}
+	purpose = purposeOrDefault(purposesOn, purpose, duyuruByDefault)
 	tracking := operatorTracking(c.Context(), h.mailer, params.Tracking, params.TemplateID, &params.MailListID)
 	if _, err := h.db.GetTemplateById(c.Context(), params.TemplateID); err != nil {
 		return err
@@ -183,31 +199,36 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 			BodyVariables: bodyVarsJson,
 			Recipients:    recipients,
 			Tracking:      tracking,
+			Purpose:       purpose,
 		})
 		if err != nil {
 			return err
 		}
-		return c.Status(fiber.StatusCreated).JSON(CreatedMailTask{ID: taskID, Tracking: tracking})
+		return c.Status(fiber.StatusCreated).JSON(createdMailTask(taskID, tracking, purpose))
 	}
 
 	taskID, err := h.mailer.Enqueue(c.Context(), database.CreateMailTaskParams{
-		SentBy:            sentBy,
-		TemplateID:        &params.TemplateID,
-		MailListID:        &params.MailListID,
-		BodyVariables:     bodyVarsJson,
-		TrackingRequested: tracking,
+		SentBy:                  sentBy,
+		TemplateID:              &params.TemplateID,
+		MailListID:              &params.MailListID,
+		BodyVariables:           bodyVarsJson,
+		TrackingRequested:       tracking,
+		Purpose:                 purpose.Purpose,
+		Category:                purpose.Category,
+		TransactionalStatement:  purpose.TransactionalStatement,
+		CommercialContentAbsent: purpose.CommercialContentAbsent,
 	})
 	if err != nil {
 		return err
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(CreatedMailTask{ID: taskID, Tracking: tracking})
+	return c.Status(fiber.StatusCreated).JSON(createdMailTask(taskID, tracking, purpose))
 }
 
 // SendSingle godoc
 //
 //	@Summary		Send a single email
-//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked.
+//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): a person's send may be islem (with transactional_statement true; never tracked, 400 mail_task.tracking_not_allowed when it asks; the system lane, bilgi@) or duyuru with a category (the bulk lane, duyuru@); without a purpose, islem when untracked and duyuru when tracked. A service's token is always islem; its fields are ignored.
 //	@Tags			Mail
 //	@Accept			json
 //	@Produce		json
@@ -243,20 +264,44 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	// operator's mail. A service's mail stays in the system lane and is
 	// tracked only while SKYMAIL_TRACKING_SYSTEM says so.
 	service := middlewares.IsServiceAccount(c)
-	tracking := !service && operatorTracking(c.Context(), h.mailer, params.Tracking, templateID, nil)
+	// A service's mail (account mail, a Forms confirmation, a notice) is
+	// always islem: what its body says about a purpose is ignored. A
+	// person's may be either; islem is never tracked.
+	purposesOn := h.mailer.PurposeAvailable()
+	var purpose mailer.SendPurpose
+	if !service {
+		if purpose, err = choosePurpose(purposesOn, params.SendPurpose, targetPeople, params.Tracking); err != nil {
+			return err
+		}
+	}
+	tracking := !service && !isIslem(purpose) && operatorTracking(c.Context(), h.mailer, params.Tracking, templateID, nil)
+	switch {
+	case service:
+		purpose = purposeOrDefault(purposesOn, mailer.SendPurpose{}, islemByDefault)
+	case tracking:
+		purpose = purposeOrDefault(purposesOn, purpose, duyuruByDefault)
+	default:
+		purpose = purposeOrDefault(purposesOn, purpose, islemByDefault)
+	}
 	arg := database.CreateSingleMailTaskParams{
-		SentBy:            sentBy,
-		TemplateID:        &templateID,
-		BodyVariables:     bodyVarsJson,
-		RecipientFullName: params.RecipientFullName,
-		RecipientEmail:    params.RecipientEmail,
-		TrackingRequested: tracking,
+		SentBy:                  sentBy,
+		TemplateID:              &templateID,
+		BodyVariables:           bodyVarsJson,
+		RecipientFullName:       params.RecipientFullName,
+		RecipientEmail:          params.RecipientEmail,
+		TrackingRequested:       tracking,
+		Purpose:                 purpose.Purpose,
+		Category:                purpose.Category,
+		TransactionalStatement:  purpose.TransactionalStatement,
+		CommercialContentAbsent: purpose.CommercialContentAbsent,
 	}
 	var taskID uuid.UUID
 	switch {
 	case service && h.mailer.SystemTrackingAvailable():
 		taskID, tracking, err = h.mailer.EnqueueSystemSingle(c.Context(), arg, nil)
-	case tracking:
+	case tracking, isDuyuru(purpose):
+		// The bulk lane: an operator's mail to an audience of one, tracked
+		// or not (a duyuru single the person did not ask tracking for).
 		taskID, err = h.mailer.EnqueueTrackedSingle(c.Context(), arg, nil)
 	default:
 		taskID, err = h.mailer.EnqueueSingle(c.Context(), arg)
@@ -265,7 +310,7 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 		return err
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(CreatedMailTask{ID: taskID, Tracking: tracking})
+	return c.Status(fiber.StatusCreated).JSON(createdMailTask(taskID, tracking, purpose))
 }
 
 // MailTaskItem is a send as the send list, a send's own page and the home
@@ -294,6 +339,20 @@ type MailTaskItem struct {
 	ContentExpiresAt *time.Time `json:"content_expires_at"`
 	// Whether the send is tracked: it asked for open and click tracking, SkyMail's tracking was on when it was queued and its template may be tracked (not System, not sensitive); or it is a person's send queued while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); or it is a service's mail queued while SkyMail tracked system mail (SKYMAIL_TRACKING_SYSTEM).
 	Tracking bool `json:"tracking"`
+	SendPurposeFields
+}
+
+// SendPurposeFields is a send's purpose as it was written (ADR 0072 decision
+// 2), the same on a send and on a Mail onayı request.
+type SendPurposeFields struct {
+	// islem or duyuru. Null for a send queued while SkyMail's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).
+	Purpose *string `json:"purpose" enums:"islem,duyuru"`
+	// core's category of a duyuru send (club:duyuru, club:haber, team:<group id>:duyuru|haber); null for any other.
+	Category *string `json:"category"`
+	// true on an islem send whose sender stated that the mail is about the recipient's own application or transaction; null otherwise (a service's mail, a send from an older client, every duyuru send).
+	TransactionalStatement *bool `json:"transactional_statement"`
+	// On a duyuru send, the sender's statement that it carries no commercial content, as given; null when none was given, and on every islem send.
+	CommercialContentAbsent *bool `json:"commercial_content_absent"`
 }
 
 // GetTasks godoc

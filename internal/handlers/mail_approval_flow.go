@@ -148,6 +148,10 @@ type approvalSend struct {
 	variables []byte
 	// The submitter asked for open and click tracking.
 	tracking bool
+	// What the body said about the send's purpose, and the purpose it is
+	// written with (approvalPurpose).
+	askedPurpose requests.SendPurpose
+	purpose      mailer.SendPurpose
 }
 
 func approvalSendOf(params requests.SubmitMailApproval) (approvalSend, error) {
@@ -180,11 +184,47 @@ func approvalSendOf(params requests.SubmitMailApproval) (approvalSend, error) {
 	if err != nil {
 		return approvalSend{}, err
 	}
-	send := approvalSend{formSourceID: params.FormSourceID, templateID: params.TemplateID, recipients: recipients, variables: raw, tracking: params.Tracking}
+	send := approvalSend{formSourceID: params.FormSourceID, templateID: params.TemplateID, recipients: recipients, variables: raw, tracking: params.Tracking, askedPurpose: params.SendPurpose}
 	if hasList {
 		send.mailListID = params.MailListID
 	}
 	return send, nil
+}
+
+// approvalPurpose is the purpose a request to send is written with (ADR 0072
+// decision 2): islem only to people or a Forms source; duyuru, club:duyuru,
+// when the body names none. The zero SendPurpose while purposes are off.
+func (h *mailApprovalHandlerImpl) approvalPurpose(send approvalSend) (mailer.SendPurpose, error) {
+	on := h.mailer.PurposeAvailable()
+	target := targetPeople
+	switch {
+	case send.mailListID != nil:
+		target = targetAudience
+	case send.formSourceID != nil:
+		target = targetFormSource
+	}
+	chosen, err := choosePurpose(on, send.askedPurpose, target, send.tracking)
+	if err != nil {
+		return mailer.SendPurpose{}, err
+	}
+	return purposeOrDefault(on, chosen, duyuruByDefault), nil
+}
+
+// storedPurpose is the purpose a request was written with.
+func storedPurpose(a database.MailApproval) mailer.SendPurpose {
+	return mailer.SendPurpose{Purpose: a.Purpose, Category: a.Category, TransactionalStatement: a.TransactionalStatement, CommercialContentAbsent: a.CommercialContentAbsent}
+}
+
+// queuedPurpose is the purpose a request's send is queued with: the one it
+// was written with, or — submitted while purposes were off — duyuru,
+// club:duyuru, as an approved send has always been. None while purposes
+// are off: the send goes as before.
+func (h *mailApprovalHandlerImpl) queuedPurpose(a database.MailApproval) mailer.SendPurpose {
+	on := h.mailer.PurposeAvailable()
+	if !on {
+		return mailer.SendPurpose{}
+	}
+	return purposeOrDefault(on, storedPurpose(a), duyuruByDefault)
 }
 
 // errNotOneAudience refuses a submission that names no audience, or both a
@@ -480,7 +520,8 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	// An approved send is an operator's mail: while SkyMail tracks every
 	// person's send it is tracked, whatever the request said when it was
 	// submitted (queue does the same under the lock).
-	tracked := view.MailApproval.TrackingRequested || h.mailer.OperatorTrackingAlways()
+	// An islem send is never tracked.
+	tracked := (view.MailApproval.TrackingRequested || h.mailer.OperatorTrackingAlways()) && !isIslem(h.queuedPurpose(view.MailApproval))
 	var prepared approvalPrepared
 	if action.sends && view.MailApproval.MailListID != nil && !view.InternalMailList {
 		prepared, err = h.groupRecipients(ctx, *view.MailApproval.MailListID)
@@ -727,8 +768,16 @@ func (h *mailApprovalHandlerImpl) queue(ctx context.Context, q *database.Queries
 	// (SKYMAIL_TRACKING_OPERATOR) it is tracked whatever the request asked
 	// when it was submitted; otherwise a Forms source's never is (it has no
 	// box).
+	// An islem send (to people or a Forms source, declared about the
+	// recipient's own application) waits in the bulk lane too, and goes out
+	// from bilgi@ untracked.
 	sends := h.mailer.Queue(q, mailer.PriorityBulk)
+	purpose := h.queuedPurpose(a)
+	a.Purpose, a.Category, a.TransactionalStatement, a.CommercialContentAbsent =
+		purpose.Purpose, purpose.Category, purpose.TransactionalStatement, purpose.CommercialContentAbsent
 	switch {
+	case isIslem(purpose):
+		a.TrackingRequested = false
 	case h.mailer.OperatorTrackingAlways():
 		a.TrackingRequested = true
 	case a.FormSourceID != nil:
@@ -766,12 +815,16 @@ func queueToPeople(ctx context.Context, q *database.Queries, sends mailer.Queue,
 	taskIDs := make([]uuid.UUID, len(send.recipients))
 	for i, to := range send.recipients {
 		arg := database.CreateSingleMailTaskParams{
-			SentBy:            a.SubmitterSub,
-			TemplateID:        &a.TemplateID,
-			BodyVariables:     a.BodyVariables,
-			RecipientFullName: to.FullName,
-			RecipientEmail:    to.Email,
-			TrackingRequested: a.TrackingRequested,
+			SentBy:                  a.SubmitterSub,
+			TemplateID:              &a.TemplateID,
+			BodyVariables:           a.BodyVariables,
+			RecipientFullName:       to.FullName,
+			RecipientEmail:          to.Email,
+			TrackingRequested:       a.TrackingRequested,
+			Purpose:                 a.Purpose,
+			Category:                a.Category,
+			TransactionalStatement:  a.TransactionalStatement,
+			CommercialContentAbsent: a.CommercialContentAbsent,
 		}
 		if a.TrackingRequested {
 			taskIDs[i], err = sends.EnqueueTrackedSingle(ctx, arg, preferences)
@@ -802,11 +855,15 @@ func queueToList(ctx context.Context, q *database.Queries, sends mailer.Queue, a
 			return uuid.Nil, errApprovalAudienceEmpty
 		}
 		taskID, err := sends.Enqueue(ctx, database.CreateMailTaskParams{
-			SentBy:            a.SubmitterSub,
-			TemplateID:        &a.TemplateID,
-			MailListID:        a.MailListID,
-			BodyVariables:     a.BodyVariables,
-			TrackingRequested: a.TrackingRequested,
+			SentBy:                  a.SubmitterSub,
+			TemplateID:              &a.TemplateID,
+			MailListID:              a.MailListID,
+			BodyVariables:           a.BodyVariables,
+			TrackingRequested:       a.TrackingRequested,
+			Purpose:                 a.Purpose,
+			Category:                a.Category,
+			TransactionalStatement:  a.TransactionalStatement,
+			CommercialContentAbsent: a.CommercialContentAbsent,
 		})
 		if err == nil && taskID == uuid.Nil {
 			return uuid.Nil, errApprovalAudienceEmpty
@@ -835,6 +892,7 @@ func queueToList(ctx context.Context, q *database.Queries, sends mailer.Queue, a
 		Recipients:    prepared.groupMembers,
 		Tracking:      a.TrackingRequested,
 		Preferences:   prepared.tracking,
+		Purpose:       storedPurpose(a),
 	})
 }
 
@@ -899,18 +957,23 @@ func (h *mailApprovalHandlerImpl) resubmit(ctx context.Context, q *database.Quer
 	now := h.now()
 	// A Forms source's send is tracked only while SkyMail tracks every
 	// person's send: it has no box.
-	tracked := (send.formSourceID == nil || h.mailer.OperatorTrackingAlways()) &&
+	// An islem send is never tracked.
+	tracked := (send.formSourceID == nil || h.mailer.OperatorTrackingAlways()) && !isIslem(send.purpose) &&
 		operatorTracking(ctx, h.mailer, send.tracking, checked.template.ID, send.mailListID)
 	if _, err := q.ResubmitMailApproval(ctx, database.ResubmitMailApprovalParams{
-		TemplateID:        checked.template.ID,
-		TemplateVersionID: checked.versionID,
-		MailListID:        send.mailListID,
-		FormSourceID:      send.formSourceID,
-		BodyVariables:     send.variables,
-		TrackingRequested: tracked,
-		At:                now,
-		DeadlineAt:        now.Add(mailApprovalDeadline),
-		ID:                a.ID,
+		TemplateID:              checked.template.ID,
+		TemplateVersionID:       checked.versionID,
+		MailListID:              send.mailListID,
+		FormSourceID:            send.formSourceID,
+		BodyVariables:           send.variables,
+		TrackingRequested:       tracked,
+		Purpose:                 send.purpose.Purpose,
+		Category:                send.purpose.Category,
+		TransactionalStatement:  send.purpose.TransactionalStatement,
+		CommercialContentAbsent: send.purpose.CommercialContentAbsent,
+		At:                      now,
+		DeadlineAt:              now.Add(mailApprovalDeadline),
+		ID:                      a.ID,
 	}); err != nil {
 		return approvalNotice{}, err
 	}
@@ -1124,6 +1187,12 @@ func approvalItem(view database.GetMailApprovalRow, groupNames map[uuid.UUID]*st
 		TaskIDs:       view.TaskIds,
 		LastEvent:     last,
 		Tracking:      view.MailApproval.TrackingRequested,
+		SendPurposeFields: SendPurposeFields{
+			Purpose:                 view.MailApproval.Purpose,
+			Category:                view.MailApproval.Category,
+			TransactionalStatement:  view.MailApproval.TransactionalStatement,
+			CommercialContentAbsent: view.MailApproval.CommercialContentAbsent,
+		},
 	}
 }
 
