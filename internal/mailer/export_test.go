@@ -133,7 +133,18 @@ func SetExchangeTokens(m Transactional, tokens TokenSource) { m.(*mailerImpl).ex
 // SetTemplateKeys makes m read a send's template key, which picks a mail's
 // sender lane, with keyOf instead of the database.
 func SetTemplateKeys(m Transactional, keyOf func(ctx context.Context, taskID uuid.UUID) (*string, bool, error)) {
-	m.(*mailerImpl).templateKey = keyOf
+	m.(*mailerImpl).templateKey = func(ctx context.Context, taskID uuid.UUID) (sendLane, error) {
+		key, system, err := keyOf(ctx, taskID)
+		return sendLane{Key: key, System: system}, err
+	}
+}
+
+// SetSendLanes is SetTemplateKeys with the send's purpose too.
+func SetSendLanes(m Transactional, laneOf func(ctx context.Context, taskID uuid.UUID) (key *string, system bool, purpose *string, err error)) {
+	m.(*mailerImpl).templateKey = func(ctx context.Context, taskID uuid.UUID) (sendLane, error) {
+		key, system, purpose, err := laneOf(ctx, taskID)
+		return sendLane{Key: key, System: system, Purpose: purpose}, err
+	}
 }
 
 // GraphFailure classifies Graph's answer to a send.

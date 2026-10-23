@@ -13,8 +13,8 @@ import (
 // The unsubscribe record applied (ADR 0072 decision 5; hub ticket
 // abonelik-cikisi 02; README, "Tek tık çıkış ucu"). An address that left the
 // duyuru stream through SkyMail's link is in mail_unsubscribes. Only mail of
-// that stream stops: a send whose sender lane is duyuru (LaneOf; after
-// ticket 03 its purpose). Account mail and the bilgi lane's (Forms
+// that stream stops: a send whose sender lane is duyuru (LaneOf: its purpose
+// while SKYMAIL_MAIL_PURPOSE is on, else its queue priority). Account mail and the bilgi lane's (Forms
 // confirmations, notices) are sent as before, and the bounce list applies to
 // every stream as ever: an address in both is held by both.
 //
@@ -31,9 +31,15 @@ import (
 const unsubscribedError = suppressedErrorPrefix + "unsubscribed"
 
 // unsubscribesOf reads the unsubscribed among rows' recipients when their
-// send is in the duyuru stream: nil for any other send.
+// send is in the duyuru stream: nil for any other send. An islem send is
+// never looked up, nor one without a purpose in the system lane (a login
+// code waits for no lookup); a duyuru send always is, whatever its lane.
 func (q *queue) unsubscribesOf(ctx context.Context, rows []commonMailRow) (map[string]bool, error) {
-	if q.priority > PriorityBulk {
+	purpose := q.lanes.purposeOf(rows[0].Purpose)
+	switch {
+	case purpose != nil && *purpose == PurposeIslem:
+		return nil, nil
+	case purpose == nil && q.priority > PriorityBulk:
 		return nil, nil
 	}
 	addresses := make([]string, 0, len(rows))
@@ -53,7 +59,7 @@ func (q *queue) unsubscribesOf(ctx context.Context, rows []commonMailRow) (map[s
 	if err != nil {
 		return nil, fmt.Errorf("read the send's template: %w", err)
 	}
-	if LaneOf(template.Key, template.System, q.priority) != LaneDuyuru {
+	if LaneOf(purpose, template.Key, template.System, q.priority) != LaneDuyuru {
 		return nil, nil
 	}
 	unsubscribed := make(map[string]bool, len(found))
@@ -84,7 +90,7 @@ func (m *mailerImpl) skipUnsubscribed(ctx context.Context, q *database.Queries, 
 	skip := map[uuid.UUID]bool{}
 	var skipIDs []uuid.UUID
 	for _, row := range found {
-		if LaneOf(row.Key, row.System, priority[row.ID]) == LaneDuyuru {
+		if LaneOf(m.lanes.purposeOf(row.Purpose), row.Key, row.System, priority[row.ID]) == LaneDuyuru {
 			skip[row.ID] = true
 			skipIDs = append(skipIDs, row.ID)
 		}

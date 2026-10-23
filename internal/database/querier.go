@@ -206,7 +206,8 @@ type Querier interface {
 	GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueueItemsByTaskIdParams) ([]GetMailQueueItemsByTaskIdRow, error)
 	GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTaskByIdRow, error)
 	// The key of a send's template and whether it is a system template, which
-	// together say whether it is account mail (mailer.AccountMail).
+	// together say whether it is account mail (mailer.AccountMail), and the
+	// send's purpose, which says its stream (mailer.LaneOf).
 	GetMailTaskTemplateKey(ctx context.Context, taskID uuid.UUID) (GetMailTaskTemplateKeyRow, error)
 	// Whether a send is never tracked, whatever was asked: its template is a
 	// System template, or its content is sensitive by the one definition the

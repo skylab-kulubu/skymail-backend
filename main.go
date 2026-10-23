@@ -377,6 +377,7 @@ func logSendLanes(lanes mailer.SendLanes) {
 		line = line.Str("reply_to", lanes.ReplyTo.Address)
 	}
 	line = line.Bool("list_unsubscribe", lanes.ListUnsubscribe)
+	line = line.Bool("mail_purpose", lanes.Purpose)
 	if lanes.ListUnsubscribe && lanes.Lane(mailer.LaneDuyuru).Transport == mailer.TransportOff {
 		log.Warn().Msg("sender lanes: SKYMAIL_LIST_UNSUBSCRIBE is on but the duyuru lane is off: no mail carries List-Unsubscribe until SKYMAIL_SEND_DUYURU is graph or xoauth2")
 	}
@@ -392,7 +393,7 @@ func logSendLanes(lanes mailer.SendLanes) {
 				Msg("sender lanes: the skymail-posta certificate expires within 30 days; renew it (ops/wizards/skymail-posta-app-kaydi.sh)")
 		}
 	}
-	line.Msg("sender lanes (SKYMAIL_SEND_HESAP, SKYMAIL_SEND_BILGI, SKYMAIL_SEND_DUYURU, SKYMAIL_LIST_UNSUBSCRIBE)")
+	line.Msg("sender lanes (SKYMAIL_SEND_HESAP, SKYMAIL_SEND_BILGI, SKYMAIL_SEND_DUYURU, SKYMAIL_LIST_UNSUBSCRIBE, SKYMAIL_MAIL_PURPOSE)")
 }
 
 // logSystemTracking says at startup whether the mail services send is
