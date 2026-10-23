@@ -352,6 +352,8 @@ başlık yazmaz, `off` yolu (eski `SMTP_FROM`) da yazmaz.
   başlıksız gider.
 - **Gövdede bağlantı.** Kişinin bağlantısı şablona `.UnsubscribeUrl` olarak
   girer (`.Email`, `.FullName` gibi; gönderimin aynı adlı değişkenini ezer).
+  Kişinin bağlantısı yoksa değişken boştur; gönderimin verdiği değer
+  kullanılmaz.
 - **Saklama.** Bağlantı API'de hiç sunulmaz (`json:"-"`); satırın kişisel
   içeriğiyle birlikte boşaltılır (saklama süresi, maskeleme son tarihi,
   saklanmayan gönderim) ve hesap silmede satırla gider.
