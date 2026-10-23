@@ -100,7 +100,7 @@ func TestTrackingRecordingIsBoundedAndSerialized(t *testing.T) {
 	if written, err := record(otherLink); err != nil || written {
 		t.Errorf("mismatched link: %v %v", written, err)
 	}
-	// Clear observations to prove disabled, erased, pending and one-year expiry
+	// Clear observations to prove disabled, erased, pending and 90-day expiry
 	// reject writes independently of the total caps.
 	if _, err := s.Conn.Exec(ctx, `DELETE FROM mail_tracking_events WHERE queue_id=$1`, queue); err != nil {
 		t.Fatal(err)
@@ -108,8 +108,8 @@ func TestTrackingRecordingIsBoundedAndSerialized(t *testing.T) {
 	for _, change := range []string{
 		`UPDATE mail_queue SET tracking_disabled_at=now() WHERE id=$1`,
 		`UPDATE mail_queue SET tracking_disabled_at=NULL,recipient_sub=NULL WHERE id=$1`,
-		`UPDATE mail_queue SET recipient_sub='b7d2e4f0-2a6c-4e8b-8f1d-5e6f7a8b9c0d',sent_at=now()-interval '365 days' WHERE id=$1`,
-		`UPDATE mail_queue SET sent_at=now()-interval '364 days',status='pending' WHERE id=$1`,
+		`UPDATE mail_queue SET recipient_sub='b7d2e4f0-2a6c-4e8b-8f1d-5e6f7a8b9c0d',sent_at=now()-interval '90 days' WHERE id=$1`,
+		`UPDATE mail_queue SET sent_at=now()-interval '89 days',status='pending' WHERE id=$1`,
 	} {
 		if _, err := s.Conn.Exec(ctx, change, queue); err != nil {
 			t.Fatal(err)
@@ -118,11 +118,11 @@ func TestTrackingRecordingIsBoundedAndSerialized(t *testing.T) {
 			t.Errorf("%s: %v %v", change, written, err)
 		}
 	}
-	if _, err := s.Conn.Exec(ctx, `UPDATE mail_queue SET status='sent',sent_at=now()-interval '364 days' WHERE id=$1`, queue); err != nil {
+	if _, err := s.Conn.Exec(ctx, `UPDATE mail_queue SET status='sent',sent_at=now()-interval '89 days' WHERE id=$1`, queue); err != nil {
 		t.Fatal(err)
 	}
 	if written, err := record(0); !written || err != nil {
-		t.Fatalf("364 days: %v %v", written, err)
+		t.Fatalf("89 days: %v %v", written, err)
 	}
 	if _, err := s.Conn.Exec(ctx, `UPDATE mail_tasks SET tracking_closed_at=now() WHERE id=$1`, task); err != nil {
 		t.Fatal(err)

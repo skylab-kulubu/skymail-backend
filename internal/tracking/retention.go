@@ -11,18 +11,23 @@ import (
 // design note 07 §4.7; docs/data-lifecycle.md, open and click tracking).
 
 // EventRetentionDays is how long a person's openings and clicks are kept,
-// from their mail going out (mail_queue.sent_at): a year (Yusuf, 2026-10-19;
-// the design said 90 days). Past it no event is written or shown, and the
-// retention run deletes the events and closes the token. Every window on
-// events — the writers', the reports', the retention run's — is this one.
-const EventRetentionDays = 365
+// from their mail going out (mail_queue.sent_at): 90 days (KVKK notice s6,
+// 2026-10-23; it replaces Yusuf's 2026-10-19 year). Past it no event is
+// written or shown, and the retention run keeps the send's counts without
+// people, deletes the events and closes the token: what is left names no
+// one and cannot be traced back. Every window on events — the writers', the
+// reports', the retention run's — is this one.
+const EventRetentionDays = 90
 
 // EventRetention is EventRetentionDays as a duration.
 const EventRetention = EventRetentionDays * 24 * time.Hour
 
-// TotalsMinRecipients is the fewest tracked recipients a send's counts
-// without people are kept for once its events go (T4): fewer, and a count
-// could still tell about one person.
+// TotalsMinRecipients is the fewest tracked recipients whose counts without
+// people are kept for good and shown to anyone who reads the send (T4, #97
+// T6): fewer, and a count could still tell about one person. A send with
+// fewer keeps its counts too, shown only to who may read its people, and
+// the retention run deletes them a year after the send was created
+// (mail_tasks.created_at), as its content (KVKK notice s6).
 const TotalsMinRecipients = 10
 
 // RetentionMode is what the retention run does: SKYMAIL_TRACKING_RETENTION.
