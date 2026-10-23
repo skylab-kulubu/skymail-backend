@@ -13,8 +13,8 @@ import (
 )
 
 // Every window on tracking events in query.sql — the writers', the
-// reports' — is tracking.EventRetentionDays, the retention run's: a year
-// (Yusuf, 2026-10-19). A query cannot read the Go constant, so this keeps
+// reports' — is tracking.EventRetentionDays, the retention run's: 90 days
+// (KVKK notice s6, 2026-10-23). A query cannot read the Go constant, so this keeps
 // the two from drifting apart.
 func TestTrackingQueriesUseTheEventRetention(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)

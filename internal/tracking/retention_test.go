@@ -8,11 +8,11 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
 )
 
-// Yusuf, 2026-10-19: a person's openings and clicks are kept a year from
-// their mail going out, not 90 days.
-func TestEventRetentionIsOneYear(t *testing.T) {
-	if tracking.EventRetentionDays != 365 || tracking.EventRetention != 365*24*time.Hour {
-		t.Fatalf("event retention = %d days (%s), want 365", tracking.EventRetentionDays, tracking.EventRetention)
+// KVKK notice s6, 2026-10-23: a person's openings and clicks are kept 90
+// days from their mail going out, no longer the year of 2026-10-19.
+func TestEventRetentionIsNinetyDays(t *testing.T) {
+	if tracking.EventRetentionDays != 90 || tracking.EventRetention != 90*24*time.Hour {
+		t.Fatalf("event retention = %d days (%s), want 90", tracking.EventRetentionDays, tracking.EventRetention)
 	}
 	if tracking.TotalsMinRecipients != 10 {
 		t.Fatalf("totals threshold = %d, want 10 (T4)", tracking.TotalsMinRecipients)
