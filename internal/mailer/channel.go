@@ -156,17 +156,21 @@ func (s *emailSender) Send(ctx context.Context, job database.MailQueue) error {
 	if err != nil {
 		return err
 	}
+	unsubscribe := s.listUnsubscribe(lane, config, job)
 	switch config.Transport {
 	case TransportGraph:
 		if s.graphTokens == nil || config.From == nil {
 			return fmt.Errorf("send failed: the %s lane is graph without the application's credentials", lane)
+		}
+		if unsubscribe != "" {
+			return s.sendGraphMIME(ctx, job, lane, config, unsubscribe)
 		}
 		return s.sendGraph(ctx, job, lane, config)
 	case TransportXOAUTH2:
 		if s.exchangeTokens == nil || s.xoauth2 == nil || config.From == nil {
 			return fmt.Errorf("send failed: the %s lane is xoauth2 without the application's credentials", lane)
 		}
-		return s.sendXOAUTH2(ctx, job, lane, config)
+		return s.sendXOAUTH2(ctx, job, lane, config, unsubscribe)
 	default:
 		msg, err := s.message(ctx, job, s.config.FromEmail, false)
 		if err != nil {
@@ -225,12 +229,16 @@ func (s *emailSender) message(ctx context.Context, job database.MailQueue, from 
 }
 
 // sendXOAUTH2 sends job from lane's mailbox over SMTP, AUTH XOAUTH2 with an
-// Exchange Online token for the application. The token is dropped when the
-// connection or the AUTH fails, so the next try asks for a new one.
-func (s *emailSender) sendXOAUTH2(ctx context.Context, job database.MailQueue, lane Lane, config LaneConfig) error {
+// Exchange Online token for the application, with List-Unsubscribe when
+// unsubscribe is a link. The token is dropped when the connection or the AUTH
+// fails, so the next try asks for a new one.
+func (s *emailSender) sendXOAUTH2(ctx context.Context, job database.MailQueue, lane Lane, config LaneConfig, unsubscribe string) error {
 	msg, err := s.message(ctx, job, config.From.String(), true)
 	if err != nil {
 		return err
+	}
+	if unsubscribe != "" {
+		setListUnsubscribe(msg, unsubscribe)
 	}
 	// The token's wait is bounded by the send budget, as Graph's is: a slow
 	// Entra must not hold a row past its lease.

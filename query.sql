@@ -895,12 +895,15 @@ FROM inserted_task it
 -- recipient_sub is the recipient's Keycloak subject when the send knew it.
 -- tracking_token is the recipient's token when the row is tracked, and
 -- tracking_skip_reason why not when the send asked for tracking.
+-- list_unsubscribe_url is the recipient's one-click unsubscribe link when
+-- core gave one (List-Unsubscribe, bounce ticket 11).
 -- name: CreateMailQueueItems :copyfrom
 INSERT INTO mail_queue (
     task_id, recipient_full_name, recipient_email,
     subject, body, body_html, priority, recipient_sub,
-    tracking_token, tracking_skip_reason, suppressed_but_sent
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
+    tracking_token, tracking_skip_reason, suppressed_but_sent,
+    list_unsubscribe_url
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
 
 -- A recipient whose mail did not render, say a template that slices an empty
 -- full name, is written failed, with the render error the send's page shows:
@@ -1128,9 +1131,10 @@ WITH due AS (SELECT mt.id, mt.content_mask_failing_since
              ORDER BY mt.content_mask_failing_since
              LIMIT sqlc.arg(batch_size)::int FOR UPDATE OF mt SKIP LOCKED),
      emptied AS (UPDATE mail_queue q
-         SET subject   = '',
-             body      = '',
-             body_html = NULL
+         SET subject              = '',
+             body                 = '',
+             body_html            = NULL,
+             list_unsubscribe_url = NULL
          FROM due
          WHERE q.task_id = due.id
          RETURNING q.task_id)
@@ -1165,7 +1169,7 @@ ORDER BY parts.rank;
 -- between the reading and the writing (a row it is emptying is waited for and
 -- read again: emptied, it is not taken).
 -- name: ListQueueRowsToMask :many
-SELECT id, recipient_full_name, recipient_email, subject, body, body_html
+SELECT id, recipient_full_name, recipient_email, subject, body, body_html, list_unsubscribe_url
 FROM mail_queue
 WHERE task_id = sqlc.arg(task_id)
   AND id > sqlc.arg(after)
@@ -1212,7 +1216,7 @@ WHERE id = sqlc.arg(id);
 -- times: it is not kept.
 -- name: ClearSendContent :exec
 WITH emptied AS (UPDATE mail_queue
-    SET subject = '', body = '', body_html = NULL
+    SET subject = '', body = '', body_html = NULL, list_unsubscribe_url = NULL
     WHERE mail_queue.task_id = sqlc.arg(task_id)
     RETURNING mail_queue.id)
 UPDATE mail_tasks
@@ -1263,12 +1267,13 @@ WITH due AS (SELECT mt.id
              ORDER BY mt.created_at
              LIMIT sqlc.arg(batch_size)::int FOR UPDATE OF mt SKIP LOCKED),
      rows AS (UPDATE mail_queue q
-         SET subject   = '',
-             body      = '',
-             body_html = NULL
+         SET subject              = '',
+             body                 = '',
+             body_html            = NULL,
+             list_unsubscribe_url = NULL
          FROM due
          WHERE q.task_id = due.id
-           AND (q.subject <> '' OR q.body <> '' OR q.body_html IS NOT NULL)
+           AND (q.subject <> '' OR q.body <> '' OR q.body_html IS NOT NULL OR q.list_unsubscribe_url IS NOT NULL)
          RETURNING q.task_id)
 UPDATE mail_tasks mt
 SET body_variables     = '{}',
@@ -1706,10 +1711,16 @@ WHERE e.queue_id = sqlc.arg(queue_id) AND e.kind = 'click'
          AND b.classifier_version = sqlc.arg(classifier_version)
          AND b.occurred_at BETWEEN sqlc.arg(at)::timestamptz - interval '5 seconds' AND sqlc.arg(at)) >= 3;
 
+-- system_lane: a row of the send is in the system lane (priority > 0, as
+-- ProcessSystemQueueItems reads it). A tracked mail there is always one the
+-- system sends (a service's single mail, SkyMail's own approval notice): a
+-- person's tracked send is in the bulk lane, and the system lane is never
+-- tracked as a person asks. Its people are read with the role only.
 -- name: TrackingTaskAccess :one
 SELECT t.id, t.sent_by, t.tracking_requested, t.tracking_closed_at,
        COALESCE((SELECT max(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS sent_at,
-       COALESCE((SELECT min(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS started_at
+       COALESCE((SELECT min(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS started_at,
+       EXISTS (SELECT 1 FROM mail_queue q WHERE q.task_id = t.id AND q.priority > 0) AS system_lane
 FROM mail_tasks t WHERE t.id = $1;
 
 -- Aggregates remain inside PostgreSQL: a report never loads raw events or
@@ -1895,6 +1906,107 @@ SELECT count(*) FILTER (WHERE status <> 'failed') AS queued,
 FROM mail_queue
 WHERE task_id = sqlc.arg(task_id);
 
+-- A notification type's text on a channel other than e-mail (hub ticket
+-- iletisim-servisi 05: inbox), as the Template seed states it with the type.
+-- name: UpsertNotificationVariant :one
+INSERT INTO notification_variants (type, channel, title, summary, link)
+VALUES (sqlc.arg(type)::text, sqlc.arg(channel)::text, sqlc.arg(title)::text,
+        sqlc.arg(summary)::text, sqlc.arg(link)::text)
+ON CONFLICT (type, channel) DO UPDATE
+    SET title      = EXCLUDED.title,
+        summary    = EXCLUDED.summary,
+        link       = EXCLUDED.link,
+        updated_at = now()
+RETURNING *;
+
+-- name: DeleteNotificationVariant :exec
+DELETE FROM notification_variants
+WHERE type = sqlc.arg(type)::text
+  AND channel = sqlc.arg(channel)::text;
+
+-- name: GetNotificationVariant :one
+SELECT *
+FROM notification_variants
+WHERE type = sqlc.arg(type)::text
+  AND channel = sqlc.arg(channel)::text;
+
+-- name: ListNotificationVariants :many
+SELECT *
+FROM notification_variants
+ORDER BY type, channel;
+
+-- One notification's inbox item for each person, its text rendered once:
+-- gone in 90 days, or at expires_at when that is sooner. A person already
+-- holding the notification's item is left as they are.
+-- name: InsertInboxItems :execrows
+INSERT INTO inbox_items (user_id, notification_id, notification_type, title, summary, link, expires_at)
+SELECT person, sqlc.arg(notification_id)::uuid, sqlc.arg(notification_type)::text, sqlc.arg(title)::text,
+       sqlc.arg(summary)::text, sqlc.narg(link)::text,
+       LEAST(now() + interval '90 days', COALESCE(sqlc.narg(expires_at)::timestamptz, 'infinity'::timestamptz))
+FROM unnest(sqlc.arg(user_ids)::uuid[]) AS person
+ON CONFLICT (notification_id, user_id) DO NOTHING;
+
+-- A page of one person's inbox, newest first: the items after the cursor
+-- (created_at, id), archived ones as archived says (exclude, include, only),
+-- none past its expiry.
+-- name: ListInboxItems :many
+SELECT *
+FROM inbox_items
+WHERE user_id = sqlc.arg(user_id)::uuid
+  AND expires_at > now()
+  AND CASE sqlc.arg(archived)::text
+          WHEN 'include' THEN true
+          WHEN 'only' THEN archived_at IS NOT NULL
+          ELSE archived_at IS NULL END
+  AND (sqlc.narg(before_created_at)::timestamptz IS NULL
+      OR (created_at, id) < (sqlc.narg(before_created_at)::timestamptz, sqlc.narg(before_id)::uuid))
+ORDER BY created_at DESC, id DESC
+LIMIT sqlc.arg(page_size)::int;
+
+-- A person's unseen and unread items, archived and expired ones left out.
+-- name: CountInboxItems :one
+SELECT count(*) FILTER (WHERE seen_at IS NULL) AS unseen,
+       count(*) FILTER (WHERE read_at IS NULL) AS unread
+FROM inbox_items
+WHERE user_id = sqlc.arg(user_id)::uuid
+  AND archived_at IS NULL
+  AND expires_at > now();
+
+-- One of the person's own items, marked: seen; read (seen too); unread;
+-- archived. A mark already there keeps its time. Nothing when the item is not
+-- theirs, does not exist or has expired.
+-- name: MarkInboxItem :one
+UPDATE inbox_items
+SET seen_at     = CASE WHEN sqlc.arg(mark)::text IN ('seen', 'read') THEN COALESCE(seen_at, now()) ELSE seen_at END,
+    read_at     = CASE sqlc.arg(mark)::text
+                      WHEN 'read' THEN COALESCE(read_at, now())
+                      WHEN 'unread' THEN NULL
+                      ELSE read_at END,
+    archived_at = CASE WHEN sqlc.arg(mark)::text = 'archived' THEN COALESCE(archived_at, now()) ELSE archived_at END
+WHERE id = sqlc.arg(id)::uuid
+  AND user_id = sqlc.arg(user_id)::uuid
+  AND expires_at > now()
+RETURNING *;
+
+-- Every item of the person's inbox (archived ones left out) not yet seen, or
+-- with read not yet read, marked so.
+-- name: MarkAllInboxItems :execrows
+UPDATE inbox_items
+SET seen_at = COALESCE(seen_at, now()),
+    read_at = CASE WHEN sqlc.arg(read)::boolean THEN COALESCE(read_at, now()) ELSE read_at END
+WHERE user_id = sqlc.arg(user_id)::uuid
+  AND archived_at IS NULL
+  AND expires_at > now()
+  AND (seen_at IS NULL OR (sqlc.arg(read)::boolean AND read_at IS NULL));
+
+-- The inbox sweep: at most batch_size items past their expiry.
+-- name: DeleteExpiredInboxItems :execrows
+DELETE FROM inbox_items
+WHERE id IN (SELECT i.id
+             FROM inbox_items i
+             WHERE i.expires_at <= sqlc.arg(at)::timestamptz
+             ORDER BY i.expires_at, i.id
+             LIMIT sqlc.arg(batch_size)::int FOR UPDATE SKIP LOCKED);
 -- Bounces and the suppression list (hub spec skymail-bounce-isleme; README,
 -- "Geri dönen posta ve bastırma listesi").
 
@@ -1975,22 +2087,6 @@ WHERE address = ANY (sqlc.arg(addresses)::text[]);
 INSERT INTO mail_bounces (queue_id, source, kind, action, status, smtp_code)
 VALUES (sqlc.arg(queue_id), 'smtp', 'hard', 'failed', sqlc.narg(status)::text, sqlc.arg(smtp_code)::int);
 
--- The suppression list, newest first, those whose address contains search
--- (case-insensitively) when it is given.
--- name: ListSuppressions :many
-SELECT id, address, recipient_sub, source, reason_code, first_seen, last_seen, count, last_queue_id, exempt_flagged_at
-FROM mail_suppressions
-WHERE sqlc.narg(search)::text IS NULL
-   OR strpos(address, lower(sqlc.narg(search)::text)) > 0
-ORDER BY last_seen DESC, address
-LIMIT sqlc.arg(row_limit)::int OFFSET sqlc.arg(row_offset)::int;
-
--- name: CountSuppressions :one
-SELECT count(*)
-FROM mail_suppressions
-WHERE sqlc.narg(search)::text IS NULL
-   OR strpos(address, lower(sqlc.narg(search)::text)) > 0;
-
 -- Removes a suppression: the address is mailed again. What it said is
 -- returned for the removal's record, never the address.
 -- name: DeleteSuppression :one
@@ -2003,3 +2099,129 @@ RETURNING source, reason_code, count, first_seen;
 INSERT INTO mail_suppression_removals (actor_sub, source, reason_code, count, first_seen)
 VALUES (sqlc.arg(actor_sub)::text, sqlc.arg(source)::text, sqlc.arg(reason_code)::text, sqlc.arg(count)::int,
         sqlc.arg(first_seen)::timestamptz);
+
+-- The unsubscribe record of the duyuru stream (ADR 0072; hub ticket
+-- abonelik-cikisi 02; README, "Tek tık çıkış ucu").
+
+-- The unsubscribed among a send's recipients (lower-cased addresses) in a
+-- stream: what queueing writes failed when the send is in that stream.
+-- name: GetUnsubscribedAddresses :many
+SELECT address
+FROM mail_unsubscribes
+WHERE stream = sqlc.arg(stream)::text
+  AND address = ANY (sqlc.arg(addresses)::text[]);
+
+-- The e-mail rows among ids, claimed by claimed_by, whose address left the
+-- duyuru stream, with their send's template's key and whether it is a system
+-- template (mailer.LaneOf: account mail is never in the duyuru stream).
+-- name: GetUnsubscribedClaimedRows :many
+SELECT q.id, t.key, coalesce(t.system, false)::boolean AS system
+FROM mail_queue q
+         JOIN mail_unsubscribes u ON u.address = lower(btrim(q.recipient_email)) AND u.stream = 'duyuru'
+         LEFT JOIN mail_tasks mt ON mt.id = q.task_id
+         LEFT JOIN templates t ON t.id = mt.template_id
+WHERE q.id = ANY (sqlc.arg(ids)::uuid[])
+  AND q.channel = 'email'
+  AND q.status = 'processing'
+  AND q.claimed_by = sqlc.arg(claimed_by)::text;
+
+-- Writes failed the claimed rows whose address left the stream after they
+-- were queued: skipped, never sent, nothing tried (attempts stays).
+-- name: SkipUnsubscribedClaimedRows :execrows
+UPDATE mail_queue
+SET status = 'failed',
+    error  = sqlc.arg(error)::text
+WHERE id = ANY (sqlc.arg(ids)::uuid[])
+  AND status = 'processing'
+  AND claimed_by = sqlc.arg(claimed_by)::text;
+
+-- The address's unsubscribe from a stream, if it has one.
+-- name: GetUnsubscribe :one
+SELECT id, address, stream, source, created_at
+FROM mail_unsubscribes
+WHERE address = sqlc.arg(address)::text
+  AND stream = sqlc.arg(stream)::text;
+
+-- Records an unsubscribe; an address already out of the stream keeps its
+-- first record (0 rows).
+-- name: InsertUnsubscribe :execrows
+INSERT INTO mail_unsubscribes (address, stream, source)
+VALUES (sqlc.arg(address)::text, sqlc.arg(stream)::text, sqlc.arg(source)::text)
+ON CONFLICT (address, stream) DO NOTHING;
+
+-- Removes the address's unsubscribe from a stream: the person resubscribed.
+-- What it said is returned for the reactivation's record, never the address.
+-- name: DeleteUnsubscribeOf :one
+DELETE
+FROM mail_unsubscribes
+WHERE address = sqlc.arg(address)::text
+  AND stream = sqlc.arg(stream)::text
+RETURNING stream, source, created_at;
+
+-- The unsubscribe the operator API names by id, locked until it is removed.
+-- name: LockUnsubscribe :one
+SELECT id, address, stream, source, created_at
+FROM mail_unsubscribes
+WHERE id = sqlc.arg(id)
+    FOR UPDATE;
+
+-- name: DeleteUnsubscribe :execrows
+DELETE
+FROM mail_unsubscribes
+WHERE id = sqlc.arg(id);
+
+-- name: UnsubscribeExists :one
+SELECT EXISTS (SELECT 1 FROM mail_unsubscribes WHERE id = sqlc.arg(id))::boolean AS found;
+
+-- name: InsertUnsubscribeReactivation :exec
+INSERT INTO mail_unsubscribe_reactivations (actor, actor_sub, reason, stream, source, unsubscribed_at)
+VALUES (sqlc.arg(actor)::text, sqlc.narg(actor_sub)::text, sqlc.narg(reason)::text, sqlc.arg(stream)::text,
+        sqlc.arg(source)::text, sqlc.arg(unsubscribed_at)::timestamptz);
+
+-- The reactivations, newest first.
+-- name: ListUnsubscribeReactivations :many
+SELECT id, reactivated_at, actor, actor_sub, reason, stream, source, unsubscribed_at
+FROM mail_unsubscribe_reactivations
+ORDER BY reactivated_at DESC, id DESC
+LIMIT sqlc.arg(row_limit)::int OFFSET sqlc.arg(row_offset)::int;
+
+-- name: CountUnsubscribeReactivations :one
+SELECT count(*)
+FROM mail_unsubscribe_reactivations;
+
+-- The suppression list and the unsubscribe record as one list, most recent
+-- first: reason bounce (mail_suppressions, every stream) or unsubscribed
+-- (mail_unsubscribes, its stream). reason, when given, keeps one of them;
+-- search keeps the addresses that contain it, case-insensitively.
+-- name: ListSuppressionEntries :many
+SELECT e.id, e.address, e.reason, e.stream, e.recipient_sub, e.source, e.reason_code, e.first_seen, e.last_seen,
+       e.count, e.last_queue_id, e.exempt_flagged_at
+FROM (SELECT s.id, s.address, 'bounce'::text AS reason, 'all'::text AS stream, s.recipient_sub, s.source,
+             s.reason_code, s.first_seen, s.last_seen, s.count, s.last_queue_id, s.exempt_flagged_at
+      FROM mail_suppressions s
+      WHERE sqlc.narg(reason)::text IS NULL OR sqlc.narg(reason)::text = 'bounce'
+      UNION ALL
+      SELECT u.id, u.address, 'unsubscribed'::text, u.stream, NULL::uuid, u.source, ''::text, u.created_at,
+             u.created_at, 1, NULL::uuid, NULL::timestamptz
+      FROM mail_unsubscribes u
+      WHERE sqlc.narg(reason)::text IS NULL OR sqlc.narg(reason)::text = 'unsubscribed') e
+WHERE sqlc.narg(search)::text IS NULL
+   OR strpos(e.address, lower(sqlc.narg(search)::text)) > 0
+ORDER BY e.last_seen DESC, e.address, e.reason
+LIMIT sqlc.arg(row_limit)::int OFFSET sqlc.arg(row_offset)::int;
+
+-- name: CountSuppressionEntries :one
+SELECT ((SELECT count(*)
+        FROM mail_suppressions s
+        WHERE (sqlc.narg(reason)::text IS NULL OR sqlc.narg(reason)::text = 'bounce')
+          AND (sqlc.narg(search)::text IS NULL OR strpos(s.address, lower(sqlc.narg(search)::text)) > 0))
+           + (SELECT count(*)
+              FROM mail_unsubscribes u
+              WHERE (sqlc.narg(reason)::text IS NULL OR sqlc.narg(reason)::text = 'unsubscribed')
+                AND (sqlc.narg(search)::text IS NULL OR strpos(u.address, lower(sqlc.narg(search)::text)) > 0)))::bigint
+           AS total;
+
+-- name: GetSuppressionID :one
+SELECT id
+FROM mail_suppressions
+WHERE id = sqlc.arg(id);

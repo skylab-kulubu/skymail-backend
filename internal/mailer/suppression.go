@@ -38,7 +38,8 @@ func suppressedError(s database.GetSuppressedAddressesRow) string {
 // The key alone is not enough: the template must also be a system template
 // (the Template seed's; the keys are not reserved, so anyone with
 // skymail:templates:write could otherwise send past the list with an
-// account.* key).
+// account.* key). Only skymail:templates:system, the seed's service account's,
+// marks one (handlers.TemplatesSystemRole).
 func AccountMail(key *string, system bool) bool {
 	return system && key != nil && (strings.HasPrefix(*key, "keycloak.") || strings.HasPrefix(*key, "account."))
 }

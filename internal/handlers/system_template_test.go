@@ -44,6 +44,15 @@ func (m *recordingMailerStub) EnqueueSingle(_ context.Context, arg database.Crea
 	return uuid.New(), nil
 }
 
+func (*recordingMailerStub) SystemTrackingAvailable() bool { return false }
+
+func (*recordingMailerStub) OperatorTrackingAlways() bool { return false }
+
+func (m *recordingMailerStub) EnqueueSystemSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, _ *mailer.TrackingPreferences) (uuid.UUID, bool, error) {
+	id, err := m.EnqueueSingle(ctx, arg)
+	return id, false, err
+}
+
 func (*recordingMailerStub) EnqueueTrackedSingle(context.Context, database.CreateSingleMailTaskParams, *mailer.TrackingPreferences) (uuid.UUID, error) {
 	return uuid.New(), nil
 }
@@ -66,6 +75,8 @@ func systemTemplateApp(t *testing.T, db *database.Store, mail mailer.Mailer) *fi
 	}})
 	app.Use(func(c fiber.Ctx) error {
 		c.Locals("user_id", "31ef736f-72da-4a40-8791-d523199cf9f0")
+		// The by-key upsert's system mark takes the seed's role.
+		c.Locals("roles", []string{TemplatesSystemRole})
 		return c.Next()
 	})
 

@@ -24,6 +24,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
+	"github.com/skylab-kulubu/skymail-backend/internal/requests"
 	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 )
@@ -105,7 +106,7 @@ func claimsUserinfo(t *testing.T) string {
 	return server.URL
 }
 
-func newNotificationWorld(t *testing.T) *notificationWorld {
+func newNotificationWorld(t *testing.T, opts ...mailer.Option) *notificationWorld {
 	t.Helper()
 	ctx := context.Background()
 	postgres := testpostgres.StartDatabase(t)
@@ -137,8 +138,10 @@ func newNotificationWorld(t *testing.T) *notificationWorld {
 
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
 	auth := middlewares.NewAuthMiddleware("skymail", claimsUserinfo(t), middlewares.AudienceOff)
+	// As main registers them: the person's own routes before /v1's chain.
+	registerInboxRoutes(app, auth, nil, handlers.NewInboxHandler(store))
 	api := protectedAPI(app, auth, nil)
-	registerNotificationRoutes(api, auth, handlers.NewNotificationHandler(store, mailer.NewMailer(store, mailer.SMTPConfig{}, mailer.SenderOn), directory))
+	registerNotificationRoutes(api, auth, handlers.NewNotificationHandler(store, mailer.NewMailer(store, mailer.SMTPConfig{}, mailer.SenderOn, opts...), directory))
 	return &notificationWorld{t: t, store: store, app: app, people: directory}
 }
 
@@ -497,5 +500,98 @@ func TestTheSeedStatesANotificationType(t *testing.T) {
 		if status, raw := call(http.MethodPut, "/v1/notification_types/team.membership-added", body); status != fiber.StatusBadRequest {
 			t.Errorf("PUT %v: %d %s, want 400", body, status, raw)
 		}
+	}
+}
+
+// A recipient's unsubscribe_url (bounce ticket 11) is core's signed link: an
+// optional type of the bulk lane keeps it on the person's row and renders it
+// as .UnsubscribeUrl; a person without one gets neither. A required or
+// system-lane type refuses it, and so does a link the header could not carry.
+// A request without the field hashes as before it existed.
+func TestAnUnsubscribeURLGoesOnlyWithAnOptionalBulkType(t *testing.T) {
+	w := newNotificationWorld(t)
+	ctx := context.Background()
+	for _, statement := range []string{
+		`INSERT INTO templates (key, name, subject, html_content, plain_text_content, react_email_content, content_sensitive)
+		 VALUES ('club.digest', 'Duyuru', 'Duyuru', '<p>{{.FullName}}</p><a href="{{.UnsubscribeUrl}}">Abonelikten çık</a>', 'Çık: {{.UnsubscribeUrl}}', '', false),
+		        ('event.reminder', 'Hatırlatma', 'Hatırlatma', '<p>{{.FullName}}</p>', '{{.FullName}}', '', false)`,
+		`INSERT INTO notification_types (key, category, required, default_channels, lane)
+		 VALUES ('club.digest', 'news', false, '{email}', 'bulk'),
+		        ('event.reminder', 'events', false, '{email}', 'system')`,
+	} {
+		if _, err := w.store.Conn.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	token := bearer(t, coreService, true, coreRoles...)
+	link := "https://api.yildizskylab.com/v1/communication-preferences/unsubscribe?t=AQEBGqzN0x8K-_c2Vj"
+	withLink := func(r map[string]any, url string) map[string]any {
+		r["unsubscribe_url"] = url
+		return r
+	}
+
+	s := w.post(token, "digest-1", notification("club.digest",
+		withLink(recipient(personAyse, "", "email"), link), recipient(personMehmet, "", "email")))
+	if s.status != fiber.StatusCreated || s.result.Channels["email"].Queued != 2 {
+		t.Fatalf("status %d %s", s.status, s.raw)
+	}
+	rows, err := w.store.Conn.Query(ctx, `SELECT recipient_email, list_unsubscribe_url, body, body_html FROM mail_queue WHERE task_id = $1`,
+		*s.result.Channels["email"].TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	seen := 0
+	for rows.Next() {
+		var email, body string
+		var url, page *string
+		if err := rows.Scan(&email, &url, &body, &page); err != nil {
+			t.Fatal(err)
+		}
+		seen++
+		switch email {
+		case "ayse@example.com":
+			if url == nil || *url != link || body != "Çık: "+link || page == nil || !strings.Contains(*page, `href="`+link+`"`) {
+				t.Errorf("Ayşe's row: link %v, body %q, html %v", url, body, page)
+			}
+		case "mehmet@example.com":
+			if url != nil || strings.Contains(body, "https://") {
+				t.Errorf("Mehmet's row: link %v, body %q", url, body)
+			}
+		default:
+			t.Errorf("a row for %s", email)
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("%d rows", seen)
+	}
+
+	for name, tc := range map[string]struct {
+		kind, url, code string
+	}{
+		"a required type":       {"core.certificate", link, "notification.unsubscribe_url_not_allowed"},
+		"a system-lane type":    {"event.reminder", link, "notification.unsubscribe_url_not_allowed"},
+		"http":                  {"club.digest", "http://api.yildizskylab.com/u?t=AQ", "notification.unsubscribe_url_invalid"},
+		"a line break":          {"club.digest", "https://api.yildizskylab.com/u?t=AQ\r\nBcc: x@example.com", "notification.unsubscribe_url_invalid"},
+		"an angle bracket":      {"club.digest", "https://api.yildizskylab.com/u?t=AQ>", "notification.unsubscribe_url_invalid"},
+		"a user in the address": {"club.digest", "https://user@api.yildizskylab.com/u?t=AQ", "notification.unsubscribe_url_invalid"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := w.post(token, "digest-"+strings.ReplaceAll(name, " ", "-"), notification(tc.kind,
+				recipient(personMehmet, "", "email"), withLink(recipient(personAyse, "", "email"), tc.url)))
+			if s.status != fiber.StatusBadRequest || s.error.Code != tc.code || s.error.Params["recipient"] != float64(1) {
+				t.Fatalf("%d %s, want 400 %s for recipient 1", s.status, s.raw, tc.code)
+			}
+		})
+	}
+	if n := w.count(`SELECT count(*) FROM mail_queue WHERE list_unsubscribe_url IS NOT NULL`); n != 1 {
+		t.Errorf("rows with a link = %d, want Ayşe's alone", n)
+	}
+
+	// The field is left out of a request's JSON when empty, so a retry from
+	// before it hashes the same.
+	raw, err := json.Marshal(requests.NotificationRecipient{Sub: personAyse})
+	if err != nil || strings.Contains(string(raw), "unsubscribe_url") {
+		t.Errorf("an empty unsubscribe_url is written: %s %v", raw, err)
 	}
 }

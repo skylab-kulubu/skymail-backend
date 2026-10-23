@@ -67,6 +67,13 @@ func (a *routeTestAuth) Authenticate(c fiber.Ctx) error {
 	return c.Next()
 }
 
+func (a *routeTestAuth) AuthenticatePerson(c fiber.Ctx) error {
+	a.authCalls++
+	*a.order = append(*a.order, "person")
+	c.Locals("user_id", a.subject)
+	return c.Next()
+}
+
 func (a *routeTestAuth) RequireAnyPermission(...string) func(fiber.Ctx) error {
 	return func(c fiber.Ctx) error {
 		a.permissionCalls++

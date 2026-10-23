@@ -10,7 +10,8 @@ import (
 
 // sweepSend is a send for the content sweep: its template's content_sensitive,
 // whether it went to a list, how long ago it was created and its rows'
-// statuses. Every row holds a rendered mail.
+// statuses. Every row holds a rendered mail and an unsubscribe link, which go
+// together.
 type sweepSend struct {
 	sensitive *bool
 	list      bool
@@ -42,8 +43,10 @@ func seedSweepSend(t *testing.T, db *Store, send sweepSend) uuid.UUID {
 	}
 	for _, status := range send.statuses {
 		if _, err := db.Conn.Exec(ctx, `
-			INSERT INTO mail_queue (task_id, recipient_full_name, recipient_email, subject, body, body_html, status, created_at)
-			VALUES ($1, 'Ayşe Kaya', 'ayse@example.com', 'Kodun 123456', 'Kod: 123456', '<p>123456</p>', $2, now() - $3::interval)`,
+			INSERT INTO mail_queue (task_id, recipient_full_name, recipient_email, subject, body, body_html, status, created_at,
+			                        list_unsubscribe_url)
+			VALUES ($1, 'Ayşe Kaya', 'ayse@example.com', 'Kodun 123456', 'Kod: 123456', '<p>123456</p>', $2, now() - $3::interval,
+			        'https://api.example.com/v1/communication-preferences/unsubscribe?t=AQ')`,
 			taskID, status, send.age.String()); err != nil {
 			t.Fatal(err)
 		}
@@ -64,7 +67,8 @@ func sweptStateOf(t *testing.T, db *Store, task uuid.UUID) sweptState {
 		SELECT mt.content_cleared_at IS NOT NULL,
 		       mt.body_variables::text,
 		       (SELECT count(*) FROM mail_queue q
-		        WHERE q.task_id = mt.id AND (q.subject <> '' OR q.body <> '' OR q.body_html IS NOT NULL))
+		        WHERE q.task_id = mt.id AND (q.subject <> '' OR q.body <> '' OR q.body_html IS NOT NULL
+		                                     OR q.list_unsubscribe_url IS NOT NULL))
 		FROM mail_tasks mt WHERE mt.id = $1`, task).Scan(&state.cleared, &state.variables, &state.content); err != nil {
 		t.Fatal(err)
 	}
@@ -372,5 +376,31 @@ func TestSentContentViewsAreDeletedPastTheirRetention(t *testing.T) {
 	}
 	if left != 2 || all != 2 {
 		t.Errorf("left %d of %d views, want the two younger than 730 days", left, all)
+	}
+}
+
+// A send that is not kept loses its rows' unsubscribe links with their mail:
+// emptied at once (ClearSendContent) or past the masking deadline.
+func TestASendNotKeptLosesItsUnsubscribeLinks(t *testing.T) {
+	db := lifecycleStore(t)
+	ctx := context.Background()
+	yes := true
+	emptied := seedSweepSend(t, db, sweepSend{sensitive: &yes, age: time.Hour, statuses: []string{"sent", "sent"}})
+	if err := db.ClearSendContent(ctx, emptied); err != nil {
+		t.Fatal(err)
+	}
+	if state := sweptStateOf(t, db, emptied); !state.cleared || state.content != 0 {
+		t.Errorf("ClearSendContent: %+v", state)
+	}
+
+	late := seedSweepSend(t, db, sweepSend{sensitive: &yes, age: time.Hour, statuses: []string{"sent"}})
+	if _, err := db.Conn.Exec(ctx, `UPDATE mail_tasks SET content_mask_failing_since = now() - INTERVAL '2 days' WHERE id = $1`, late); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ClearSendsPastMaskDeadline(ctx, ClearSendsPastMaskDeadlineParams{DeadlineSeconds: 3600, BatchSize: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if state := sweptStateOf(t, db, late); !state.cleared || state.content != 0 {
+		t.Errorf("past the masking deadline: %+v", state)
 	}
 }
