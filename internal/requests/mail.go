@@ -12,13 +12,13 @@ import (
 // Mail onayı request, and for a single mail duyuru when it is tracked, islem
 // when it is not. category and the two statements come only with a purpose.
 type SendPurpose struct {
-	// islem: about the recipient's own application or transaction, only to people one by one (POST /mail_tasks/single, a Mail onayı request to people) or to a Forms source's respondents, with transactional_statement true, never tracked, never with a category; it goes out from bilgi@ without List-Unsubscribe and skips the unsubscribe record. duyuru: an announcement to an audience, with a category; it goes out from duyuru@ and follows the preference and the unsubscribe record. A list or a Keycloak group is always duyuru.
+	// islem: about the recipient's own application or transaction, only to people one by one (POST /mail_tasks/single, a Mail onayı request to people) or to a Forms source's respondents, with transactional_statement true, never with a category, tracked as any send; it goes out from bilgi@ without List-Unsubscribe and skips the unsubscribe record. duyuru: an announcement to an audience, with a category; it goes out from duyuru@ and follows the preference and the unsubscribe record. A list or a Keycloak group is always duyuru.
 	Purpose *string `json:"purpose" enums:"islem,duyuru"`
 	// core's category of a duyuru send: club:duyuru, club:haber, team:<Keycloak group id>:duyuru or team:<id>:haber. Required with duyuru, refused with islem. Whether the group is a team is core's to say (a later version).
 	Category *string `json:"category" example:"club:duyuru"`
 	// With islem, required and true: the sender's statement that the mail is about the recipient's own application or transaction (a changed place or time, a missing document, a result). Ignored with duyuru.
 	TransactionalStatement *bool `json:"transactional_statement"`
-	// With duyuru: the sender's statement that the mail carries no commercial content (no sponsor promotion, paid ticket, company job advert or draw; ADR 0072 decision 9). Kept as given; a later version requires it true. Ignored with islem.
+	// The sender's statement that the mail carries no commercial content (no sponsor promotion, paid ticket, company job advert or draw; ADR 0072 decision 9). false is refused with either purpose (400 mail_task.commercial_content_not_allowed: commercial mail needs İYS consent under 6563, which the club cannot have). With duyuru, true is kept; a later version requires it. Ignored with islem.
 	CommercialContentAbsent *bool `json:"commercial_content_absent"`
 }
 

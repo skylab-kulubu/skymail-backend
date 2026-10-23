@@ -344,7 +344,7 @@ func (h *mailHandlerImpl) GetFormSource(c fiber.Ctx) error {
 // SendFormSource godoc
 //
 //	@Summary		Send to an immutable Forms audience
-//	@Description	The source owner holding current skymail:mails:send or skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is no_account) and core deciding, and the answer says tracking true. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): duyuru with a category by default; islem with transactional_statement true when the mail is about each respondent's own application: never tracked, queued in the bulk lane, sent from bilgi@ without List-Unsubscribe. The purpose is part of an exact retry.
+//	@Description	The source owner holding current skymail:mails:send or skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is no_account) and core deciding, and the answer says tracking true. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): duyuru with a category by default; islem with transactional_statement true when the mail is about each respondent's own application: tracked as any Forms source send, queued in the bulk lane, sent from bilgi@ without List-Unsubscribe. The purpose is part of an exact retry.
 //	@Tags			Mail
 //	@Param			send	body	requests.SendFormSource	true	"Prepared source and mail content"
 //	@Accept			json
@@ -380,9 +380,9 @@ func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 		variables = []byte(`{}`)
 	}
 	// A Forms source's respondents get duyuru unless the sender declares the
-	// mail about their own application (islem): then it is never tracked.
+	// mail about their own application (islem); either is tracked as before.
 	purposesOn := m.PurposeAvailable()
-	named, err := choosePurpose(purposesOn, p.SendPurpose, targetFormSource, p.Tracking)
+	named, err := choosePurpose(purposesOn, p.SendPurpose, targetFormSource)
 	if err != nil {
 		return err
 	}
@@ -391,11 +391,8 @@ func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	tracked := m.OperatorTrackingAlways() && !isIslem(purpose)
-	var preferences *mailer.TrackingPreferences
-	if tracked {
-		preferences = formSourceTracking(c.Context(), h.db, m, p.FormSourceID, owner, p.TemplateID, true)
-	}
+	tracked := m.OperatorTrackingAlways()
+	preferences := formSourceTracking(c.Context(), h.db, m, p.FormSourceID, owner, p.TemplateID, true)
 	var id uuid.UUID
 	repeated := false
 	err = h.db.InTx(c.Context(), func(q *database.Queries) error {
@@ -452,7 +449,7 @@ func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 
 func (h *mailApprovalHandlerImpl) submitFormSource(c fiber.Ctx, caller approvalCaller, p requests.SubmitMailApproval, send approvalSend) error {
 	// Checked already (approvalPurpose): what the body named, for the hash.
-	named, err := choosePurpose(h.mailer.PurposeAvailable(), send.askedPurpose, targetFormSource, send.tracking)
+	named, err := choosePurpose(h.mailer.PurposeAvailable(), send.askedPurpose, targetFormSource)
 	if err != nil {
 		return err
 	}
@@ -490,7 +487,7 @@ func (h *mailApprovalHandlerImpl) submitFormSource(c fiber.Ctx, caller approvalC
 		a, err := q.CreateMailApproval(c.Context(), database.CreateMailApprovalParams{
 			SubmitterSub: caller.sub, SubmitterName: caller.name, SubmitterEmail: caller.email, SubmitterEmailUnverified: caller.emailUnverified,
 			TemplateID: p.TemplateID, TemplateVersionID: checked.versionID, FormSourceID: &source.ID, BodyVariables: send.variables,
-			At: now, DeadlineAt: now.Add(mailApprovalDeadline), TrackingRequested: h.mailer.OperatorTrackingAlways() && !isIslem(send.purpose),
+			At: now, DeadlineAt: now.Add(mailApprovalDeadline), TrackingRequested: h.mailer.OperatorTrackingAlways(),
 			Purpose: send.purpose.Purpose, Category: send.purpose.Category,
 			TransactionalStatement: send.purpose.TransactionalStatement, CommercialContentAbsent: send.purpose.CommercialContentAbsent,
 		})

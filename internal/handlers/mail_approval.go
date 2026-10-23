@@ -208,7 +208,7 @@ type MailApprovalItem struct {
 	TaskIDs []uuid.UUID `json:"task_ids"`
 	// What happened to it last.
 	LastEvent *MailApprovalEvent `json:"last_event"`
-	// The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyMail tracks every person's send, it is tracked whatever this says, unless it is islem: never tracked.
+	// The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyMail tracks every person's send, it is tracked whatever this says, islem too.
 	Tracking bool `json:"tracking"`
 	// The purpose of the send once approved, as submitted. Null for a request submitted while SkyMail's purposes were off: approved while they are on, it goes as duyuru, club:duyuru.
 	SendPurposeFields
@@ -391,7 +391,7 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 			BodyVariables:            send.variables,
 			At:                       now,
 			DeadlineAt:               now.Add(mailApprovalDeadline),
-			TrackingRequested:        !isIslem(send.purpose) && operatorTracking(c.Context(), h.mailer, send.tracking, checked.template.ID, send.mailListID),
+			TrackingRequested:        operatorTracking(c.Context(), h.mailer, send.tracking, checked.template.ID, send.mailListID),
 			Purpose:                  send.purpose.Purpose,
 			Category:                 send.purpose.Category,
 			TransactionalStatement:   send.purpose.TransactionalStatement,

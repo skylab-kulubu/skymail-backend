@@ -75,8 +75,8 @@ type createdPurpose struct {
 
 // What ADR 0072 refuses is refused, before anything is queued: islem to a
 // list, a group, or as a Mail onayı request to a list; islem without the
-// statement, tracked, or with a category; duyuru without core's category; a
-// category without a purpose.
+// statement or with a category; duyuru without core's category; commercial
+// content declared, whatever the purpose; a category without a purpose.
 func TestThePurposeRulesRefuseASend(t *testing.T) {
 	w := newFormSourceWorld(t, purposesOn())
 	source := prepareSource(t, w, "source-sender", 2)
@@ -94,7 +94,9 @@ func TestThePurposeRulesRefuseASend(t *testing.T) {
 		{"islem to a Keycloak group", "yusuf", "/v1/mail_tasks", with(group, islemFields), "mail_task.purpose_not_allowed"},
 		{"a Mail onayı request to a list as islem", "elif", "/v1/mail_approvals", with(w.listSend(), islemFields), "mail_task.purpose_not_allowed"},
 		{"islem without the statement", "yusuf", "/v1/mail_tasks/single", with(single, map[string]any{"purpose": "islem"}), "mail_task.transactional_statement_required"},
-		{"islem tracked", "yusuf", "/v1/mail_tasks/single", with(single, map[string]any{"purpose": "islem", "transactional_statement": true, "tracking": true}), "mail_task.tracking_not_allowed"},
+		{"commercial content declared, duyuru", "yusuf", "/v1/mail_tasks", with(w.listSend(), map[string]any{"purpose": "duyuru", "category": "club:duyuru", "commercial_content_absent": false}), "mail_task.commercial_content_not_allowed"},
+		{"commercial content declared, islem", "yusuf", "/v1/mail_tasks/single", with(single, map[string]any{"purpose": "islem", "transactional_statement": true, "commercial_content_absent": false}), "mail_task.commercial_content_not_allowed"},
+		{"commercial content declared, a Forms source", "source-sender", "/v1/mail_tasks/form-source", with(sourceSend(w, source.ID), map[string]any{"purpose": "duyuru", "category": "club:haber", "commercial_content_absent": false}), "mail_task.commercial_content_not_allowed"},
 		{"islem with a category", "yusuf", "/v1/mail_tasks/single", with(single, map[string]any{"purpose": "islem", "transactional_statement": true, "category": "club:duyuru"}), "mail_task.category_not_allowed"},
 		{"a Forms source as islem without the statement", "source-sender", "/v1/mail_tasks/form-source", with(sourceSend(w, source.ID), map[string]any{"purpose": "islem", "transactional_statement": false}), "mail_task.transactional_statement_required"},
 		{"duyuru without a category", "yusuf", "/v1/mail_tasks", with(w.listSend(), map[string]any{"purpose": "duyuru"}), "mail_task.category_required"},
@@ -242,11 +244,12 @@ func TestASendersPurposeIsWrittenAndReadBack(t *testing.T) {
 	}
 }
 
-// With every person's send tracked (SKYMAIL_TRACKING_OPERATOR), an islem send
-// still is not: a Forms source's respondents get no token and Keycloak is
-// not asked about them, and an islem request approved is not tracked either;
-// a duyuru send to the same source is tracked as before.
-func TestAnIslemSendIsNeverTracked(t *testing.T) {
+// With every person's send tracked (SKYMAIL_TRACKING_OPERATOR; Yusuf: every
+// mail is tracked), an islem send is tracked as any operator's send: a Forms
+// source's respondents looked up and given tokens as for duyuru, an islem
+// request approved tracked, an islem single mail tracked in the bulk lane,
+// and one that asks for tracking itself is not refused.
+func TestAnIslemSendIsTrackedLikeAnyOperatorSend(t *testing.T) {
 	prefs := &routePreferences{}
 	accounts := &laterAccounts{}
 	w := newFormSourceWorld(t, purposesOn(), mailer.WithTracking(mailer.Tracking{
@@ -260,39 +263,43 @@ func TestAnIslemSendIsNeverTracked(t *testing.T) {
 	notSensitive := false
 	w.setFreeBasic(false, &notSensitive)
 	w.account(approvalPerson{sub: elif.sub, name: "Source Recipient 0", email: "source-0@example.invalid"}, true, true)
+	w.account(elif, true, true)
 	w.directory.store = w.store
 
 	source := prepareSource(t, w, "source-sender", 3)
 	var created createdPurpose
-	if status, raw := w.call("source-sender", http.MethodPost, "/v1/mail_tasks/form-source", with(sourceSend(w, source.ID), islemFields), &created); status != fiber.StatusCreated || created.Tracking {
-		t.Fatalf("islem Forms source = %d %s; want 201, tracking false", status, raw)
+	if status, raw := w.call("source-sender", http.MethodPost, "/v1/mail_tasks/form-source", with(sourceSend(w, source.ID), islemFields), &created); status != fiber.StatusCreated || !created.Tracking || str(created.Purpose) != "islem" {
+		t.Fatalf("islem Forms source = %d %s; want 201, tracked islem", status, raw)
 	}
-	requested, rows := w.trackingOf(created.ID)
-	if requested || len(rows) != 3 || w.directory.accountAsks != 0 || prefs.asked != 0 {
-		t.Errorf("islem tracked %v, rows %+v; Keycloak asked %d, core %d", requested, rows, w.directory.accountAsks, prefs.asked)
-	}
-	for email, row := range rows {
-		if row.token != nil {
-			t.Errorf("%s has a tracking token", email)
-		}
+	checkFormSourceRows(t, w, created.ID, 3)
+	if w.laneOf(created.ID) != mailer.PriorityBulk {
+		t.Errorf("islem Forms source in lane %d", w.laneOf(created.ID))
 	}
 
 	approvalSource := prepareSource(t, w, "okur", 2)
 	var submitted map[string]any
-	if status, raw := w.call("okur", http.MethodPost, "/v1/mail_approvals", with(sourceSend(w, approvalSource.ID), islemFields), &submitted); status != fiber.StatusCreated || submitted["tracking"] != false || submitted["purpose"] != "islem" {
+	if status, raw := w.call("okur", http.MethodPost, "/v1/mail_approvals", with(sourceSend(w, approvalSource.ID), islemFields), &submitted); status != fiber.StatusCreated || submitted["tracking"] != true || submitted["purpose"] != "islem" {
 		t.Fatalf("submit islem Forms source = %d %s", status, raw)
 	}
 	status, answer, failure := w.act("fatih", uuid.MustParse(submitted["id"].(string)), "approve", nil)
 	if status != fiber.StatusOK || answer.send() == uuid.Nil {
 		t.Fatalf("approve = %d %+v", status, failure)
 	}
-	if got := w.purposeOf(answer.send()); str(got.purpose) != "islem" || got.tracked {
-		t.Errorf("approved islem send written %s tracked %v", str(got.purpose), got.tracked)
+	if got := w.purposeOf(answer.send()); str(got.purpose) != "islem" || !got.tracked {
+		t.Errorf("approved islem send written %s tracked %v, want tracked islem", str(got.purpose), got.tracked)
 	}
 
-	duyuruSource := prepareSource(t, w, "source-sender", 2)
-	if status, raw := w.call("source-sender", http.MethodPost, "/v1/mail_tasks/form-source", sourceSend(w, duyuruSource.ID), &created); status != fiber.StatusCreated || !created.Tracking || str(created.Purpose) != "duyuru" {
-		t.Errorf("duyuru Forms source = %d %s; want tracked duyuru", status, raw)
+	single := w.listSend()
+	delete(single, "mail_list_id")
+	single["recipient_email"], single["recipient_full_name"] = elif.email, elif.name
+	for _, body := range []map[string]any{with(single, islemFields), with(with(single, islemFields), map[string]any{"tracking": true})} {
+		var one createdPurpose
+		if status, raw := w.call("yusuf", http.MethodPost, "/v1/mail_tasks/single", body, &one); status != fiber.StatusCreated || !one.Tracking || str(one.Purpose) != "islem" {
+			t.Fatalf("islem single = %d %s; want 201, tracked islem", status, raw)
+		}
+		if got := w.purposeOf(one.ID); str(got.purpose) != "islem" || !got.tracked || w.laneOf(one.ID) != mailer.PriorityBulk {
+			t.Errorf("islem single written %s tracked %v in lane %d", str(got.purpose), got.tracked, w.laneOf(one.ID))
+		}
 	}
 }
 

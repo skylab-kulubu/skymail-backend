@@ -19,7 +19,10 @@ import (
 //   - people one by one (POST /mail_tasks/single, a Mail onayı request to
 //     people) and a Forms source's respondents may be islem, with the
 //     sender's statement that the mail is about the recipient's own
-//     application or transaction; such a mail is never tracked;
+//     application or transaction; it is tracked as any person's send is
+//     (Yusuf: every mail is tracked; SKYMAIL_TRACKING_OPERATOR);
+//   - no send may declare commercial content (6563: that needs İYS consent,
+//     which the club cannot have; ADR 0072 decision 9);
 //   - a duyuru send names core's category;
 //   - a service's single mail is always islem, whatever it says;
 //   - a body that names no purpose (an older client) gets the one it has
@@ -51,8 +54,8 @@ var (
 		"A send to a list or a Keycloak group is duyuru: islem is only for people one by one or a Forms source's respondents.", fiber.StatusBadRequest)
 	errTransactionalStatementRequired = apperrors.New("mail_task.transactional_statement_required",
 		"An islem send needs transactional_statement true: the mail is about the recipient's own application or transaction.", fiber.StatusBadRequest)
-	errPurposeTracking = apperrors.New("mail_task.tracking_not_allowed",
-		"An islem send is never tracked: send it without tracking, or as duyuru.", fiber.StatusBadRequest)
+	errCommercialContent = apperrors.New("mail_task.commercial_content_not_allowed",
+		"SkyMail sends no commercial content (6563 needs İYS consent, which the club cannot have): commercial_content_absent is true or left out.", fiber.StatusBadRequest)
 	errCategoryRequired = apperrors.New("mail_task.category_required",
 		"A duyuru send needs a category: club:duyuru, club:haber, team:<group id>:duyuru or team:<group id>:haber.", fiber.StatusBadRequest)
 	errCategoryInvalid = apperrors.New("mail_task.category_invalid",
@@ -80,22 +83,17 @@ func islemByDefault() mailer.SendPurpose {
 	return mailer.SendPurpose{Purpose: &purpose}
 }
 
-// isIslem says p is an islem send.
-func isIslem(p mailer.SendPurpose) bool {
-	return p.Purpose != nil && *p.Purpose == mailer.PurposeIslem
-}
-
 // isDuyuru says p is a duyuru send.
 func isDuyuru(p mailer.SendPurpose) bool {
 	return p.Purpose != nil && *p.Purpose == mailer.PurposeDuyuru
 }
 
-// choosePurpose checks the purpose a body names for a send to target that
-// asked for tracking (tracking): the zero SendPurpose while purposes are off
-// (on false) or when the body names none, which the caller then gives its
-// default; otherwise the purpose the send is written with, or why it is
-// refused.
-func choosePurpose(on bool, asked requests.SendPurpose, target sendTarget, tracking bool) (mailer.SendPurpose, error) {
+// choosePurpose checks the purpose a body names for a send to target: the
+// zero SendPurpose while purposes are off (on false) or when the body names
+// none, which the caller then gives its default; otherwise the purpose the
+// send is written with, or why it is refused. Tracking is the tracking
+// rules' (SKYMAIL_TRACKING, SKYMAIL_TRACKING_OPERATOR), whatever the purpose.
+func choosePurpose(on bool, asked requests.SendPurpose, target sendTarget) (mailer.SendPurpose, error) {
 	if !on {
 		return mailer.SendPurpose{}, nil
 	}
@@ -104,6 +102,9 @@ func choosePurpose(on bool, asked requests.SendPurpose, target sendTarget, track
 			return mailer.SendPurpose{}, errPurposeRequired
 		}
 		return mailer.SendPurpose{}, nil
+	}
+	if asked.CommercialContentAbsent != nil && !*asked.CommercialContentAbsent {
+		return mailer.SendPurpose{}, errCommercialContent
 	}
 	switch *asked.Purpose {
 	case mailer.PurposeIslem:
@@ -114,8 +115,6 @@ func choosePurpose(on bool, asked requests.SendPurpose, target sendTarget, track
 			return mailer.SendPurpose{}, errCategoryNotAllowed
 		case asked.TransactionalStatement == nil || !*asked.TransactionalStatement:
 			return mailer.SendPurpose{}, errTransactionalStatementRequired
-		case tracking:
-			return mailer.SendPurpose{}, errPurposeTracking
 		}
 		purpose, statement := mailer.PurposeIslem, true
 		return mailer.SendPurpose{Purpose: &purpose, TransactionalStatement: &statement}, nil

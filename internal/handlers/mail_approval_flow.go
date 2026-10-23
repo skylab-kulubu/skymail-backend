@@ -203,7 +203,7 @@ func (h *mailApprovalHandlerImpl) approvalPurpose(send approvalSend) (mailer.Sen
 	case send.formSourceID != nil:
 		target = targetFormSource
 	}
-	chosen, err := choosePurpose(on, send.askedPurpose, target, send.tracking)
+	chosen, err := choosePurpose(on, send.askedPurpose, target)
 	if err != nil {
 		return mailer.SendPurpose{}, err
 	}
@@ -520,8 +520,7 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	// An approved send is an operator's mail: while SkyMail tracks every
 	// person's send it is tracked, whatever the request said when it was
 	// submitted (queue does the same under the lock).
-	// An islem send is never tracked.
-	tracked := (view.MailApproval.TrackingRequested || h.mailer.OperatorTrackingAlways()) && !isIslem(h.queuedPurpose(view.MailApproval))
+	tracked := view.MailApproval.TrackingRequested || h.mailer.OperatorTrackingAlways()
 	var prepared approvalPrepared
 	if action.sends && view.MailApproval.MailListID != nil && !view.InternalMailList {
 		prepared, err = h.groupRecipients(ctx, *view.MailApproval.MailListID)
@@ -769,15 +768,13 @@ func (h *mailApprovalHandlerImpl) queue(ctx context.Context, q *database.Queries
 	// when it was submitted; otherwise a Forms source's never is (it has no
 	// box).
 	// An islem send (to people or a Forms source, declared about the
-	// recipient's own application) waits in the bulk lane too, and goes out
-	// from bilgi@ untracked.
+	// recipient's own application) waits in the bulk lane too, is tracked as
+	// any approved send, and goes out from bilgi@.
 	sends := h.mailer.Queue(q, mailer.PriorityBulk)
 	purpose := h.queuedPurpose(a)
 	a.Purpose, a.Category, a.TransactionalStatement, a.CommercialContentAbsent =
 		purpose.Purpose, purpose.Category, purpose.TransactionalStatement, purpose.CommercialContentAbsent
 	switch {
-	case isIslem(purpose):
-		a.TrackingRequested = false
 	case h.mailer.OperatorTrackingAlways():
 		a.TrackingRequested = true
 	case a.FormSourceID != nil:
@@ -957,8 +954,7 @@ func (h *mailApprovalHandlerImpl) resubmit(ctx context.Context, q *database.Quer
 	now := h.now()
 	// A Forms source's send is tracked only while SkyMail tracks every
 	// person's send: it has no box.
-	// An islem send is never tracked.
-	tracked := (send.formSourceID == nil || h.mailer.OperatorTrackingAlways()) && !isIslem(send.purpose) &&
+	tracked := (send.formSourceID == nil || h.mailer.OperatorTrackingAlways()) &&
 		operatorTracking(ctx, h.mailer, send.tracking, checked.template.ID, send.mailListID)
 	if _, err := q.ResubmitMailApproval(ctx, database.ResubmitMailApprovalParams{
 		TemplateID:              checked.template.ID,

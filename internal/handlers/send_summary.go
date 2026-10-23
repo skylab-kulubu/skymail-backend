@@ -206,7 +206,7 @@ type TrackingMode struct {
 	TrackingAvailable bool `json:"tracking_available"`
 	// True while SKYMAIL_TRACKING_OPERATOR=on too: every person's send is tracked, the send form shows no box and a send's tracking field is ignored.
 	TrackingAlways bool `json:"tracking_always"`
-	// True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru), a duyuru send its category, and an islem send is never tracked (even with tracking_always). False: the fields are ignored.
+	// True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru), and a duyuru send its category; tracking follows tracking_available and tracking_always whatever the purpose. False: the fields are ignored.
 	PurposeAvailable bool `json:"purpose_available"`
 }
 

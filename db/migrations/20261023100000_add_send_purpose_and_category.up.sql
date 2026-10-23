@@ -3,7 +3,8 @@
 -- the queue priority, says which message stream a mail is in:
 --
 --   purpose: islem (the transactional stream: hesap@ and bilgi@; no
---     preference, no unsubscribe record, no List-Unsubscribe, not tracked) or
+--     preference, no unsubscribe record, no List-Unsubscribe; tracked by the
+--     tracking rules, as any mail) or
 --     duyuru (the broadcast stream: duyuru@; a category, the preference, the
 --     unsubscribe record, the one-click header and a visible link). NULL is a
 --     row from before, or one queued while SKYMAIL_MAIL_PURPOSE was off: read

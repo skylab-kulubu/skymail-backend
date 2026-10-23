@@ -99,7 +99,8 @@ type SendLanes struct {
 // stream its mail is in.
 const (
 	// PurposeIslem is the transactional stream (hesap@, bilgi@): no
-	// preference, no unsubscribe record, no List-Unsubscribe, not tracked.
+	// preference, no unsubscribe record, no List-Unsubscribe; tracked by the
+	// tracking rules, as any mail.
 	PurposeIslem = "islem"
 	// PurposeDuyuru is the broadcast stream (duyuru@): a category, the
 	// preference, the unsubscribe record, the one-click header and a visible

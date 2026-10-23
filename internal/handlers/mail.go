@@ -139,7 +139,7 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 	}
 	// A list or a Keycloak group is always duyuru.
 	purposesOn := h.mailer.PurposeAvailable()
-	purpose, err := choosePurpose(purposesOn, params.SendPurpose, targetAudience, params.Tracking)
+	purpose, err := choosePurpose(purposesOn, params.SendPurpose, targetAudience)
 	if err != nil {
 		return err
 	}
@@ -228,7 +228,7 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 // SendSingle godoc
 //
 //	@Summary		Send a single email
-//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): a person's send may be islem (with transactional_statement true; never tracked, 400 mail_task.tracking_not_allowed when it asks; the system lane, bilgi@) or duyuru with a category (the bulk lane, duyuru@); without a purpose, islem when untracked and duyuru when tracked. A service's token is always islem; its fields are ignored.
+//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): a person's send may be islem (with transactional_statement true; bilgi@; tracked as any person's send, in the bulk lane then, else the system lane) or duyuru with a category (the bulk lane, duyuru@); without a purpose, islem when untracked and duyuru when tracked. A service's token is always islem; its fields are ignored.
 //	@Tags			Mail
 //	@Accept			json
 //	@Produce		json
@@ -266,15 +266,15 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	service := middlewares.IsServiceAccount(c)
 	// A service's mail (account mail, a Forms confirmation, a notice) is
 	// always islem: what its body says about a purpose is ignored. A
-	// person's may be either; islem is never tracked.
+	// person's may be either, tracked as any person's send.
 	purposesOn := h.mailer.PurposeAvailable()
 	var purpose mailer.SendPurpose
 	if !service {
-		if purpose, err = choosePurpose(purposesOn, params.SendPurpose, targetPeople, params.Tracking); err != nil {
+		if purpose, err = choosePurpose(purposesOn, params.SendPurpose, targetPeople); err != nil {
 			return err
 		}
 	}
-	tracking := !service && !isIslem(purpose) && operatorTracking(c.Context(), h.mailer, params.Tracking, templateID, nil)
+	tracking := !service && operatorTracking(c.Context(), h.mailer, params.Tracking, templateID, nil)
 	switch {
 	case service:
 		purpose = purposeOrDefault(purposesOn, mailer.SendPurpose{}, islemByDefault)
@@ -300,8 +300,9 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	case service && h.mailer.SystemTrackingAvailable():
 		taskID, tracking, err = h.mailer.EnqueueSystemSingle(c.Context(), arg, nil)
 	case tracking, isDuyuru(purpose):
-		// The bulk lane: an operator's mail to an audience of one, tracked
-		// or not (a duyuru single the person did not ask tracking for).
+		// The bulk lane, where tracking is planned: an operator's tracked
+		// mail (islem too, which goes out from bilgi@ all the same), or a
+		// duyuru single the person did not ask tracking for.
 		taskID, err = h.mailer.EnqueueTrackedSingle(c.Context(), arg, nil)
 	default:
 		taskID, err = h.mailer.EnqueueSingle(c.Context(), arg)
