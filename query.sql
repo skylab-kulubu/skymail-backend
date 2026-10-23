@@ -1682,7 +1682,7 @@ SELECT q.id, q.task_id, q.sent_at, now()::timestamptz AS at
 FROM mail_queue q JOIN mail_tasks t ON t.id = q.task_id
 WHERE q.tracking_token = $1 AND q.tracking_disabled_at IS NULL
   AND q.recipient_sub IS NOT NULL AND q.status = 'sent'
-  AND q.sent_at IS NOT NULL AND q.sent_at > now() - interval '365 days'
+  AND q.sent_at IS NOT NULL AND q.sent_at > now() - interval '90 days'
   AND q.sent_at <= now() AND t.tracking_closed_at IS NULL
 FOR UPDATE OF q;
 
@@ -1698,7 +1698,7 @@ SELECT q.id, q.task_id, sqlc.arg(kind)::text, sqlc.narg(link_id)::bigint, sqlc.a
 FROM mail_queue q
 WHERE q.id = sqlc.arg(queue_id) AND q.tracking_disabled_at IS NULL
   AND q.recipient_sub IS NOT NULL AND q.status = 'sent'
-  AND q.sent_at > sqlc.arg(at)::timestamptz - interval '365 days'
+  AND q.sent_at > sqlc.arg(at)::timestamptz - interval '90 days'
   AND q.sent_at <= sqlc.arg(at)
   AND NOT EXISTS (SELECT 1 FROM mail_tasks t WHERE t.id = q.task_id AND t.tracking_closed_at IS NOT NULL)
   AND ((sqlc.arg(kind)::text = 'open' AND sqlc.narg(link_id)::bigint IS NULL
@@ -1747,7 +1747,7 @@ WITH people AS (
  FROM mail_queue q WHERE q.task_id = sqlc.arg(task_id)
 ), events AS (
  SELECT e.* FROM mail_tracking_events e JOIN mail_queue q ON q.id = e.queue_id
- WHERE e.task_id = sqlc.arg(task_id) AND q.sent_at > now() - interval '365 days'
+ WHERE e.task_id = sqlc.arg(task_id) AND q.sent_at > now() - interval '90 days'
 ), reasons AS (
  SELECT reason, count(*) AS n FROM people WHERE NOT tracked GROUP BY reason
 ), links AS (
@@ -1783,13 +1783,13 @@ SELECT jsonb_build_object('tracked_recipients',tracked_recipients,'untracked_by_
 FROM mail_task_tracking_totals WHERE task_id = $1;
 
 -- One aggregate per recipient, then filtering and pagination. Events older
--- than their recipient's one-year window (tracking.EventRetentionDays) never
+-- than their recipient's 90-day window (tracking.EventRetentionDays) never
 -- reappear while retention is disabled or catching up. No tracking token or link target is selected.
 -- name: ListTrackingRecipients :one
 WITH clicked AS (
  SELECT e.queue_id,e.link_id,count(*)::int AS clicks,max(e.occurred_at) AS last_clicked_at
  FROM mail_tracking_events e JOIN mail_queue q ON q.id=e.queue_id
- WHERE e.task_id=sqlc.arg(task_id) AND e.kind='click' AND q.sent_at > now() - interval '365 days'
+ WHERE e.task_id=sqlc.arg(task_id) AND e.kind='click' AND q.sent_at > now() - interval '90 days'
  GROUP BY e.queue_id,e.link_id
 ), people AS (
  SELECT q.id,q.recipient_sub,q.recipient_email,q.recipient_full_name,
@@ -1804,7 +1804,7 @@ WITH clicked AS (
         COALESCE(jsonb_agg(DISTINCT e.source_class) FILTER (WHERE e.id IS NOT NULL),'[]'::jsonb) AS source_classes,
         COALESCE((SELECT jsonb_agg(jsonb_build_object('link_id',c.link_id,'clicks',c.clicks,'last_clicked_at',c.last_clicked_at) ORDER BY c.link_id)
                   FROM clicked c WHERE c.queue_id=q.id),'[]'::jsonb) AS clicked_links
- FROM mail_queue q LEFT JOIN mail_tracking_events e ON e.queue_id=q.id AND q.sent_at > now() - interval '365 days'
+ FROM mail_queue q LEFT JOIN mail_tracking_events e ON e.queue_id=q.id AND q.sent_at > now() - interval '90 days'
  WHERE q.task_id=sqlc.arg(task_id)
  GROUP BY q.id
 ), filtered AS (

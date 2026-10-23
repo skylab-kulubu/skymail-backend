@@ -471,7 +471,7 @@ type MailTaskLink struct {
 	CreatedAt        time.Time `json:"created_at"`
 }
 
-// A send's tracking counts without people, kept after its events go; only sends with at least 10 tracked recipients.
+// A send's tracking counts without people, kept after its events go: for good with at least 10 tracked recipients, a year from the send with fewer.
 type MailTaskTrackingTotal struct {
 	TaskID                 uuid.UUID `json:"task_id"`
 	TrackedRecipients      int       `json:"tracked_recipients"`

@@ -883,10 +883,17 @@ aydınlatma metni (18) tamamlanmadan hiçbir ortamda bayrak açılmaz;
 production açılışı bilet 19'dadır. `on` geçerli adreslerle başlatılabilir,
 ancak bu bir açılış izni değildir.
 
-**Saklama süresi (Yusuf, 2026-10-19): kişi bazındaki açılma ve tıklama
-kayıtları alıcının postasının gittiği andan (`sent_at`) 1 yıl
-(`tracking.EventRetentionDays` = 365) tutulur** (tasarım notu 90 gün
-diyordu). Olay yazımı, raporlar ve saklama işi aynı sabiti kullanır.
+**Saklama süresi (KVKK aydınlatma metni s6, 2026-10-23; Yusuf'un
+2026-10-19 "1 yıl" kararının yerine): kişi bazındaki açılma ve tıklama
+kayıtları alıcının postasının gittiği andan (`sent_at`) 90 gün
+(`tracking.EventRetentionDays` = 90) tutulur**, sonra anonimleşir: saklama
+işi gönderimin kişisiz toplamını yazar, olayları siler ve belirteci kapatır;
+kişiye geri götüren bir şey (özet, sıra numarası) kalmaz. IP hiç
+okunmadığı için saklanacak ya da silinecek IP yoktur. Kişisiz toplam her
+gönderimde tutulur: en az 10 takipli alıcıda süresiz; 10'dan azda
+gönderimin oluşturulmasından 1 yıl sonra, içeriğiyle birlikte silinir.
+Bağlantılar 1 yıl yönlendirir; 90 günden sonraki tıklama kişiye yazılmaz.
+Olay yazımı, raporlar ve saklama işi aynı sabiti kullanır.
 
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
@@ -1186,7 +1193,7 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   çalışır. İstekten hedefe hiçbir parça eklenmez.
 - SQL, alıcı satırı kilidi altında tüm replikalar birlikte açılmayı 5
   dakikada 1/toplam 20; tıklamayı bağlantı başına dakikada 1/alıcı başına
-  toplam 50 ile sınırlar. Teslim edilmemiş veya `sent_at + 1 yıl` dolmuş
+  toplam 50 ile sınırlar. Teslim edilmemiş veya `sent_at + 90 gün` dolmuş
   satır olay alamaz; imha işinin çalışması beklenmez. Süreç başına kayıt
   kovası 50 olay denemesi/sn (patlama 50), en çok 8 eşzamanlı DB işlemi,
   işlem başına 500 ms bütçe ve 2048 girdilik/30 sn negatif önbellek vardır.
@@ -1205,11 +1212,12 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   Seri noktaları UTC'de ilk 72 saat saatlik, sonra günlük; `at`, `interval`,
   `likely_human_opens`, `automated_opens`, `likely_human_clicks`,
   `automated_clicks` taşır. Boş kovalar yazılmaz. Kimlik ve hedef URL yoktur
-  (tek alıcılı hedef kişiyi adlandırabilir). Son postadan 1 yıl sonra
+  (tek alıcılı hedef kişiyi adlandırabilir). Son postadan 90 gün sonra
 `retained: true`:
-  yalnız ≥10 alıcılı kişisiz toplam, yoksa `report: null`; seri dönmez.
+  yalnız kişisiz toplam (10'dan az alıcılıda gönderimden 1 yıl sonra
+  silinir), yoksa `report: null`; seri dönmez.
   **Küçük gönderim ve sistem postası:** takipli alıcısı 10'dan az
-  (`tracking.TotalsMinRecipients`, saklanan toplamın eşiği) ya da sistem
+  (`tracking.TotalsMinRecipients`) ya da sistem
   şeridindeki bir gönderimin sayıları kişiye dair bilgidir ("1/1 açıldı,
   14:00"; alıcı `GET /{id}/queue`'da görünür). Bu sayıları yalnız kişi
   raporunu okuyabilen (aşağıdaki kural: `skymail:mails:tracking:read` ya
@@ -1231,9 +1239,9 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   (`link_id`, `clicks`, `last_clicked_at`) içerir. “opened” açılma veya
   otomatik olmayan tıklama çıkarımını, “not_opened” ikisinin yokluğunu
   belirtir; “okumadı” anlamına gelmez. Token/hedef URL dönmez. Gönderimin
-  son `sent_at`'ından (teslim yoksa `created_at`) 1 yıl sonra 410 döner
-  ("Kişi bazında takip kaydı 1 yıl sonra silindi.");
-  bu tarihten önce de her alıcının kendi 1 yıllık pencere dışı olayları
+  son `sent_at`'ından (teslim yoksa `created_at`) 90 gün sonra 410 döner
+  ("Kişi bazında takip kaydı 90 gün sonra silindi.");
+  bu tarihten önce de her alıcının kendi 90 günlük pencere dışı olayları
   gizlenir. İki okuma ucunun bütçesi 2 sn, önbelleği `no-store`'dur.
 
 ### Geri alma: `PUT /internal/v1/tracking-withdrawals/{sub}` (core'dan)
@@ -1283,8 +1291,8 @@ ADR-0062'nin imha işi kalıbı (core `RETENTION_SWEEP_MODE` ile aynı):
 `off` (varsayılan, hiçbir şey koşmaz), `dry-run` (her kuralı çalıştırır,
 işlemi geri alır: yalnız sayar), `apply` (değiştirir), `purge` (tam geri
 dönüş, aşağıda). Açılışta `dry-run`; 1–2 dry-run makbuzu okunur okunmaz
-`apply`'a alınır (bilet 19). Bir yıl beklenmez: D7 yalnız `apply`'da
-çalışır, ilk yıl apply yalnız D7'ye dokunur.
+`apply`'a alınır (bilet 19). 90 gün beklenmez: D7 yalnız `apply`'da
+çalışır, ilk 90 gün apply yalnız D7'ye dokunur.
 
 - **Zamanlama:** açılışta ve saatte bir "zamanı geldi mi" denetlenir; aynı
   kipte son 23 saatte `ok`/`partial`/`refused_large`/`would_refuse_large`
@@ -1297,23 +1305,27 @@ dönüş, aşağıda). Açılışta `dry-run`; 1–2 dry-run makbuzu okunur okun
 - **Kurallar** (gönderim başına tek işlem; önce gönderimin takipli kuyruk
   satırları `ORDER BY id FOR UPDATE`, sonra bağlantılar, sonra olaylar;
   hesap silmenin kilit sırası):
-  1. alıcılarından birinin postası 1 yıldan eskiyse, gönderimde en az 10
-     takipli alıcı varsa ve henüz yoksa **önce** kişisiz toplam
-     (`mail_task_tracking_totals`) gönderimin bütün olaylarından yazılır.
+  1. alıcılarından birinin postası 90 günden eskiyse ve henüz yoksa
+     **önce** kişisiz toplam (`mail_task_tracking_totals`) gönderimin bütün
+     olaylarından yazılır; her gönderimde (KVKK s6), 10'dan az takipli
+     alıcılıda yalnız gönderimin ilk yılında (geç koşu yazmaz).
      "Takipli alıcı" yalnız postası gitmiş (`status='sent'`) ve belirteci
      açık (geri almamış, silinmemiş) olandır; ötekiler toplamda
      `not_delivered` / `tracking_closed` nedeniyle görünür;
-  2. postası 1 yıldan eski alıcıların belirteçleri kapanır;
+  2. postası 90 günden eski alıcıların belirteçleri kapanır;
   3. 1 yıllık bağlantıların adresi boşalır (`expired`); maskelenmiş ya da
      sonradan hassaslaşmış (`mail_task_content_sensitive()`) gönderimin
      bütün bağlantılarının adresi boşalır (`erased`, inceleme D7);
-  4. postası 1 yıldan eski alıcıların olayları silinir;
-  5. kuyrukta bekleyen ya da 1 yıl içinde olan postası kalmayan gönderim
-     kapanır (`tracking_closed_at`); raporu artık yalnız kişisiz toplamdır.
+  4. postası 90 günden eski alıcıların olayları silinir (geri dönüşsüz:
+     açılma/tıklamayı kişiye bağlayan satır kalmaz);
+  5. kuyrukta bekleyen ya da 90 gün içinde olan postası kalmayan gönderim
+     kapanır (`tracking_closed_at`); raporu artık yalnız kişisiz toplamdır;
+  6. 10'dan az takipli alıcılı gönderimin kişisiz toplamı, gönderimin
+     oluşturulmasından 1 yıl sonra silinir (içerikle birlikte).
 - **dry-run ile apply aynı tanımdan:** dry-run aynı ifadeleri çalıştırıp
   işlemi geri alır; apply önce dry-run'ı koşar, sonra değiştirir.
-- **Fren:** bir koşuda kapanacak belirteç, silinecek olay ya da boşalacak
-  bağlantı sayısı `SKYMAIL_TRACKING_RETENTION_MAX_ROWS`'u (varsayılan 50.000)
+- **Fren:** bir koşuda kapanacak belirteç, silinecek olay ya da toplam veya
+  boşalacak bağlantı sayısı `SKYMAIL_TRACKING_RETENTION_MAX_ROWS`'u (varsayılan 50.000)
   aşarsa apply hiçbir şey değiştirmez (`refused_large`, `error` düzeyinde
   `"alarm":"tracking_retention_brake"`). Karar yalnız apply'ın önce koştuğu
   dry-run sayılarına bakar; değişiklik yapan apply hiçbir zaman
@@ -1323,7 +1335,7 @@ dönüş, aşağıda). Açılışta `dry-run`; 1–2 dry-run makbuzu okunur okun
 - **Makbuz:** her koşu `tracking_retention_runs`'a bir satır yazar (kip,
   başlangıç/bitiş, durum `ok|partial|refused_large|failed`,
   `events_cutoff`, durum ayrıca `would_refuse_large` olabilir; sayılar: `sends`, `totals_written`, `tokens_closed`,
-  `events_deleted`, `links_expired`, `links_erased`, `sends_closed`,
+  `totals_deleted`, `events_deleted`, `links_expired`, `links_erased`, `sends_closed`,
   `sends_failed`); kişi, belirteç ya da adres yoktur. Aynı sayılar
   `"event":"tracking_retention_run"` günlük satırındadır.
 - **`purge` (tam geri dönüş):** `SKYMAIL_TRACKING=off` ister (yoksa açılış
@@ -1331,11 +1343,11 @@ dönüş, aşağıda). Açılışta `dry-run`; 1–2 dry-run makbuzu okunur okun
   bakmadan; kişisiz toplamlar ve bağlantılar kalır, eski postaların
   bağlantıları yönlendirir. Her koşuda tekrarlanır (zararsız); iş bitince
   kip **`apply`'a** alınır (`off`'a değil: `off`'ta 1 yıllık bağlantı
-  boşaltması ve D7 de durur; bayrak kapalıyken `apply` zararsızdır). Elle SQL
+  boşaltması, 10'dan az alıcılı toplamın 1 yıllık silinmesi ve D7 de durur; bayrak kapalıyken `apply` zararsızdır). Elle SQL
   gerekmez.
-- **Bilinen sınırlar:** (1) kişisiz toplam ilk alıcının yılı dolduğu koşuda
-  bir kez yazılır; aynı gönderimin sonra giden alıcılarının o andan kendi
-  yıllarına kadarki olayları toplama girmez (gönderim dakikalar içinde
+- **Bilinen sınırlar:** (1) kişisiz toplam ilk alıcının 90 günü dolduğu
+  koşuda bir kez yazılır; aynı gönderimin sonra giden alıcılarının o andan
+  kendi 90 günlerine kadarki olayları toplama girmez (gönderim dakikalar içinde
   gittiği için pratikte etkisiz). (2) Maskeleme süpürücüsü görevi sonra
   kuyruk satırlarını, saklama ise önce kuyruk satırlarını kilitler; bir
   yıllık takipli gönderimin şablonu tam o anda hassaslaşırsa Postgres

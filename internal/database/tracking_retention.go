@@ -100,8 +100,11 @@ var ErrTrackingRetentionNotDue = errors.New("tracking retention: not due")
 type TrackingRetentionCounts struct {
 	// Sends looked at.
 	Sends int64 `json:"sends"`
-	// Counts without people kept (≥ TotalsMinRecipients tracked).
+	// Counts without people kept.
 	TotalsWritten int64 `json:"totals_written"`
+	// Counts of sends with fewer than TotalsMinRecipients tracked
+	// recipients, a year after the send: deleted.
+	TotalsDeleted int64 `json:"totals_deleted"`
 	TokensClosed  int64 `json:"tokens_closed"`
 	EventsDeleted int64 `json:"events_deleted"`
 	// Links a year old: url emptied, expired.
@@ -109,7 +112,7 @@ type TrackingRetentionCounts struct {
 	// Links of a send masked or sensitive since it went out (D7): url
 	// emptied, erased.
 	LinksErased int64 `json:"links_erased"`
-	// Sends all of whose mail is past the year: tracking_closed_at.
+	// Sends all of whose mail is past EventRetention: tracking_closed_at.
 	SendsClosed int64 `json:"sends_closed"`
 	// Sends whose transaction failed (the run is then partial).
 	SendsFailed int64 `json:"sends_failed"`
@@ -118,6 +121,7 @@ type TrackingRetentionCounts struct {
 func (c *TrackingRetentionCounts) add(o TrackingRetentionCounts) {
 	c.Sends += o.Sends
 	c.TotalsWritten += o.TotalsWritten
+	c.TotalsDeleted += o.TotalsDeleted
 	c.TokensClosed += o.TokensClosed
 	c.EventsDeleted += o.EventsDeleted
 	c.LinksExpired += o.LinksExpired
@@ -168,22 +172,26 @@ const trackingRetentionDueSQL = `
 	                   WHERE mode = $1 AND status IN ('ok', 'partial', 'refused_large', 'would_refuse_large')
 	                     AND started_at > now() - interval '23 hours')`
 
-// RunTrackingRetention runs the retention rules once (design note 07 §4.7,
-// Yusuf 2026-10-19: a year), holding the advisory lock, and writes its
-// receipt.
+// RunTrackingRetention runs the retention rules once (design note 07 §4.7;
+// KVKK notice s6, 2026-10-23: 90 days), holding the advisory lock, and
+// writes its receipt.
 //
 // For each send with something due, in one transaction of its own, after
 // locking the send's tracked queue rows by id:
 //
 //  1. the send's counts without people are kept, from all its events, when
-//     one of its recipients' mail went out EventRetention ago or more, it
-//     has at least TotalsMinRecipients tracked rows and has none kept yet;
+//     one of its recipients' mail went out EventRetention ago or more and
+//     it has none kept yet (a send with fewer than TotalsMinRecipients
+//     tracked rows only within a year of its creation);
 //  2. those recipients' tokens close;
 //  3. its links a year old are emptied (expired), and every link of a send
 //     masked or sensitive now (D7) is emptied (erased);
-//  4. those recipients' events are deleted;
-//  5. a send none of whose mail is still to go out or within the year
-//     closes (tracking_closed_at).
+//  4. those recipients' events are deleted: nothing ties an opening or a
+//     click to a person any more, and nothing can tie it back;
+//  5. a send none of whose mail is still to go out or within EventRetention
+//     closes (tracking_closed_at);
+//  6. the counts of a send with fewer than TotalsMinRecipients tracked
+//     rows are deleted a year after the send was created, with its content.
 //
 // A dry run runs exactly these statements and rolls each transaction back:
 // its counts are what apply changes. Apply first runs the dry run; when a
@@ -289,13 +297,14 @@ func (s *Store) RunTrackingRetention(ctx context.Context, opts TrackingRetention
 }
 
 func (c TrackingRetentionCounts) refusedBy(brake int64) bool {
-	return c.TokensClosed > brake || c.EventsDeleted > brake || c.LinksExpired+c.LinksErased > brake
+	return c.TokensClosed > brake || c.EventsDeleted > brake || c.LinksExpired+c.LinksErased > brake || c.TotalsDeleted > brake
 }
 
 // trackingRetentionSends lists the sends with something due, oldest first:
-// tracking still open and created a year ago or more (mail of theirs can be
-// past the year), or a link due (a year old, or of a send masked or
-// sensitive now).
+// tracking still open and created EventRetention ago or more (mail of
+// theirs can be past it), a link due (a year old, or of a send masked or
+// sensitive now), or the counts of a send with fewer than
+// TotalsMinRecipients tracked recipients created a year ago or more.
 func (s *Store) trackingRetentionSends(ctx context.Context, now time.Time) ([]uuid.UUID, error) {
 	rows, err := s.Conn.Query(ctx, `
 		SELECT id FROM (
@@ -307,8 +316,11 @@ func (s *Store) trackingRetentionSends(ctx context.Context, now time.Time) ([]uu
 		    WHERE l.url IS NOT NULL
 		      AND (l.created_at <= @now::timestamptz - interval '1 year'
 		           OR t.content_masked_at IS NOT NULL OR mail_task_content_sensitive(t.id))
+		    UNION
+		    SELECT t.id, t.created_at FROM mail_task_tracking_totals tt JOIN mail_tasks t ON t.id = tt.task_id
+		    WHERE tt.tracked_recipients < @min::int AND t.created_at <= @now::timestamptz - interval '1 year'
 		) due
-		ORDER BY created_at, id`, pgx.NamedArgs{"now": now, "days": tracking.EventRetentionDays})
+		ORDER BY created_at, id`, pgx.NamedArgs{"now": now, "days": tracking.EventRetentionDays, "min": tracking.TotalsMinRecipients})
 	if err != nil {
 		return nil, fmt.Errorf("sends due: %w", err)
 	}
@@ -356,14 +368,17 @@ var trackingRetentionRules = []struct {
 	},
 	{
 		// 1. The counts without people (T4), as the live report has them,
-		// from every event the send still has, before any goes.
+		// from every event the send still has, before any goes. Every send
+		// keeps them (KVKK notice s6); one with fewer than
+		// TotalsMinRecipients tracked recipients only until a year after
+		// its creation (rule 6), so a run late past it keeps none.
 		//
 		// A person counts as tracked only when their tracked mail went out
 		// and their token is open (T4, orchestrator 2026-10-19): a token of
 		// mail that never went out (not_delivered) or closed by a
 		// withdrawal, an erasure or the flag (tracking_closed) could leave
-		// fewer than ten behind the counts. The table's CHECK keeps
-		// tracked_recipients at 10 or more.
+		// fewer than ten behind the counts, and the reports show the counts
+		// of fewer than ten to who may read the send's people only.
 		sql: `WITH people AS (
 		          SELECT q.tracking_token IS NOT NULL AND q.status = 'sent' AND q.tracking_disabled_at IS NULL AS tracked,
 		                 CASE WHEN q.tracking_token IS NULL THEN COALESCE(q.tracking_skip_reason, 'not_requested')
@@ -388,8 +403,9 @@ var trackingRetentionRules = []struct {
 		             (SELECT count(DISTINCT queue_id) FROM events WHERE kind = 'click'),
 		             COALESCE((SELECT jsonb_agg(to_jsonb(links) ORDER BY links.position) FROM links), '[]'::jsonb),
 		             @now::timestamptz
-		      WHERE (SELECT count(*) FROM people WHERE tracked) >= @min::int
-		        AND EXISTS (SELECT 1 FROM mail_tasks t WHERE t.id = @task AND t.tracking_closed_at IS NULL)
+		      WHERE EXISTS (SELECT 1 FROM mail_tasks t WHERE t.id = @task AND t.tracking_closed_at IS NULL
+		                      AND ((SELECT count(*) FROM people WHERE tracked) >= @min::int
+		                           OR t.created_at > @now::timestamptz - interval '1 year'))
 		        AND EXISTS (SELECT 1 FROM mail_queue q
 		                    WHERE q.task_id = @task AND q.tracking_token IS NOT NULL AND q.status = 'sent'
 		                      AND q.sent_at <= @now::timestamptz - make_interval(days => @days::int))
@@ -397,7 +413,7 @@ var trackingRetentionRules = []struct {
 		count: func(c *TrackingRetentionCounts, n int64) { c.TotalsWritten += n },
 	},
 	{
-		// 2. The tokens of mail past the year.
+		// 2. The tokens of mail past EventRetention.
 		sql: `UPDATE mail_queue q SET tracking_disabled_at = @now::timestamptz
 		      WHERE q.task_id = @task AND q.tracking_token IS NOT NULL AND q.tracking_disabled_at IS NULL
 		        AND q.status = 'sent' AND q.sent_at <= @now::timestamptz - make_interval(days => @days::int)`,
@@ -420,7 +436,7 @@ var trackingRetentionRules = []struct {
 		count: func(c *TrackingRetentionCounts, n int64) { c.LinksErased += n },
 	},
 	{
-		// 4. The events of mail past the year.
+		// 4. The events of mail past EventRetention.
 		sql: `DELETE FROM mail_tracking_events e USING mail_queue q
 		      WHERE e.queue_id = q.id AND q.task_id = @task
 		        AND q.sent_at <= @now::timestamptz - make_interval(days => @days::int)`,
@@ -428,7 +444,8 @@ var trackingRetentionRules = []struct {
 	},
 	{
 		// 5. The send, once none of its mail is still to go out or within
-		// the year: its report is the counts without people from now on.
+		// EventRetention: its report is the counts without people from now
+		// on.
 		sql: `UPDATE mail_tasks t SET tracking_closed_at = @now::timestamptz
 		      WHERE t.id = @task AND t.tracking_requested AND t.tracking_closed_at IS NULL
 		        AND t.created_at <= @now::timestamptz - make_interval(days => @days::int)
@@ -437,6 +454,15 @@ var trackingRetentionRules = []struct {
 		                          AND (q.status IN ('pending', 'processing')
 		                               OR (q.status = 'sent' AND q.sent_at > @now::timestamptz - make_interval(days => @days::int))))`,
 		count: func(c *TrackingRetentionCounts, n int64) { c.SendsClosed += n },
+	},
+	{
+		// 6. The counts of a send with fewer than TotalsMinRecipients
+		// tracked recipients go a year after the send was created, as its
+		// content does (KVKK notice s6).
+		sql: `DELETE FROM mail_task_tracking_totals tt USING mail_tasks t
+		      WHERE tt.task_id = @task AND t.id = tt.task_id AND tt.tracked_recipients < @min::int
+		        AND t.created_at <= @now::timestamptz - interval '1 year'`,
+		count: func(c *TrackingRetentionCounts, n int64) { c.TotalsDeleted += n },
 	},
 }
 

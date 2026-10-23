@@ -4395,7 +4395,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/tracking": {
             "get": {
-                "description": "Requires skymail:mails:read. No identities, link tokens or target URLs. After a year only retained totals for at least 10 tracked recipients, or null. tracking_available follows the current flag. A send's counts tell of people when it has fewer than 10 tracked recipients (tracking.TotalsMinRecipients, the bound retained totals keep) or is mail the system sends (the system lane): then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read, or the send's own sender outside the system lane) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4).",
+                "description": "Requires skymail:mails:read. No identities, link tokens or target URLs. After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts tell of people when it has fewer than 10 tracked recipients (tracking.TotalsMinRecipients) or is mail the system sends (the system lane): then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read, or the send's own sender outside the system lane) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4).",
                 "parameters": [
                     {
                         "description": "Mail task ID",
@@ -4447,7 +4447,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/tracking/recipients": {
             "get": {
-                "description": "Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 a year after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.",
+                "description": "Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 90 days after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.",
                 "parameters": [
                     {
                         "description": "Mail task ID",

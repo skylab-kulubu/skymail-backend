@@ -70,8 +70,8 @@ const (
 	OutcomeNoFailure Outcome = "diger"
 )
 
-// RetentionDays is how long a bounce is kept: a year, as open and click
-// tracking's events (hub spec §5). The content sweep deletes older ones.
+// RetentionDays is how long a bounce is kept: a year (hub spec §5). The
+// content sweep deletes older ones.
 const RetentionDays = 365
 
 // sentAtSlack is how much earlier than the row's sent_at a report may say it

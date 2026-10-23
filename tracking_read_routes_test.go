@@ -54,13 +54,14 @@ func TestTrackingReadRoutesEnforceRolesSenderAndNinetyDays(t *testing.T) {
 			t.Errorf("%s status %d", query, status)
 		}
 	}
-	// A year (tracking.EventRetention; Yusuf, 2026-10-19), not 90 days.
-	for _, age := range []string{"89 days", "91 days", "364 days", "365 days", "366 days"} {
+	// 90 days (tracking.EventRetention; KVKK notice s6, 2026-10-23), no
+	// longer a year.
+	for _, age := range []string{"1 day", "89 days", "90 days", "91 days", "364 days"} {
 		if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_queue SET sent_at=now()-$2::interval WHERE task_id=$1`, created.ID, age); err != nil {
 			t.Fatal(err)
 		}
 		want := 410
-		if age == "89 days" || age == "91 days" || age == "364 days" {
+		if age == "1 day" || age == "89 days" {
 			want = 200
 		}
 		if status, raw := w.call("yusuf", "GET", base+"/recipients", nil, nil); status != want {
@@ -87,6 +88,27 @@ func TestTrackingReadRoutesEnforceRolesSenderAndNinetyDays(t *testing.T) {
 	}
 	if status, _ := w.call("baska", "GET", base+"/recipients", nil, nil); status != 403 {
 		t.Error("expired existence revealed before recipient authorization")
+	}
+	// Every send keeps its counts now (KVKK notice s6); those of fewer than
+	// 10 tracked people still go only to who may read the send's people.
+	if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_task_tracking_totals SET tracked_recipients=3 WHERE task_id=$1`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	approvalPeople["tracking_reader"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skymail:access", "skymail:mails:read", handlers.TrackingReadRole}}
+	defer delete(approvalPeople, "tracking_reader")
+	for who, wantWithheld := range map[string]bool{"baska": true, "tracking_reader": false} {
+		var small struct {
+			Retained bool            `json:"retained"`
+			Withheld bool            `json:"withheld"`
+			Report   *map[string]any `json:"report"`
+		}
+		status, raw := w.call(who, "GET", base, nil, &small)
+		if status != 200 || !small.Retained || small.Withheld != wantWithheld || (small.Report == nil) != wantWithheld {
+			t.Errorf("retained counts of 3 as %s: %d %s", who, status, raw)
+		}
+		if !wantWithheld && small.Report != nil && (*small.Report)["tracked_recipients"] != float64(3) {
+			t.Errorf("retained counts of 3 as %s: %s", who, raw)
+		}
 	}
 }
 
