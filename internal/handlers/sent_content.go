@@ -21,10 +21,11 @@ const SystemMailsReadRole = "skymail:system-mails:read"
 const mailsWriteRole = "skymail:mails:write"
 
 // DefaultContentRetentionDays is how long a send's content is kept when
-// MAIL_CONTENT_RETENTION_DAYS does not say: the longest it may say (Yusuf,
-// 2026-10-12: "en çok neyse o olsun"). Sensitive content is emptied at once
-// whatever it says.
-const DefaultContentRetentionDays = MaxContentRetentionDays
+// MAIL_CONTENT_RETENTION_DAYS does not say: a year, what production is set
+// to (KVKK notice s6; hub ticket kvkk-s6-yayin-oncesi 15; it replaces Yusuf's
+// 2026-10-12 "the longest allowed"). Sensitive content is masked whatever it
+// says.
+const DefaultContentRetentionDays = 365
 
 // ContentAccess is whether a caller may open a send's content, and if not,
 // why. A sensitive send's content is kept masked and shown so; a restricted
@@ -178,7 +179,7 @@ type SentMailContent struct {
 // GetQueueItemContent godoc
 //
 //	@Summary		Get one recipient's mail as kept
-//	@Description	The subject, plain text and HTML a recipient of the send was sent, as SkyMail keeps it. access says whether and how they are shown: available — as sent; masked — the send is sensitive (its template carries a code or a one-time link, or said so when it was sent, or it is a single mail whose template does not say it may be shown), and the content sweep replaced every code, one-time link and IP address with •••••• once the send was done (masked_variables, masked_by); the unmasked mail is not kept, and each opening is recorded in sent_content_views; pending — sensitive and not masked yet (a row still to go out, or sent in the last minutes): not shown; restricted — shown to the send's sender, for a send to a list, a group or an approved request to holders of skymail:mails:write, and to holders of skymail:system-mails:read; expired — past MAIL_CONTENT_RETENTION_DAYS (3650 by default) and no longer kept; not_kept — a sensitive send whose content was emptied (before sensitive content was kept, 2026-10-13, or because it could not be masked for certain), which does not come back; unavailable — holds nothing (Account erasure emptied it, or it never rendered). The fields are null unless access is available or masked. The HTML may reach the network (images, a tracking pixel): show it sandboxed, with remote content blocked by default. Never cached.
+//	@Description	The subject, plain text and HTML a recipient of the send was sent, as SkyMail keeps it. access says whether and how they are shown: available — as sent; masked — the send is sensitive (its template carries a code or a one-time link, or said so when it was sent, or it is a single mail whose template does not say it may be shown), and the content sweep replaced every code, one-time link and IP address with •••••• once the send was done (masked_variables, masked_by); the unmasked mail is not kept, and each opening is recorded in sent_content_views; pending — sensitive and not masked yet (a row still to go out, or sent in the last minutes): not shown; restricted — shown to the send's sender, for a send to a list, a group or an approved request to holders of skymail:mails:write, and to holders of skymail:system-mails:read; expired — past MAIL_CONTENT_RETENTION_DAYS (365 by default) and no longer kept; not_kept — a sensitive send whose content was emptied (before sensitive content was kept, 2026-10-13, or because it could not be masked for certain), which does not come back; unavailable — holds nothing (Account erasure emptied it, or it never rendered). The fields are null unless access is available or masked. The HTML may reach the network (images, a tracking pixel): show it sandboxed, with remote content blocked by default. Never cached.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id		path		string	true	"Task ID"
