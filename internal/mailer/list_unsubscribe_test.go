@@ -264,7 +264,7 @@ func TestValidUnsubscribeURL(t *testing.T) {
 }
 
 // A recipient's link is rendered as .UnsubscribeUrl, over a send's variable of
-// that name; without one the send's variable stays.
+// that name; without one the variable is empty, whatever the send says.
 func TestTheRecipientsLinkIsRendered(t *testing.T) {
 	page := `<a href="{{.UnsubscribeUrl}}">Abonelikten çık</a>`
 	got, err := mailer.Render("Konu", "Çık: {{.UnsubscribeUrl}}", page, []byte(`{"UnsubscribeUrl":"https://example.org/genel"}`),
@@ -280,7 +280,18 @@ func TestTheRecipientsLinkIsRendered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.PlainText != "Çık: https://example.org/genel" {
+	// A send's own UnsubscribeUrl never stands in for a missing link: a
+	// caller of the API cannot put its own "Abonelikten çık" in a mail.
+	if got.PlainText != "Çık: " || strings.Contains(got.HTML, "example.org") {
 		t.Errorf("without a link: %+v", got)
+	}
+	footer := `{{if .UnsubscribeUrl}}<a href="{{.UnsubscribeUrl}}">Abonelikten çık</a>{{end}}`
+	got, err = mailer.Render("Konu", "{{if .UnsubscribeUrl}}Çık{{end}}", footer, []byte(`{"UnsubscribeUrl":"https://example.org/genel"}`),
+		mailer.RecipientInfo{FullName: "Ali", Email: "ali@example.net"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PlainText != "" || got.HTML != "" {
+		t.Errorf("footer without a link: %+v", got)
 	}
 }

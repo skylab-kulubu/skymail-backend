@@ -913,8 +913,9 @@ type Rendered struct {
 // Render renders a Mail template's subject, plain text and HTML for one
 // recipient exactly as a send renders what it queues: the send's variables —
 // a JSON object, as a mail task keeps them — with the recipient's Email and
-// FullName over them, and UnsubscribeUrl when the recipient has a link. A
-// part that does not parse is a *ParseError.
+// FullName over them, and UnsubscribeUrl as the recipient's link (empty
+// when they have none, whatever the send's variables say). A part that does
+// not parse is a *ParseError.
 func Render(subject, plainText, html string, variables []byte, recipient RecipientInfo) (Rendered, error) {
 	parsed, err := parseMailTemplates(subject, plainText, html)
 	if err != nil {
@@ -944,9 +945,9 @@ func (t mailTemplates) renderWith(textVars, htmlVars map[string]interface{}, rec
 		}
 		data["Email"] = recipient.Email
 		data["FullName"] = recipient.FullName
-		if recipient.UnsubscribeURL != "" {
-			data["UnsubscribeUrl"] = recipient.UnsubscribeURL
-		}
+		// Always the recipient's, empty when they have none: a send's own
+		// UnsubscribeUrl variable never reaches the footer's link.
+		data["UnsubscribeUrl"] = recipient.UnsubscribeURL
 		return data
 	}
 	textData, htmlData := withRecipient(textVars), withRecipient(htmlVars)
