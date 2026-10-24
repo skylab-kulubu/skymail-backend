@@ -129,3 +129,43 @@ func TestMatchedRefusesAShortAnswer(t *testing.T) {
 		t.Error("a 503 is an answer")
 	}
 }
+
+// More than ResolveBatch addresses go in batches of at most ResolveBatch,
+// each answered in the order asked.
+func TestMatchedAsksInBatches(t *testing.T) {
+	var sizes []int
+	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Recipients []map[string]string `json:"recipients"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		sizes = append(sizes, len(body.Recipients))
+		results := make([]string, len(body.Recipients))
+		for i, recipient := range body.Recipients {
+			results[i] = `{"matched":false}`
+			if strings.HasPrefix(recipient["email"], "uye") {
+				results[i] = `{"matched":true,"sub":"7d3c1f6e-0000-4000-8000-000000000001","allowed":true,"reason":null}`
+			}
+		}
+		fmt.Fprint(w, `{"results":[`+strings.Join(results, ",")+`]}`)
+	}))
+	defer core.Close()
+
+	addresses := make([]string, 0, consent.ResolveBatch+1)
+	for i := 0; i < consent.ResolveBatch; i++ {
+		addresses = append(addresses, fmt.Sprintf("misafir%d@example.com", i))
+	}
+	addresses = append(addresses, "uye@example.com")
+	matched, err := consent.NewClient(core.URL, token("svc"), nil).Matched(context.Background(), "club:duyuru", addresses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sizes) != 2 || sizes[0] != consent.ResolveBatch || sizes[1] != 1 {
+		t.Errorf("batches %v, want %d and 1", sizes, consent.ResolveBatch)
+	}
+	if len(matched) != consent.ResolveBatch+1 || !matched["uye@example.com"] || matched["misafir0@example.com"] {
+		t.Errorf("matched %d addresses, uye %v", len(matched), matched["uye@example.com"])
+	}
+}
