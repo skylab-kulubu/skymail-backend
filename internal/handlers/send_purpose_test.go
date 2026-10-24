@@ -1,8 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/skylab-kulubu/skymail-backend/internal/database"
 
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
@@ -121,4 +125,43 @@ func show(p mailer.SendPurpose) string {
 		return "false"
 	}
 	return "{" + s(p.Purpose) + " " + s(p.Category) + " " + b(p.TransactionalStatement) + " " + b(p.CommercialContentAbsent) + "}"
+}
+
+type templateByID map[uuid.UUID]database.Template
+
+func (t templateByID) GetTemplateById(_ context.Context, id uuid.UUID) (database.Template, error) {
+	template, ok := t[id]
+	if !ok {
+		return database.Template{}, errors.New("no rows")
+	}
+	return template, nil
+}
+
+// A promotional send of an account template is refused (its mail would go in
+// the hesap lane, without its withdraw link); any other is not.
+func TestRefuseAccountPromotional(t *testing.T) {
+	account, other, missing := uuid.New(), uuid.New(), uuid.New()
+	templates := templateByID{
+		account: {Key: strp("keycloak.login-code"), System: true},
+		other:   {Key: strp("free.basic")},
+	}
+	promotional := mailer.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), CommercialContentAbsent: boolp(false)}
+	thanks := mailer.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), CommercialContentAbsent: boolp(true)}
+	ctx := context.Background()
+	if err := refuseAccountPromotional(ctx, templates, account, promotional); !errors.Is(err, errPromotionalAccountTemplate) {
+		t.Errorf("promotional, account template: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		id      uuid.UUID
+		purpose mailer.SendPurpose
+	}{
+		"promotional, another template":     {other, promotional},
+		"not promotional, account template": {account, thanks},
+		"no purpose, account template":      {account, mailer.SendPurpose{}},
+		"a template that cannot be read":    {missing, promotional},
+	} {
+		if err := refuseAccountPromotional(ctx, templates, tc.id, tc.purpose); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
 }

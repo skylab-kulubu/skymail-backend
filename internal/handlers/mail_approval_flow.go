@@ -194,7 +194,7 @@ func approvalSendOf(params requests.SubmitMailApproval) (approvalSend, error) {
 // approvalPurpose is the purpose a request to send is written with (ADR 0072
 // decision 2): islem only to people or a Forms source; duyuru, club:duyuru,
 // when the body names none. The zero SendPurpose while purposes are off.
-func (h *mailApprovalHandlerImpl) approvalPurpose(send approvalSend) (mailer.SendPurpose, error) {
+func (h *mailApprovalHandlerImpl) approvalPurpose(ctx context.Context, send approvalSend) (mailer.SendPurpose, error) {
 	on := h.mailer.PurposeAvailable()
 	target := targetPeople
 	switch {
@@ -205,6 +205,9 @@ func (h *mailApprovalHandlerImpl) approvalPurpose(send approvalSend) (mailer.Sen
 	}
 	chosen, err := choosePurpose(on, h.mailer.PromotionalAvailable(), h.mailer.ListConsentAvailable(), send.askedPurpose, target)
 	if err != nil {
+		return mailer.SendPurpose{}, err
+	}
+	if err := refuseAccountPromotional(ctx, h.db, send.templateID, chosen); err != nil {
 		return mailer.SendPurpose{}, err
 	}
 	return purposeOrDefault(on, chosen, duyuruByDefault), nil

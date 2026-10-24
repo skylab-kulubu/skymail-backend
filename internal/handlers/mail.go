@@ -143,6 +143,9 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if err := refuseAccountPromotional(c.Context(), h.db, params.TemplateID, purpose); err != nil {
+		return err
+	}
 	purpose = purposeOrDefault(purposesOn, purpose, duyuruByDefault)
 	tracking := operatorTracking(c.Context(), h.mailer, params.Tracking, params.TemplateID, &params.MailListID)
 	if _, err := h.db.GetTemplateById(c.Context(), params.TemplateID); err != nil {
@@ -272,6 +275,9 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	var purpose mailer.SendPurpose
 	if !service {
 		if purpose, err = choosePurpose(purposesOn, h.mailer.PromotionalAvailable(), h.mailer.ListConsentAvailable(), params.SendPurpose, targetPeople); err != nil {
+			return err
+		}
+		if err := refuseAccountPromotional(c.Context(), h.db, templateID, purpose); err != nil {
 			return err
 		}
 	}

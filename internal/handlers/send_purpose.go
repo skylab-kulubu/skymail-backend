@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"strings"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
 )
@@ -59,6 +61,8 @@ var (
 		"An islem send needs transactional_statement true: the mail is about the recipient's own application or transaction.", fiber.StatusBadRequest)
 	errCommercialContent = apperrors.New("mail_task.commercial_content_not_allowed",
 		"commercial_content_absent false makes a mail promotional (its main purpose is promoting a product or a service: a discount code, a company's job posting, a sale, a raffle), which goes only to those who consented to promotional mail: it is allowed on a duyuru send while SkyMail's promotional sends are on (tracking-mode promotional_available), and never on an islem send.", fiber.StatusBadRequest)
+	errPromotionalAccountTemplate = apperrors.New("mail_task.promotional_account_template",
+		"A promotional mail (commercial_content_absent false) is not sent with an account template (a System template keyed keycloak.* or account.*): account mail carries neither List-Unsubscribe nor the footer line, so the mail would have no link that withdraws the promotional consent.", fiber.StatusBadRequest)
 	errCategoryRequired = apperrors.New("mail_task.category_required",
 		"A duyuru send needs a category: club:duyuru, club:haber, team:<group id>:duyuru or team:<group id>:haber.", fiber.StatusBadRequest)
 	errCategoryInvalid = apperrors.New("mail_task.category_invalid",
@@ -173,4 +177,28 @@ func purposeOrDefault(on bool, chosen mailer.SendPurpose, fallback func() mailer
 		return chosen
 	}
 	return fallback()
+}
+
+// templateReader reads a template by id (database.Store, database.Queries).
+type templateReader interface {
+	GetTemplateById(ctx context.Context, id uuid.UUID) (database.Template, error)
+}
+
+// refuseAccountPromotional refuses a promotional send (chosen says so) of an
+// account template: its mail goes in the hesap lane (mailer.LaneOf), which
+// writes neither List-Unsubscribe nor the footer line, so it would go
+// without the link that withdraws the promotional consent. A template that
+// cannot be read is left to the caller's own check.
+func refuseAccountPromotional(ctx context.Context, templates templateReader, templateID uuid.UUID, chosen mailer.SendPurpose) error {
+	if chosen.CommercialContentAbsent == nil || *chosen.CommercialContentAbsent {
+		return nil
+	}
+	template, err := templates.GetTemplateById(ctx, templateID)
+	if err != nil {
+		return nil
+	}
+	if mailer.AccountMail(template.Key, template.System) {
+		return errPromotionalAccountTemplate
+	}
+	return nil
 }

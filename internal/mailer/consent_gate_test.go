@@ -576,7 +576,8 @@ func TestAListsOwnEventMailNeedsNoConsent(t *testing.T) {
 }
 
 // SKYMAIL_PROMOTIONAL=on needs purposes, List-Unsubscribe and a duyuru lane
-// that writes it; anything less stops startup. Off asks for nothing.
+// that writes it, SKYMAIL_LIST_CONSENT=on purposes; anything less stops
+// startup. Off asks for nothing.
 func TestPromotionalNeedsItsWayOut(t *testing.T) {
 	graph := map[mailer.Lane]mailer.LaneConfig{mailer.LaneDuyuru: {Transport: mailer.TransportGraph}}
 	off := map[mailer.Lane]mailer.LaneConfig{mailer.LaneDuyuru: {Transport: mailer.TransportOff}}
@@ -587,7 +588,8 @@ func TestPromotionalNeedsItsWayOut(t *testing.T) {
 		want  string
 	}{
 		{"off", mailer.ConsentGate{}, mailer.SendLanes{}, ""},
-		{"list consent alone", mailer.ConsentGate{ListConsent: true}, mailer.SendLanes{}, ""},
+		{"list consent without purposes", mailer.ConsentGate{ListConsent: true}, mailer.SendLanes{}, "SKYMAIL_MAIL_PURPOSE"},
+		{"list consent with purposes", mailer.ConsentGate{ListConsent: true}, mailer.SendLanes{Purpose: true}, ""},
 		{"all there", mailer.ConsentGate{Promotional: true}, mailer.SendLanes{Purpose: true, ListUnsubscribe: true, Lanes: graph}, ""},
 		{"no purposes", mailer.ConsentGate{Promotional: true}, mailer.SendLanes{ListUnsubscribe: true, Lanes: graph}, "SKYMAIL_MAIL_PURPOSE"},
 		{"no List-Unsubscribe", mailer.ConsentGate{Promotional: true}, mailer.SendLanes{Purpose: true, Lanes: graph}, "SKYMAIL_LIST_UNSUBSCRIBE"},
@@ -599,5 +601,25 @@ func TestPromotionalNeedsItsWayOut(t *testing.T) {
 				t.Errorf("%v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// A row older than 48 hours whose answer the cache does not hold (a cold
+// cache, a healthy core) is asked about, not closed: only core failing
+// closes it.
+func TestAnOldRowIsAskedAboutWhileCoreIsHealthy(t *testing.T) {
+	captureMailerLogs(t)
+	db := suppressionQueue(t)
+	m := gatedMailer(t, db, mailer.ConsentGate{Promotional: true, Core: promotionalAudience()})
+	promo := enqueuePurposed(t, m, duyuruSend(false), mailer.RecipientInfo{FullName: "Ayşe", Email: "ayse@example.com"})
+	if _, err := db.Conn.Exec(context.Background(),
+		`UPDATE mail_queue SET created_at = NOW() - INTERVAL '49 hours' WHERE task_id = $1`, promo); err != nil {
+		t.Fatal(err)
+	}
+	if taken := gatedTurn(t, m); len(taken) != 1 {
+		t.Errorf("taken %d, want Ayşe's: core answered", len(taken))
+	}
+	if got := rowTo(t, db, promo, "ayse@example.com"); got.error != "" {
+		t.Errorf("Ayşe: %+v", got)
 	}
 }

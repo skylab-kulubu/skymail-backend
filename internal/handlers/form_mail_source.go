@@ -386,6 +386,9 @@ func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if err := refuseAccountPromotional(c.Context(), h.db, p.TemplateID, named); err != nil {
+		return err
+	}
 	purpose := purposeOrDefault(purposesOn, named, duyuruByDefault)
 	hash, err := formSourceRequestHash("direct", p.TemplateID, variables, p.Tracking, named)
 	if err != nil {

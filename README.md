@@ -598,7 +598,7 @@ satırları (giriş kodları) toplu şerit alınmadan önce işçilere verilir.
 | `suppressed: no_promotional_consent` | tanıtım izni yok: `failed`, atlanmış sayılır |
 | `suppressed: no_announcement_consent` | hesapsız adres, duyuru rızası yok: `failed`, atlanmış sayılır |
 | bekler | cevap henüz bilinmiyor: satır `pending`'e döner, deneme ve bütçe sayılmaz; okuma sürerken 1 saniye, core cevap vermiyorken yaşına göre 1, 2, 5, 10, en çok 15 dakika sonra yeniden alınır |
-| `consent: unavailable` | kuyruğa alındıktan 48 saat sonra hâlâ cevap yok: `failed`, belirsiz (atlanmış sayılmaz) |
+| `consent: unavailable` | core başarısızken (devre kesici açık) satır kuyruğa alınalı 48 saati geçti: `failed`, belirsiz (atlanmış sayılmaz). core sağlamken eski satır da sorulur, kapanmaz |
 
 **core kapalıysa** bilinmeyen rıza yok sayılmaz: satır bekler, gönderilmez
 (kapalı yönde). core başarısız olunca 30 saniye sorulmaz (devre kesici).
@@ -621,6 +621,11 @@ Başka değer açılışı durdurur; ikisinden biri `on` iken `CORE_URL` gerekir
 (`SKYMAIL_SEND_DUYURU=graph|xoauth2`) ister: tanıtım postası izni geri alma
 bağlantısını hem künyede hem tek tık başlığında taşımalıdır. Biri eksikse
 açılış durur (yarım yapılandırmayla "tanıtım açık" denmez).
+`SKYMAIL_LIST_CONSENT=on` da `SKYMAIL_MAIL_PURPOSE=on` ister: amaç yokken
+"listenin kendi etkinliği" beyanı verilemez ve kapı her misafir postasını
+tutardı. Hesap şablonuyla (`keycloak.*`, `account.*`) tanıtım gönderimi
+`400 mail_task.promotional_account_template` döner: hesap postası ne tek tık
+başlığını ne künye satırını taşır.
 Açılış logu `promotional`, `list_consent` ve `core` alanlarını yazar.
 
 **core sözleşmesi.** SkyMail'in servis hesabı token'ıyla:
