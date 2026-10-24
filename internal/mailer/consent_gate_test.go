@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/skylab-kulubu/skymail-backend/internal/consent"
@@ -21,13 +22,21 @@ type fakeConsents struct {
 	down      bool
 	// resolveDown fails recipients:resolve alone.
 	resolveDown bool
-	asked       []string
+	// slow: core takes its time, until the caller gives up.
+	slow  bool
+	asked []string
 }
 
-func (f *fakeConsents) Audience(_ context.Context, purpose string) ([]consent.Item, error) {
+func (f *fakeConsents) Audience(ctx context.Context, purpose string) ([]consent.Item, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.asked = append(f.asked, "audience "+purpose)
+	if f.slow {
+		f.mu.Unlock()
+		<-ctx.Done()
+		f.mu.Lock()
+		return nil, ctx.Err()
+	}
 	if f.down {
 		return nil, errors.New("core answered 503")
 	}
@@ -75,7 +84,18 @@ func gatedMailer(t *testing.T, db *database.Store, gate mailer.ConsentGate, opts
 	t.Helper()
 	m := mailer.NewMailer(db, startFakeSMTP(t).config(), mailer.SenderOn, append(opts, mailer.WithConsentGate(gate))...)
 	mailer.PrepareTurns(m, 10)
+	// A row waiting for a fetch is due again at once: the next turn takes it.
+	mailer.SetConsentTiming(m, time.Minute, 2*time.Second, 30*time.Second, 0, nil)
 	return m
+}
+
+// gatedTurn is a turn, the consent fetch it started, and the next turn: the
+// rows both took.
+func gatedTurn(t *testing.T, m mailer.Transactional) []database.MailQueue {
+	t.Helper()
+	taken := mailer.Turn(context.Background(), m)
+	mailer.WaitConsentFetches(m)
+	return append(taken, mailer.Turn(context.Background(), m)...)
 }
 
 func duyuruSend(commercialAbsent bool) mailer.SendPurpose {
@@ -85,8 +105,13 @@ func duyuruSend(commercialAbsent bool) mailer.SendPurpose {
 
 func enqueuePurposed(t *testing.T, m mailer.Transactional, purpose mailer.SendPurpose, recipients ...mailer.RecipientInfo) uuid.UUID {
 	t.Helper()
+	return enqueueTemplate(t, m, initialTemplate, purpose, recipients...)
+}
+
+func enqueueTemplate(t *testing.T, m mailer.Transactional, template uuid.UUID, purpose mailer.SendPurpose, recipients ...mailer.RecipientInfo) uuid.UUID {
+	t.Helper()
 	task, err := m.EnqueueWithRecipients(context.Background(), mailer.EnqueueWithRecipientsParams{
-		SentBy: laneSender, TemplateID: initialTemplate, BodyVariables: []byte(`{}`), Recipients: recipients, Purpose: purpose,
+		SentBy: laneSender, TemplateID: template, BodyVariables: []byte(`{"code":"123456"}`), Recipients: recipients, Purpose: purpose,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -115,6 +140,24 @@ func storedLink(t *testing.T, db *database.Store, task uuid.UUID, email string) 
 	return *link
 }
 
+// waitingRow says a row waits: pending, nothing tried, no error, due again
+// no sooner than after.
+func waitingRow(t *testing.T, db *database.Store, task uuid.UUID, email string, after time.Duration) {
+	t.Helper()
+	var status, failure string
+	var attempts int
+	var due bool
+	if err := db.Conn.QueryRow(context.Background(), `
+		SELECT status::text, coalesce(error, ''), attempts, next_attempt_at >= NOW() + $3 * INTERVAL '1 millisecond'
+		FROM mail_queue WHERE task_id = $1 AND lower(recipient_email) = lower($2)`, task, email, int(after/time.Millisecond)).
+		Scan(&status, &failure, &attempts, &due); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" || failure != "" || attempts != 0 || !due {
+		t.Errorf("%s: %s %q, %d attempts, due later %v; want waiting, nothing tried, due no sooner than %s", email, status, failure, attempts, due, after)
+	}
+}
+
 // A promotional mail (s6 §5.10) goes only to an address in core's
 // promotional audience, with that grant's withdraw link as its
 // List-Unsubscribe; the others are written failed with nothing tried and
@@ -132,7 +175,7 @@ func TestAPromotionalMailGoesOnlyToThoseWhoConsented(t *testing.T) {
 	baris := mailer.RecipientInfo{FullName: "Barış", Email: "baris@example.com"}
 	zeynep := mailer.RecipientInfo{FullName: "Zeynep", Email: "zeynep@example.com"}
 	thanks := enqueuePurposed(t, m, duyuruSend(true), ayse, baris, zeynep)
-	if taken := takenTo(mailer.Turn(context.Background(), m)); len(taken) != 3 {
+	if taken := takenTo(gatedTurn(t, m)); len(taken) != 3 {
 		t.Fatalf("the sponsor's thanks: taken %d, want all three", len(taken))
 	}
 	if asked := core.calls(); len(asked) != 0 {
@@ -143,7 +186,7 @@ func TestAPromotionalMailGoesOnlyToThoseWhoConsented(t *testing.T) {
 	}
 
 	promo := enqueuePurposed(t, m, duyuruSend(false), ayse, baris, zeynep)
-	taken := takenTo(mailer.Turn(context.Background(), m))
+	taken := takenTo(gatedTurn(t, m))
 	if len(taken) != 1 || taken["Ayse@Example.com"].ListUnsubscribeUrl == nil || *taken["Ayse@Example.com"].ListUnsubscribeUrl != ayseWithdraw {
 		t.Fatalf("taken %+v, want Ayşe alone with her withdraw link", taken)
 	}
@@ -169,29 +212,48 @@ func TestAPromotionalMailGoesOnlyToThoseWhoConsented(t *testing.T) {
 	}
 }
 
-// A consent withdrawn after the mail was queued holds it: the audience is
-// read again every turn.
-func TestAPromotionalConsentWithdrawnAfterQueueingHoldsTheMail(t *testing.T) {
+// The audience is read once and used for consentCacheTTL: a second send in
+// that time does not ask core again; after it, core is asked again, and a
+// consent withdrawn in between holds the mail.
+func TestTheAudienceIsCachedForAMinute(t *testing.T) {
 	captureMailerLogs(t)
 	db := suppressionQueue(t)
 	core := promotionalAudience()
+	clock := newTestClock()
 	m := gatedMailer(t, db, mailer.ConsentGate{Promotional: true, Core: core})
-	promo := enqueuePurposed(t, m, duyuruSend(false), mailer.RecipientInfo{FullName: "Deniz", Email: "deniz@example.com"})
+	mailer.SetConsentTiming(m, time.Minute, 2*time.Second, 30*time.Second, 0, clock.now)
+	deniz := mailer.RecipientInfo{FullName: "Deniz", Email: "deniz@example.com"}
+
+	enqueuePurposed(t, m, duyuruSend(false), deniz)
+	if taken := gatedTurn(t, m); len(taken) != 1 {
+		t.Fatalf("taken %d, want Deniz's", len(taken))
+	}
+	enqueuePurposed(t, m, duyuruSend(false), deniz)
+	if taken := mailer.Turn(context.Background(), m); len(taken) != 1 {
+		t.Errorf("within the minute: taken %d, want Deniz's from the cache", len(taken))
+	}
+	if asked := core.calls(); len(asked) != 1 {
+		t.Errorf("core asked %v, want once", asked)
+	}
 
 	core.mu.Lock()
 	core.audiences[consent.PurposePromotional] = core.audiences[consent.PurposePromotional][:1]
 	core.mu.Unlock()
-	if taken := mailer.Turn(context.Background(), m); len(taken) != 0 {
-		t.Errorf("taken %d rows after Deniz withdrew", len(taken))
+	clock.advance(61 * time.Second)
+	late := enqueuePurposed(t, m, duyuruSend(false), deniz)
+	if taken := gatedTurn(t, m); len(taken) != 0 {
+		t.Errorf("after Deniz withdrew: taken %d", len(taken))
 	}
-	if got := rowTo(t, db, promo, "deniz@example.com"); got.error != "suppressed: no_promotional_consent" {
+	if got := rowTo(t, db, late, "deniz@example.com"); got.error != "suppressed: no_promotional_consent" {
 		t.Errorf("Deniz: %+v", got)
 	}
 }
 
-// Core not answering is no audience: a promotional mail goes to no one,
-// whatever SKYMAIL_PROMOTIONAL says now, and without CORE_URL too.
-func TestAPromotionalMailGoesNowhereWithoutCore(t *testing.T) {
+// Core not answering is not the consent's absence: the mail waits, nothing
+// tried and nothing counted; core's breaker keeps it unasked a while, and the
+// row backs off. Still unanswered 48 hours after it was queued, it is closed
+// undecided (consent: unavailable, not skipped). Without CORE_URL too.
+func TestAPromotionalMailWaitsForCore(t *testing.T) {
 	captureMailerLogs(t)
 	for name, gate := range map[string]mailer.ConsentGate{
 		"core down":                    {Promotional: true, Core: &fakeConsents{down: true}},
@@ -202,21 +264,115 @@ func TestAPromotionalMailGoesNowhereWithoutCore(t *testing.T) {
 			db := suppressionQueue(t)
 			m := gatedMailer(t, db, gate)
 			promo := enqueuePurposed(t, m, duyuruSend(false), mailer.RecipientInfo{FullName: "Ayşe", Email: "ayse@example.com"})
-			if taken := mailer.Turn(context.Background(), m); len(taken) != 0 {
+			if taken := gatedTurn(t, m); len(taken) != 0 {
 				t.Errorf("taken %d rows", len(taken))
 			}
-			if got := rowTo(t, db, promo, "ayse@example.com"); got.status != "failed" || got.error != "suppressed: consent_unavailable" || got.attempts != 0 {
-				t.Errorf("Ayşe: %+v, want failed with suppressed: consent_unavailable", got)
+			waitingRow(t, db, promo, "ayse@example.com", 50*time.Second)
+			if core, ok := gate.Core.(*fakeConsents); ok && len(core.calls()) != 1 {
+				t.Errorf("core asked %v, want once: the breaker is open", core.calls())
+			}
+
+			if _, err := db.Conn.Exec(context.Background(),
+				`UPDATE mail_queue SET created_at = NOW() - INTERVAL '49 hours', next_attempt_at = NOW() WHERE task_id = $1`, promo); err != nil {
+				t.Fatal(err)
+			}
+			if taken := mailer.Turn(context.Background(), m); len(taken) != 0 {
+				t.Errorf("after 48 hours: taken %d rows", len(taken))
+			}
+			if got := rowTo(t, db, promo, "ayse@example.com"); got.status != "failed" || got.error != "consent: unavailable" || got.attempts != 0 {
+				t.Errorf("after 48 hours: %+v, want failed, consent: unavailable", got)
+			}
+			if status := sendStatus(t, db, promo); status == "sent" {
+				t.Errorf("send status %q: an undecided row is not a sent one", status)
 			}
 		})
 	}
 }
 
+// A promotional mail sent with a System account template (keycloak.*,
+// account.*) is held all the same: the gate reads it before account mail.
+func TestAPromotionalMailOnAnAccountTemplateIsHeld(t *testing.T) {
+	captureMailerLogs(t)
+	db := suppressionQueue(t)
+	m := gatedMailer(t, db, mailer.ConsentGate{Promotional: true, Core: promotionalAudience()})
+	promo := enqueueTemplate(t, m, accountTemplate, duyuruSend(false), mailer.RecipientInfo{FullName: "Zeynep", Email: "zeynep@example.com"})
+	if taken := gatedTurn(t, m); len(taken) != 0 {
+		t.Errorf("taken %d rows", len(taken))
+	}
+	if got := rowTo(t, db, promo, "zeynep@example.com"); got.error != "suppressed: no_promotional_consent" {
+		t.Errorf("Zeynep: %+v, want held", got)
+	}
+}
+
+// A slow core never holds up the turn: the system lane's rows and the bulk
+// rows no consent applies to go at once, the promotional row waits, and the
+// turn does not wait for core at all.
+func TestASlowCoreHoldsUpNothingElse(t *testing.T) {
+	captureMailerLogs(t)
+	db := suppressionQueue(t)
+	core := &fakeConsents{slow: true}
+	m := gatedMailer(t, db, mailer.ConsentGate{Promotional: true, Core: core})
+	mailer.SetConsentTiming(m, time.Minute, 300*time.Millisecond, 30*time.Second, 0, nil)
+	promo := enqueuePurposed(t, m, duyuruSend(false), mailer.RecipientInfo{FullName: "Ayşe", Email: "ayse@example.com"})
+	code := enqueueOne(t, m, accountTemplate, "deniz@example.com")
+	thanks := enqueuePurposed(t, m, duyuruSend(true), mailer.RecipientInfo{FullName: "Zeynep", Email: "zeynep@example.com"})
+
+	began := time.Now()
+	taken := mailer.Turn(context.Background(), m)
+	if took := time.Since(began); took > 200*time.Millisecond {
+		t.Errorf("the turn took %s: it waited for core", took)
+	}
+	got := map[uuid.UUID]bool{}
+	for _, row := range taken {
+		got[row.TaskID] = true
+	}
+	if len(taken) != 2 || !got[code] || !got[thanks] {
+		t.Errorf("taken %d rows, want the login code and the thanks", len(taken))
+	}
+	mailer.WaitConsentFetches(m)
+	if again := mailer.Turn(context.Background(), m); len(again) != 0 {
+		t.Errorf("after core timed out: taken %d rows", len(again))
+	}
+	waitingRow(t, db, promo, "ayse@example.com", 50*time.Second)
+}
+
+// One turn of mixed rows: a promotional mail, a list's duyuru and mail no
+// consent applies to; each is decided on its own and the unrelated go first.
+func TestAMixedTurn(t *testing.T) {
+	captureMailerLogs(t)
+	db := suppressionQueue(t)
+	core := announcementCore()
+	core.audiences[consent.PurposePromotional] = promotionalAudience().audiences[consent.PurposePromotional]
+	m := gatedMailer(t, db, mailer.ConsentGate{Promotional: true, ListConsent: true, Core: core})
+	mailer.PrepareTurns(m, 20) // room for the nine bulk rows in one turn
+	list := enqueueToList(t, m, consentList(t, db))
+	promo := enqueuePurposed(t, m, duyuruSend(false), mailer.RecipientInfo{FullName: "Ayşe", Email: "ayse@example.com"},
+		mailer.RecipientInfo{FullName: "Zeynep", Email: "zeynep@example.com"})
+	islem, statement := mailer.PurposeIslem, true
+	other := enqueuePurposed(t, m, mailer.SendPurpose{Purpose: &islem, TransactionalStatement: &statement}, mailer.RecipientInfo{FullName: "Misafir", Email: "misafir@example.com"})
+
+	first := takenTo(mailer.Turn(context.Background(), m))
+	if len(first) != 1 || first["misafir@example.com"].TaskID != other {
+		t.Errorf("first turn %v, want the islem mail alone", first)
+	}
+	mailer.WaitConsentFetches(m)
+	second := takenTo(mailer.Turn(context.Background(), m))
+	if len(second) != 3 || second["Uye@example.com"].TaskID != list || second["rizali@example.com"].TaskID != list || second["ayse@example.com"].TaskID != promo {
+		t.Errorf("second turn %v, want the member, the guest who consented and Ayşe", second)
+	}
+	if got := rowTo(t, db, promo, "zeynep@example.com"); got.error != "suppressed: no_promotional_consent" {
+		t.Errorf("Zeynep: %+v", got)
+	}
+	if got := rowTo(t, db, list, "misafir@example.com"); got.error != "suppressed: no_announcement_consent" {
+		t.Errorf("the guest without consent: %+v", got)
+	}
+}
+
 // consentList is an internal list of a member (an account), a guest who
 // consented to announcements on davet-v2, a guest without consent, one
-// whose consent was given on davet-v1 (invitations alone) and one due the
-// renewal question. The names start with an ASCII letter: initialTemplate
-// writes the first byte of the name.
+// whose consent was given on davet-v1 (invitations alone), one due the
+// renewal question and one whose consent names no text. The names start
+// with an ASCII letter: initialTemplate writes the first byte of the name.
 func consentList(t *testing.T, db *database.Store) uuid.UUID {
 	t.Helper()
 	list := uuid.New()
@@ -227,7 +383,7 @@ func consentList(t *testing.T, db *database.Store) uuid.UUID {
 		WITH people AS (
 			INSERT INTO recipients (full_name, email)
 			VALUES ('Uye', 'Uye@example.com'), ('Rizali', 'rizali@example.com'), ('Misafir', 'misafir@example.com'),
-			       ('Eski', 'eski@example.com'), ('Yenilenecek', 'yenilenecek@example.com')
+			       ('Eski', 'eski@example.com'), ('Yenilenecek', 'yenilenecek@example.com'), ('Bos', 'bos@example.com')
 			RETURNING id)
 		INSERT INTO mailing_list_recipients (mail_list_id, recipient_id) SELECT $1, id FROM people`, list); err != nil {
 		t.Fatal(err)
@@ -242,6 +398,7 @@ func announcementCore() *fakeConsents {
 			{Email: "rizali@example.com", TextVersion: "davet-v2", WithdrawURL: "https://api.example.org/v1/consents/withdraw?token=r"},
 			{Email: "eski@example.com", TextVersion: "davet-v1", WithdrawURL: "https://api.example.org/v1/consents/withdraw?token=e"},
 			{Email: "yenilenecek@example.com", TextVersion: "davet-v2", WithdrawURL: "https://api.example.org/v1/consents/withdraw?token=y", RenewalDue: true},
+			{Email: "bos@example.com", TextVersion: "", WithdrawURL: "https://api.example.org/v1/consents/withdraw?token=b"},
 		}},
 	}
 }
@@ -262,8 +419,9 @@ func enqueueToList(t *testing.T, m mailer.Transactional, list uuid.UUID) uuid.UU
 // With SKYMAIL_LIST_CONSENT on, a list's duyuru goes to an address that is
 // an account's and to one whose announcement consent is open on a text that
 // covers announcements; any other is written failed, "duyuru rızası yok".
-// Core is asked with the send's category. A Keycloak group's members and a
-// mail to one person are not held.
+// Core is asked for the accounts with club:duyuru, whatever the send's
+// category (a team removed since cannot fail the question). A Keycloak
+// group's members and a mail to one person are not held.
 func TestAListAnnouncementToAnAddressWithoutAnAccountNeedsTheConsent(t *testing.T) {
 	captureMailerLogs(t)
 	db := suppressionQueue(t)
@@ -272,20 +430,20 @@ func TestAListAnnouncementToAnAddressWithoutAnAccountNeedsTheConsent(t *testing.
 	list := consentList(t, db)
 	task := enqueueToList(t, m, list)
 
-	taken := takenTo(mailer.Turn(context.Background(), m))
+	taken := takenTo(gatedTurn(t, m))
 	if len(taken) != 2 || taken["Uye@example.com"].ID == uuid.Nil || taken["rizali@example.com"].ID == uuid.Nil {
 		t.Fatalf("taken %v, want the member and the guest who consented", taken)
 	}
 	if taken["rizali@example.com"].ListUnsubscribeUrl != nil {
 		t.Errorf("an announcement got the consent's withdraw link")
 	}
-	for _, email := range []string{"misafir@example.com", "eski@example.com", "yenilenecek@example.com"} {
+	for _, email := range []string{"misafir@example.com", "eski@example.com", "yenilenecek@example.com", "bos@example.com"} {
 		if got := rowTo(t, db, task, email); got.status != "failed" || got.error != "suppressed: no_announcement_consent" || got.attempts != 0 {
 			t.Errorf("%s: %+v, want failed with suppressed: no_announcement_consent", email, got)
 		}
 	}
 	asked := core.calls()
-	if len(asked) != 2 || !strings.HasPrefix(asked[0], "resolve club:haber ") || asked[1] != "audience event_invitations" {
+	if len(asked) != 2 || asked[0] != "audience event_invitations" || !strings.HasPrefix(asked[1], "resolve club:duyuru ") {
 		t.Errorf("core asked %v", asked)
 	}
 
@@ -317,17 +475,17 @@ func TestListConsentOffSendsAsBefore(t *testing.T) {
 	core := announcementCore()
 	m := gatedMailer(t, db, mailer.ConsentGate{Core: core})
 	enqueueToList(t, m, consentList(t, db))
-	if taken := mailer.Turn(context.Background(), m); len(taken) != 5 {
-		t.Errorf("taken %d, want all five", len(taken))
+	if taken := mailer.Turn(context.Background(), m); len(taken) != 6 {
+		t.Errorf("taken %d, want all six", len(taken))
 	}
 	if asked := core.calls(); len(asked) != 0 {
 		t.Errorf("core asked %v", asked)
 	}
 }
 
-// Core not answering: an address whose account core cannot confirm gets no
-// announcement, unless the audience, read, holds its consent.
-func TestAListAnnouncementWithoutCoreGoesOnlyWhereTheConsentIsKnown(t *testing.T) {
+// Core not answering: no list recipient is dropped. One whose consent core
+// still shows goes; the others, the member among them, wait for core.
+func TestAListAnnouncementWithoutCoreWaits(t *testing.T) {
 	captureMailerLogs(t)
 	for name, core := range map[string]*fakeConsents{"core down": {down: true}, "resolve down": nil} {
 		t.Run(name, func(t *testing.T) {
@@ -338,8 +496,8 @@ func TestAListAnnouncementWithoutCoreGoesOnlyWhereTheConsentIsKnown(t *testing.T
 			db := suppressionQueue(t)
 			m := gatedMailer(t, db, mailer.ConsentGate{ListConsent: true, Core: core})
 			task := enqueueToList(t, m, consentList(t, db))
-			taken := takenTo(mailer.Turn(context.Background(), m))
-			want := map[string]string{"Uye@example.com": "suppressed: consent_unavailable", "misafir@example.com": "suppressed: consent_unavailable"}
+			taken := takenTo(gatedTurn(t, m))
+			waiting := []string{"Uye@example.com", "misafir@example.com", "eski@example.com"}
 			if core.resolveDown {
 				if len(taken) != 1 || taken["rizali@example.com"].ID == uuid.Nil {
 					t.Errorf("taken %v, want the guest whose consent core holds", taken)
@@ -348,12 +506,10 @@ func TestAListAnnouncementWithoutCoreGoesOnlyWhereTheConsentIsKnown(t *testing.T
 				if len(taken) != 0 {
 					t.Errorf("taken %v, want none", taken)
 				}
-				want["rizali@example.com"] = "suppressed: consent_unavailable"
+				waiting = append(waiting, "rizali@example.com")
 			}
-			for email, reason := range want {
-				if got := rowTo(t, db, task, email); got.status != "failed" || got.error != reason {
-					t.Errorf("%s: %+v, want %s", email, got, reason)
-				}
+			for _, email := range waiting {
+				waitingRow(t, db, task, email, 0)
 			}
 		})
 	}

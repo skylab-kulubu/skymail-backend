@@ -1459,6 +1459,34 @@ func (q *Queries) DatabaseNow(ctx context.Context) (time.Time, error) {
 	return now, err
 }
 
+const deferClaimedRows = `-- name: DeferClaimedRows :execrows
+UPDATE mail_queue
+SET status          = 'pending',
+    claimed_at      = NULL,
+    claimed_by      = NULL,
+    next_attempt_at = NOW() + ($1::int * INTERVAL '1 millisecond')
+WHERE id = ANY ($2::uuid[])
+  AND status = 'processing'
+  AND claimed_by = $3::text
+`
+
+type DeferClaimedRowsParams struct {
+	DelayMs   int         `json:"delay_ms"`
+	Ids       []uuid.UUID `json:"ids"`
+	ClaimedBy string      `json:"claimed_by"`
+}
+
+// Puts claimed rows back to pending, nothing tried and nothing counted,
+// to be taken again delay_ms from now: their contact consent is not known
+// yet (internal/mailer/consent_gate.go).
+func (q *Queries) DeferClaimedRows(ctx context.Context, arg DeferClaimedRowsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deferClaimedRows, arg.DelayMs, arg.Ids, arg.ClaimedBy)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deferMaskFailure = `-- name: DeferMaskFailure :exec
 UPDATE mail_tasks
 SET content_mask_unconfirmed   = content_mask_unconfirmed + 1,
@@ -2007,6 +2035,7 @@ SELECT q.id,
        q.recipient_email,
        q.recipient_sub,
        q.priority,
+       q.created_at,
        t.key,
        coalesce(t.system, false)::boolean AS system,
        mt.purpose,
@@ -2034,6 +2063,7 @@ type GetConsentGateClaimedRowsRow struct {
 	RecipientEmail string     `json:"recipient_email"`
 	RecipientSub   *uuid.UUID `json:"recipient_sub"`
 	Priority       int16      `json:"priority"`
+	CreatedAt      *time.Time `json:"created_at"`
 	Key            *string    `json:"key"`
 	System         bool       `json:"system"`
 	Purpose        *string    `json:"purpose"`
@@ -2061,6 +2091,7 @@ func (q *Queries) GetConsentGateClaimedRows(ctx context.Context, arg GetConsentG
 			&i.RecipientEmail,
 			&i.RecipientSub,
 			&i.Priority,
+			&i.CreatedAt,
 			&i.Key,
 			&i.System,
 			&i.Purpose,

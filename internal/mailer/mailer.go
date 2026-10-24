@@ -309,6 +309,10 @@ type mailerImpl struct {
 	// consents are the contact consents applied (WithConsentGate;
 	// consent_gate.go).
 	consents ConsentGate
+	// consentCache is what core said about consents (consent_gate.go), and
+	// consentFetches the fetches under way.
+	consentCache   *consentCache
+	consentFetches sync.WaitGroup
 	// refuseReserved writes a recipient in a reserved domain failed when a
 	// send is queued (WithReservedDomainsRefused); off by default.
 	refuseReserved bool
@@ -370,6 +374,7 @@ func NewMailer(db *database.Store, smtpConfig SMTPConfig, sender Sender, opts ..
 		graphClient: &http.Client{},
 	}
 	m.templateKey = m.databaseTemplateKey
+	m.consentCache = newConsentCache()
 	m.channels = map[string]newChannelSender{ChannelEmail: m.newEmailSender}
 	for _, opt := range opts {
 		opt(m)
@@ -1179,23 +1184,39 @@ func (m *mailerImpl) drainQueue(ctx context.Context, logger *zerolog.Logger) boo
 		return true
 	}
 
-	items := m.claim(ctx, logger, true, idle)
-	system := len(items)
-	bulkRoom := min(idle-len(items), m.bulkSlots-int(m.takenBulk.Load()))
+	// The system lane's rows go to the workers before the bulk lane is
+	// taken: nothing the bulk lane waits for holds back a login code.
+	system := m.claim(ctx, logger, true, idle)
+	if !m.dispatch(ctx, logger, system) {
+		return false
+	}
+	// Counted once they are with the workers: the budget never holds a
+	// system row back.
+	m.countSystem(ctx, logger, len(system))
+	bulkRoom := min(idle-len(system), m.bulkSlots-int(m.takenBulk.Load()))
 	if bulkRoom > 0 {
 		bulk := m.claimBulk(ctx, logger, bulkRoom)
 		m.takenBulk.Add(int32(len(bulk)))
-		items = append(items, bulk...)
+		if !m.dispatch(ctx, logger, bulk) {
+			return false
+		}
 	}
+	// What the contact consents of this turn's rows needed and core has not
+	// said yet is fetched in the background, outside the transaction.
+	m.fetchConsents(ctx, logger)
+	return true
+}
 
-	if len(items) > 0 {
-		m.taken.Add(int32(len(items)))
-		logger.Debug().Int("count", len(items)).Msg("Pulled pending jobs from database")
+// dispatch hands items, which this process took, to the workers. The
+// channel holds a row per worker and no more rows are taken than workers
+// are idle, so this never waits on a worker; at a stop the rows are in the
+// channel, where Stop gives them back.
+func (m *mailerImpl) dispatch(ctx context.Context, logger *zerolog.Logger, items []database.MailQueue) bool {
+	if len(items) == 0 {
+		return true
 	}
-
-	// The channel holds a row per worker and no more rows are taken than
-	// workers are idle, so this never waits on a worker; at a stop the rows
-	// are in the channel, where Stop gives them back.
+	m.taken.Add(int32(len(items)))
+	logger.Debug().Int("count", len(items)).Msg("Pulled pending jobs from database")
 	for _, item := range items {
 		select {
 		case m.jobs <- item:
@@ -1205,10 +1226,6 @@ func (m *mailerImpl) drainQueue(ctx context.Context, logger *zerolog.Logger) boo
 			return false
 		}
 	}
-	// Counted once they are with the workers: the budget never holds a
-	// system row back.
-	m.countSystem(ctx, logger, system)
-
 	return true
 }
 

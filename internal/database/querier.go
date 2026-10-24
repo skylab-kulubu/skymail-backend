@@ -144,6 +144,10 @@ type Querier interface {
 	// statement's time, not the transaction's (NOW()), so a budget read later in
 	// a transaction reads the instant it counts at.
 	DatabaseNow(ctx context.Context) (time.Time, error)
+	// Puts claimed rows back to pending, nothing tried and nothing counted,
+	// to be taken again delay_ms from now: their contact consent is not known
+	// yet (internal/mailer/consent_gate.go).
+	DeferClaimedRows(ctx context.Context, arg DeferClaimedRowsParams) (int64, error)
 	// Puts a send whose masking failed back: not counted yet, tried again after
 	// base_seconds doubled for each failure it has had (a day at most). The first
 	// failure since the send was last masked starts its deadline.
