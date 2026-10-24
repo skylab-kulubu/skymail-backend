@@ -192,10 +192,12 @@ type SendSummary struct {
 	// True while SKYMAIL_TRACKING_OPERATOR=on with SKYMAIL_TRACKING=on: every person's send (a list, a group, people, a Forms source, a Mail onayı request) is tracked whether it asked or not, of any template. The send form then shows no tracking box: a send's tracking field is ignored.
 	TrackingAlways bool `json:"tracking_always"`
 	// True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru) and a duyuru send its category, and the purpose picks the mailbox it goes out from. The send form shows its purpose, category and statements only then; while it is false they are ignored.
-	PurposeAvailable bool           `json:"purpose_available"`
-	SendCounts       SendCounts     `json:"send_counts"`
-	DailySent        []DailySent    `json:"daily_sent"`
-	RecentSends      []MailTaskItem `json:"recent_sends"`
+	PurposeAvailable bool `json:"purpose_available"`
+	// True while SKYMAIL_LIST_CONSENT=on, as tracking-mode says it: the list send form shows the own event statement box.
+	ListConsentAvailable bool           `json:"list_consent_available"`
+	SendCounts           SendCounts     `json:"send_counts"`
+	DailySent            []DailySent    `json:"daily_sent"`
+	RecentSends          []MailTaskItem `json:"recent_sends"`
 }
 
 // TrackingMode is how SkyMail tracks a person's send: what the send form needs
@@ -208,19 +210,23 @@ type TrackingMode struct {
 	TrackingAlways bool `json:"tracking_always"`
 	// True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru), and a duyuru send its category; tracking follows tracking_available and tracking_always whatever the purpose. False: the fields are ignored.
 	PurposeAvailable bool `json:"purpose_available"`
+	// True while SKYMAIL_PROMOTIONAL=on (with purpose_available): a duyuru send may say it is promotional (commercial_content_absent false: its main purpose is promoting a product or a service, such as a discount code, a company's job posting, a sale or a raffle), and then goes only to those who consented to promotional mail, each with the link that withdraws that consent. False: such a send is refused (400 mail_task.commercial_content_not_allowed).
+	PromotionalAvailable bool `json:"promotional_available"`
+	// True while SKYMAIL_LIST_CONSENT=on: a list's address without an account gets a duyuru only with its announcement consent, unless the send states own_event_statement (the mail is about the list's own event or work). The list send form shows that box only then.
+	ListConsentAvailable bool `json:"list_consent_available"`
 }
 
 // GetTrackingMode godoc
 //
 //	@Summary		How a person's send is tracked
-//	@Description	tracking_available, tracking_always and purpose_available, as the summary says them, for anyone who may use SkyMail: someone who only submits a send for approval sees whether it will be tracked and whether it names a purpose. It is a setting of SkyMail, not of any send.
+//	@Description	tracking_available, tracking_always and purpose_available, as the summary says them, and promotional_available, for anyone who may use SkyMail: someone who only submits a send for approval sees whether it will be tracked and whether it names a purpose. It is a setting of SkyMail, not of any send.
 //	@Tags			Mail
 //	@Produce		json
 //	@Success		200	{object}	handlers.TrackingMode
 //	@Failure		403	{object}	apperrors.AppError	"Forbidden"
 //	@Router			/mail_tasks/tracking-mode [get]
 func (h *mailHandlerImpl) GetTrackingMode(c fiber.Ctx) error {
-	return c.JSON(TrackingMode{TrackingAvailable: h.mailer.TrackingAvailable(), TrackingAlways: h.mailer.OperatorTrackingAlways(), PurposeAvailable: h.mailer.PurposeAvailable()})
+	return c.JSON(TrackingMode{TrackingAvailable: h.mailer.TrackingAvailable(), TrackingAlways: h.mailer.OperatorTrackingAlways(), PurposeAvailable: h.mailer.PurposeAvailable(), PromotionalAvailable: h.mailer.PromotionalAvailable(), ListConsentAvailable: h.mailer.ListConsentAvailable()})
 }
 
 // GetSummary godoc
@@ -284,10 +290,11 @@ func (h *mailHandlerImpl) GetSummary(c fiber.Ctx) error {
 			Sent:       counts.Sent,
 			Failed:     counts.Failed,
 		},
-		SenderPaused:      h.mailer.SenderPaused(),
-		TrackingAvailable: h.mailer.TrackingAvailable(),
-		TrackingAlways:    h.mailer.OperatorTrackingAlways(),
-		PurposeAvailable:  h.mailer.PurposeAvailable(),
+		SenderPaused:         h.mailer.SenderPaused(),
+		TrackingAvailable:    h.mailer.TrackingAvailable(),
+		TrackingAlways:       h.mailer.OperatorTrackingAlways(),
+		PurposeAvailable:     h.mailer.PurposeAvailable(),
+		ListConsentAvailable: h.mailer.ListConsentAvailable(),
 		SendCounts: SendCounts{
 			Failed:  sendCounts.Failed,
 			Sending: sendCounts.Sending,
@@ -340,6 +347,7 @@ func (h *mailHandlerImpl) mailTaskItems(ctx context.Context, caller contentCalle
 				Category:                send.Category,
 				TransactionalStatement:  send.TransactionalStatement,
 				CommercialContentAbsent: send.CommercialContentAbsent,
+				OwnEventStatement:       send.OwnEventStatement,
 			},
 		}
 	}

@@ -17,8 +17,10 @@ type SendPurpose struct {
 	Category *string `json:"category" example:"club:duyuru"`
 	// With islem, required and true: the sender's statement that the mail is about the recipient's own application or transaction (a changed place or time, a missing document, a result). Ignored with duyuru.
 	TransactionalStatement *bool `json:"transactional_statement"`
-	// The sender's statement that the mail carries no commercial content (no sponsor promotion, paid ticket, company job advert or draw; ADR 0072 decision 9). false is refused with either purpose (400 mail_task.commercial_content_not_allowed: commercial mail needs İYS consent under 6563, which the club cannot have). With duyuru, true is kept; a later version requires it. Ignored with islem.
+	// The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyMail's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.
 	CommercialContentAbsent *bool `json:"commercial_content_absent"`
+	// With duyuru to a list or a Keycloak group, while SkyMail holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.
+	OwnEventStatement *bool `json:"own_event_statement"`
 }
 
 type CreateMailTask struct {

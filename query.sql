@@ -871,10 +871,12 @@ WITH active_source AS (
       AND ml.archived_at IS NULL
 ), inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send,
-                            tracking_requested, purpose, category, transactional_statement, commercial_content_absent)
+                            tracking_requested, purpose, category, transactional_statement, commercial_content_absent,
+                            own_event_statement)
         SELECT sqlc.arg(sent_by), template_id, mail_list_id, sqlc.arg(body_variables), content_sensitive,
                sqlc.arg(tracking_requested)::boolean, sqlc.narg(purpose)::text, sqlc.narg(category)::text,
-               sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean
+               sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean,
+               sqlc.narg(own_event_statement)::boolean
         FROM active_source
         RETURNING *
 )
@@ -1290,11 +1292,13 @@ RETURNING mt.id, (SELECT count(*) FROM rows WHERE rows.task_id = mt.id) AS rows_
 -- mail_task_content_sensitive() reads it first (20261020120000).
 -- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, form_source_id, body_variables, content_sensitive_at_send,
-                        tracking_requested, purpose, category, transactional_statement, commercial_content_absent)
+                        tracking_requested, purpose, category, transactional_statement, commercial_content_absent,
+                        own_event_statement)
 SELECT sqlc.arg(sent_by), sqlc.arg(template_id), sqlc.narg(mail_list_id), sqlc.narg(form_source_id), sqlc.arg(body_variables),
        CASE WHEN template_key_content_locked(templates.key) THEN 'true' ELSE COALESCE(templates.content_sensitive::text, 'unset') END,
        sqlc.arg(tracking_requested)::boolean, sqlc.narg(purpose)::text, sqlc.narg(category)::text,
-       sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean
+       sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean,
+       sqlc.narg(own_event_statement)::boolean
 FROM templates
 WHERE templates.id = sqlc.arg(template_id)
   AND archived_at IS NULL
@@ -1402,7 +1406,8 @@ SELECT mt.id,
        mt.purpose,
        mt.category,
        mt.transactional_statement,
-       mt.commercial_content_absent
+       mt.commercial_content_absent,
+       mt.own_event_statement
 FROM page
          JOIN mail_tasks mt ON mt.id = page.id
          LEFT JOIN templates t ON mt.template_id = t.id
@@ -1455,12 +1460,13 @@ WHERE (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(st
 INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, submitter_email_unverified, template_id,
                             template_version_id, mail_list_id, form_source_id, body_variables, created_at, submitted_at, deadline_at,
                             updated_at, tracking_requested, purpose, category, transactional_statement,
-                            commercial_content_absent)
+                            commercial_content_absent, own_event_statement)
 VALUES (sqlc.arg(submitter_sub), sqlc.narg(submitter_name), sqlc.narg(submitter_email),
         sqlc.arg(submitter_email_unverified), sqlc.arg(template_id),
         sqlc.arg(template_version_id), sqlc.narg(mail_list_id), sqlc.narg(form_source_id), sqlc.arg(body_variables), sqlc.arg(at), sqlc.arg(at),
         sqlc.arg(deadline_at), sqlc.arg(at), sqlc.arg(tracking_requested)::boolean, sqlc.narg(purpose)::text,
-        sqlc.narg(category)::text, sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean)
+        sqlc.narg(category)::text, sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean,
+        sqlc.narg(own_event_statement)::boolean)
 RETURNING *;
 
 -- The people a request goes to, in the order submitted, replacing whoever it
@@ -1542,6 +1548,7 @@ SET state               = 'pending',
     category                  = sqlc.narg(category)::text,
     transactional_statement   = sqlc.narg(transactional_statement)::boolean,
     commercial_content_absent = sqlc.narg(commercial_content_absent)::boolean,
+    own_event_statement       = sqlc.narg(own_event_statement)::boolean,
     submitted_at        = sqlc.arg(at),
     deadline_at         = sqlc.arg(deadline_at),
     updated_at          = sqlc.arg(at)
@@ -1682,7 +1689,7 @@ SELECT q.id, q.task_id, q.sent_at, now()::timestamptz AS at
 FROM mail_queue q JOIN mail_tasks t ON t.id = q.task_id
 WHERE q.tracking_token = $1 AND q.tracking_disabled_at IS NULL
   AND q.recipient_sub IS NOT NULL AND q.status = 'sent'
-  AND q.sent_at IS NOT NULL AND q.sent_at > now() - interval '365 days'
+  AND q.sent_at IS NOT NULL AND q.sent_at > now() - interval '90 days'
   AND q.sent_at <= now() AND t.tracking_closed_at IS NULL
 FOR UPDATE OF q;
 
@@ -1698,7 +1705,7 @@ SELECT q.id, q.task_id, sqlc.arg(kind)::text, sqlc.narg(link_id)::bigint, sqlc.a
 FROM mail_queue q
 WHERE q.id = sqlc.arg(queue_id) AND q.tracking_disabled_at IS NULL
   AND q.recipient_sub IS NOT NULL AND q.status = 'sent'
-  AND q.sent_at > sqlc.arg(at)::timestamptz - interval '365 days'
+  AND q.sent_at > sqlc.arg(at)::timestamptz - interval '90 days'
   AND q.sent_at <= sqlc.arg(at)
   AND NOT EXISTS (SELECT 1 FROM mail_tasks t WHERE t.id = q.task_id AND t.tracking_closed_at IS NOT NULL)
   AND ((sqlc.arg(kind)::text = 'open' AND sqlc.narg(link_id)::bigint IS NULL
@@ -1743,11 +1750,11 @@ FROM mail_tasks t WHERE t.id = $1;
 -- can have personal URLs and the summary only requires mails:read.
 -- name: GetTrackingReport :one
 WITH people AS (
- SELECT q.id, q.tracking_token IS NOT NULL AS tracked, COALESCE(q.tracking_skip_reason,'not_requested') AS reason
+ SELECT q.id, (q.tracking_token IS NOT NULL OR q.tracking_disabled_at IS NOT NULL) AS tracked, COALESCE(q.tracking_skip_reason,'not_requested') AS reason
  FROM mail_queue q WHERE q.task_id = sqlc.arg(task_id)
 ), events AS (
  SELECT e.* FROM mail_tracking_events e JOIN mail_queue q ON q.id = e.queue_id
- WHERE e.task_id = sqlc.arg(task_id) AND q.sent_at > now() - interval '365 days'
+ WHERE e.task_id = sqlc.arg(task_id) AND q.sent_at > now() - interval '90 days'
 ), reasons AS (
  SELECT reason, count(*) AS n FROM people WHERE NOT tracked GROUP BY reason
 ), links AS (
@@ -1783,17 +1790,17 @@ SELECT jsonb_build_object('tracked_recipients',tracked_recipients,'untracked_by_
 FROM mail_task_tracking_totals WHERE task_id = $1;
 
 -- One aggregate per recipient, then filtering and pagination. Events older
--- than their recipient's one-year window (tracking.EventRetentionDays) never
+-- than their recipient's 90-day window (tracking.EventRetentionDays) never
 -- reappear while retention is disabled or catching up. No tracking token or link target is selected.
 -- name: ListTrackingRecipients :one
 WITH clicked AS (
  SELECT e.queue_id,e.link_id,count(*)::int AS clicks,max(e.occurred_at) AS last_clicked_at
  FROM mail_tracking_events e JOIN mail_queue q ON q.id=e.queue_id
- WHERE e.task_id=sqlc.arg(task_id) AND e.kind='click' AND q.sent_at > now() - interval '365 days'
+ WHERE e.task_id=sqlc.arg(task_id) AND e.kind='click' AND q.sent_at > now() - interval '90 days'
  GROUP BY e.queue_id,e.link_id
 ), people AS (
  SELECT q.id,q.recipient_sub,q.recipient_email,q.recipient_full_name,
-        q.tracking_token IS NOT NULL AS tracked,q.tracking_skip_reason,
+        (q.tracking_token IS NOT NULL OR q.tracking_disabled_at IS NOT NULL) AS tracked,q.tracking_skip_reason,
         min(e.occurred_at) FILTER (WHERE e.kind='open') AS first_open_at,
         min(e.occurred_at) FILTER (WHERE NOT e.automated_likely AND e.kind='open') AS human_open_at,
         min(e.occurred_at) FILTER (WHERE NOT e.automated_likely AND e.kind='click') AS human_click_at,
@@ -1804,7 +1811,7 @@ WITH clicked AS (
         COALESCE(jsonb_agg(DISTINCT e.source_class) FILTER (WHERE e.id IS NOT NULL),'[]'::jsonb) AS source_classes,
         COALESCE((SELECT jsonb_agg(jsonb_build_object('link_id',c.link_id,'clicks',c.clicks,'last_clicked_at',c.last_clicked_at) ORDER BY c.link_id)
                   FROM clicked c WHERE c.queue_id=q.id),'[]'::jsonb) AS clicked_links
- FROM mail_queue q LEFT JOIN mail_tracking_events e ON e.queue_id=q.id AND q.sent_at > now() - interval '365 days'
+ FROM mail_queue q LEFT JOIN mail_tracking_events e ON e.queue_id=q.id AND q.sent_at > now() - interval '90 days'
  WHERE q.task_id=sqlc.arg(task_id)
  GROUP BY q.id
 ), filtered AS (
@@ -2076,6 +2083,18 @@ WHERE id IN (SELECT b.id
              ORDER BY b.received_at
              LIMIT sqlc.arg(batch_size)::int FOR UPDATE SKIP LOCKED);
 
+-- Deletes up to batch_size of the oldest records of a reversed unsubscribe
+-- three years after they were written (KVKK notice s6; hub ticket
+-- kvkk-s6-yayin-oncesi 14): the content sweep's step.
+-- name: DeleteOldUnsubscribeReactivations :execrows
+DELETE
+FROM mail_unsubscribe_reactivations
+WHERE id IN (SELECT r.id
+             FROM mail_unsubscribe_reactivations r
+             WHERE r.reactivated_at < now() - interval '3 years'
+             ORDER BY r.reactivated_at
+             LIMIT sqlc.arg(batch_size)::int FOR UPDATE SKIP LOCKED);
+
 -- The suppressed among a send's recipients (lower-cased addresses): what
 -- queueing writes failed, or sends flagged when the send is account mail.
 -- name: GetSuppressedAddresses :many
@@ -2150,6 +2169,57 @@ SET status = 'failed',
 WHERE id = ANY (sqlc.arg(ids)::uuid[])
   AND status = 'processing'
   AND claimed_by = sqlc.arg(claimed_by)::text;
+
+-- The claimed e-mail rows among ids whose send a contact consent may hold
+-- back (internal/mailer/consent_gate.go): a promotional duyuru send
+-- (commercial_content_absent false), or a send to an internal list. With the
+-- send's template (account mail is never held), purpose, category and the
+-- recipient's account, when the row knows it.
+-- name: GetConsentGateClaimedRows :many
+SELECT q.id,
+       q.recipient_email,
+       q.recipient_sub,
+       q.priority,
+       q.created_at,
+       t.key,
+       coalesce(t.system, false)::boolean AS system,
+       mt.purpose,
+       mt.category,
+       (mt.purpose IS NOT DISTINCT FROM 'duyuru' AND mt.commercial_content_absent IS FALSE)::boolean AS promotional,
+       (ml.id IS NOT NULL)::boolean AS to_list,
+       (mt.own_event_statement IS TRUE)::boolean AS own_event
+FROM mail_queue q
+         JOIN mail_tasks mt ON mt.id = q.task_id
+         LEFT JOIN templates t ON t.id = mt.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = mt.mail_list_id
+WHERE q.id = ANY (sqlc.arg(ids)::uuid[])
+  AND q.channel = 'email'
+  AND q.status = 'processing'
+  AND q.claimed_by = sqlc.arg(claimed_by)::text
+  AND ((mt.purpose IS NOT DISTINCT FROM 'duyuru' AND mt.commercial_content_absent IS FALSE) OR ml.id IS NOT NULL);
+
+-- Puts claimed rows back to pending, nothing tried and nothing counted,
+-- to be taken again delay_ms from now: their contact consent is not known
+-- yet (internal/mailer/consent_gate.go).
+-- name: DeferClaimedRows :execrows
+UPDATE mail_queue
+SET status          = 'pending',
+    claimed_at      = NULL,
+    claimed_by      = NULL,
+    next_attempt_at = NOW() + (sqlc.arg(delay_ms)::int * INTERVAL '1 millisecond')
+WHERE id = ANY (sqlc.arg(ids)::uuid[])
+  AND status = 'processing'
+  AND claimed_by = sqlc.arg(claimed_by)::text;
+
+-- Gives claimed rows the link their mail is sent with: a promotional mail's
+-- is the grant's withdraw link, which ends the promotional consent.
+-- name: SetClaimedRowsUnsubscribeURL :execrows
+-- links[i] is ids[i]'s.
+UPDATE mail_queue q
+SET list_unsubscribe_url = (sqlc.arg(links)::text[])[array_position(sqlc.arg(ids)::uuid[], q.id)]
+WHERE q.id = ANY (sqlc.arg(ids)::uuid[])
+  AND q.status = 'processing'
+  AND q.claimed_by = sqlc.arg(claimed_by)::text;
 
 -- The address's unsubscribe from a stream, if it has one.
 -- name: GetUnsubscribe :one

@@ -482,7 +482,8 @@ Arayüz bayrağı `GET /v1/mail_tasks/tracking-mode` ve `/summary`'nin
 | `purpose` | `islem` ya da `duyuru` |
 | `category` | `duyuru`'da zorunlu, `islem`'de yasak: `club:duyuru`, `club:haber`, `team:<Keycloak grup id>:duyuru`, `team:<id>:haber`. Grup id'si UUID'dir, küçük harfle yazılır. Grubun gerçekten ekip olup olmadığını core söyler (bilet 09) |
 | `transactional_statement` | `islem`'de zorunlu ve `true`: "bu posta alıcının kendi başvurusu ya da işlemi hakkındadır". `duyuru`'da yok sayılır |
-| `commercial_content_absent` | "ticari içerik yok" beyanı. `false` her amaçta reddedilir: ticari ileti 6563'e göre İYS onayı ister, kulübün o yolu yok (ADR 0072 karar 9). `duyuru`'da `true` saklanır, yokluğunun reddi bilet 09'un `SKYMAIL_BULK_PREFERENCE` bayrağıyla gelir. `islem`'de `true` yok sayılır |
+| `commercial_content_absent` | "Postanın asıl amacı tanıtım değildir" beyanı (KVKK aydınlatma metni s6 §5.10; ADR 0072 karar 9): kısa sponsor teşekkürü ve logo serbesttir; indirim kodu, şirket iş ilanı, satış ya da çekiliş postayı tanıtım yapar. `false` postayı tanıtım postası yapar: `SKYMAIL_PROMOTIONAL=on` iken `duyuru`'da kabul edilir ve posta yalnız tanıtım izni verene gider ("Tanıtım postası ve hesapsız liste alıcısı"); bayrak kapalıyken ve `islem`'de her zaman reddedilir. `duyuru`'da `true` saklanır, yokluğunun reddi bilet 09'un `SKYMAIL_BULK_PREFERENCE` bayrağıyla gelir. `islem`'de `true` yok sayılır |
+| `own_event_statement` | Liste ya da Keycloak grubuna `duyuru`'da, `SKYMAIL_LIST_CONSENT=on` iken: "Bu posta listenin oluşturulduğu etkinlik ya da çalışmayla ilgilidir" beyanı (s6 satır 15, Yusuf'un T3 kararı 2026-10-24). Gönderimle, göndereni ve zamanıyla saklanır (`mail_tasks`, `mail_approvals`). Beyanlı posta listenin hesapsız adresine duyuru rızası aranmadan, yine `duyuru` akışında çıkış bağlantısıyla gider. Bayrak kapalıyken, kişiye, Forms kaynağına ve `islem`'de yok sayılır |
 
 **Kurallar** (Yusuf, 2026-10-21; hepsi `400`, hiçbir şey kuyruğa girmez):
 
@@ -490,7 +491,7 @@ Arayüz bayrağı `GET /v1/mail_tasks/tracking-mode` ve `/summary`'nin
 |---|---|
 | liste ya da Keycloak grubuna (doğrudan ya da onay isteğiyle) `islem` | `mail_task.purpose_not_allowed` |
 | `islem` ama `transactional_statement` yok ya da `false` | `mail_task.transactional_statement_required` |
-| `commercial_content_absent: false` (her amaçta) | `mail_task.commercial_content_not_allowed` |
+| `commercial_content_absent: false`, `islem`'de ya da `SKYMAIL_PROMOTIONAL` kapalıyken | `mail_task.commercial_content_not_allowed` |
 | `islem` + `category` | `mail_task.category_not_allowed` |
 | `duyuru` ama `category` yok | `mail_task.category_required` |
 | `category` core'un biçiminde değil | `mail_task.category_invalid` |
@@ -556,6 +557,89 @@ gönderimin `islem` olmaması. Eski imaj bu sütunları okumaz, yazmaz.
 **Geri dönüş.** `SKYMAIL_MAIL_PURPOSE=off` + yeniden dağıtım: amaç okunmaz,
 kuyrukta bekleyen işlem amaçlı toplu satır da yeniden `duyuru@`'dan gider,
 künye satırı eklenmez. İmajı geri almak da güvenlidir; sütunlar kalır.
+
+## Tanıtım postası ve hesapsız liste alıcısı (`SKYMAIL_PROMOTIONAL`, `SKYMAIL_LIST_CONSENT`)
+
+KVKK aydınlatma metni s6 §5.8, §5.10, §5.14 ve tablo satır 13–15 (hub
+biletleri kvkk-s6-yayin-oncesi 11 ve 12). İki tür `duyuru` postası yalnız
+core'un rıza kaydında (`contact_consents`, core `docs/contact-consents.md`)
+izni olan kişiye gider:
+
+- **Tanıtım postası.** Asıl amacı bir mal ya da hizmetin tanıtımı olan posta
+  (indirim kodu, şirket iş ilanı, satış, çekiliş): `duyuru` +
+  `commercial_content_absent: false`. Kulübün kendi etkinliğinin duyurusu,
+  ücretli olsa da, ve kısa sponsor teşekkürü ya da logo tanıtım değildir
+  (Yusuf). Posta yalnız core'un `promotional` kitlesindeki adrese gider; o
+  iznin `withdrawUrl`'i `List-Unsubscribe` başlığı ve künye satırı olur
+  ("Tanıtım içerikli e-postaları almak istemiyorsan: İzni geri al"): tek tık
+  tanıtım iznini kapatır. Şablon `{{.UnsubscribeUrl}}` yazıyorsa orada duyuru
+  bağlantısı (bilet 09'dan sonra) kalır.
+- **Hesapsız liste alıcısı** (`SKYMAIL_LIST_CONSENT=on`). İç listeye giden
+  postada, core'un `recipients:resolve`'ünün hiçbir hesaba eşlemediği adres
+  yalnız core'un `event_invitations` kitlesindeyse alır; kayıt `davet-v1`
+  metniyle verilmişse (yalnız davet) ya da yenileme sorusu bekliyorsa
+  (`renewalDue`) sayılmaz. Keycloak grubu üyeleri hesaptır, satırında hesap
+  (`recipient_sub`) olan alıcı ve kişiye tek posta bu kurala girmez.
+  Gönderen postanın listenin kendi etkinliği ya da çalışmasıyla ilgili
+  olduğunu beyan ettiyse (`own_event_statement: true`; s6 satır 15, 5/2-c)
+  rıza aranmaz: posta bütün liste alıcılarına, yine duyuru akışında ve çıkış
+  bağlantısıyla gider; beyan gönderim kaydında kalır.
+
+**Ne zaman.** Dağıtıcı toplu satırları alırken, aynı işlemde, çıkış kaydından
+sonra ve gönderim bütçesi saymadan önce, her turda karar verir. core'a ne
+işlemin içinde ne bütçe kilidi altında sorulur (abonelik-cikisi 09): karar
+süreç içi önbellekten verilir (kitle ve hesap eşlemesi 60 saniye; geri alınan
+izin en çok bu kadar geç sayılır), bilinmeyen şey işlemden sonra arka planda,
+en çok 5 saniyede core'dan okunur; dağıtıcı beklemez. Sistem şeridinin
+satırları (giriş kodları) toplu şerit alınmadan önce işçilere verilir.
+
+| Sonuç | |
+|---|---|
+| `suppressed: no_promotional_consent` | tanıtım izni yok: `failed`, atlanmış sayılır |
+| `suppressed: no_announcement_consent` | hesapsız adres, duyuru rızası yok: `failed`, atlanmış sayılır |
+| bekler | cevap henüz bilinmiyor: satır `pending`'e döner, deneme ve bütçe sayılmaz; okuma sürerken 1 saniye, core cevap vermiyorken yaşına göre 1, 2, 5, 10, en çok 15 dakika sonra yeniden alınır |
+| `consent: unavailable` | core başarısızken (devre kesici açık) satır kuyruğa alınalı 48 saati geçti: `failed`, belirsiz (atlanmış sayılmaz). core sağlamken eski satır da sorulur, kapanmaz |
+
+**core kapalıysa** bilinmeyen rıza yok sayılmaz: satır bekler, gönderilmez
+(kapalı yönde). core başarısız olunca 30 saniye sorulmaz (devre kesici).
+Listedeki hesaplı üye core yüzünden düşürülmez; rızası önbellekte görünen
+misafir yine alır. Hesap eşlemesi her zaman `club:duyuru` ile sorulur:
+eşleme kategoriye bağlı değildir, sonradan silinmiş bir ekip soruyu bozmaz.
+Tanıtım kuralı bayraktan ve şablondan bağımsız her zaman uygulanır: bayrak
+açıkken kuyruğa girmiş tanıtım postası bayrak kapatılınca herkese gitmez,
+hesap şablonuyla (`keycloak.*`, `account.*`) gönderilen tanıtım da izin arar.
+`textVersion`'ı boş kayıt duyuru rızası sayılmaz.
+
+| Değişken | |
+|---|---|
+| `SKYMAIL_PROMOTIONAL` | `off` (ya da boş, varsayılan): `commercial_content_absent: false` reddedilir. `on`: `duyuru`'da kabul edilir; `GET /v1/mail_tasks/tracking-mode` `promotional_available: true` döner |
+| `SKYMAIL_LIST_CONSENT` | `off` (ya da boş, varsayılan): liste postası bugünkü gibi, `own_event_statement` yok sayılır. `on`: hesapsız liste alıcısına duyuru rızası aranır, beyanlı posta hariç; `tracking-mode` `list_consent_available: true` döner |
+
+Başka değer açılışı durdurur; ikisinden biri `on` iken `CORE_URL` gerekir.
+`SKYMAIL_PROMOTIONAL=on` ayrıca `SKYMAIL_MAIL_PURPOSE=on`,
+`SKYMAIL_LIST_UNSUBSCRIBE=on` ve kapalı olmayan bir duyuru şeridi
+(`SKYMAIL_SEND_DUYURU=graph|xoauth2`) ister: tanıtım postası izni geri alma
+bağlantısını hem künyede hem tek tık başlığında taşımalıdır. Biri eksikse
+açılış durur (yarım yapılandırmayla "tanıtım açık" denmez).
+`SKYMAIL_LIST_CONSENT=on` da `SKYMAIL_MAIL_PURPOSE=on` ister: amaç yokken
+"listenin kendi etkinliği" beyanı verilemez ve kapı her misafir postasını
+tutardı. Hesap şablonuyla (`keycloak.*`, `account.*`) tanıtım gönderimi
+`400 mail_task.promotional_account_template` döner: hesap postası ne tek tık
+başlığını ne künye satırını taşır.
+Açılış logu `promotional`, `list_consent` ve `core` alanlarını yazar.
+
+**core sözleşmesi.** SkyMail'in servis hesabı token'ıyla:
+`GET /v1/consents/audience?purpose=promotional|event_invitations` (core
+istemcisi rolü `consent:audience:read`; sayfa 1000) ve
+`POST /internal/v1/audiences/recipients:resolve` (rol `audience:read`;
+tur başına en çok 1000 adres). Rıza kaydı core'da `CONTACT_CONSENT_KEY` ile
+açılır; anahtar yokken kitle `503` döner. Bu yüzden production'da iki bayrak
+da rıza kaydı açılana (data-lifecycle 10) kadar kapalı kalır.
+
+**Açılış sırası.** core rıza kaydı canlı + SkyMail servis hesabına iki rol →
+`SKYMAIL_PROMOTIONAL=on` → arayüz (skymail-frontend: "Bu posta tanıtım
+içeriyor" seçimi) → `SKYMAIL_LIST_CONSENT=on`. Geri dönüş: bayrak `off` +
+yeniden dağıtım; kuyruktaki tanıtım postası yine yalnız izinliye gider.
 
 ## Tek tık çıkış ucu (`SKYMAIL_UNSUBSCRIBE_LINK`, `mail_unsubscribes`)
 
@@ -661,6 +745,9 @@ kişinin çıkışını yalnız kişi isteyince ya da bir hata olunca geri alır
   (`actor_sub`), ne zaman, gerekçe, kaydın akışı, kaynağı ve ilk tarihi yazılır;
   adres yazılmaz. Hesap silme `actor_sub`'ı Silinmiş kullanıcı yapar, kişiyi
   adlandıran gerekçeyi `[silindi]` yapar.
+- Geri alma kaydı (kişinin kendi geri alması da) yazılmasından 3 yıl sonra
+  içerik süpürücüsünce silinir (KVKK aydınlatma metni s6; süre sabit, env
+  yok).
 - `GET /v1/suppressions/reactivations?_start=&_end=` aynı rolle geri almaları
   en yeni önce döner (`X-Total-Count`).
 
@@ -864,7 +951,7 @@ docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | 
 - `skymail:system-mails:read` SkyMail istemcisinin rolüdür (yönetici: YK, DK,
   ADMIN).
 - Süpürücü beş dakikada bir önce hassasları maskeler, sonra
-  `MAIL_CONTENT_RETENTION_DAYS` (varsayılan `3650`, 1–3650) dolmuş
+  `MAIL_CONTENT_RETENTION_DAYS` (varsayılan `365`, 1–3650) dolmuş
   gönderimlerin içeriğini boşaltır, sonra
   `SENT_CONTENT_VIEWS_RETENTION_DAYS`'ten (varsayılan `730`, 1–3650; Yusuf,
   2026-10-14: 2 yıl) eski `sent_content_views` satırlarını siler. Geçersiz
@@ -883,10 +970,19 @@ aydınlatma metni (18) tamamlanmadan hiçbir ortamda bayrak açılmaz;
 production açılışı bilet 19'dadır. `on` geçerli adreslerle başlatılabilir,
 ancak bu bir açılış izni değildir.
 
-**Saklama süresi (Yusuf, 2026-10-19): kişi bazındaki açılma ve tıklama
-kayıtları alıcının postasının gittiği andan (`sent_at`) 1 yıl
-(`tracking.EventRetentionDays` = 365) tutulur** (tasarım notu 90 gün
-diyordu). Olay yazımı, raporlar ve saklama işi aynı sabiti kullanır.
+**Saklama süresi (KVKK aydınlatma metni s6, 2026-10-23; Yusuf'un
+2026-10-19 "1 yıl" kararının yerine): kişi bazındaki açılma ve tıklama
+kayıtları alıcının postasının gittiği andan (`sent_at`) 90 gün
+(`tracking.EventRetentionDays` = 90) tutulur**, sonra anonimleşir: saklama
+işi gönderimin kişisiz toplamını yazar, olayları siler ve alıcının
+belirtecini siler (`tracking_token` NULL; bağlantılar kendi belirteçleriyle
+yönlendirir);
+kişiye geri götüren bir şey (özet, sıra numarası) kalmaz. IP hiç
+okunmadığı için saklanacak ya da silinecek IP yoktur. Kişisiz toplam her
+gönderimde tutulur: en az 10 takipli alıcıda süresiz; 10'dan azda
+gönderimin oluşturulmasından 1 yıl sonra, içeriğiyle birlikte silinir.
+Bağlantılar 1 yıl yönlendirir; 90 günden sonraki tıklama kişiye yazılmaz.
+Olay yazımı, raporlar ve saklama işi aynı sabiti kullanır.
 
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
@@ -995,7 +1091,7 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   satırları, Mail onayı isteği ve `POST /v1/mail_tasks/single` yanıtı
   `tracking` alanı taşır.
 - **Hesap silme** kişiye giden satırların olaylarını siler, belirteçlerini
-  kapatır, kişiyi adlandıran (yazıldığı gibi ya da URL çözülmüş) ya da yalnız
+  siler (`tracking_token` NULL), kişiyi adlandıran (yazıldığı gibi ya da URL çözülmüş) ya da yalnız
   ona giden gönderimin bağlantılarının adresini boşaltır; sayaçlar
   `tracking_events_deleted`, `tracking_links_cleared`
   ([`docs/data-lifecycle.md`](docs/data-lifecycle.md#open-and-click-tracking)).
@@ -1186,7 +1282,7 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   çalışır. İstekten hedefe hiçbir parça eklenmez.
 - SQL, alıcı satırı kilidi altında tüm replikalar birlikte açılmayı 5
   dakikada 1/toplam 20; tıklamayı bağlantı başına dakikada 1/alıcı başına
-  toplam 50 ile sınırlar. Teslim edilmemiş veya `sent_at + 1 yıl` dolmuş
+  toplam 50 ile sınırlar. Teslim edilmemiş veya `sent_at + 90 gün` dolmuş
   satır olay alamaz; imha işinin çalışması beklenmez. Süreç başına kayıt
   kovası 50 olay denemesi/sn (patlama 50), en çok 8 eşzamanlı DB işlemi,
   işlem başına 500 ms bütçe ve 2048 girdilik/30 sn negatif önbellek vardır.
@@ -1205,11 +1301,12 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   Seri noktaları UTC'de ilk 72 saat saatlik, sonra günlük; `at`, `interval`,
   `likely_human_opens`, `automated_opens`, `likely_human_clicks`,
   `automated_clicks` taşır. Boş kovalar yazılmaz. Kimlik ve hedef URL yoktur
-  (tek alıcılı hedef kişiyi adlandırabilir). Son postadan 1 yıl sonra
+  (tek alıcılı hedef kişiyi adlandırabilir). Son postadan 90 gün sonra
 `retained: true`:
-  yalnız ≥10 alıcılı kişisiz toplam, yoksa `report: null`; seri dönmez.
+  yalnız kişisiz toplam (10'dan az alıcılıda gönderimden 1 yıl sonra
+  silinir), yoksa `report: null`; seri dönmez.
   **Küçük gönderim ve sistem postası:** takipli alıcısı 10'dan az
-  (`tracking.TotalsMinRecipients`, saklanan toplamın eşiği) ya da sistem
+  (`tracking.TotalsMinRecipients`) ya da sistem
   şeridindeki bir gönderimin sayıları kişiye dair bilgidir ("1/1 açıldı,
   14:00"; alıcı `GET /{id}/queue`'da görünür). Bu sayıları yalnız kişi
   raporunu okuyabilen (aşağıdaki kural: `skymail:mails:tracking:read` ya
@@ -1231,9 +1328,9 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   (`link_id`, `clicks`, `last_clicked_at`) içerir. “opened” açılma veya
   otomatik olmayan tıklama çıkarımını, “not_opened” ikisinin yokluğunu
   belirtir; “okumadı” anlamına gelmez. Token/hedef URL dönmez. Gönderimin
-  son `sent_at`'ından (teslim yoksa `created_at`) 1 yıl sonra 410 döner
-  ("Kişi bazında takip kaydı 1 yıl sonra silindi.");
-  bu tarihten önce de her alıcının kendi 1 yıllık pencere dışı olayları
+  son `sent_at`'ından (teslim yoksa `created_at`) 90 gün sonra 410 döner
+  ("Kişi bazında takip kaydı 90 gün sonra silindi.");
+  bu tarihten önce de her alıcının kendi 90 günlük pencere dışı olayları
   gizlenir. İki okuma ucunun bütçesi 2 sn, önbelleği `no-store`'dur.
 
 ### Geri alma: `PUT /internal/v1/tracking-withdrawals/{sub}` (core'dan)
@@ -1258,9 +1355,10 @@ Authorization: Bearer <core istemcisinin client credentials token'ı>
 - Başarı **`204`**, gövdesiz; idempotent: tekrar çağrı da `204` döner,
   hiçbir şey değiştirmez. Bayrak açık ya da kapalı fark etmez.
 - Etki, tek işlemde: kişinin `recipient_sub`'ına giden bütün takipli
-  satırlar `ORDER BY id FOR UPDATE` kilitlenir, belirteçleri kapanır
-  (`tracking_disabled_at`; gönderilmiş ve kuyrukta bekleyen postalar dahil,
-  bekleyen posta pikselsiz gider), sonra açılma ve tıklama olayları silinir.
+  satırlar `ORDER BY id FOR UPDATE` kilitlenir, açılma ve tıklama olayları
+  silinir, sonra belirteçleri silinir (`tracking_token` NULL,
+  `tracking_disabled_at` dolar; gönderilmiş ve kuyrukta bekleyen postalar
+  dahil, bekleyen posta pikselsiz gider).
   Bağlantılara dokunulmaz: eski postaların bağlantıları yönlendirmeye devam
   eder. Daha önce yazılmış kişisiz toplamlar değişmez. Sonraki gönderimlerde
   core `tracking:resolve` ile `preference_off` der.
@@ -1283,8 +1381,8 @@ ADR-0062'nin imha işi kalıbı (core `RETENTION_SWEEP_MODE` ile aynı):
 `off` (varsayılan, hiçbir şey koşmaz), `dry-run` (her kuralı çalıştırır,
 işlemi geri alır: yalnız sayar), `apply` (değiştirir), `purge` (tam geri
 dönüş, aşağıda). Açılışta `dry-run`; 1–2 dry-run makbuzu okunur okunmaz
-`apply`'a alınır (bilet 19). Bir yıl beklenmez: D7 yalnız `apply`'da
-çalışır, ilk yıl apply yalnız D7'ye dokunur.
+`apply`'a alınır (bilet 19). 90 gün beklenmez: D7 yalnız `apply`'da
+çalışır, ilk 90 gün apply yalnız D7'ye dokunur.
 
 - **Zamanlama:** açılışta ve saatte bir "zamanı geldi mi" denetlenir; aynı
   kipte son 23 saatte `ok`/`partial`/`refused_large`/`would_refuse_large`
@@ -1297,23 +1395,30 @@ dönüş, aşağıda). Açılışta `dry-run`; 1–2 dry-run makbuzu okunur okun
 - **Kurallar** (gönderim başına tek işlem; önce gönderimin takipli kuyruk
   satırları `ORDER BY id FOR UPDATE`, sonra bağlantılar, sonra olaylar;
   hesap silmenin kilit sırası):
-  1. alıcılarından birinin postası 1 yıldan eskiyse, gönderimde en az 10
-     takipli alıcı varsa ve henüz yoksa **önce** kişisiz toplam
-     (`mail_task_tracking_totals`) gönderimin bütün olaylarından yazılır.
+  1. alıcılarından birinin postası 90 günden eskiyse ve henüz yoksa
+     **önce** kişisiz toplam (`mail_task_tracking_totals`) gönderimin bütün
+     olaylarından yazılır; her gönderimde (KVKK s6), 10'dan az takipli
+     alıcılıda yalnız gönderimin ilk yılında (geç koşu yazmaz).
      "Takipli alıcı" yalnız postası gitmiş (`status='sent'`) ve belirteci
      açık (geri almamış, silinmemiş) olandır; ötekiler toplamda
      `not_delivered` / `tracking_closed` nedeniyle görünür;
-  2. postası 1 yıldan eski alıcıların belirteçleri kapanır;
+  2. postası 90 günden eski alıcıların belirteçleri silinir
+     (`tracking_token` NULL, `tracking_disabled_at` dolar): eski adreslerdeki
+     `rt` artık kimseyi göstermez, tıklama bağlantının kendi belirteciyle
+     1 yıl yönlendirir;
   3. 1 yıllık bağlantıların adresi boşalır (`expired`); maskelenmiş ya da
      sonradan hassaslaşmış (`mail_task_content_sensitive()`) gönderimin
      bütün bağlantılarının adresi boşalır (`erased`, inceleme D7);
-  4. postası 1 yıldan eski alıcıların olayları silinir;
-  5. kuyrukta bekleyen ya da 1 yıl içinde olan postası kalmayan gönderim
-     kapanır (`tracking_closed_at`); raporu artık yalnız kişisiz toplamdır.
+  4. postası 90 günden eski alıcıların olayları silinir (geri dönüşsüz:
+     açılma/tıklamayı kişiye bağlayan satır kalmaz);
+  5. kuyrukta bekleyen ya da 90 gün içinde olan postası kalmayan gönderim
+     kapanır (`tracking_closed_at`); raporu artık yalnız kişisiz toplamdır;
+  6. 10'dan az takipli alıcılı gönderimin kişisiz toplamı, gönderimin
+     oluşturulmasından 1 yıl sonra silinir (içerikle birlikte).
 - **dry-run ile apply aynı tanımdan:** dry-run aynı ifadeleri çalıştırıp
   işlemi geri alır; apply önce dry-run'ı koşar, sonra değiştirir.
-- **Fren:** bir koşuda kapanacak belirteç, silinecek olay ya da boşalacak
-  bağlantı sayısı `SKYMAIL_TRACKING_RETENTION_MAX_ROWS`'u (varsayılan 50.000)
+- **Fren:** bir koşuda kapanacak belirteç, silinecek olay ya da toplam veya
+  boşalacak bağlantı sayısı `SKYMAIL_TRACKING_RETENTION_MAX_ROWS`'u (varsayılan 50.000)
   aşarsa apply hiçbir şey değiştirmez (`refused_large`, `error` düzeyinde
   `"alarm":"tracking_retention_brake"`). Karar yalnız apply'ın önce koştuğu
   dry-run sayılarına bakar; değişiklik yapan apply hiçbir zaman
@@ -1323,24 +1428,31 @@ dönüş, aşağıda). Açılışta `dry-run`; 1–2 dry-run makbuzu okunur okun
 - **Makbuz:** her koşu `tracking_retention_runs`'a bir satır yazar (kip,
   başlangıç/bitiş, durum `ok|partial|refused_large|failed`,
   `events_cutoff`, durum ayrıca `would_refuse_large` olabilir; sayılar: `sends`, `totals_written`, `tokens_closed`,
-  `events_deleted`, `links_expired`, `links_erased`, `sends_closed`,
+  `totals_deleted`, `events_deleted`, `links_expired`, `links_erased`, `sends_closed`,
   `sends_failed`); kişi, belirteç ya da adres yoktur. Aynı sayılar
   `"event":"tracking_retention_run"` günlük satırındadır.
 - **`purge` (tam geri dönüş):** `SKYMAIL_TRACKING=off` ister (yoksa açılış
-  durur). Bütün belirteçleri kapatır ve bütün olayları siler, yaşına
+  durur). Bütün belirteçleri siler ve bütün olayları siler, yaşına
   bakmadan; kişisiz toplamlar ve bağlantılar kalır, eski postaların
   bağlantıları yönlendirir. Her koşuda tekrarlanır (zararsız); iş bitince
   kip **`apply`'a** alınır (`off`'a değil: `off`'ta 1 yıllık bağlantı
-  boşaltması ve D7 de durur; bayrak kapalıyken `apply` zararsızdır). Elle SQL
+  boşaltması, 10'dan az alıcılı toplamın 1 yıllık silinmesi ve D7 de durur; bayrak kapalıyken `apply` zararsızdır). Elle SQL
   gerekmez.
-- **Bilinen sınırlar:** (1) kişisiz toplam ilk alıcının yılı dolduğu koşuda
-  bir kez yazılır; aynı gönderimin sonra giden alıcılarının o andan kendi
-  yıllarına kadarki olayları toplama girmez (gönderim dakikalar içinde
+- **Bilinen sınırlar:** (1) kişisiz toplam ilk alıcının 90 günü dolduğu
+  koşuda bir kez yazılır; aynı gönderimin sonra giden alıcılarının o andan
+  kendi 90 günlerine kadarki olayları toplama girmez (gönderim dakikalar içinde
   gittiği için pratikte etkisiz). (2) Maskeleme süpürücüsü görevi sonra
   kuyruk satırlarını, saklama ise önce kuyruk satırlarını kilitler; bir
   yıllık takipli gönderimin şablonu tam o anda hassaslaşırsa Postgres
   birini ölü kilit diye iptal eder: saklama `sends_failed` yazıp ertesi gün
   dener, maskeleme başarısızlık sayar (hassas içerik için güvenli yön).
+- **Geri dönüş (`20261023180000`, toplam her gönderimde):** imajı eskiye
+  döndürmek yeterli, eski imaj yeni şemada çalışır (yalnız ≥10 toplam
+  yazar). Down migration yalnız eski imaj ayaktayken ya da
+  `SKYMAIL_TRACKING_RETENTION=off` iken koşulur: önce 10'dan az alıcılı
+  toplamları siler (geri gelmez), sonra CHECK'i geri koyar; yeni imajın
+  saklama işi arada 10'dan az bir toplam yazarsa CHECK düşer ve sürüm
+  `dirty` kalır. Silinen belirteçler hiçbir geri dönüşte geri gelmez.
 
 Makbuzlar (production sunucusunda, salt okunur):
 
