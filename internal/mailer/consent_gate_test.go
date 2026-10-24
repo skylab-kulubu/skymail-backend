@@ -390,3 +390,30 @@ func TestThePromotionalFooterLine(t *testing.T) {
 		t.Errorf("a duyuru link's line %q", got)
 	}
 }
+
+// SKYMAIL_PROMOTIONAL=on needs purposes, List-Unsubscribe and a duyuru lane
+// that writes it; anything less stops startup. Off asks for nothing.
+func TestPromotionalNeedsItsWayOut(t *testing.T) {
+	graph := map[mailer.Lane]mailer.LaneConfig{mailer.LaneDuyuru: {Transport: mailer.TransportGraph}}
+	off := map[mailer.Lane]mailer.LaneConfig{mailer.LaneDuyuru: {Transport: mailer.TransportOff}}
+	for _, tc := range []struct {
+		name  string
+		gate  mailer.ConsentGate
+		lanes mailer.SendLanes
+		want  string
+	}{
+		{"off", mailer.ConsentGate{}, mailer.SendLanes{}, ""},
+		{"list consent alone", mailer.ConsentGate{ListConsent: true}, mailer.SendLanes{}, ""},
+		{"all there", mailer.ConsentGate{Promotional: true}, mailer.SendLanes{Purpose: true, ListUnsubscribe: true, Lanes: graph}, ""},
+		{"no purposes", mailer.ConsentGate{Promotional: true}, mailer.SendLanes{ListUnsubscribe: true, Lanes: graph}, "SKYMAIL_MAIL_PURPOSE"},
+		{"no List-Unsubscribe", mailer.ConsentGate{Promotional: true}, mailer.SendLanes{Purpose: true, Lanes: graph}, "SKYMAIL_LIST_UNSUBSCRIBE"},
+		{"the duyuru lane off", mailer.ConsentGate{Promotional: true}, mailer.SendLanes{Purpose: true, ListUnsubscribe: true, Lanes: off}, "SKYMAIL_SEND_DUYURU"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.gate.CheckWith(tc.lanes)
+			if (tc.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tc.want)) {
+				t.Errorf("%v, want %q", err, tc.want)
+			}
+		})
+	}
+}

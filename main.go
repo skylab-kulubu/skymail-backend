@@ -167,6 +167,9 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid contact consent configuration")
 	}
+	if err := consentGate.CheckWith(sendLanes); err != nil {
+		log.Fatal().Err(err).Msg("invalid contact consent configuration")
+	}
 	if (consentGate.Promotional || consentGate.ListConsent) && trackingConfig.CoreURL == "" {
 		log.Fatal().Msg("SKYMAIL_PROMOTIONAL=on and SKYMAIL_LIST_CONSENT=on need CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
 	}

@@ -100,6 +100,28 @@ func ConsentGateFromEnv(getenv func(string) string) (ConsentGate, error) {
 	return gate, nil
 }
 
+// CheckWith says whether the gate can run with lanes: a promotional mail
+// must carry its withdraw link both ways s6 §5.8 and RFC 8058 ask for, so
+// SKYMAIL_PROMOTIONAL=on needs SKYMAIL_MAIL_PURPOSE=on (a send names its
+// purpose, and the visible footer line is added), SKYMAIL_LIST_UNSUBSCRIBE=on
+// and a duyuru lane that is not off (List-Unsubscribe is written only
+// there). Anything less stops startup: SkyMail never says promotional sends
+// are on while their mail would go out without its one-click way out.
+func (g ConsentGate) CheckWith(lanes SendLanes) error {
+	if !g.Promotional {
+		return nil
+	}
+	switch {
+	case !lanes.Purpose:
+		return fmt.Errorf("%s=on needs %s=on", PromotionalEnv, PurposeEnv)
+	case !lanes.ListUnsubscribe:
+		return fmt.Errorf("%s=on needs %s=on", PromotionalEnv, ListUnsubscribeEnv)
+	case lanes.Lane(LaneDuyuru).Transport == TransportOff:
+		return fmt.Errorf("%s=on needs %s=graph or xoauth2: List-Unsubscribe is written only on the duyuru lane", PromotionalEnv, sendEnv(LaneDuyuru))
+	}
+	return nil
+}
+
 // WithConsentGate applies the contact consents (ConsentGateFromEnv). Without
 // it both switches are off and no reader is set: a promotional mail is
 // never sent.
