@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,11 +36,26 @@ import (
 //
 // The check is made where the dispatcher takes the bulk rows, in the same
 // transaction and before the send budget counts them, every turn: a consent
-// withdrawn after the send was queued holds the mail too. Core is asked at
-// most consentGateTimeout a turn. A row held is written failed with nothing
-// tried, its error counted skipped (suppressedErrorPrefix), never sent: when
-// core does not answer, the audience is none (fail closed). Every duyuru
-// mail is queued in the bulk lane, so the system lane is not checked.
+// withdrawn after the send was queued holds the mail too. Core is never
+// asked inside that transaction or under the budget's lock (abonelik-cikisi
+// 09): the gate reads what core said from a cache (consentCacheTTL), and
+// what it does not know yet is fetched after the transaction, in the
+// background (at most consentRoundTimeout), while the dispatcher goes on.
+//
+//   - Held: a row core's answer says no to is written failed with nothing
+//     tried, its error counted skipped (suppressedErrorPrefix), never sent.
+//   - Waiting: a row whose answer is not known yet (not fetched, or core did
+//     not answer) goes back to pending, nothing tried and nothing counted,
+//     and is taken again later: at once while the answer is being fetched,
+//     with a backoff by its age while core does not answer (a circuit
+//     breaker keeps core unasked for consentBreakerOpen after a failure).
+//     Not knowing a consent is not its absence: a list's member is never
+//     held because core was down. A row still waiting consentUndecidedAfter
+//     after it was queued is written failed, consent: unavailable (no
+//     suppressed: prefix: it was never decided).
+//
+// Every duyuru mail is queued in the bulk lane, so the system lane is not
+// checked; its rows are handed to the workers before the bulk lane is taken.
 
 const (
 	// noPromotionalConsentError: the address gave no promotional consent.
@@ -47,15 +63,29 @@ const (
 	// noAnnouncementConsentError: an address without an account gave no
 	// consent to the club's announcements ("duyuru rızası yok").
 	noAnnouncementConsentError = suppressedErrorPrefix + "no_announcement_consent"
-	// consentUnavailableError: core did not answer, so no consent is known.
-	consentUnavailableError = suppressedErrorPrefix + "consent_unavailable"
+	// consentUndecidedError: core did not answer for consentUndecidedAfter,
+	// so no consent is known; not skipped, undecided.
+	consentUndecidedError = "consent: unavailable"
 )
 
 // clubAnnouncements is the category of a send that names none.
 const clubAnnouncements = "club:duyuru"
 
-// consentGateTimeout bounds what one turn waits on core.
-const consentGateTimeout = 10 * time.Second
+const (
+	// consentRoundTimeout bounds one fetch from core (abonelik-cikisi 09: a
+	// turn waits at most 5 seconds).
+	consentRoundTimeout = 5 * time.Second
+	// consentCacheTTL is how long an answer is used: a consent withdrawn
+	// counts at most this late, well within Google's and Yahoo's two days.
+	consentCacheTTL = 60 * time.Second
+	// consentBreakerOpen is how long core is not asked after it failed.
+	consentBreakerOpen = 30 * time.Second
+	// consentUndecidedAfter is how long a row waits for core's answer.
+	consentUndecidedAfter = 48 * time.Hour
+	// consentFetchDelay is how soon a row waiting for a fetch under way is
+	// taken again.
+	consentFetchDelay = time.Second
+)
 
 // ConsentReader is what the gate asks core (consent.Client).
 type ConsentReader interface {
@@ -111,15 +141,67 @@ func WithConsentGate(gate ConsentGate) Option {
 // promotional.
 func (m *mailerImpl) PromotionalAvailable() bool { return m.consents.Promotional }
 
+// consentCache is what core said, shared by the dispatcher and the fetch
+// that runs after its transaction.
+type consentCache struct {
+	mu sync.Mutex
+	// promotional: address → withdraw link; invited: the addresses whose
+	// announcement consent counts; accounts: address → whether core matched
+	// it to an account. Each with when it was read.
+	promotional   map[string]string
+	promotionalAt time.Time
+	invited       map[string]bool
+	invitedAt     time.Time
+	accounts      map[string]cachedAccount
+	// openUntil: core failed, and is not asked again before then.
+	openUntil time.Time
+	// needs is what the last turns found unknown, for the next fetch.
+	needs consentNeeds
+	// fetching: a fetch is under way.
+	fetching bool
+
+	ttl, roundTimeout, breakerOpen, fetchDelay time.Duration
+	now                                        func() time.Time
+}
+
+type cachedAccount struct {
+	matched bool
+	at      time.Time
+}
+
+// consentNeeds is what a fetch reads.
+type consentNeeds struct {
+	promotional, invited bool
+	addresses            map[string]bool
+}
+
+func (n consentNeeds) empty() bool { return !n.promotional && !n.invited && len(n.addresses) == 0 }
+
+func newConsentCache() *consentCache {
+	return &consentCache{accounts: map[string]cachedAccount{}, ttl: consentCacheTTL, roundTimeout: consentRoundTimeout,
+		breakerOpen: consentBreakerOpen, fetchDelay: consentFetchDelay, now: time.Now}
+}
+
+func (c *consentCache) fresh(at time.Time) bool { return !at.IsZero() && c.now().Sub(at) < c.ttl }
+
 // gatedRow is a claimed row the gate decides about.
 type gatedRow struct {
 	id      uuid.UUID
 	address string
+	queued  time.Time
 }
 
-// gateConsents writes failed (in q's transaction) the bulk rows this process
-// just took that a contact consent holds back, gives the promotional ones
-// their withdraw link, and returns the rows to send.
+// verdict is what the gate decides about a row.
+type verdict struct {
+	held    map[uuid.UUID]string
+	links   map[uuid.UUID]string
+	waiting []gatedRow
+}
+
+// gateConsents decides (in q's transaction, from the cache alone) about the
+// bulk rows this process just took that a contact consent applies to: it
+// writes the held failed, puts the waiting back, gives the promotional ones
+// their withdraw link and returns the rows to send.
 func (m *mailerImpl) gateConsents(ctx context.Context, q *database.Queries, logger *zerolog.Logger, rows []database.MailQueue) ([]database.MailQueue, error) {
 	if len(rows) == 0 {
 		return rows, nil
@@ -132,62 +214,38 @@ func (m *mailerImpl) gateConsents(ctx context.Context, q *database.Queries, logg
 	if err != nil {
 		return nil, fmt.Errorf("read the sends contact consents apply to: %w", err)
 	}
-	var promotional []gatedRow
-	listByCategory := map[string][]gatedRow{}
+	var promotional, list []gatedRow
 	for _, row := range found {
-		if AccountMail(row.Key, row.System) {
-			continue
+		gated := gatedRow{id: row.ID, address: consent.NormalizeAddress(row.RecipientEmail), queued: m.consentCache.now()}
+		if row.CreatedAt != nil {
+			gated.queued = *row.CreatedAt
 		}
-		address := consent.NormalizeAddress(row.RecipientEmail)
 		switch {
+		// Before account mail: a promotional mail is held whatever its
+		// template, a System template's too.
 		case row.Promotional:
-			promotional = append(promotional, gatedRow{row.ID, address})
+			promotional = append(promotional, gated)
+		case AccountMail(row.Key, row.System):
 		case m.consents.ListConsent && row.ToList && row.RecipientSub == nil &&
 			LaneOf(m.lanes.purposeOf(row.Purpose), row.Key, row.System, Priority(row.Priority)) == LaneDuyuru:
-			category := clubAnnouncements
-			if row.Category != nil {
-				category = *row.Category
-			}
-			listByCategory[category] = append(listByCategory[category], gatedRow{row.ID, address})
+			list = append(list, gated)
 		}
 	}
-	if len(promotional) == 0 && len(listByCategory) == 0 {
+	if len(promotional) == 0 && len(list) == 0 {
 		return rows, nil
 	}
 
-	asking, cancel := context.WithTimeout(ctx, consentGateTimeout)
-	defer cancel()
-	held := map[uuid.UUID]string{}
-	links := map[uuid.UUID]string{}
-	if len(promotional) > 0 {
-		audience, err := m.promotionalAudience(asking)
-		for _, row := range promotional {
-			link, ok := audience[row.address]
-			switch {
-			case err != nil:
-				held[row.id] = consentUnavailableError
-			case !ok:
-				held[row.id] = noPromotionalConsentError
-			default:
-				links[row.id] = link
-			}
-		}
-		if err != nil {
-			logger.Warn().Err(err).Int("count", len(promotional)).
-				Msg("Core did not say who consented to promotional mail: those rows are written failed, never sent")
-		}
-	}
-	if len(listByCategory) > 0 {
-		m.gateListRows(asking, logger, listByCategory, held)
-	}
-
-	if err := m.writeHeld(ctx, q, logger, held); err != nil {
+	v := m.consentCache.decide(promotional, list)
+	if err := m.writeHeld(ctx, q, logger, v.held); err != nil {
 		return nil, err
 	}
-	if len(links) > 0 {
-		linkIDs := make([]uuid.UUID, 0, len(links))
-		linkValues := make([]string, 0, len(links))
-		for id, link := range links {
+	if err := m.writeWaiting(ctx, q, logger, v.waiting); err != nil {
+		return nil, err
+	}
+	if len(v.links) > 0 {
+		linkIDs := make([]uuid.UUID, 0, len(v.links))
+		linkValues := make([]string, 0, len(v.links))
+		for id, link := range v.links {
 			linkIDs = append(linkIDs, id)
 			linkValues = append(linkValues, link)
 		}
@@ -197,12 +255,16 @@ func (m *mailerImpl) gateConsents(ctx context.Context, q *database.Queries, logg
 			return nil, fmt.Errorf("give promotional mail its withdraw link: %w", err)
 		}
 	}
-	kept := make([]database.MailQueue, 0, len(rows)-len(held))
+	waiting := make(map[uuid.UUID]bool, len(v.waiting))
+	for _, row := range v.waiting {
+		waiting[row.id] = true
+	}
+	kept := make([]database.MailQueue, 0, len(rows))
 	for _, row := range rows {
-		if _, ok := held[row.ID]; ok {
+		if _, ok := v.held[row.ID]; ok || waiting[row.ID] {
 			continue
 		}
-		if link, ok := links[row.ID]; ok {
+		if link, ok := v.links[row.ID]; ok {
 			row.ListUnsubscribeUrl = &link
 		}
 		kept = append(kept, row)
@@ -210,53 +272,196 @@ func (m *mailerImpl) gateConsents(ctx context.Context, q *database.Queries, logg
 	return kept, nil
 }
 
-// gateListRows holds, in held, the list rows to an address that is no
-// account's and gave no announcement consent.
-func (m *mailerImpl) gateListRows(ctx context.Context, logger *zerolog.Logger, byCategory map[string][]gatedRow, held map[uuid.UUID]string) {
-	var unmatched []gatedRow
-	var resolveErr error
-	for category, rows := range byCategory {
-		matched, err := m.matchedAddresses(ctx, category, rows)
-		if err != nil {
-			// Who has an account is not known: each row needs the consent.
-			resolveErr = err
-			unmatched = append(unmatched, rows...)
+// decide sorts the rows by what the cache knows, and notes what it does not.
+func (c *consentCache) decide(promotional, list []gatedRow) verdict {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v := verdict{held: map[uuid.UUID]string{}, links: map[uuid.UUID]string{}}
+	for _, row := range promotional {
+		if !c.fresh(c.promotionalAt) {
+			c.needs.promotional = true
+			v.waiting = append(v.waiting, row)
 			continue
 		}
-		for _, row := range rows {
-			if !matched[row.address] {
-				unmatched = append(unmatched, row)
-			}
+		if link, ok := c.promotional[row.address]; ok {
+			v.links[row.id] = link
+		} else {
+			v.held[row.id] = noPromotionalConsentError
 		}
 	}
-	if len(unmatched) == 0 {
-		return
-	}
-	invited, audienceErr := m.announcementAudience(ctx)
-	for _, row := range unmatched {
+	invitedKnown := c.fresh(c.invitedAt)
+	for _, row := range list {
+		account, accountKnown := c.accounts[row.address]
+		accountKnown = accountKnown && c.fresh(account.at)
 		switch {
-		case audienceErr == nil && invited[row.address]:
-		case audienceErr != nil || resolveErr != nil:
-			held[row.id] = consentUnavailableError
+		case accountKnown && account.matched:
+		case invitedKnown && c.invited[row.address]:
+		case accountKnown && invitedKnown:
+			v.held[row.id] = noAnnouncementConsentError
 		default:
-			held[row.id] = noAnnouncementConsentError
+			if !accountKnown {
+				if c.needs.addresses == nil {
+					c.needs.addresses = map[string]bool{}
+				}
+				c.needs.addresses[row.address] = true
+			}
+			if !invitedKnown {
+				c.needs.invited = true
+			}
+			v.waiting = append(v.waiting, row)
 		}
 	}
-	if err := errors.Join(resolveErr, audienceErr); err != nil {
-		logger.Warn().Err(err).Int("count", len(unmatched)).
-			Msg("Core did not say which list recipients have an account or consented to announcements: those without it are written failed, never sent")
+	return v
+}
+
+// writeWaiting puts the waiting rows back to pending, nothing tried: at once
+// while core may be asked, with a backoff by their age while its breaker is
+// open; a row waiting past consentUndecidedAfter is written failed,
+// undecided.
+func (m *mailerImpl) writeWaiting(ctx context.Context, q *database.Queries, logger *zerolog.Logger, rows []gatedRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	c := m.consentCache
+	c.mu.Lock()
+	now, open, fetchDelay := c.now(), c.now().Before(c.openUntil), c.fetchDelay
+	c.mu.Unlock()
+	byDelay := map[time.Duration][]uuid.UUID{}
+	var undecided []uuid.UUID
+	for _, row := range rows {
+		age := now.Sub(row.queued)
+		switch {
+		case age >= consentUndecidedAfter:
+			undecided = append(undecided, row.id)
+		case open:
+			byDelay[consentBackoff(age)] = append(byDelay[consentBackoff(age)], row.id)
+		default:
+			byDelay[fetchDelay] = append(byDelay[fetchDelay], row.id)
+		}
+	}
+	for delay, ids := range byDelay {
+		if _, err := q.DeferClaimedRows(ctx, database.DeferClaimedRowsParams{
+			Ids: ids, ClaimedBy: m.claimant, DelayMs: int(delay / time.Millisecond),
+		}); err != nil {
+			return fmt.Errorf("put back rows waiting for core's consent answer: %w", err)
+		}
+	}
+	if len(undecided) > 0 {
+		if _, err := q.SkipUnsubscribedClaimedRows(ctx, database.SkipUnsubscribedClaimedRowsParams{
+			Ids: undecided, ClaimedBy: m.claimant, Error: consentUndecidedError,
+		}); err != nil {
+			return fmt.Errorf("close rows core never answered for: %w", err)
+		}
+		logger.Warn().Int("count", len(undecided)).Dur("waited", consentUndecidedAfter).
+			Msg("Core never said whether recipients consented: written failed, undecided, never sent")
+	}
+	if waiting := len(rows) - len(undecided); waiting > 0 {
+		logger.Info().Int("count", waiting).Bool("core_breaker_open", open).
+			Msg("Recipients wait for core's consent answer: put back, nothing tried")
+	}
+	return nil
+}
+
+// consentBackoff is how long a row of age waits while core does not answer:
+// 1, 2, 5, 10, then 15 minutes, as it grows older.
+func consentBackoff(age time.Duration) time.Duration {
+	switch {
+	case age < 2*time.Minute:
+		return time.Minute
+	case age < 5*time.Minute:
+		return 2 * time.Minute
+	case age < 15*time.Minute:
+		return 5 * time.Minute
+	case age < 30*time.Minute:
+		return 10 * time.Minute
+	default:
+		return 15 * time.Minute
 	}
 }
 
-func (m *mailerImpl) matchedAddresses(ctx context.Context, category string, rows []gatedRow) (map[string]bool, error) {
+// fetchConsents starts, unless one is under way or core's breaker is open,
+// a fetch of what the last turns found unknown, outside any transaction and
+// the dispatcher's turn; it wakes the dispatcher when it is done.
+func (m *mailerImpl) fetchConsents(ctx context.Context, logger *zerolog.Logger) {
+	c := m.consentCache
+	c.mu.Lock()
+	if c.fetching || c.needs.empty() || c.now().Before(c.openUntil) {
+		c.mu.Unlock()
+		return
+	}
+	needs := c.needs
+	c.needs = consentNeeds{}
+	c.fetching = true
+	c.mu.Unlock()
+	m.consentFetches.Add(1)
+	go func() {
+		defer m.consentFetches.Done()
+		err := m.fetch(ctx, needs)
+		c.mu.Lock()
+		c.fetching = false
+		if err != nil {
+			c.openUntil = c.now().Add(c.breakerOpen)
+		}
+		c.mu.Unlock()
+		if err != nil {
+			logger.Warn().Err(err).Dur("breaker_open", c.breakerOpen).
+				Msg("Core did not say who consented: the rows that need it wait")
+		}
+		m.wake()
+	}()
+}
+
+// fetch reads what needs names from core, within consentRoundTimeout, and
+// keeps it in the cache.
+func (m *mailerImpl) fetch(ctx context.Context, needs consentNeeds) error {
 	if m.consents.Core == nil {
-		return nil, errors.New("no core to ask (CORE_URL)")
+		return errors.New("no core to ask (CORE_URL)")
 	}
-	addresses := make([]string, len(rows))
-	for i, row := range rows {
-		addresses[i] = row.address
+	c := m.consentCache
+	asking, cancel := context.WithTimeout(ctx, c.roundTimeout)
+	defer cancel()
+	if needs.promotional {
+		audience, err := m.promotionalAudience(asking)
+		if err != nil {
+			return err
+		}
+		c.mu.Lock()
+		c.promotional, c.promotionalAt = audience, c.now()
+		c.mu.Unlock()
 	}
-	return m.consents.Core.Matched(ctx, category, addresses)
+	if needs.invited {
+		invited, err := m.announcementAudience(asking)
+		if err != nil {
+			return err
+		}
+		c.mu.Lock()
+		c.invited, c.invitedAt = invited, c.now()
+		c.mu.Unlock()
+	}
+	if len(needs.addresses) > 0 {
+		addresses := make([]string, 0, len(needs.addresses))
+		for address := range needs.addresses {
+			addresses = append(addresses, address)
+		}
+		// Matching an address does not depend on the category: club:duyuru
+		// is always one core knows.
+		matched, err := m.consents.Core.Matched(asking, clubAnnouncements, addresses)
+		if err != nil {
+			return err
+		}
+		c.mu.Lock()
+		at := c.now()
+		for address, ok := range matched {
+			c.accounts[address] = cachedAccount{matched: ok, at: at}
+		}
+		for address, account := range c.accounts {
+			if !c.fresh(account.at) {
+				delete(c.accounts, address)
+			}
+		}
+		c.mu.Unlock()
+	}
+	return nil
 }
 
 // promotionalAudience is the addresses that consented to promotional mail,
@@ -264,9 +469,6 @@ func (m *mailerImpl) matchedAddresses(ctx context.Context, category string, rows
 // List-Unsubscribe (ValidUnsubscribeURL) does not count: the mail would have
 // no way out.
 func (m *mailerImpl) promotionalAudience(ctx context.Context) (map[string]string, error) {
-	if m.consents.Core == nil {
-		return nil, errors.New("no core to ask (CORE_URL)")
-	}
 	items, err := m.consents.Core.Audience(ctx, consent.PurposePromotional)
 	if err != nil {
 		return nil, err
@@ -281,19 +483,17 @@ func (m *mailerImpl) promotionalAudience(ctx context.Context) (map[string]string
 }
 
 // announcementAudience is the addresses that consented to the club's other
-// events and announcements: a grant on davet-v1 named invitations alone, and
-// one due its renewal question gets that question, not announcements.
+// events and announcements: a grant on davet-v1 named invitations alone, one
+// that names no text is not known to cover them, and one due its renewal
+// question gets that question, not announcements.
 func (m *mailerImpl) announcementAudience(ctx context.Context) (map[string]bool, error) {
-	if m.consents.Core == nil {
-		return nil, errors.New("no core to ask (CORE_URL)")
-	}
 	items, err := m.consents.Core.Audience(ctx, consent.PurposeEventInvitations)
 	if err != nil {
 		return nil, err
 	}
 	invited := make(map[string]bool, len(items))
 	for _, item := range items {
-		if item.TextVersion != consent.TextInvitationsOnly && !item.RenewalDue {
+		if item.TextVersion != "" && item.TextVersion != consent.TextInvitationsOnly && !item.RenewalDue {
 			invited[item.Email] = true
 		}
 	}

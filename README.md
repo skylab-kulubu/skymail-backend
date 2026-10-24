@@ -581,21 +581,29 @@ izni olan kişiye gider:
   (`recipient_sub`) olan alıcı ve kişiye tek posta bu kurala girmez.
 
 **Ne zaman.** Dağıtıcı toplu satırları alırken, aynı işlemde, çıkış kaydından
-sonra ve gönderim bütçesi saymadan önce, her turda core'a sorar (tur başına en
-çok 10 saniye): kuyruğa alındıktan sonra geri alınan izin de postayı durdurur.
-Tutulan satır `failed` yazılır, hiçbir şey denenmez, gönderimde atlanmış sayılır
-(`suppressed:` öneki):
+sonra ve gönderim bütçesi saymadan önce, her turda karar verir. core'a ne
+işlemin içinde ne bütçe kilidi altında sorulur (abonelik-cikisi 09): karar
+süreç içi önbellekten verilir (kitle ve hesap eşlemesi 60 saniye; geri alınan
+izin en çok bu kadar geç sayılır), bilinmeyen şey işlemden sonra arka planda,
+en çok 5 saniyede core'dan okunur; dağıtıcı beklemez. Sistem şeridinin
+satırları (giriş kodları) toplu şerit alınmadan önce işçilere verilir.
 
-| Hata | |
+| Sonuç | |
 |---|---|
-| `suppressed: no_promotional_consent` | tanıtım izni yok |
-| `suppressed: no_announcement_consent` | hesapsız adres, duyuru rızası yok |
-| `suppressed: consent_unavailable` | core cevap vermedi (ya da `CORE_URL` yok): kitle sıfır sayılır |
+| `suppressed: no_promotional_consent` | tanıtım izni yok: `failed`, atlanmış sayılır |
+| `suppressed: no_announcement_consent` | hesapsız adres, duyuru rızası yok: `failed`, atlanmış sayılır |
+| bekler | cevap henüz bilinmiyor: satır `pending`'e döner, deneme ve bütçe sayılmaz; okuma sürerken 1 saniye, core cevap vermiyorken yaşına göre 1, 2, 5, 10, en çok 15 dakika sonra yeniden alınır |
+| `consent: unavailable` | kuyruğa alındıktan 48 saat sonra hâlâ cevap yok: `failed`, belirsiz (atlanmış sayılmaz) |
 
-**core kapalıysa** tanıtım postası kimseye gitmez; liste postası hesabı core'ca
-doğrulanamayan ve rızası okunamayan adrese gitmez (kapalı yönde). Tanıtım
-kuralı bayraktan bağımsız her zaman uygulanır: bayrak açıkken kuyruğa girmiş
-tanıtım postası bayrak kapatılınca herkese gitmez.
+**core kapalıysa** bilinmeyen rıza yok sayılmaz: satır bekler, gönderilmez
+(kapalı yönde). core başarısız olunca 30 saniye sorulmaz (devre kesici).
+Listedeki hesaplı üye core yüzünden düşürülmez; rızası önbellekte görünen
+misafir yine alır. Hesap eşlemesi her zaman `club:duyuru` ile sorulur:
+eşleme kategoriye bağlı değildir, sonradan silinmiş bir ekip soruyu bozmaz.
+Tanıtım kuralı bayraktan ve şablondan bağımsız her zaman uygulanır: bayrak
+açıkken kuyruğa girmiş tanıtım postası bayrak kapatılınca herkese gitmez,
+hesap şablonuyla (`keycloak.*`, `account.*`) gönderilen tanıtım da izin arar.
+`textVersion`'ı boş kayıt duyuru rızası sayılmaz.
 
 | Değişken | |
 |---|---|

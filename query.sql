@@ -2173,6 +2173,7 @@ SELECT q.id,
        q.recipient_email,
        q.recipient_sub,
        q.priority,
+       q.created_at,
        t.key,
        coalesce(t.system, false)::boolean AS system,
        mt.purpose,
@@ -2188,6 +2189,19 @@ WHERE q.id = ANY (sqlc.arg(ids)::uuid[])
   AND q.status = 'processing'
   AND q.claimed_by = sqlc.arg(claimed_by)::text
   AND ((mt.purpose IS NOT DISTINCT FROM 'duyuru' AND mt.commercial_content_absent IS FALSE) OR ml.id IS NOT NULL);
+
+-- Puts claimed rows back to pending, nothing tried and nothing counted,
+-- to be taken again delay_ms from now: their contact consent is not known
+-- yet (internal/mailer/consent_gate.go).
+-- name: DeferClaimedRows :execrows
+UPDATE mail_queue
+SET status          = 'pending',
+    claimed_at      = NULL,
+    claimed_by      = NULL,
+    next_attempt_at = NOW() + (sqlc.arg(delay_ms)::int * INTERVAL '1 millisecond')
+WHERE id = ANY (sqlc.arg(ids)::uuid[])
+  AND status = 'processing'
+  AND claimed_by = sqlc.arg(claimed_by)::text;
 
 -- Gives claimed rows the link their mail is sent with: a promotional mail's
 -- is the grant's withdraw link, which ends the promotional consent.
