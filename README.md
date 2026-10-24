@@ -616,6 +616,11 @@ hesap şablonuyla (`keycloak.*`, `account.*`) gönderilen tanıtım da izin arar
 | `SKYMAIL_LIST_CONSENT` | `off` (ya da boş, varsayılan): liste postası bugünkü gibi, `own_event_statement` yok sayılır. `on`: hesapsız liste alıcısına duyuru rızası aranır, beyanlı posta hariç; `tracking-mode` `list_consent_available: true` döner |
 
 Başka değer açılışı durdurur; ikisinden biri `on` iken `CORE_URL` gerekir.
+`SKYMAIL_PROMOTIONAL=on` ayrıca `SKYMAIL_MAIL_PURPOSE=on`,
+`SKYMAIL_LIST_UNSUBSCRIBE=on` ve kapalı olmayan bir duyuru şeridi
+(`SKYMAIL_SEND_DUYURU=graph|xoauth2`) ister: tanıtım postası izni geri alma
+bağlantısını hem künyede hem tek tık başlığında taşımalıdır. Biri eksikse
+açılış durur (yarım yapılandırmayla "tanıtım açık" denmez).
 Açılış logu `promotional`, `list_consent` ve `core` alanlarını yazar.
 
 **core sözleşmesi.** SkyMail'in servis hesabı token'ıyla:
