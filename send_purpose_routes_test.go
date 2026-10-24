@@ -446,5 +446,9 @@ func TestTheOwnEventStatementIsKeptWhileListConsentIsOn(t *testing.T) {
 		if status, raw := w.call("okur", http.MethodGet, "/v1/mail_tasks/tracking-mode", nil, &mode); status != fiber.StatusOK || mode.ListConsentAvailable != on {
 			t.Errorf("tracking mode = %d %s, want list_consent_available %v", status, raw, on)
 		}
+		var summary handlers.SendSummary
+		if status, raw := w.call("baska", http.MethodGet, "/v1/mail_tasks/summary", nil, &summary); status != fiber.StatusOK || summary.ListConsentAvailable != on {
+			t.Errorf("summary = %d %s, want list_consent_available %v", status, raw, on)
+		}
 	}
 }

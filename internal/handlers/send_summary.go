@@ -192,10 +192,12 @@ type SendSummary struct {
 	// True while SKYMAIL_TRACKING_OPERATOR=on with SKYMAIL_TRACKING=on: every person's send (a list, a group, people, a Forms source, a Mail onayı request) is tracked whether it asked or not, of any template. The send form then shows no tracking box: a send's tracking field is ignored.
 	TrackingAlways bool `json:"tracking_always"`
 	// True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru) and a duyuru send its category, and the purpose picks the mailbox it goes out from. The send form shows its purpose, category and statements only then; while it is false they are ignored.
-	PurposeAvailable bool           `json:"purpose_available"`
-	SendCounts       SendCounts     `json:"send_counts"`
-	DailySent        []DailySent    `json:"daily_sent"`
-	RecentSends      []MailTaskItem `json:"recent_sends"`
+	PurposeAvailable bool `json:"purpose_available"`
+	// True while SKYMAIL_LIST_CONSENT=on, as tracking-mode says it: the list send form shows the own event statement box.
+	ListConsentAvailable bool           `json:"list_consent_available"`
+	SendCounts           SendCounts     `json:"send_counts"`
+	DailySent            []DailySent    `json:"daily_sent"`
+	RecentSends          []MailTaskItem `json:"recent_sends"`
 }
 
 // TrackingMode is how SkyMail tracks a person's send: what the send form needs
@@ -288,10 +290,11 @@ func (h *mailHandlerImpl) GetSummary(c fiber.Ctx) error {
 			Sent:       counts.Sent,
 			Failed:     counts.Failed,
 		},
-		SenderPaused:      h.mailer.SenderPaused(),
-		TrackingAvailable: h.mailer.TrackingAvailable(),
-		TrackingAlways:    h.mailer.OperatorTrackingAlways(),
-		PurposeAvailable:  h.mailer.PurposeAvailable(),
+		SenderPaused:         h.mailer.SenderPaused(),
+		TrackingAvailable:    h.mailer.TrackingAvailable(),
+		TrackingAlways:       h.mailer.OperatorTrackingAlways(),
+		PurposeAvailable:     h.mailer.PurposeAvailable(),
+		ListConsentAvailable: h.mailer.ListConsentAvailable(),
 		SendCounts: SendCounts{
 			Failed:  sendCounts.Failed,
 			Sending: sendCounts.Sending,
