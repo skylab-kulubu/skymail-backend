@@ -138,7 +138,8 @@ func trackingState(t *testing.T, s *Store) map[string]string {
 	state := map[string]string{}
 	for name, sql := range map[string]string{
 		"events": `SELECT id::text, queue_id::text || '|' || kind FROM mail_tracking_events`,
-		"queue":  `SELECT id::text, COALESCE(tracking_disabled_at::text, 'open') FROM mail_queue WHERE tracking_token IS NOT NULL`,
+		"queue": `SELECT id::text, COALESCE(tracking_disabled_at::text, 'open') || CASE WHEN tracking_token IS NULL THEN '|dropped' ELSE '' END
+		           FROM mail_queue WHERE tracking_token IS NOT NULL OR tracking_disabled_at IS NOT NULL`,
 		"links":  `SELECT id::text, COALESCE(url, '') || '|' || COALESCE(url_cleared_reason, '') FROM mail_task_links`,
 		"totals": `SELECT task_id::text, tracked_recipients::text || '|' || unique_opens::text || '|' || clicks_by_link::text FROM mail_task_tracking_totals`,
 		"sends":  `SELECT id::text, COALESCE(tracking_closed_at::text, 'open') FROM mail_tasks`,
@@ -184,6 +185,15 @@ func TestWithdrawTrackingStopsThePersonsTrackingAndKeepsTheLinks(t *testing.T) {
 	if want := (TrackingWithdrawal{TokensClosed: 2, EventsDeleted: 3}); got != want {
 		t.Errorf("withdrawal = %+v, want %+v", got, want)
 	}
+	// The tokens are gone, not only closed: nothing ties Deniz's old
+	// addresses to Deniz (KVKK notice s6).
+	if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE id = ANY($1) AND tracking_token IS NULL AND tracking_disabled_at IS NOT NULL`,
+		[]uuid.UUID{announcement.rows[0], later.rows[0]}); n != 2 {
+		t.Errorf("%d of Deniz's 2 tokens dropped", n)
+	}
+	if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE tracking_token = $1`, announcement.tokens[0]); n != 0 {
+		t.Errorf("Deniz's old token still names %d rows", n)
+	}
 
 	after := trackingState(t, s)
 	for key, value := range before {
@@ -195,8 +205,8 @@ func TestWithdrawTrackingStopsThePersonsTrackingAndKeepsTheLinks(t *testing.T) {
 				t.Errorf("Deniz's %s is kept", key)
 			}
 		case strings.HasPrefix(key, "queue ") && mine:
-			if after[key] == "open" {
-				t.Errorf("Deniz's token %s is open", key)
+			if !strings.HasSuffix(after[key], "|dropped") {
+				t.Errorf("Deniz's token %s is not dropped: %q", key, after[key])
 			}
 		case changed:
 			t.Errorf("%s changed: %q -> %q", key, value, after[key])
@@ -298,34 +308,54 @@ func retentionCounts(r *TrackingRetentionReport) TrackingRetentionCounts {
 	return r.Counts
 }
 
-// The retention run (SKYMAIL_TRACKING_RETENTION). A year (EventRetention)
+// The retention run (SKYMAIL_TRACKING_RETENTION). 90 days (EventRetention)
 // after a recipient's mail went out, their send's counts without people are
-// kept when it had at least 10 tracked recipients, then their token closes
-// and their events go; a send all of whose mail is past it closes. A link
-// goes a year after it was written (expired), and at once when its send is
-// masked or sensitive now (D7, erased). A dry run counts exactly what apply
-// then changes, from the same statements, and changes nothing.
+// kept — every send's (KVKK notice s6), one of fewer than 10 tracked
+// recipients only within a year of its creation — then their token closes
+// and their events go; a send all of whose mail is past it closes. The counts
+// of a send of fewer than 10 go a year after it was created. A link goes a
+// year after it was written (expired), and at once when its send is masked
+// or sensitive now (D7, erased). A dry run counts exactly what apply then
+// changes, from the same statements, and changes nothing.
 func TestTrackingRetentionDryRunCountsWhatApplyChanges(t *testing.T) {
 	s := retentionStore(t)
 	ctx := context.Background()
 	day := tracking.EventRetentionDays
 
-	// Ten tracked and one untracked, all a year and a day ago.
+	// Ten tracked and one untracked, all 90 days and a day ago, in a send
+	// created a year and a day ago whose links are as old.
 	var people []recipient
 	for i := 0; i < 10; i++ {
 		people = append(people, tracked(day+1, 1, i%2))
 	}
 	people[0].opens, people[0].automated = 2, true
 	people = append(people, recipient{sentAgo: day + 1})
-	big := seedSend(t, s, retentionTemplate, day+1, []int{day + 1, day + 1}, people...)
-	// Nine tracked: no counts are kept.
+	big := seedSend(t, s, retentionTemplate, 366, []int{366, 366}, people...)
+	// Nine tracked: their counts are kept too, for the send's first year.
 	var nine []recipient
 	for i := 0; i < 9; i++ {
 		nine = append(nine, tracked(day+1, 1, 0))
 	}
 	small := seedSend(t, s, retentionTemplate, day+1, nil, nine...)
-	// One recipient a day short of the year, one a day past it.
+	// One recipient a day short of the 90 days, one a day past them.
 	edge := seedSend(t, s, retentionTemplate, day+1, []int{day - 1}, tracked(day-1, 1, 1), tracked(day+1, 1, 1))
+	// Three tracked, a year and a day ago, retention never ran on them: no
+	// counts are kept, the year of a send of fewer than 10 is over.
+	late := seedSend(t, s, retentionTemplate, 366, nil, tracked(366, 1, 0), tracked(366, 1, 0), tracked(366, 1, 0))
+	// Three tracked, a year and a day ago, rolled up and closed long since:
+	// their counts go now.
+	old := seedSend(t, s, retentionTemplate, 366, nil, tracked(366, 0, 0), tracked(366, 0, 0), tracked(366, 0, 0))
+	if _, err := s.Conn.Exec(ctx, `UPDATE mail_queue SET tracking_disabled_at = now() - interval '275 days', tracking_token = NULL WHERE task_id = $1`, old.task); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Conn.Exec(ctx, `UPDATE mail_tasks SET tracking_closed_at = now() - interval '275 days' WHERE id = $1`, old.task); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Conn.Exec(ctx, `
+		INSERT INTO mail_task_tracking_totals (task_id, tracked_recipients, unique_opens, unique_likely_human_opens, unique_clickers, rolled_up_at)
+		VALUES ($1, 3, 2, 2, 1, now() - interval '275 days')`, old.task); err != nil {
+		t.Fatal(err)
+	}
 	// A recent send masked since (D7), and one whose template turned sensitive.
 	masked := seedSend(t, s, retentionTemplate, 10, []int{10}, tracked(10, 1, 1))
 	if _, err := s.Conn.Exec(ctx, `UPDATE mail_tasks SET content_masked_at = now() WHERE id = $1`, masked.task); err != nil {
@@ -340,13 +370,14 @@ func TestTrackingRetentionDryRunCountsWhatApplyChanges(t *testing.T) {
 	before := trackingState(t, s)
 
 	want := TrackingRetentionCounts{
-		Sends:         5,
-		TotalsWritten: 1,
-		TokensClosed:  10 + 9 + 1,
-		EventsDeleted: (11 + 5) + 9 + 2,
+		Sends:         7,
+		TotalsWritten: 3, // big, small, edge
+		TotalsDeleted: 1, // old
+		TokensClosed:  10 + 9 + 1 + 3,
+		EventsDeleted: (11 + 5) + 9 + 2 + 3,
 		LinksExpired:  2,
 		LinksErased:   2,
-		SendsClosed:   2,
+		SendsClosed:   3, // big, small, late
 	}
 
 	dry, err := s.RunTrackingRetention(ctx, TrackingRetentionOptions{Mode: tracking.RetentionDryRun})
@@ -370,7 +401,7 @@ func TestTrackingRetentionDryRunCountsWhatApplyChanges(t *testing.T) {
 	}
 	assertReceipt(t, s, apply)
 
-	// What stays: the edge's recipient a day short of the year, the masked
+	// What stays: the edge's recipient a day short of the 90 days, the masked
 	// and sensitive sends' events (their links went), the recent send.
 	for _, kept := range []uuid.UUID{edge.rows[0], masked.rows[0], sensitive.rows[0], recent.rows[0]} {
 		if n := queryCount(t, s, `SELECT count(*) FROM mail_tracking_events WHERE queue_id = $1`, kept); n == 0 {
@@ -383,6 +414,19 @@ func TestTrackingRetentionDryRunCountsWhatApplyChanges(t *testing.T) {
 	if n := queryCount(t, s, `SELECT count(*) FROM mail_tracking_events`); n != 2+1+2+3 {
 		t.Errorf("%d events left, want 8", n)
 	}
+	// The recipient bond is gone past the 90 days (KVKK notice s6): the
+	// tokens of mail past them are dropped, not only closed, and no row
+	// answers to an old token; the edge's recipient within them keeps hers.
+	for _, gone := range [][]byte{big.tokens[0], big.tokens[9], small.tokens[0], edge.tokens[1], late.tokens[0]} {
+		if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE tracking_token = $1`, gone); n != 0 {
+			t.Errorf("an old token still names %d rows", n)
+		}
+	}
+	for _, row := range []uuid.UUID{big.rows[0], small.rows[8], edge.rows[1], late.rows[2]} {
+		if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE id = $1 AND tracking_token IS NULL AND tracking_disabled_at IS NOT NULL`, row); n != 1 {
+			t.Errorf("row %s keeps its token past the 90 days", row)
+		}
+	}
 	for id, wantState := range map[int64]string{
 		big.links[0]: "|expired", big.links[1]: "|expired", edge.links[0]: "https://skylab.example/0|",
 		masked.links[0]: "|erased", sensitive.links[0]: "|erased", recent.links[0]: "https://skylab.example/0|",
@@ -391,14 +435,15 @@ func TestTrackingRetentionDryRunCountsWhatApplyChanges(t *testing.T) {
 			t.Errorf("link %d = %v, want %q", id, got, wantState)
 		}
 	}
-	for task, closed := range map[uuid.UUID]bool{big.task: true, small.task: true, edge.task: false, masked.task: false, recent.task: false} {
+	for task, closed := range map[uuid.UUID]bool{big.task: true, small.task: true, late.task: true, old.task: true, edge.task: false, masked.task: false, recent.task: false} {
 		if n := queryCount(t, s, `SELECT count(*) FROM mail_tasks WHERE id = $1 AND tracking_closed_at IS NOT NULL`, task); (n == 1) != closed {
 			t.Errorf("send %s closed = %v, want %v", task, n == 1, closed)
 		}
 	}
 
 	// The counts without people of the send of ten, as its live report had
-	// them; none for the send of nine.
+	// them; the send of nine's and the edge's as theirs; none for the sends
+	// of three a year old.
 	report, err := s.GetRetainedTrackingReport(ctx, big.task)
 	if err != nil {
 		t.Fatal(err)
@@ -422,15 +467,25 @@ func TestTrackingRetentionDryRunCountsWhatApplyChanges(t *testing.T) {
 	if !reflect.DeepEqual(totals, wantTotals) {
 		t.Errorf("totals = %v\nwant     %v", totals, wantTotals)
 	}
-	if _, err := s.GetRetainedTrackingReport(ctx, small.task); !errors.Is(err, pgx.ErrNoRows) {
-		t.Errorf("send of nine has totals: %v", err)
+	for task, want := range map[uuid.UUID]int{small.task: 9, edge.task: 2} {
+		if n := queryCount(t, s, `SELECT tracked_recipients FROM mail_task_tracking_totals WHERE task_id = $1`, task); n != want {
+			t.Errorf("send %s keeps counts of %d, want %d", task, n, want)
+		}
+	}
+	if n := queryCount(t, s, `SELECT unique_opens FROM mail_task_tracking_totals WHERE task_id = $1`, small.task); n != 9 {
+		t.Errorf("send of nine: unique_opens = %d, want 9", n)
+	}
+	for _, task := range []uuid.UUID{late.task, old.task} {
+		if _, err := s.GetRetainedTrackingReport(ctx, task); !errors.Is(err, pgx.ErrNoRows) {
+			t.Errorf("send of three a year old has totals: %v", err)
+		}
 	}
 
 	again, err := s.RunTrackingRetention(ctx, TrackingRetentionOptions{Mode: tracking.RetentionApply})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.Counts.TotalsWritten+again.Counts.TokensClosed+again.Counts.EventsDeleted+again.Counts.LinksExpired+again.Counts.LinksErased+again.Counts.SendsClosed != 0 {
+	if again.Counts.TotalsWritten+again.Counts.TotalsDeleted+again.Counts.TokensClosed+again.Counts.EventsDeleted+again.Counts.LinksExpired+again.Counts.LinksErased+again.Counts.SendsClosed != 0 {
 		t.Errorf("a second apply changed %+v", again.Counts)
 	}
 }
@@ -460,7 +515,7 @@ func TestTrackingRetentionKeepsTheCountsBeforeTheFirstEventGoes(t *testing.T) {
 		t.Errorf("unique_opens = %d, want all 10", n)
 	}
 	if n := queryCount(t, s, `SELECT count(*) FROM mail_tracking_events WHERE task_id = $1`, send.task); n != 9 {
-		t.Errorf("%d events left, want the 9 within their year", n)
+		t.Errorf("%d events left, want the 9 within their 90 days", n)
 	}
 }
 
@@ -593,8 +648,8 @@ func TestTrackingRetentionPurgeDeletesEveryEvent(t *testing.T) {
 	if n := queryCount(t, s, `SELECT count(*) FROM mail_tracking_events`); n != 0 {
 		t.Errorf("%d events after purge", n)
 	}
-	if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE tracking_token IS NOT NULL AND tracking_disabled_at IS NULL`); n != 0 {
-		t.Errorf("%d tokens open after purge", n)
+	if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE tracking_token IS NOT NULL`); n != 0 {
+		t.Errorf("%d tokens left after purge", n)
 	}
 	if n := queryCount(t, s, `SELECT count(*) FROM mail_task_links WHERE url IS NOT NULL`); n != 1 {
 		t.Error("purge emptied the link")
@@ -654,8 +709,9 @@ func TestTrackingRetentionWaitsForAnInFlightClick(t *testing.T) {
 // T4 counts people a count could tell about: the ≥10 threshold and
 // tracked_recipients count only the tracked mail that went out and whose
 // token is still open (not withdrawn, erased or closed). A send of ten
-// tokens one of which failed keeps no counts; one of eleven with one
-// withdrawal keeps them for ten, the withdrawn one among the untracked.
+// tokens one of which failed keeps counts of nine, which go a year after
+// the send; one of eleven with one withdrawal keeps them for ten, the
+// withdrawn one among the untracked, for good.
 func TestTrackingRetentionThresholdCountsOnlyDeliveredOpenTokens(t *testing.T) {
 	s := retentionStore(t)
 	ctx := context.Background()
@@ -680,11 +736,11 @@ func TestTrackingRetentionThresholdCountsOnlyDeliveredOpenTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != "ok" || got.Counts.TotalsWritten != 1 {
-		t.Fatalf("run = %s %+v, want ok and one send's counts", got.Status, got.Counts)
+	if got.Status != "ok" || got.Counts.TotalsWritten != 2 {
+		t.Fatalf("run = %s %+v, want ok and both sends' counts", got.Status, got.Counts)
 	}
-	if _, err := s.GetRetainedTrackingReport(ctx, failed.task); !errors.Is(err, pgx.ErrNoRows) {
-		t.Errorf("nine delivered of ten tokens kept counts: %v", err)
+	if n := queryCount(t, s, `SELECT tracked_recipients FROM mail_task_tracking_totals WHERE task_id = $1`, failed.task); n != 9 {
+		t.Errorf("nine delivered of ten tokens: counts of %d", n)
 	}
 	report, err := s.GetRetainedTrackingReport(ctx, withdrawn.task)
 	if err != nil {
@@ -700,6 +756,32 @@ func TestTrackingRetentionThresholdCountsOnlyDeliveredOpenTokens(t *testing.T) {
 	}
 	if totals.Tracked != 10 || totals.UniqueOpen != 10 || !reflect.DeepEqual(totals.Untracked, map[string]int{"tracking_closed": 1}) {
 		t.Errorf("totals = %+v, want 10 tracked, 10 opens, the withdrawn one tracking_closed", totals)
+	}
+
+	// A year on (and a day short of it): the counts of nine go, those of
+	// ten stay.
+	for _, age := range []string{"364 days", "366 days"} {
+		if _, err := s.Conn.Exec(ctx, `UPDATE mail_tasks SET created_at = now() - $2::interval WHERE id = ANY($1)`,
+			[]uuid.UUID{failed.task, withdrawn.task}, age); err != nil {
+			t.Fatal(err)
+		}
+		got, err = s.RunTrackingRetention(ctx, TrackingRetentionOptions{Mode: tracking.RetentionApply})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantDeleted, wantNine := int64(0), 1
+		if age == "366 days" {
+			wantDeleted, wantNine = 1, 0
+		}
+		if got.Counts.TotalsDeleted != wantDeleted {
+			t.Errorf("%s: %+v, want %d counts deleted", age, got.Counts, wantDeleted)
+		}
+		if n := queryCount(t, s, `SELECT count(*) FROM mail_task_tracking_totals WHERE task_id = $1`, failed.task); n != wantNine {
+			t.Errorf("%s: %d counts of nine, want %d", age, n, wantNine)
+		}
+		if n := queryCount(t, s, `SELECT count(*) FROM mail_task_tracking_totals WHERE task_id = $1`, withdrawn.task); n != 1 {
+			t.Errorf("%s: the counts of ten went", age)
+		}
 	}
 }
 

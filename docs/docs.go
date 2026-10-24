@@ -440,7 +440,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "On a duyuru send, the sender's statement that it carries no commercial content, as given; null when none was given, and on every islem send.",
+                        "description": "On a duyuru send, the sender's statement that its main purpose is not promotion (a short sponsor thanks or logo is allowed; KVKK notice s6 §5.10), as given; null when none was given, and on every islem send.",
                         "type": "boolean"
                     },
                     "created_at": {
@@ -465,6 +465,10 @@ const docTemplate = `{
                     },
                     "notification": {
                         "$ref": "#/components/schemas/handlers.MailApprovalNotification"
+                    },
+                    "own_event_statement": {
+                        "description": "On a duyuru send to a list or a group, the sender's statement that the mail is about the list's own event or work (KVKK notice s6 row 15), kept with the send's sender and time; null otherwise.",
+                        "type": "boolean"
                     },
                     "preview": {
                         "$ref": "#/components/schemas/handlers.MailApprovalPreview"
@@ -626,7 +630,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "On a duyuru send, the sender's statement that it carries no commercial content, as given; null when none was given, and on every islem send.",
+                        "description": "On a duyuru send, the sender's statement that its main purpose is not promotion (a short sponsor thanks or logo is allowed; KVKK notice s6 §5.10), as given; null when none was given, and on every islem send.",
                         "type": "boolean"
                     },
                     "created_at": {
@@ -641,6 +645,10 @@ const docTemplate = `{
                     },
                     "last_event": {
                         "$ref": "#/components/schemas/handlers.MailApprovalEvent"
+                    },
+                    "own_event_statement": {
+                        "description": "On a duyuru send to a list or a group, the sender's statement that the mail is about the list's own event or work (KVKK notice s6 row 15), kept with the send's sender and time; null otherwise.",
+                        "type": "boolean"
                     },
                     "purpose": {
                         "description": "islem or duyuru. Null for a send queued while SkyMail's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).",
@@ -827,7 +835,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "On a duyuru send, the sender's statement that it carries no commercial content, as given; null when none was given, and on every islem send.",
+                        "description": "On a duyuru send, the sender's statement that its main purpose is not promotion (a short sponsor thanks or logo is allowed; KVKK notice s6 §5.10), as given; null when none was given, and on every islem send.",
                         "type": "boolean"
                     },
                     "content_access": {
@@ -848,6 +856,10 @@ const docTemplate = `{
                     },
                     "mail_list_name": {
                         "type": "string"
+                    },
+                    "own_event_statement": {
+                        "description": "On a duyuru send to a list or a group, the sender's statement that the mail is about the list's own event or work (KVKK notice s6 row 15), kept with the send's sender and time; null otherwise.",
+                        "type": "boolean"
                     },
                     "purpose": {
                         "description": "islem or duyuru. Null for a send queued while SkyMail's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).",
@@ -1314,6 +1326,10 @@ const docTemplate = `{
                         "type": "array",
                         "uniqueItems": false
                     },
+                    "list_consent_available": {
+                        "description": "True while SKYMAIL_LIST_CONSENT=on, as tracking-mode says it: the list send form shows the own event statement box.",
+                        "type": "boolean"
+                    },
                     "purpose_available": {
                         "description": "True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru) and a duyuru send its category, and the purpose picks the mailbox it goes out from. The send form shows its purpose, category and statements only then; while it is false they are ignored.",
                         "type": "boolean"
@@ -1758,6 +1774,14 @@ const docTemplate = `{
             },
             "handlers.TrackingMode": {
                 "properties": {
+                    "list_consent_available": {
+                        "description": "True while SKYMAIL_LIST_CONSENT=on: a list's address without an account gets a duyuru only with its announcement consent, unless the send states own_event_statement (the mail is about the list's own event or work). The list send form shows that box only then.",
+                        "type": "boolean"
+                    },
+                    "promotional_available": {
+                        "description": "True while SKYMAIL_PROMOTIONAL=on (with purpose_available): a duyuru send may say it is promotional (commercial_content_absent false: its main purpose is promoting a product or a service, such as a discount code, a company's job posting, a sale or a raffle), and then goes only to those who consented to promotional mail, each with the link that withdraws that consent. False: such a send is refused (400 mail_task.commercial_content_not_allowed).",
+                        "type": "boolean"
+                    },
                     "purpose_available": {
                         "description": "True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru), and a duyuru send its category; tracking follows tracking_available and tracking_always whatever the purpose. False: the fields are ignored.",
                         "type": "boolean"
@@ -2024,11 +2048,15 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "The sender's statement that the mail carries no commercial content (no sponsor promotion, paid ticket, company job advert or draw; ADR 0072 decision 9). false is refused with either purpose (400 mail_task.commercial_content_not_allowed: commercial mail needs İYS consent under 6563, which the club cannot have). With duyuru, true is kept; a later version requires it. Ignored with islem.",
+                        "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyMail's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.",
                         "type": "boolean"
                     },
                     "mail_list_id": {
                         "type": "string"
+                    },
+                    "own_event_statement": {
+                        "description": "With duyuru to a list or a Keycloak group, while SkyMail holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.",
+                        "type": "boolean"
                     },
                     "purpose": {
                         "description": "islem: about the recipient's own application or transaction, only to people one by one (POST /mail_tasks/single, a Mail onayı request to people) or to a Forms source's respondents, with transactional_statement true, never with a category, tracked as any send; it goes out from bilgi@ without List-Unsubscribe and skips the unsubscribe record. duyuru: an announcement to an audience, with a category; it goes out from duyuru@ and follows the preference and the unsubscribe record. A list or a Keycloak group is always duyuru.",
@@ -2365,11 +2393,15 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "The sender's statement that the mail carries no commercial content (no sponsor promotion, paid ticket, company job advert or draw; ADR 0072 decision 9). false is refused with either purpose (400 mail_task.commercial_content_not_allowed: commercial mail needs İYS consent under 6563, which the club cannot have). With duyuru, true is kept; a later version requires it. Ignored with islem.",
+                        "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyMail's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.",
                         "type": "boolean"
                     },
                     "form_source_id": {
                         "type": "string"
+                    },
+                    "own_event_statement": {
+                        "description": "With duyuru to a list or a Keycloak group, while SkyMail holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.",
+                        "type": "boolean"
                     },
                     "purpose": {
                         "description": "islem: about the recipient's own application or transaction, only to people one by one (POST /mail_tasks/single, a Mail onayı request to people) or to a Forms source's respondents, with transactional_statement true, never with a category, tracked as any send; it goes out from bilgi@ without List-Unsubscribe and skips the unsubscribe record. duyuru: an announcement to an audience, with a category; it goes out from duyuru@ and follows the preference and the unsubscribe record. A list or a Keycloak group is always duyuru.",
@@ -2445,7 +2477,11 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "The sender's statement that the mail carries no commercial content (no sponsor promotion, paid ticket, company job advert or draw; ADR 0072 decision 9). false is refused with either purpose (400 mail_task.commercial_content_not_allowed: commercial mail needs İYS consent under 6563, which the club cannot have). With duyuru, true is kept; a later version requires it. Ignored with islem.",
+                        "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyMail's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.",
+                        "type": "boolean"
+                    },
+                    "own_event_statement": {
+                        "description": "With duyuru to a list or a Keycloak group, while SkyMail holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.",
                         "type": "boolean"
                     },
                     "purpose": {
@@ -2506,7 +2542,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "The sender's statement that the mail carries no commercial content (no sponsor promotion, paid ticket, company job advert or draw; ADR 0072 decision 9). false is refused with either purpose (400 mail_task.commercial_content_not_allowed: commercial mail needs İYS consent under 6563, which the club cannot have). With duyuru, true is kept; a later version requires it. Ignored with islem.",
+                        "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyMail's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.",
                         "type": "boolean"
                     },
                     "form_source_id": {
@@ -2516,6 +2552,10 @@ const docTemplate = `{
                     "mail_list_id": {
                         "description": "An internal mailing list or a Keycloak group. Choose exactly one of this,\nmanual recipients or form_source_id.",
                         "type": "string"
+                    },
+                    "own_event_statement": {
+                        "description": "With duyuru to a list or a Keycloak group, while SkyMail holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.",
+                        "type": "boolean"
                     },
                     "purpose": {
                         "description": "islem: about the recipient's own application or transaction, only to people one by one (POST /mail_tasks/single, a Mail onayı request to people) or to a Forms source's respondents, with transactional_statement true, never with a category, tracked as any send; it goes out from bilgi@ without List-Unsubscribe and skips the unsubscribe record. duyuru: an announcement to an audience, with a category; it goes out from duyuru@ and follows the preference and the unsubscribe record. A list or a Keycloak group is always duyuru.",
@@ -4108,7 +4148,7 @@ const docTemplate = `{
         },
         "/mail_tasks/tracking-mode": {
             "get": {
-                "description": "tracking_available, tracking_always and purpose_available, as the summary says them, for anyone who may use SkyMail: someone who only submits a send for approval sees whether it will be tracked and whether it names a purpose. It is a setting of SkyMail, not of any send.",
+                "description": "tracking_available, tracking_always and purpose_available, as the summary says them, and promotional_available, for anyone who may use SkyMail: someone who only submits a send for approval sees whether it will be tracked and whether it names a purpose. It is a setting of SkyMail, not of any send.",
                 "responses": {
                     "200": {
                         "content": {
@@ -4314,7 +4354,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/queue/{itemId}/content": {
             "get": {
-                "description": "The subject, plain text and HTML a recipient of the send was sent, as SkyMail keeps it. access says whether and how they are shown: available — as sent; masked — the send is sensitive (its template carries a code or a one-time link, or said so when it was sent, or it is a single mail whose template does not say it may be shown), and the content sweep replaced every code, one-time link and IP address with •••••• once the send was done (masked_variables, masked_by); the unmasked mail is not kept, and each opening is recorded in sent_content_views; pending — sensitive and not masked yet (a row still to go out, or sent in the last minutes): not shown; restricted — shown to the send's sender, for a send to a list, a group or an approved request to holders of skymail:mails:write, and to holders of skymail:system-mails:read; expired — past MAIL_CONTENT_RETENTION_DAYS (3650 by default) and no longer kept; not_kept — a sensitive send whose content was emptied (before sensitive content was kept, 2026-10-13, or because it could not be masked for certain), which does not come back; unavailable — holds nothing (Account erasure emptied it, or it never rendered). The fields are null unless access is available or masked. The HTML may reach the network (images, a tracking pixel): show it sandboxed, with remote content blocked by default. Never cached.",
+                "description": "The subject, plain text and HTML a recipient of the send was sent, as SkyMail keeps it. access says whether and how they are shown: available — as sent; masked — the send is sensitive (its template carries a code or a one-time link, or said so when it was sent, or it is a single mail whose template does not say it may be shown), and the content sweep replaced every code, one-time link and IP address with •••••• once the send was done (masked_variables, masked_by); the unmasked mail is not kept, and each opening is recorded in sent_content_views; pending — sensitive and not masked yet (a row still to go out, or sent in the last minutes): not shown; restricted — shown to the send's sender, for a send to a list, a group or an approved request to holders of skymail:mails:write, and to holders of skymail:system-mails:read; expired — past MAIL_CONTENT_RETENTION_DAYS (365 by default) and no longer kept; not_kept — a sensitive send whose content was emptied (before sensitive content was kept, 2026-10-13, or because it could not be masked for certain), which does not come back; unavailable — holds nothing (Account erasure emptied it, or it never rendered). The fields are null unless access is available or masked. The HTML may reach the network (images, a tracking pixel): show it sandboxed, with remote content blocked by default. Never cached.",
                 "parameters": [
                     {
                         "description": "Task ID",
@@ -4395,7 +4435,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/tracking": {
             "get": {
-                "description": "Requires skymail:mails:read. No identities, link tokens or target URLs. After a year only retained totals for at least 10 tracked recipients, or null. tracking_available follows the current flag. A send's counts tell of people when it has fewer than 10 tracked recipients (tracking.TotalsMinRecipients, the bound retained totals keep) or is mail the system sends (the system lane): then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read, or the send's own sender outside the system lane) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4).",
+                "description": "Requires skymail:mails:read. No identities, link tokens or target URLs. After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts tell of people when it has fewer than 10 tracked recipients (tracking.TotalsMinRecipients) or is mail the system sends (the system lane): then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read, or the send's own sender outside the system lane) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4).",
                 "parameters": [
                     {
                         "description": "Mail task ID",
@@ -4447,7 +4487,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/tracking/recipients": {
             "get": {
-                "description": "Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 a year after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.",
+                "description": "Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 90 days after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.",
                 "parameters": [
                     {
                         "description": "Mail task ID",

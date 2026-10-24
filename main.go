@@ -24,6 +24,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/bounce"
 	"github.com/skylab-kulubu/skymail-backend/internal/config"
+	"github.com/skylab-kulubu/skymail-backend/internal/consent"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/erasuretoken"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
@@ -159,6 +160,19 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid unsubscribe link configuration")
 	}
+	// The contact consents (README, "Tanıtım postası ve hesapsız liste
+	// alıcısı"): SKYMAIL_PROMOTIONAL and SKYMAIL_LIST_CONSENT, off unless on;
+	// either on needs CORE_URL.
+	consentGate, err := mailer.ConsentGateFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid contact consent configuration")
+	}
+	if err := consentGate.CheckWith(sendLanes); err != nil {
+		log.Fatal().Err(err).Msg("invalid contact consent configuration")
+	}
+	if (consentGate.Promotional || consentGate.ListConsent) && trackingConfig.CoreURL == "" {
+		log.Fatal().Msg("SKYMAIL_PROMOTIONAL=on and SKYMAIL_LIST_CONSENT=on need CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
+	}
 	if migrationConfig.Mode == migrations.ModeApply {
 		// A stop signal ends a wait for another process's migrations, never
 		// a migration under way.
@@ -203,6 +217,11 @@ func main() {
 		Msg("open and click tracking retention (SKYMAIL_TRACKING_RETENTION)")
 	logSendLanes(sendLanes)
 	logUnsubscribeLink(unsubscribeConfig)
+	if trackingConfig.CoreURL != "" {
+		consentGate.Core = consent.NewClient(trackingConfig.CoreURL, kcClient, nil)
+	}
+	log.Info().Bool("promotional", consentGate.Promotional).Bool("list_consent", consentGate.ListConsent).Bool("core", consentGate.Core != nil).
+		Msg("contact consents (SKYMAIL_PROMOTIONAL, SKYMAIL_LIST_CONSENT)")
 	db := database.NewStore(conn)
 	mailerService := mailer.NewMailer(db, mailer.SMTPConfig{
 		FromEmail: cfg.SMTPFrom,
@@ -215,6 +234,7 @@ func main() {
 	}, mailSender, mailer.WithQueueLease(queueLease), mailer.WithRateBudget(rateBudget),
 		mailer.WithReservedDomainsRefused(),
 		mailer.WithSendLanes(sendLanes),
+		mailer.WithConsentGate(consentGate),
 		mailer.WithTracking(mailer.Tracking{
 			Config:      trackingConfig,
 			Preferences: tracking.NewCoreClient(trackingConfig.CoreURL, kcClient, nil),
@@ -524,8 +544,9 @@ const viewSweepBatch = 500
 // startup and every interval after (docs/data-lifecycle.md, sent mail
 // content). It runs while the sender is paused too: it touches no row still
 // to go out. Then it deletes the records of who opened a masked mail older
-// than viewRetentionDays, and the bounces older than a year
-// (bounce.RetentionDays). It logs counts only.
+// than viewRetentionDays, the bounces older than a year
+// (bounce.RetentionDays) and the records of reversed unsubscribes older than
+// three years. It logs counts only.
 func clearMailContent(ctx context.Context, db *database.Store, retentionDays, viewRetentionDays int, interval time.Duration) {
 	log.Info().Int("retention_days", retentionDays).Int("view_retention_days", viewRetentionDays).
 		Msg("mail content sweep (MAIL_CONTENT_RETENTION_DAYS, SENT_CONTENT_VIEWS_RETENTION_DAYS)")
@@ -563,6 +584,13 @@ func clearMailContent(ctx context.Context, db *database.Store, retentionDays, vi
 		}
 		if bounces > 0 {
 			log.Info().Int64("bounces", bounces).Msg("deleted the bounces past retention")
+		}
+		reactivations, err := db.DeleteUnsubscribeReactivations(ctx, viewSweepBatch)
+		if err != nil && ctx.Err() == nil {
+			log.Error().Err(err).Msg("unsubscribe reactivation sweep failed")
+		}
+		if reactivations > 0 {
+			log.Info().Int64("reactivations", reactivations).Msg("deleted the records of reversed unsubscribes past three years")
 		}
 		select {
 		case <-ctx.Done():

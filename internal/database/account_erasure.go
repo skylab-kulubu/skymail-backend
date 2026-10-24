@@ -395,10 +395,12 @@ var closeTrackingTokensStep = erasureStep{
 	// lock shared with public writers, so an in-flight event commits
 	// before the following DELETE takes its fresh snapshot.
 	name: "tracking tokens of mail to the person",
+	// The token is dropped too (KVKK notice s6): their old mail's links
+	// redirect by the link's own token, and nothing ties them to the
+	// person.
 	sql: `UPDATE mail_queue q
-		      SET tracking_disabled_at = now()
+		      SET tracking_disabled_at = COALESCE(q.tracking_disabled_at, now()), tracking_token = NULL
 		      WHERE q.tracking_token IS NOT NULL
-		        AND q.tracking_disabled_at IS NULL
 		        AND ` + toPerson,
 }
 

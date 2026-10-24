@@ -152,3 +152,19 @@ var GraphFailure = graphFailure
 
 // RetryAfterOf reads a Retry-After header.
 var RetryAfterOf = retryAfter
+
+// SetConsentTiming sets the consent cache's lifetime, a fetch's limit, how
+// long core's breaker stays open, how soon a row waiting for a fetch is
+// taken again, and its clock (nil: time.Now).
+func SetConsentTiming(m Transactional, ttl, round, breaker, fetchDelay time.Duration, now func() time.Time) {
+	c := m.(*mailerImpl).consentCache
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ttl, c.roundTimeout, c.breakerOpen, c.fetchDelay = ttl, round, breaker, fetchDelay
+	if now != nil {
+		c.now = now
+	}
+}
+
+// WaitConsentFetches waits for the consent fetches under way.
+func WaitConsentFetches(m Transactional) { m.(*mailerImpl).consentFetches.Wait() }

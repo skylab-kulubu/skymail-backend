@@ -363,7 +363,7 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 	if err := caller.mayRead(send); err != nil {
 		return err
 	}
-	if send.purpose, err = h.approvalPurpose(send); err != nil {
+	if send.purpose, err = h.approvalPurpose(c.Context(), send); err != nil {
 		return err
 	}
 	if send.formSourceID != nil {
@@ -396,6 +396,7 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 			Category:                 send.purpose.Category,
 			TransactionalStatement:   send.purpose.TransactionalStatement,
 			CommercialContentAbsent:  send.purpose.CommercialContentAbsent,
+			OwnEventStatement:        send.purpose.OwnEventStatement,
 		})
 		if err != nil {
 			return err
@@ -764,7 +765,7 @@ func (h *mailApprovalHandlerImpl) Resubmit(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if send.purpose, err = h.approvalPurpose(send); err != nil {
+	if send.purpose, err = h.approvalPurpose(c.Context(), send); err != nil {
 		return err
 	}
 	return h.act(c, approvalAction{

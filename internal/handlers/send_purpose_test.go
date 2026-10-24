@@ -1,8 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/skylab-kulubu/skymail-backend/internal/database"
 
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
@@ -13,42 +17,57 @@ func boolp(b bool) *bool    { return &b }
 
 // The rules of a send's purpose (ADR 0072 decision 2; Yusuf, 2026-10-21):
 // islem only to people or a Forms source, with the statement, without a
-// category; duyuru with one of core's categories; no commercial content
-// declared, whatever the purpose; a body that names none gets its default
+// category; duyuru with one of core's categories; commercial content
+// declared only on a duyuru send while SKYMAIL_PROMOTIONAL is on; a body that names none gets its default
 // from the caller; off, nothing is read. Tracking is not the purpose's.
 func TestChoosePurpose(t *testing.T) {
 	islem := requests.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true)}
 	team := "team:6F1D2C3B-0A9E-4F8D-8C7B-6A5E4D3C2B1A:haber"
 	for _, tc := range []struct {
-		name   string
-		on     bool
-		asked  requests.SendPurpose
-		target sendTarget
-		want   mailer.SendPurpose
-		err    error
+		name        string
+		on          bool
+		promotional bool
+		listConsent bool
+		asked       requests.SendPurpose
+		target      sendTarget
+		want        mailer.SendPurpose
+		err         error
 	}{
-		{"off: everything ignored", false, requests.SendPurpose{Purpose: strp("islem")}, targetAudience, mailer.SendPurpose{}, nil},
-		{"none named: the caller's default", true, requests.SendPurpose{}, targetAudience, mailer.SendPurpose{}, nil},
-		{"a category without a purpose", true, requests.SendPurpose{Category: strp("club:duyuru")}, targetPeople, mailer.SendPurpose{}, errPurposeRequired},
-		{"a statement without a purpose", true, requests.SendPurpose{TransactionalStatement: boolp(true)}, targetPeople, mailer.SendPurpose{}, errPurposeRequired},
-		{"an unknown purpose", true, requests.SendPurpose{Purpose: strp("ticari")}, targetPeople, mailer.SendPurpose{}, errPurposeInvalid},
-		{"islem to a list or a group", true, islem, targetAudience, mailer.SendPurpose{}, errPurposeNotAllowed},
-		{"islem without the statement", true, requests.SendPurpose{Purpose: strp("islem")}, targetPeople, mailer.SendPurpose{}, errTransactionalStatementRequired},
-		{"islem with the statement false", true, requests.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(false)}, targetFormSource, mailer.SendPurpose{}, errTransactionalStatementRequired},
-		{"commercial content declared, duyuru", true, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), CommercialContentAbsent: boolp(false)}, targetAudience, mailer.SendPurpose{}, errCommercialContent},
-		{"commercial content declared, islem", true, requests.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true), CommercialContentAbsent: boolp(false)}, targetPeople, mailer.SendPurpose{}, errCommercialContent},
-		{"commercial content declared without a purpose", true, requests.SendPurpose{CommercialContentAbsent: boolp(false)}, targetPeople, mailer.SendPurpose{}, errPurposeRequired},
-		{"islem with a category", true, requests.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true), Category: strp("club:duyuru")}, targetPeople, mailer.SendPurpose{}, errCategoryNotAllowed},
-		{"islem to people", true, islem, targetPeople, mailer.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true)}, nil},
-		{"islem to a Forms source, its commercial statement dropped", true, requests.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true), CommercialContentAbsent: boolp(true)}, targetFormSource, mailer.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true)}, nil},
-		{"duyuru without a category", true, requests.SendPurpose{Purpose: strp("duyuru")}, targetAudience, mailer.SendPurpose{}, errCategoryRequired},
-		{"duyuru with a blank category", true, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp(" ")}, targetAudience, mailer.SendPurpose{}, errCategoryRequired},
-		{"duyuru with a bad category", true, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:bulten")}, targetAudience, mailer.SendPurpose{}, errCategoryInvalid},
-		{"duyuru, a team lower-cased, its transactional statement dropped", true, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp(team), TransactionalStatement: boolp(true), CommercialContentAbsent: boolp(true)}, targetAudience,
+		{"off: everything ignored", false, false, false, requests.SendPurpose{Purpose: strp("islem")}, targetAudience, mailer.SendPurpose{}, nil},
+		{"none named: the caller's default", true, false, false, requests.SendPurpose{}, targetAudience, mailer.SendPurpose{}, nil},
+		{"a category without a purpose", true, false, false, requests.SendPurpose{Category: strp("club:duyuru")}, targetPeople, mailer.SendPurpose{}, errPurposeRequired},
+		{"a statement without a purpose", true, false, false, requests.SendPurpose{TransactionalStatement: boolp(true)}, targetPeople, mailer.SendPurpose{}, errPurposeRequired},
+		{"an unknown purpose", true, false, false, requests.SendPurpose{Purpose: strp("ticari")}, targetPeople, mailer.SendPurpose{}, errPurposeInvalid},
+		{"islem to a list or a group", true, false, false, islem, targetAudience, mailer.SendPurpose{}, errPurposeNotAllowed},
+		{"islem without the statement", true, false, false, requests.SendPurpose{Purpose: strp("islem")}, targetPeople, mailer.SendPurpose{}, errTransactionalStatementRequired},
+		{"islem with the statement false", true, false, false, requests.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(false)}, targetFormSource, mailer.SendPurpose{}, errTransactionalStatementRequired},
+		{"commercial content declared, duyuru", true, false, false, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), CommercialContentAbsent: boolp(false)}, targetAudience, mailer.SendPurpose{}, errCommercialContent},
+		{"commercial content declared, islem", true, false, false, requests.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true), CommercialContentAbsent: boolp(false)}, targetPeople, mailer.SendPurpose{}, errCommercialContent},
+		{"commercial content declared without a purpose", true, false, false, requests.SendPurpose{CommercialContentAbsent: boolp(false)}, targetPeople, mailer.SendPurpose{}, errPurposeRequired},
+		{"promotional, SKYMAIL_PROMOTIONAL on: a duyuru send keeps it", true, true, false, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), CommercialContentAbsent: boolp(false)}, targetAudience,
+			mailer.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), CommercialContentAbsent: boolp(false)}, nil},
+		{"promotional to one person, SKYMAIL_PROMOTIONAL on", true, true, false, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:haber"), CommercialContentAbsent: boolp(false)}, targetPeople,
+			mailer.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:haber"), CommercialContentAbsent: boolp(false)}, nil},
+		{"promotional islem, SKYMAIL_PROMOTIONAL on", true, true, false, requests.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true), CommercialContentAbsent: boolp(false)}, targetPeople, mailer.SendPurpose{}, errCommercialContent},
+		{"promotional, purposes off", false, true, false, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), CommercialContentAbsent: boolp(false)}, targetAudience, mailer.SendPurpose{}, nil},
+		{"own event statement, list consent on, to a list", true, false, true, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), OwnEventStatement: boolp(true)}, targetAudience,
+			mailer.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), OwnEventStatement: boolp(true)}, nil},
+		{"own event statement, list consent off: dropped", true, false, false, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), OwnEventStatement: boolp(true)}, targetAudience,
+			mailer.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru")}, nil},
+		{"own event statement to one person: dropped", true, false, true, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), OwnEventStatement: boolp(true)}, targetPeople,
+			mailer.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru")}, nil},
+		{"own event statement without a purpose", true, false, true, requests.SendPurpose{OwnEventStatement: boolp(true)}, targetAudience, mailer.SendPurpose{}, errPurposeRequired},
+		{"islem with a category", true, false, false, requests.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true), Category: strp("club:duyuru")}, targetPeople, mailer.SendPurpose{}, errCategoryNotAllowed},
+		{"islem to people", true, false, false, islem, targetPeople, mailer.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true)}, nil},
+		{"islem to a Forms source, its commercial statement dropped", true, false, false, requests.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true), CommercialContentAbsent: boolp(true)}, targetFormSource, mailer.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true)}, nil},
+		{"duyuru without a category", true, false, false, requests.SendPurpose{Purpose: strp("duyuru")}, targetAudience, mailer.SendPurpose{}, errCategoryRequired},
+		{"duyuru with a blank category", true, false, false, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp(" ")}, targetAudience, mailer.SendPurpose{}, errCategoryRequired},
+		{"duyuru with a bad category", true, false, false, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:bulten")}, targetAudience, mailer.SendPurpose{}, errCategoryInvalid},
+		{"duyuru, a team lower-cased, its transactional statement dropped", true, false, false, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp(team), TransactionalStatement: boolp(true), CommercialContentAbsent: boolp(true)}, targetAudience,
 			mailer.SendPurpose{Purpose: strp("duyuru"), Category: strp("team:6f1d2c3b-0a9e-4f8d-8c7b-6a5e4d3c2b1a:haber"), CommercialContentAbsent: boolp(true)}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := choosePurpose(tc.on, tc.asked, tc.target)
+			got, err := choosePurpose(tc.on, tc.promotional, tc.listConsent, tc.asked, tc.target)
 			if !errors.Is(err, tc.err) || (tc.err == nil && err != nil) {
 				t.Fatalf("error %v, want %v", err, tc.err)
 			}
@@ -85,7 +104,8 @@ func samePurpose(a, b mailer.SendPurpose) bool {
 	eqS := func(x, y *string) bool { return (x == nil) == (y == nil) && (x == nil || *x == *y) }
 	eqB := func(x, y *bool) bool { return (x == nil) == (y == nil) && (x == nil || *x == *y) }
 	return eqS(a.Purpose, b.Purpose) && eqS(a.Category, b.Category) &&
-		eqB(a.TransactionalStatement, b.TransactionalStatement) && eqB(a.CommercialContentAbsent, b.CommercialContentAbsent)
+		eqB(a.TransactionalStatement, b.TransactionalStatement) && eqB(a.CommercialContentAbsent, b.CommercialContentAbsent) &&
+		eqB(a.OwnEventStatement, b.OwnEventStatement)
 }
 
 func show(p mailer.SendPurpose) string {
@@ -105,4 +125,43 @@ func show(p mailer.SendPurpose) string {
 		return "false"
 	}
 	return "{" + s(p.Purpose) + " " + s(p.Category) + " " + b(p.TransactionalStatement) + " " + b(p.CommercialContentAbsent) + "}"
+}
+
+type templateByID map[uuid.UUID]database.Template
+
+func (t templateByID) GetTemplateById(_ context.Context, id uuid.UUID) (database.Template, error) {
+	template, ok := t[id]
+	if !ok {
+		return database.Template{}, errors.New("no rows")
+	}
+	return template, nil
+}
+
+// A promotional send of an account template is refused (its mail would go in
+// the hesap lane, without its withdraw link); any other is not.
+func TestRefuseAccountPromotional(t *testing.T) {
+	account, other, missing := uuid.New(), uuid.New(), uuid.New()
+	templates := templateByID{
+		account: {Key: strp("keycloak.login-code"), System: true},
+		other:   {Key: strp("free.basic")},
+	}
+	promotional := mailer.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), CommercialContentAbsent: boolp(false)}
+	thanks := mailer.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), CommercialContentAbsent: boolp(true)}
+	ctx := context.Background()
+	if err := refuseAccountPromotional(ctx, templates, account, promotional); !errors.Is(err, errPromotionalAccountTemplate) {
+		t.Errorf("promotional, account template: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		id      uuid.UUID
+		purpose mailer.SendPurpose
+	}{
+		"promotional, another template":     {other, promotional},
+		"not promotional, account template": {account, thanks},
+		"no purpose, account template":      {account, mailer.SendPurpose{}},
+		"a template that cannot be read":    {missing, promotional},
+	} {
+		if err := refuseAccountPromotional(ctx, templates, tc.id, tc.purpose); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
 }

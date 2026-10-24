@@ -283,7 +283,7 @@ safeguard).
 | What | Kept | Then |
 |---|---|---|
 | `mail_unsubscribes` (lower-cased address, `stream` — `duyuru` —, `source` — `link` —, `created_at`) | until the person resubscribes (the link's page), an operator with `skymail:unsubscribes:reactivate` reverses it at the person's request or after a mistake, or the person is erased: nothing removes it by itself | Account erasure deletes the person's addresses' |
-| `mail_unsubscribe_reactivations` (when, `actor` — `recipient` or `operator` —, the operator's `actor_sub` and `reason`, the record's stream, source and date) — no address | without end: the record of who reversed what | Account erasure replaces the actor with Silinmiş kullanıcı, and clears a reason that names the person |
+| `mail_unsubscribe_reactivations` (when, `actor` — `recipient` or `operator` —, the operator's `actor_sub` and `reason`, the record's stream, source and date) — no address | **three years** from `reactivated_at` (KVKK notice s6), then deleted by the content sweep (every 5 minutes) | Account erasure replaces the actor with Silinmiş kullanıcı, and clears a reason that names the person |
 | the link's token | never stored: it is sealed (XChaCha20-Poly1305) from the stream and the address, carries its key's version, and does not expire; it stops opening only when its key version is taken out of the ring after a leak | — |
 
 A recipient of a duyuru send whose address is in the record is written
@@ -315,15 +315,17 @@ Off unless `SKYMAIL_TRACKING=on` (hub ticket iletisim-servisi 14; design note
 
 | What | Kept | Then |
 |---|---|---|
-| `mail_queue.tracking_token`, `tracking_skip_reason`, `sent_at` | with the row | the token closes a year after `sent_at` (retention), and at once on withdrawal and Account erasure |
-| `mail_tracking_events` | **one year** from the recipient's `sent_at` (`tracking.EventRetentionDays` = 365; Yusuf, 2026-10-19 — design note 07 said 90 days). Past it no event is written or shown | deleted by the retention run; withdrawal (core, my.) and Account erasure delete the person's at once |
-| `mail_task_tracking_totals` | without end, sends with ≥10 tracked recipients only (T4); written by the retention run, from all the send's events, before the first of them goes | — |
+| `mail_queue.tracking_token` | 90 days from `sent_at`, then dropped (NULL; `tracking_disabled_at` says when): nothing ties the addresses of the recipient's old mail to them, and the links still redirect by their own token | dropped by the retention run, and at once on withdrawal and Account erasure |
+| `mail_queue.tracking_skip_reason`, `tracking_disabled_at`, `sent_at` | with the row | — |
+| `mail_tracking_events` | **90 days** from the recipient's `sent_at` (`tracking.EventRetentionDays` = 90; KVKK notice s6, 2026-10-23, replacing Yusuf's 2026-10-19 year). Past it no event is written or shown, and once the run has deleted them nothing ties an opening or a click to a person (no IP address is ever read) | deleted by the retention run; withdrawal (core, my.) and Account erasure delete the person's at once |
+| `mail_task_tracking_totals` | every send's counts without people (KVKK notice s6): without end with ≥10 tracked recipients (T4); with fewer, one year from the send's `created_at`, as its content; written by the retention run, from all the send's events, before the first of them goes | the retention run deletes a send's counts of fewer than 10 a year on; the reports show them only to who may read the send's people |
 | `mail_task_links.url` | one year from the link's `created_at` (T3) | emptied by the retention run (`url_cleared_reason` `expired`); a send masked or sensitive since it went out (review D7) and Account erasure of a person it names: emptied (`erased`) |
 | `tracking_retention_runs` | without end: one row per run, counts and times only | — |
 
 **Withdrawal** (`PUT /internal/v1/tracking-withdrawals/{sub}`, core, when
 the person turns tracking off on my.): every token of mail to the subject
-closes, sent or still queued, and their events are deleted, in one
+is dropped (NULL, `tracking_disabled_at` set), sent or still queued, and
+their events are deleted, in one
 transaction that locks their tracked queue rows first. Links stay and still
 redirect; counts without people already kept stay. Idempotent, `204`.
 
@@ -333,9 +335,9 @@ per send with the send's tracked queue rows locked first (then links, then
 events — Account erasure's order). The dry run runs the same statements and
 rolls them back; apply refuses a run past
 `SKYMAIL_TRACKING_RETENTION_MAX_ROWS` (50,000 by default; the brake). The
-≥10 threshold counts only delivered mail whose token is still open. Every run
+≥10 threshold counts only delivered mail whose token is still open; a send below it keeps its counts a year from its creation, then the run deletes them. Every run
 writes its receipt to `tracking_retention_runs`. `purge`, the full
-roll-back, deletes every event and closes every token (tracking must be
+roll-back, deletes every event and drops every token (tracking must be
 off).
 
 The mail kept (`body_html`) never holds the pixel or a click address: they
@@ -528,7 +530,7 @@ not.
 
 **How long.** The same sweep, after masking, takes the sends none of whose
 rows is still to go out and empties each `MAIL_CONTENT_RETENTION_DAYS` after
-it was created, sensitive or not (unset: 3650, the most it may be): its rows'
+it was created, sensitive or not (unset: 365, a year): its rows'
 `subject` and `body` become `''` and `body_html` `NULL`, its `body_variables`
 `{}`, and `mail_tasks.content_cleared_at` says when. Status, recipient, error
 and the counts stay. Past the period the API answers `expired` even before
@@ -547,10 +549,11 @@ sends are queued with `content_sensitive_at_send = unset` (the column's
 default). Do not run the down migration of `20261013140000`: it drops
 `sent_content_views`, the record of who opened what.
 
-The period is Yusuf's decision (2026-10-12: the longest allowed). KVKK's
-storage limitation principle (Law 6698, art. 4(2)(d): kept only as long as
-needed for its purpose) asks that it be reviewed: the content names and
-addresses people, and a shorter period is set with the variable alone.
+The default is a year, what production is set to (KVKK notice s6, the
+lawyer's answer 12; it replaces Yusuf's 2026-10-12 "the longest allowed"):
+the content names and addresses people, and KVKK's storage limitation
+principle (Law 6698, art. 4(2)(d): kept only as long as needed for its
+purpose) asks for no more. Another period is set with the variable alone.
 `sent_content_views` has its own period: `SENT_CONTENT_VIEWS_RETENTION_DAYS`
 (below, under Where the raw mail still is).
 

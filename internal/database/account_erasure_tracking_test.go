@@ -59,8 +59,8 @@ func TestEraseAccountTakesThePersonOutOfTracking(t *testing.T) {
 	if n := queryCount(t, store, `
 		SELECT count(*) FROM mail_queue
 		WHERE id IN ('50000000-0000-4000-8000-00000000f001', '50000000-0000-4000-8000-00000000f003')
-		  AND tracking_disabled_at IS NOT NULL AND recipient_sub IS NULL`); n != 2 {
-		t.Errorf("%d of the 2 rows to Deniz have their token closed", n)
+		  AND tracking_disabled_at IS NOT NULL AND tracking_token IS NULL AND recipient_sub IS NULL`); n != 2 {
+		t.Errorf("%d of the 2 rows to Deniz have their token dropped", n)
 	}
 	if got := queryString(t, store, `SELECT tracking_disabled_at::text FROM mail_queue WHERE id = '50000000-0000-4000-8000-00000000f002'`); got != nil {
 		t.Errorf("Ayşe's token closed at %s", *got)

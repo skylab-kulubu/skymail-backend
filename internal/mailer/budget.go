@@ -205,7 +205,10 @@ func (m *mailerImpl) claimBulk(ctx context.Context, logger *zerolog.Logger, maxR
 			if err != nil {
 				return err
 			}
-			taken, err = m.skipUnsubscribed(ctx, q, logger, rows)
+			if taken, err = m.skipUnsubscribed(ctx, q, logger, rows); err != nil {
+				return err
+			}
+			taken, err = m.gateConsents(ctx, q, logger, taken)
 			return err
 		})
 		if err != nil {
@@ -253,6 +256,10 @@ func (m *mailerImpl) claimBulk(ctx context.Context, logger *zerolog.Logger, maxR
 		// An address that left the duyuru stream since its mail was queued
 		// is skipped here, before the count: it never takes the budget.
 		if rows, err = m.skipUnsubscribed(ctx, q, logger, rows); err != nil || len(rows) == 0 {
+			return err
+		}
+		// So is a mail a contact consent holds back (consent_gate.go).
+		if rows, err = m.gateConsents(ctx, q, logger, rows); err != nil || len(rows) == 0 {
 			return err
 		}
 		if err := countSends(ctx, q, at, PriorityBulk, len(rows)); err != nil {

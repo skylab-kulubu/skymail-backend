@@ -194,7 +194,7 @@ func approvalSendOf(params requests.SubmitMailApproval) (approvalSend, error) {
 // approvalPurpose is the purpose a request to send is written with (ADR 0072
 // decision 2): islem only to people or a Forms source; duyuru, club:duyuru,
 // when the body names none. The zero SendPurpose while purposes are off.
-func (h *mailApprovalHandlerImpl) approvalPurpose(send approvalSend) (mailer.SendPurpose, error) {
+func (h *mailApprovalHandlerImpl) approvalPurpose(ctx context.Context, send approvalSend) (mailer.SendPurpose, error) {
 	on := h.mailer.PurposeAvailable()
 	target := targetPeople
 	switch {
@@ -203,8 +203,11 @@ func (h *mailApprovalHandlerImpl) approvalPurpose(send approvalSend) (mailer.Sen
 	case send.formSourceID != nil:
 		target = targetFormSource
 	}
-	chosen, err := choosePurpose(on, send.askedPurpose, target)
+	chosen, err := choosePurpose(on, h.mailer.PromotionalAvailable(), h.mailer.ListConsentAvailable(), send.askedPurpose, target)
 	if err != nil {
+		return mailer.SendPurpose{}, err
+	}
+	if err := refuseAccountPromotional(ctx, h.db, send.templateID, chosen); err != nil {
 		return mailer.SendPurpose{}, err
 	}
 	return purposeOrDefault(on, chosen, duyuruByDefault), nil
@@ -212,7 +215,7 @@ func (h *mailApprovalHandlerImpl) approvalPurpose(send approvalSend) (mailer.Sen
 
 // storedPurpose is the purpose a request was written with.
 func storedPurpose(a database.MailApproval) mailer.SendPurpose {
-	return mailer.SendPurpose{Purpose: a.Purpose, Category: a.Category, TransactionalStatement: a.TransactionalStatement, CommercialContentAbsent: a.CommercialContentAbsent}
+	return mailer.SendPurpose{Purpose: a.Purpose, Category: a.Category, TransactionalStatement: a.TransactionalStatement, CommercialContentAbsent: a.CommercialContentAbsent, OwnEventStatement: a.OwnEventStatement}
 }
 
 // queuedPurpose is the purpose a request's send is queued with: the one it
@@ -779,8 +782,8 @@ func (h *mailApprovalHandlerImpl) queue(ctx context.Context, q *database.Queries
 	// any approved send, and goes out from bilgi@.
 	sends := h.mailer.Queue(q, mailer.PriorityBulk)
 	purpose := h.queuedPurpose(a)
-	a.Purpose, a.Category, a.TransactionalStatement, a.CommercialContentAbsent =
-		purpose.Purpose, purpose.Category, purpose.TransactionalStatement, purpose.CommercialContentAbsent
+	a.Purpose, a.Category, a.TransactionalStatement, a.CommercialContentAbsent, a.OwnEventStatement =
+		purpose.Purpose, purpose.Category, purpose.TransactionalStatement, purpose.CommercialContentAbsent, purpose.OwnEventStatement
 	switch {
 	case h.mailer.OperatorTrackingAlways():
 		a.TrackingRequested = true
@@ -868,6 +871,7 @@ func queueToList(ctx context.Context, q *database.Queries, sends mailer.Queue, a
 			Category:                a.Category,
 			TransactionalStatement:  a.TransactionalStatement,
 			CommercialContentAbsent: a.CommercialContentAbsent,
+			OwnEventStatement:       a.OwnEventStatement,
 		})
 		if err == nil && taskID == uuid.Nil {
 			return uuid.Nil, errApprovalAudienceEmpty
@@ -974,6 +978,7 @@ func (h *mailApprovalHandlerImpl) resubmit(ctx context.Context, q *database.Quer
 		Category:                send.purpose.Category,
 		TransactionalStatement:  send.purpose.TransactionalStatement,
 		CommercialContentAbsent: send.purpose.CommercialContentAbsent,
+		OwnEventStatement:       send.purpose.OwnEventStatement,
 		At:                      now,
 		DeadlineAt:              now.Add(mailApprovalDeadline),
 		ID:                      a.ID,
@@ -1195,6 +1200,7 @@ func approvalItem(view database.GetMailApprovalRow, groupNames map[uuid.UUID]*st
 			Category:                view.MailApproval.Category,
 			TransactionalStatement:  view.MailApproval.TransactionalStatement,
 			CommercialContentAbsent: view.MailApproval.CommercialContentAbsent,
+			OwnEventStatement:       view.MailApproval.OwnEventStatement,
 		},
 	}
 }

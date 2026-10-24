@@ -144,6 +144,10 @@ type Querier interface {
 	// statement's time, not the transaction's (NOW()), so a budget read later in
 	// a transaction reads the instant it counts at.
 	DatabaseNow(ctx context.Context) (time.Time, error)
+	// Puts claimed rows back to pending, nothing tried and nothing counted,
+	// to be taken again delay_ms from now: their contact consent is not known
+	// yet (internal/mailer/consent_gate.go).
+	DeferClaimedRows(ctx context.Context, arg DeferClaimedRowsParams) (int64, error)
 	// Puts a send whose masking failed back: not counted yet, tried again after
 	// base_seconds doubled for each failure it has had (a day at most). The first
 	// failure since the send was last masked starts its deadline.
@@ -158,6 +162,10 @@ type Querier interface {
 	// Deletes up to batch_size of the oldest records of who opened a masked mail
 	// that are older than retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
 	DeleteOldSentContentViews(ctx context.Context, arg DeleteOldSentContentViewsParams) (int64, error)
+	// Deletes up to batch_size of the oldest records of a reversed unsubscribe
+	// three years after they were written (KVKK notice s6; hub ticket
+	// kvkk-s6-yayin-oncesi 14): the content sweep's step.
+	DeleteOldUnsubscribeReactivations(ctx context.Context, batchSize int) (int64, error)
 	// Removes a suppression: the address is mailed again. What it said is
 	// returned for the removal's record, never the address.
 	DeleteSuppression(ctx context.Context, id uuid.UUID) (DeleteSuppressionRow, error)
@@ -178,6 +186,12 @@ type Querier interface {
 	GetAllTemplatesIncludingArchived(ctx context.Context, arg GetAllTemplatesIncludingArchivedParams) ([]Template, error)
 	GetArchivedMailingLists(ctx context.Context, arg GetArchivedMailingListsParams) ([]MailingList, error)
 	GetArchivedTemplates(ctx context.Context, arg GetArchivedTemplatesParams) ([]Template, error)
+	// The claimed e-mail rows among ids whose send a contact consent may hold
+	// back (internal/mailer/consent_gate.go): a promotional duyuru send
+	// (commercial_content_absent false), or a send to an internal list. With the
+	// send's template (account mail is never held), purpose, category and the
+	// recipient's account, when the row knows it.
+	GetConsentGateClaimedRows(ctx context.Context, arg GetConsentGateClaimedRowsParams) ([]GetConsentGateClaimedRowsRow, error)
 	// A queue row has no sent time of its own. created_at — when that recipient's
 	// mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
 	// mail that goes through on its first attempt leaves within seconds, and only a
@@ -351,7 +365,7 @@ type Querier interface {
 	// false only drafts, discarded ones included.
 	ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]TemplateVersionSummary, error)
 	// One aggregate per recipient, then filtering and pagination. Events older
-	// than their recipient's one-year window (tracking.EventRetentionDays) never
+	// than their recipient's 90-day window (tracking.EventRetentionDays) never
 	// reappear while retention is disabled or catching up. No tracking token or link target is selected.
 	ListTrackingRecipients(ctx context.Context, arg ListTrackingRecipientsParams) ([]byte, error)
 	// The reactivations, newest first.
@@ -518,6 +532,10 @@ type Querier interface {
 	// after minute_since (the current minute and the one before it) and the
 	// hours starting at or after hour_since (every hour of the last 24).
 	SendWindowCounts(ctx context.Context, arg SendWindowCountsParams) ([]MailSendWindow, error)
+	// Gives claimed rows the link their mail is sent with: a promotional mail's
+	// is the grant's withdraw link, which ends the promotional consent.
+	// links[i] is ids[i]'s.
+	SetClaimedRowsUnsubscribeURL(ctx context.Context, arg SetClaimedRowsUnsubscribeURLParams) (int64, error)
 	// A NULL deadline leaves the request's deadline as it is.
 	SetMailApprovalState(ctx context.Context, arg SetMailApprovalStateParams) (MailApproval, error)
 	SetMailApprovalVariables(ctx context.Context, arg SetMailApprovalVariablesParams) (MailApproval, error)

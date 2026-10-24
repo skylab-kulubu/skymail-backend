@@ -18,9 +18,10 @@ import (
 const TrackingReadRole = "skymail:mails:tracking:read"
 const trackingReadBudget = 2 * time.Second
 
-// TrackingSummary has no identities or target URLs. A year after the last
-// mail went out (tracking.EventRetention) report is a retained
-// >=10-recipient aggregate, or null when there is no such total. Withheld
+// TrackingSummary has no identities or target URLs. 90 days after the last
+// mail went out (tracking.EventRetention) report is the retained aggregate,
+// or null when there is none (a send of fewer than 10 tracked recipients a
+// year after it was created). Withheld
 // says the send's counts would tell of people (see GetTracking) and the
 // caller may not read its people: report is then null.
 type TrackingSummary struct {
@@ -90,7 +91,7 @@ type TrackingRecipientLink struct {
 // GetTracking godoc
 //
 //	@Summary		Tracking counts, per-link counts and hour/day series
-//	@Description	Requires skymail:mails:read. No identities, link tokens or target URLs. After a year only retained totals for at least 10 tracked recipients, or null. tracking_available follows the current flag. A send's counts tell of people when it has fewer than 10 tracked recipients (tracking.TotalsMinRecipients, the bound retained totals keep) or is mail the system sends (the system lane): then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read, or the send's own sender outside the system lane) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4).
+//	@Description	Requires skymail:mails:read. No identities, link tokens or target URLs. After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts tell of people when it has fewer than 10 tracked recipients (tracking.TotalsMinRecipients) or is mail the system sends (the system lane): then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read, or the send's own sender outside the system lane) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4).
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id	path		string	true	"Mail task ID"
@@ -160,7 +161,7 @@ func mayReadTrackingPeople(c fiber.Ctx, task database.TrackingTaskAccessRow) boo
 // GetTrackingRecipients godoc
 //
 //	@Summary		Recipient opening and click observations
-//	@Description	Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 a year after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.
+//	@Description	Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 90 days after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id			path		string	true	"Mail task ID"
@@ -188,7 +189,7 @@ func (h *mailHandlerImpl) GetTrackingRecipients(c fiber.Ctx) error {
 		return apperrors.ErrForbidden
 	}
 	if task.TrackingClosedAt != nil || !task.SentAt.Add(tracking.EventRetention).After(h.now()) {
-		return apperrors.New("mail.tracking_expired", "Kişi bazında takip kaydı 1 yıl sonra silindi.", fiber.StatusGone)
+		return apperrors.New("mail.tracking_expired", "Kişi bazında takip kaydı 90 gün sonra silindi.", fiber.StatusGone)
 	}
 	filter := c.Query("filter")
 	switch filter {
