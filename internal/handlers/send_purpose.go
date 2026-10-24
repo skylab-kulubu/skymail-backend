@@ -94,15 +94,17 @@ func isDuyuru(p mailer.SendPurpose) bool {
 // zero SendPurpose while purposes are off (on false) or when the body names
 // none, which the caller then gives its default; otherwise the purpose the
 // send is written with, or why it is refused. promotional is
-// SKYMAIL_PROMOTIONAL: a duyuru send may then be promotional. Tracking is the
+// SKYMAIL_PROMOTIONAL: a duyuru send may then be promotional. listConsent is
+// SKYMAIL_LIST_CONSENT: a duyuru send to a list or a group then keeps its
+// own event statement. Tracking is the
 // tracking rules' (SKYMAIL_TRACKING, SKYMAIL_TRACKING_OPERATOR), whatever the
 // purpose.
-func choosePurpose(on, promotional bool, asked requests.SendPurpose, target sendTarget) (mailer.SendPurpose, error) {
+func choosePurpose(on, promotional, listConsent bool, asked requests.SendPurpose, target sendTarget) (mailer.SendPurpose, error) {
 	if !on {
 		return mailer.SendPurpose{}, nil
 	}
 	if asked.Purpose == nil {
-		if asked.Category != nil || asked.TransactionalStatement != nil || asked.CommercialContentAbsent != nil {
+		if asked.Category != nil || asked.TransactionalStatement != nil || asked.CommercialContentAbsent != nil || asked.OwnEventStatement != nil {
 			return mailer.SendPurpose{}, errPurposeRequired
 		}
 		return mailer.SendPurpose{}, nil
@@ -132,7 +134,13 @@ func choosePurpose(on, promotional bool, asked requests.SendPurpose, target send
 			return mailer.SendPurpose{}, errCategoryInvalid.WithParams(map[string]interface{}{"category": *asked.Category})
 		}
 		purpose := mailer.PurposeDuyuru
-		return mailer.SendPurpose{Purpose: &purpose, Category: &category, CommercialContentAbsent: asked.CommercialContentAbsent}, nil
+		chosen := mailer.SendPurpose{Purpose: &purpose, Category: &category, CommercialContentAbsent: asked.CommercialContentAbsent}
+		// The list's own event statement is a list's or a group's, and only
+		// while list consents are on (SKYMAIL_LIST_CONSENT).
+		if listConsent && target == targetAudience {
+			chosen.OwnEventStatement = asked.OwnEventStatement
+		}
+		return chosen, nil
 	default:
 		return mailer.SendPurpose{}, errPurposeInvalid
 	}

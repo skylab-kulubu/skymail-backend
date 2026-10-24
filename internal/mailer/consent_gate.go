@@ -33,6 +33,9 @@ import (
 //     that covers announcements (not davet-v1, core #289 review B6), and
 //     not to one due its renewal question. A Keycloak group's members are
 //     accounts, and a row that knows its recipient's account is not held.
+//     Nor is a mail its sender stated is about the list's own event or work
+//     (own_event_statement; s6 row 15: 5/2-c, no consent): it still goes in
+//     the duyuru stream, with its way out.
 //
 // The check is made where the dispatcher takes the bulk rows, in the same
 // transaction and before the send budget counts them, every turn: a consent
@@ -141,6 +144,9 @@ func WithConsentGate(gate ConsentGate) Option {
 // promotional.
 func (m *mailerImpl) PromotionalAvailable() bool { return m.consents.Promotional }
 
+// ListConsentAvailable says SKYMAIL_LIST_CONSENT is on.
+func (m *mailerImpl) ListConsentAvailable() bool { return m.consents.ListConsent }
+
 // consentCache is what core said, shared by the dispatcher and the fetch
 // that runs after its transaction.
 type consentCache struct {
@@ -226,7 +232,9 @@ func (m *mailerImpl) gateConsents(ctx context.Context, q *database.Queries, logg
 		case row.Promotional:
 			promotional = append(promotional, gated)
 		case AccountMail(row.Key, row.System):
-		case m.consents.ListConsent && row.ToList && row.RecipientSub == nil &&
+		// A mail stated to be about the list's own event or work goes
+		// without the consent (s6 row 15, 5/2-c), in the duyuru stream still.
+		case m.consents.ListConsent && row.ToList && row.RecipientSub == nil && !row.OwnEvent &&
 			LaneOf(m.lanes.purposeOf(row.Purpose), row.Key, row.System, Priority(row.Priority)) == LaneDuyuru:
 			list = append(list, gated)
 		}

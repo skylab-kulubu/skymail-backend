@@ -181,6 +181,10 @@ type Mailer interface {
 	// be promotional (commercial_content_absent false), and goes only to
 	// those who consented to promotional mail (consent_gate.go).
 	PromotionalAvailable() bool
+	// ListConsentAvailable says SKYMAIL_LIST_CONSENT is on: a list's
+	// address without an account needs its announcement consent, unless the
+	// send states it is about the list's own event (consent_gate.go).
+	ListConsentAvailable() bool
 	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error)
 	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
 	// EnqueueSystemSingle queues a mail a service sends one person (a login
@@ -820,6 +824,7 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 		Category:                params.Purpose.Category,
 		TransactionalStatement:  params.Purpose.TransactionalStatement,
 		CommercialContentAbsent: params.Purpose.CommercialContentAbsent,
+		OwnEventStatement:       params.Purpose.OwnEventStatement,
 	})
 	if err != nil {
 		return uuid.Nil, false, err

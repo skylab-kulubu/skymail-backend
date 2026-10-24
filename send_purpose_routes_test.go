@@ -423,3 +423,28 @@ func TestAPromotionalSendIsWrittenWhileTheSwitchIsOn(t *testing.T) {
 		t.Errorf("tracking mode = %d %s, want promotional_available", status, raw)
 	}
 }
+
+// SKYMAIL_LIST_CONSENT on: a list send keeps its own event statement, with
+// the send, and the tracking mode says list consents are on; to one person
+// the statement is dropped. Off, it is dropped everywhere.
+func TestTheOwnEventStatementIsKeptWhileListConsentIsOn(t *testing.T) {
+	statement := map[string]any{"purpose": "duyuru", "category": "club:duyuru", "own_event_statement": true}
+	for _, on := range []bool{true, false} {
+		w := newFormSourceWorld(t, purposesOn(), mailer.WithConsentGate(mailer.ConsentGate{ListConsent: on}))
+		var created createdPurpose
+		if status, raw := w.call("yusuf", http.MethodPost, "/v1/mail_tasks", with(w.listSend(), statement), &created); status != fiber.StatusCreated {
+			t.Fatalf("on %v: a list send = %d %s, want 201", on, status, raw)
+		}
+		var kept *bool
+		if err := w.store.Conn.QueryRow(context.Background(), `SELECT own_event_statement FROM mail_tasks WHERE id = $1`, created.ID).Scan(&kept); err != nil {
+			t.Fatal(err)
+		}
+		if on && (kept == nil || !*kept) || !on && kept != nil {
+			t.Errorf("on %v: own_event_statement written %v", on, kept)
+		}
+		var mode handlers.TrackingMode
+		if status, raw := w.call("okur", http.MethodGet, "/v1/mail_tasks/tracking-mode", nil, &mode); status != fiber.StatusOK || mode.ListConsentAvailable != on {
+			t.Errorf("tracking mode = %d %s, want list_consent_available %v", status, raw, on)
+		}
+	}
+}

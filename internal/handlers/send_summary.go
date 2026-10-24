@@ -210,6 +210,8 @@ type TrackingMode struct {
 	PurposeAvailable bool `json:"purpose_available"`
 	// True while SKYMAIL_PROMOTIONAL=on (with purpose_available): a duyuru send may say it is promotional (commercial_content_absent false: its main purpose is promoting a product or a service, such as a discount code, a company's job posting, a sale or a raffle), and then goes only to those who consented to promotional mail, each with the link that withdraws that consent. False: such a send is refused (400 mail_task.commercial_content_not_allowed).
 	PromotionalAvailable bool `json:"promotional_available"`
+	// True while SKYMAIL_LIST_CONSENT=on: a list's address without an account gets a duyuru only with its announcement consent, unless the send states own_event_statement (the mail is about the list's own event or work). The list send form shows that box only then.
+	ListConsentAvailable bool `json:"list_consent_available"`
 }
 
 // GetTrackingMode godoc
@@ -222,7 +224,7 @@ type TrackingMode struct {
 //	@Failure		403	{object}	apperrors.AppError	"Forbidden"
 //	@Router			/mail_tasks/tracking-mode [get]
 func (h *mailHandlerImpl) GetTrackingMode(c fiber.Ctx) error {
-	return c.JSON(TrackingMode{TrackingAvailable: h.mailer.TrackingAvailable(), TrackingAlways: h.mailer.OperatorTrackingAlways(), PurposeAvailable: h.mailer.PurposeAvailable(), PromotionalAvailable: h.mailer.PromotionalAvailable()})
+	return c.JSON(TrackingMode{TrackingAvailable: h.mailer.TrackingAvailable(), TrackingAlways: h.mailer.OperatorTrackingAlways(), PurposeAvailable: h.mailer.PurposeAvailable(), PromotionalAvailable: h.mailer.PromotionalAvailable(), ListConsentAvailable: h.mailer.ListConsentAvailable()})
 }
 
 // GetSummary godoc
@@ -342,6 +344,7 @@ func (h *mailHandlerImpl) mailTaskItems(ctx context.Context, caller contentCalle
 				Category:                send.Category,
 				TransactionalStatement:  send.TransactionalStatement,
 				CommercialContentAbsent: send.CommercialContentAbsent,
+				OwnEventStatement:       send.OwnEventStatement,
 			},
 		}
 	}

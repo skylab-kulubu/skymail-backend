@@ -396,6 +396,7 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 			Category:                 send.purpose.Category,
 			TransactionalStatement:   send.purpose.TransactionalStatement,
 			CommercialContentAbsent:  send.purpose.CommercialContentAbsent,
+			OwnEventStatement:        send.purpose.OwnEventStatement,
 		})
 		if err != nil {
 			return err

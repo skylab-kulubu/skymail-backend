@@ -546,3 +546,31 @@ func TestThePromotionalFooterLine(t *testing.T) {
 		t.Errorf("a duyuru link's line %q", got)
 	}
 }
+
+// A list's mail its sender stated is about the list's own event or work
+// (own_event_statement; s6 row 15, 5/2-c) goes to every address, with or
+// without an account or a consent, and core is not asked.
+func TestAListsOwnEventMailNeedsNoConsent(t *testing.T) {
+	captureMailerLogs(t)
+	db := suppressionQueue(t)
+	core := announcementCore()
+	m := gatedMailer(t, db, mailer.ConsentGate{ListConsent: true, Core: core})
+	list := consentList(t, db)
+	purpose, category, own := mailer.PurposeDuyuru, "club:duyuru", true
+	task, err := m.Enqueue(context.Background(), database.CreateMailTaskParams{
+		SentBy: laneSender, TemplateID: &initialTemplate, MailListID: &list, BodyVariables: []byte(`{}`),
+		Purpose: &purpose, Category: &category, OwnEventStatement: &own,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if taken := mailer.Turn(context.Background(), m); len(taken) != 6 {
+		t.Errorf("taken %d, want all six", len(taken))
+	}
+	if asked := core.calls(); len(asked) != 0 {
+		t.Errorf("core asked %v", asked)
+	}
+	if got := rowTo(t, db, task, "misafir@example.com"); got.error != "" {
+		t.Errorf("the guest without consent: %+v", got)
+	}
+}

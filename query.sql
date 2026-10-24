@@ -871,10 +871,12 @@ WITH active_source AS (
       AND ml.archived_at IS NULL
 ), inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send,
-                            tracking_requested, purpose, category, transactional_statement, commercial_content_absent)
+                            tracking_requested, purpose, category, transactional_statement, commercial_content_absent,
+                            own_event_statement)
         SELECT sqlc.arg(sent_by), template_id, mail_list_id, sqlc.arg(body_variables), content_sensitive,
                sqlc.arg(tracking_requested)::boolean, sqlc.narg(purpose)::text, sqlc.narg(category)::text,
-               sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean
+               sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean,
+               sqlc.narg(own_event_statement)::boolean
         FROM active_source
         RETURNING *
 )
@@ -1290,11 +1292,13 @@ RETURNING mt.id, (SELECT count(*) FROM rows WHERE rows.task_id = mt.id) AS rows_
 -- mail_task_content_sensitive() reads it first (20261020120000).
 -- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, form_source_id, body_variables, content_sensitive_at_send,
-                        tracking_requested, purpose, category, transactional_statement, commercial_content_absent)
+                        tracking_requested, purpose, category, transactional_statement, commercial_content_absent,
+                        own_event_statement)
 SELECT sqlc.arg(sent_by), sqlc.arg(template_id), sqlc.narg(mail_list_id), sqlc.narg(form_source_id), sqlc.arg(body_variables),
        CASE WHEN template_key_content_locked(templates.key) THEN 'true' ELSE COALESCE(templates.content_sensitive::text, 'unset') END,
        sqlc.arg(tracking_requested)::boolean, sqlc.narg(purpose)::text, sqlc.narg(category)::text,
-       sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean
+       sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean,
+       sqlc.narg(own_event_statement)::boolean
 FROM templates
 WHERE templates.id = sqlc.arg(template_id)
   AND archived_at IS NULL
@@ -1402,7 +1406,8 @@ SELECT mt.id,
        mt.purpose,
        mt.category,
        mt.transactional_statement,
-       mt.commercial_content_absent
+       mt.commercial_content_absent,
+       mt.own_event_statement
 FROM page
          JOIN mail_tasks mt ON mt.id = page.id
          LEFT JOIN templates t ON mt.template_id = t.id
@@ -1455,12 +1460,13 @@ WHERE (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(st
 INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, submitter_email_unverified, template_id,
                             template_version_id, mail_list_id, form_source_id, body_variables, created_at, submitted_at, deadline_at,
                             updated_at, tracking_requested, purpose, category, transactional_statement,
-                            commercial_content_absent)
+                            commercial_content_absent, own_event_statement)
 VALUES (sqlc.arg(submitter_sub), sqlc.narg(submitter_name), sqlc.narg(submitter_email),
         sqlc.arg(submitter_email_unverified), sqlc.arg(template_id),
         sqlc.arg(template_version_id), sqlc.narg(mail_list_id), sqlc.narg(form_source_id), sqlc.arg(body_variables), sqlc.arg(at), sqlc.arg(at),
         sqlc.arg(deadline_at), sqlc.arg(at), sqlc.arg(tracking_requested)::boolean, sqlc.narg(purpose)::text,
-        sqlc.narg(category)::text, sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean)
+        sqlc.narg(category)::text, sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean,
+        sqlc.narg(own_event_statement)::boolean)
 RETURNING *;
 
 -- The people a request goes to, in the order submitted, replacing whoever it
@@ -1542,6 +1548,7 @@ SET state               = 'pending',
     category                  = sqlc.narg(category)::text,
     transactional_statement   = sqlc.narg(transactional_statement)::boolean,
     commercial_content_absent = sqlc.narg(commercial_content_absent)::boolean,
+    own_event_statement       = sqlc.narg(own_event_statement)::boolean,
     submitted_at        = sqlc.arg(at),
     deadline_at         = sqlc.arg(deadline_at),
     updated_at          = sqlc.arg(at)
@@ -2179,7 +2186,8 @@ SELECT q.id,
        mt.purpose,
        mt.category,
        (mt.purpose IS NOT DISTINCT FROM 'duyuru' AND mt.commercial_content_absent IS FALSE)::boolean AS promotional,
-       (ml.id IS NOT NULL)::boolean AS to_list
+       (ml.id IS NOT NULL)::boolean AS to_list,
+       (mt.own_event_statement IS TRUE)::boolean AS own_event
 FROM mail_queue q
          JOIN mail_tasks mt ON mt.id = q.task_id
          LEFT JOIN templates t ON t.id = mt.template_id
