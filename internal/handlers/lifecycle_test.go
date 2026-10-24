@@ -77,6 +77,7 @@ func (*lifecycleMailerStub) SystemTrackingAvailable() bool { return false }
 
 func (*lifecycleMailerStub) OperatorTrackingAlways() bool { return false }
 func (*lifecycleMailerStub) PurposeAvailable() bool       { return false }
+func (*lifecycleMailerStub) PromotionalAvailable() bool   { return false }
 
 func (*lifecycleMailerStub) EnqueueSystemSingle(context.Context, database.CreateSingleMailTaskParams, *mailer.TrackingPreferences) (uuid.UUID, bool, error) {
 	return uuid.New(), false, nil

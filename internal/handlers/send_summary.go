@@ -208,19 +208,21 @@ type TrackingMode struct {
 	TrackingAlways bool `json:"tracking_always"`
 	// True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru), and a duyuru send its category; tracking follows tracking_available and tracking_always whatever the purpose. False: the fields are ignored.
 	PurposeAvailable bool `json:"purpose_available"`
+	// True while SKYMAIL_PROMOTIONAL=on (with purpose_available): a duyuru send may say it is promotional (commercial_content_absent false: its main purpose is promoting a product or a service, such as a discount code, a company's job posting, a sale or a raffle), and then goes only to those who consented to promotional mail, each with the link that withdraws that consent. False: such a send is refused (400 mail_task.commercial_content_not_allowed).
+	PromotionalAvailable bool `json:"promotional_available"`
 }
 
 // GetTrackingMode godoc
 //
 //	@Summary		How a person's send is tracked
-//	@Description	tracking_available, tracking_always and purpose_available, as the summary says them, for anyone who may use SkyMail: someone who only submits a send for approval sees whether it will be tracked and whether it names a purpose. It is a setting of SkyMail, not of any send.
+//	@Description	tracking_available, tracking_always and purpose_available, as the summary says them, and promotional_available, for anyone who may use SkyMail: someone who only submits a send for approval sees whether it will be tracked and whether it names a purpose. It is a setting of SkyMail, not of any send.
 //	@Tags			Mail
 //	@Produce		json
 //	@Success		200	{object}	handlers.TrackingMode
 //	@Failure		403	{object}	apperrors.AppError	"Forbidden"
 //	@Router			/mail_tasks/tracking-mode [get]
 func (h *mailHandlerImpl) GetTrackingMode(c fiber.Ctx) error {
-	return c.JSON(TrackingMode{TrackingAvailable: h.mailer.TrackingAvailable(), TrackingAlways: h.mailer.OperatorTrackingAlways(), PurposeAvailable: h.mailer.PurposeAvailable()})
+	return c.JSON(TrackingMode{TrackingAvailable: h.mailer.TrackingAvailable(), TrackingAlways: h.mailer.OperatorTrackingAlways(), PurposeAvailable: h.mailer.PurposeAvailable(), PromotionalAvailable: h.mailer.PromotionalAvailable()})
 }
 
 // GetSummary godoc

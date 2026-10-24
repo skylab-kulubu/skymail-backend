@@ -2002,6 +2002,82 @@ func (q *Queries) GetArchivedTemplates(ctx context.Context, arg GetArchivedTempl
 	return items, nil
 }
 
+const getConsentGateClaimedRows = `-- name: GetConsentGateClaimedRows :many
+SELECT q.id,
+       q.recipient_email,
+       q.recipient_sub,
+       q.priority,
+       t.key,
+       coalesce(t.system, false)::boolean AS system,
+       mt.purpose,
+       mt.category,
+       (mt.purpose IS NOT DISTINCT FROM 'duyuru' AND mt.commercial_content_absent IS FALSE)::boolean AS promotional,
+       (ml.id IS NOT NULL)::boolean AS to_list
+FROM mail_queue q
+         JOIN mail_tasks mt ON mt.id = q.task_id
+         LEFT JOIN templates t ON t.id = mt.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = mt.mail_list_id
+WHERE q.id = ANY ($1::uuid[])
+  AND q.channel = 'email'
+  AND q.status = 'processing'
+  AND q.claimed_by = $2::text
+  AND ((mt.purpose IS NOT DISTINCT FROM 'duyuru' AND mt.commercial_content_absent IS FALSE) OR ml.id IS NOT NULL)
+`
+
+type GetConsentGateClaimedRowsParams struct {
+	Ids       []uuid.UUID `json:"ids"`
+	ClaimedBy string      `json:"claimed_by"`
+}
+
+type GetConsentGateClaimedRowsRow struct {
+	ID             uuid.UUID  `json:"id"`
+	RecipientEmail string     `json:"recipient_email"`
+	RecipientSub   *uuid.UUID `json:"recipient_sub"`
+	Priority       int16      `json:"priority"`
+	Key            *string    `json:"key"`
+	System         bool       `json:"system"`
+	Purpose        *string    `json:"purpose"`
+	Category       *string    `json:"category"`
+	Promotional    bool       `json:"promotional"`
+	ToList         bool       `json:"to_list"`
+}
+
+// The claimed e-mail rows among ids whose send a contact consent may hold
+// back (internal/mailer/consent_gate.go): a promotional duyuru send
+// (commercial_content_absent false), or a send to an internal list. With the
+// send's template (account mail is never held), purpose, category and the
+// recipient's account, when the row knows it.
+func (q *Queries) GetConsentGateClaimedRows(ctx context.Context, arg GetConsentGateClaimedRowsParams) ([]GetConsentGateClaimedRowsRow, error) {
+	rows, err := q.db.Query(ctx, getConsentGateClaimedRows, arg.Ids, arg.ClaimedBy)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetConsentGateClaimedRowsRow
+	for rows.Next() {
+		var i GetConsentGateClaimedRowsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RecipientEmail,
+			&i.RecipientSub,
+			&i.Priority,
+			&i.Key,
+			&i.System,
+			&i.Purpose,
+			&i.Category,
+			&i.Promotional,
+			&i.ToList,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getDailySentCounts = `-- name: GetDailySentCounts :many
 WITH today AS (SELECT ($2::timestamptz AT TIME ZONE $1::text)::date AS day),
      days AS (SELECT today.day - back AS day
@@ -6054,6 +6130,31 @@ func (q *Queries) SendWindowCounts(ctx context.Context, arg SendWindowCountsPara
 		return nil, err
 	}
 	return items, nil
+}
+
+const setClaimedRowsUnsubscribeURL = `-- name: SetClaimedRowsUnsubscribeURL :execrows
+UPDATE mail_queue q
+SET list_unsubscribe_url = ($1::text[])[array_position($2::uuid[], q.id)]
+WHERE q.id = ANY ($2::uuid[])
+  AND q.status = 'processing'
+  AND q.claimed_by = $3::text
+`
+
+type SetClaimedRowsUnsubscribeURLParams struct {
+	Links     []string    `json:"links"`
+	Ids       []uuid.UUID `json:"ids"`
+	ClaimedBy string      `json:"claimed_by"`
+}
+
+// Gives claimed rows the link their mail is sent with: a promotional mail's
+// is the grant's withdraw link, which ends the promotional consent.
+// links[i] is ids[i]'s.
+func (q *Queries) SetClaimedRowsUnsubscribeURL(ctx context.Context, arg SetClaimedRowsUnsubscribeURLParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setClaimedRowsUnsubscribeURL, arg.Links, arg.Ids, arg.ClaimedBy)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setMailApprovalState = `-- name: SetMailApprovalState :one

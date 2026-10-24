@@ -182,6 +182,12 @@ type Querier interface {
 	GetAllTemplatesIncludingArchived(ctx context.Context, arg GetAllTemplatesIncludingArchivedParams) ([]Template, error)
 	GetArchivedMailingLists(ctx context.Context, arg GetArchivedMailingListsParams) ([]MailingList, error)
 	GetArchivedTemplates(ctx context.Context, arg GetArchivedTemplatesParams) ([]Template, error)
+	// The claimed e-mail rows among ids whose send a contact consent may hold
+	// back (internal/mailer/consent_gate.go): a promotional duyuru send
+	// (commercial_content_absent false), or a send to an internal list. With the
+	// send's template (account mail is never held), purpose, category and the
+	// recipient's account, when the row knows it.
+	GetConsentGateClaimedRows(ctx context.Context, arg GetConsentGateClaimedRowsParams) ([]GetConsentGateClaimedRowsRow, error)
 	// A queue row has no sent time of its own. created_at — when that recipient's
 	// mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
 	// mail that goes through on its first attempt leaves within seconds, and only a
@@ -522,6 +528,10 @@ type Querier interface {
 	// after minute_since (the current minute and the one before it) and the
 	// hours starting at or after hour_since (every hour of the last 24).
 	SendWindowCounts(ctx context.Context, arg SendWindowCountsParams) ([]MailSendWindow, error)
+	// Gives claimed rows the link their mail is sent with: a promotional mail's
+	// is the grant's withdraw link, which ends the promotional consent.
+	// links[i] is ids[i]'s.
+	SetClaimedRowsUnsubscribeURL(ctx context.Context, arg SetClaimedRowsUnsubscribeURLParams) (int64, error)
 	// A NULL deadline leaves the request's deadline as it is.
 	SetMailApprovalState(ctx context.Context, arg SetMailApprovalStateParams) (MailApproval, error)
 	SetMailApprovalVariables(ctx context.Context, arg SetMailApprovalVariablesParams) (MailApproval, error)

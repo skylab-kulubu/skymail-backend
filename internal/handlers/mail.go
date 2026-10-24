@@ -139,7 +139,7 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 	}
 	// A list or a Keycloak group is always duyuru.
 	purposesOn := h.mailer.PurposeAvailable()
-	purpose, err := choosePurpose(purposesOn, params.SendPurpose, targetAudience)
+	purpose, err := choosePurpose(purposesOn, h.mailer.PromotionalAvailable(), params.SendPurpose, targetAudience)
 	if err != nil {
 		return err
 	}
@@ -270,7 +270,7 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	purposesOn := h.mailer.PurposeAvailable()
 	var purpose mailer.SendPurpose
 	if !service {
-		if purpose, err = choosePurpose(purposesOn, params.SendPurpose, targetPeople); err != nil {
+		if purpose, err = choosePurpose(purposesOn, h.mailer.PromotionalAvailable(), params.SendPurpose, targetPeople); err != nil {
 			return err
 		}
 	}

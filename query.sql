@@ -2163,6 +2163,42 @@ WHERE id = ANY (sqlc.arg(ids)::uuid[])
   AND status = 'processing'
   AND claimed_by = sqlc.arg(claimed_by)::text;
 
+-- The claimed e-mail rows among ids whose send a contact consent may hold
+-- back (internal/mailer/consent_gate.go): a promotional duyuru send
+-- (commercial_content_absent false), or a send to an internal list. With the
+-- send's template (account mail is never held), purpose, category and the
+-- recipient's account, when the row knows it.
+-- name: GetConsentGateClaimedRows :many
+SELECT q.id,
+       q.recipient_email,
+       q.recipient_sub,
+       q.priority,
+       t.key,
+       coalesce(t.system, false)::boolean AS system,
+       mt.purpose,
+       mt.category,
+       (mt.purpose IS NOT DISTINCT FROM 'duyuru' AND mt.commercial_content_absent IS FALSE)::boolean AS promotional,
+       (ml.id IS NOT NULL)::boolean AS to_list
+FROM mail_queue q
+         JOIN mail_tasks mt ON mt.id = q.task_id
+         LEFT JOIN templates t ON t.id = mt.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = mt.mail_list_id
+WHERE q.id = ANY (sqlc.arg(ids)::uuid[])
+  AND q.channel = 'email'
+  AND q.status = 'processing'
+  AND q.claimed_by = sqlc.arg(claimed_by)::text
+  AND ((mt.purpose IS NOT DISTINCT FROM 'duyuru' AND mt.commercial_content_absent IS FALSE) OR ml.id IS NOT NULL);
+
+-- Gives claimed rows the link their mail is sent with: a promotional mail's
+-- is the grant's withdraw link, which ends the promotional consent.
+-- name: SetClaimedRowsUnsubscribeURL :execrows
+-- links[i] is ids[i]'s.
+UPDATE mail_queue q
+SET list_unsubscribe_url = (sqlc.arg(links)::text[])[array_position(sqlc.arg(ids)::uuid[], q.id)]
+WHERE q.id = ANY (sqlc.arg(ids)::uuid[])
+  AND q.status = 'processing'
+  AND q.claimed_by = sqlc.arg(claimed_by)::text;
+
 -- The address's unsubscribe from a stream, if it has one.
 -- name: GetUnsubscribe :one
 SELECT id, address, stream, source, created_at

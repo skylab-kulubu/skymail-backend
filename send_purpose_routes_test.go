@@ -395,3 +395,31 @@ func TestAnApprovedRequestToAListIsNeverIslem(t *testing.T) {
 		t.Errorf("approved list send written %s %s %v, want duyuru club:duyuru", str(got.purpose), str(got.category), got.transactional)
 	}
 }
+
+// SKYMAIL_PROMOTIONAL on: a duyuru send may say it is promotional, and is
+// written so (the dispatcher then sends it only to those who consented,
+// internal/mailer/consent_gate.go); an islem send still may not; the
+// tracking mode says so.
+func TestAPromotionalSendIsWrittenWhileTheSwitchIsOn(t *testing.T) {
+	w := newFormSourceWorld(t, purposesOn(), mailer.WithConsentGate(mailer.ConsentGate{Promotional: true}))
+	var created createdPurpose
+	promotional := map[string]any{"purpose": "duyuru", "category": "club:duyuru", "commercial_content_absent": false}
+	if status, raw := w.call("yusuf", http.MethodPost, "/v1/mail_tasks", with(w.listSend(), promotional), &created); status != fiber.StatusCreated {
+		t.Fatalf("a promotional list send = %d %s, want 201", status, raw)
+	}
+	if got := w.purposeOf(created.ID); str(got.purpose) != "duyuru" || got.commercial == nil || *got.commercial {
+		t.Errorf("written %s, commercial_content_absent %v; want duyuru, false", str(got.purpose), got.commercial)
+	}
+	single := w.listSend()
+	delete(single, "mail_list_id")
+	single["recipient_email"], single["recipient_full_name"] = "ayse@example.com", "Ayşe Kaya"
+	var failure apiError
+	if status, raw := w.call("yusuf", http.MethodPost, "/v1/mail_tasks/single",
+		with(single, map[string]any{"purpose": "islem", "transactional_statement": true, "commercial_content_absent": false}), &failure); status != fiber.StatusBadRequest || failure.Code != "mail_task.commercial_content_not_allowed" {
+		t.Errorf("a promotional islem = %d %s, want 400 mail_task.commercial_content_not_allowed", status, raw)
+	}
+	var mode handlers.TrackingMode
+	if status, raw := w.call("okur", http.MethodGet, "/v1/mail_tasks/tracking-mode", nil, &mode); status != fiber.StatusOK || !mode.PromotionalAvailable {
+		t.Errorf("tracking mode = %d %s, want promotional_available", status, raw)
+	}
+}

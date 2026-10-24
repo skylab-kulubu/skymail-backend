@@ -27,11 +27,27 @@ import (
 // is.
 
 // Footer texts: short and functional (the plain text names the link in
-// angle brackets, RFC 3986 appendix C).
+// angle brackets, RFC 3986 appendix C). A promotional mail's link is core's
+// withdraw link of the promotional consent (consent_gate.go), and its line
+// says so.
 const (
-	footerText      = "SKY LAB duyurularını almak istemiyorsan:"
-	footerLinkLabel = "Abonelikten çık"
+	footerText                 = "SKY LAB duyurularını almak istemiyorsan:"
+	footerLinkLabel            = "Abonelikten çık"
+	promotionalFooterText      = "Tanıtım içerikli e-postaları almak istemiyorsan:"
+	promotionalFooterLinkLabel = "İzni geri al"
 )
+
+// consentWithdrawPath is the path of core's withdraw link of a contact
+// consent (core docs/contact-consents.md, "Links").
+const consentWithdrawPath = "/v1/consents/withdraw?"
+
+// footerLine is the text and the link's label of link's line.
+func footerLine(link string) (text, label string) {
+	if strings.Contains(link, consentWithdrawPath) {
+		return promotionalFooterText, promotionalFooterLinkLabel
+	}
+	return footerText, footerLinkLabel
+}
 
 // withUnsubscribeFooter is job as it is sent: with the visible unsubscribe
 // line when the switch is on, the row has a link and the mail is in the
@@ -65,7 +81,8 @@ func PlainWithUnsubscribeFooter(body, link string) string {
 	if strings.Contains(body, link) {
 		return body
 	}
-	line := footerText + " " + footerLinkLabel + " <" + link + ">"
+	text, label := footerLine(link)
+	line := text + " " + label + " <" + link + ">"
 	body = strings.TrimRight(body, "\r\n")
 	if body == "" {
 		return line + "\n"
@@ -82,9 +99,10 @@ func HTMLWithUnsubscribeFooter(body, link string) string {
 	if strings.Contains(body, link) || strings.Contains(body, escaped) {
 		return body
 	}
+	text, label := footerLine(link)
 	line := `<p style="margin:24px 0 0;font-size:12px;line-height:18px;color:#6b7280">` +
-		html.EscapeString(footerText) + ` <a href="` + escaped + `" style="color:#6b7280">` +
-		html.EscapeString(footerLinkLabel) + `</a></p>`
+		html.EscapeString(text) + ` <a href="` + escaped + `" style="color:#6b7280">` +
+		html.EscapeString(label) + `</a></p>`
 	if at := lastBodyClose(body); at >= 0 {
 		return body[:at] + line + body[at:]
 	}
