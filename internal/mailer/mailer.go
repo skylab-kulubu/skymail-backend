@@ -177,6 +177,10 @@ type Mailer interface {
 	// purpose and category, and its purpose picks its stream (LaneOf). Off,
 	// the fields are ignored and no send is written with one.
 	PurposeAvailable() bool
+	// PromotionalAvailable says SKYMAIL_PROMOTIONAL is on: a duyuru send may
+	// be promotional (commercial_content_absent false), and goes only to
+	// those who consented to promotional mail (consent_gate.go).
+	PromotionalAvailable() bool
 	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error)
 	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
 	// EnqueueSystemSingle queues a mail a service sends one person (a login
@@ -302,6 +306,9 @@ type mailerImpl struct {
 	clientOptions []mail.Option
 	// tracking is open and click tracking (WithTracking); off by default.
 	tracking Tracking
+	// consents are the contact consents applied (WithConsentGate;
+	// consent_gate.go).
+	consents ConsentGate
 	// refuseReserved writes a recipient in a reserved domain failed when a
 	// send is queued (WithReservedDomainsRefused); off by default.
 	refuseReserved bool

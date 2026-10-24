@@ -382,7 +382,7 @@ func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 	// A Forms source's respondents get duyuru unless the sender declares the
 	// mail about their own application (islem); either is tracked as before.
 	purposesOn := m.PurposeAvailable()
-	named, err := choosePurpose(purposesOn, p.SendPurpose, targetFormSource)
+	named, err := choosePurpose(purposesOn, m.PromotionalAvailable(), p.SendPurpose, targetFormSource)
 	if err != nil {
 		return err
 	}
@@ -449,7 +449,7 @@ func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 
 func (h *mailApprovalHandlerImpl) submitFormSource(c fiber.Ctx, caller approvalCaller, p requests.SubmitMailApproval, send approvalSend) error {
 	// Checked already (approvalPurpose): what the body named, for the hash.
-	named, err := choosePurpose(h.mailer.PurposeAvailable(), send.askedPurpose, targetFormSource)
+	named, err := choosePurpose(h.mailer.PurposeAvailable(), h.mailer.PromotionalAvailable(), send.askedPurpose, targetFormSource)
 	if err != nil {
 		return err
 	}

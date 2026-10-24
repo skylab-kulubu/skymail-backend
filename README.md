@@ -482,7 +482,7 @@ Arayüz bayrağı `GET /v1/mail_tasks/tracking-mode` ve `/summary`'nin
 | `purpose` | `islem` ya da `duyuru` |
 | `category` | `duyuru`'da zorunlu, `islem`'de yasak: `club:duyuru`, `club:haber`, `team:<Keycloak grup id>:duyuru`, `team:<id>:haber`. Grup id'si UUID'dir, küçük harfle yazılır. Grubun gerçekten ekip olup olmadığını core söyler (bilet 09) |
 | `transactional_statement` | `islem`'de zorunlu ve `true`: "bu posta alıcının kendi başvurusu ya da işlemi hakkındadır". `duyuru`'da yok sayılır |
-| `commercial_content_absent` | "Postanın asıl amacı tanıtım değildir" beyanı (KVKK aydınlatma metni s6 §5.10; ADR 0072 karar 9): kısa sponsor teşekkürü ve logo serbesttir; indirim kodu, şirket iş ilanı, satış ya da çekiliş postayı tanıtım yapar. `false` her amaçta reddedilir: tanıtım postası yalnız izin verene gider ve SkyMail bunu göndermez. `duyuru`'da `true` saklanır, yokluğunun reddi bilet 09'un `SKYMAIL_BULK_PREFERENCE` bayrağıyla gelir. `islem`'de `true` yok sayılır |
+| `commercial_content_absent` | "Postanın asıl amacı tanıtım değildir" beyanı (KVKK aydınlatma metni s6 §5.10; ADR 0072 karar 9): kısa sponsor teşekkürü ve logo serbesttir; indirim kodu, şirket iş ilanı, satış ya da çekiliş postayı tanıtım yapar. `false` postayı tanıtım postası yapar: `SKYMAIL_PROMOTIONAL=on` iken `duyuru`'da kabul edilir ve posta yalnız tanıtım izni verene gider ("Tanıtım postası ve hesapsız liste alıcısı"); bayrak kapalıyken ve `islem`'de her zaman reddedilir. `duyuru`'da `true` saklanır, yokluğunun reddi bilet 09'un `SKYMAIL_BULK_PREFERENCE` bayrağıyla gelir. `islem`'de `true` yok sayılır |
 
 **Kurallar** (Yusuf, 2026-10-21; hepsi `400`, hiçbir şey kuyruğa girmez):
 
@@ -490,7 +490,7 @@ Arayüz bayrağı `GET /v1/mail_tasks/tracking-mode` ve `/summary`'nin
 |---|---|
 | liste ya da Keycloak grubuna (doğrudan ya da onay isteğiyle) `islem` | `mail_task.purpose_not_allowed` |
 | `islem` ama `transactional_statement` yok ya da `false` | `mail_task.transactional_statement_required` |
-| `commercial_content_absent: false` (her amaçta) | `mail_task.commercial_content_not_allowed` |
+| `commercial_content_absent: false`, `islem`'de ya da `SKYMAIL_PROMOTIONAL` kapalıyken | `mail_task.commercial_content_not_allowed` |
 | `islem` + `category` | `mail_task.category_not_allowed` |
 | `duyuru` ama `category` yok | `mail_task.category_required` |
 | `category` core'un biçiminde değil | `mail_task.category_invalid` |
@@ -556,6 +556,67 @@ gönderimin `islem` olmaması. Eski imaj bu sütunları okumaz, yazmaz.
 **Geri dönüş.** `SKYMAIL_MAIL_PURPOSE=off` + yeniden dağıtım: amaç okunmaz,
 kuyrukta bekleyen işlem amaçlı toplu satır da yeniden `duyuru@`'dan gider,
 künye satırı eklenmez. İmajı geri almak da güvenlidir; sütunlar kalır.
+
+## Tanıtım postası ve hesapsız liste alıcısı (`SKYMAIL_PROMOTIONAL`, `SKYMAIL_LIST_CONSENT`)
+
+KVKK aydınlatma metni s6 §5.8, §5.10, §5.14 ve tablo satır 13–15 (hub
+biletleri kvkk-s6-yayin-oncesi 11 ve 12). İki tür `duyuru` postası yalnız
+core'un rıza kaydında (`contact_consents`, core `docs/contact-consents.md`)
+izni olan kişiye gider:
+
+- **Tanıtım postası.** Asıl amacı bir mal ya da hizmetin tanıtımı olan posta
+  (indirim kodu, şirket iş ilanı, satış, çekiliş): `duyuru` +
+  `commercial_content_absent: false`. Kulübün kendi etkinliğinin duyurusu,
+  ücretli olsa da, ve kısa sponsor teşekkürü ya da logo tanıtım değildir
+  (Yusuf). Posta yalnız core'un `promotional` kitlesindeki adrese gider; o
+  iznin `withdrawUrl`'i `List-Unsubscribe` başlığı ve künye satırı olur
+  ("Tanıtım içerikli e-postaları almak istemiyorsan: İzni geri al"): tek tık
+  tanıtım iznini kapatır. Şablon `{{.UnsubscribeUrl}}` yazıyorsa orada duyuru
+  bağlantısı (bilet 09'dan sonra) kalır.
+- **Hesapsız liste alıcısı** (`SKYMAIL_LIST_CONSENT=on`). İç listeye giden
+  postada, core'un `recipients:resolve`'ünün hiçbir hesaba eşlemediği adres
+  yalnız core'un `event_invitations` kitlesindeyse alır; kayıt `davet-v1`
+  metniyle verilmişse (yalnız davet) ya da yenileme sorusu bekliyorsa
+  (`renewalDue`) sayılmaz. Keycloak grubu üyeleri hesaptır, satırında hesap
+  (`recipient_sub`) olan alıcı ve kişiye tek posta bu kurala girmez.
+
+**Ne zaman.** Dağıtıcı toplu satırları alırken, aynı işlemde, çıkış kaydından
+sonra ve gönderim bütçesi saymadan önce, her turda core'a sorar (tur başına en
+çok 10 saniye): kuyruğa alındıktan sonra geri alınan izin de postayı durdurur.
+Tutulan satır `failed` yazılır, hiçbir şey denenmez, gönderimde atlanmış sayılır
+(`suppressed:` öneki):
+
+| Hata | |
+|---|---|
+| `suppressed: no_promotional_consent` | tanıtım izni yok |
+| `suppressed: no_announcement_consent` | hesapsız adres, duyuru rızası yok |
+| `suppressed: consent_unavailable` | core cevap vermedi (ya da `CORE_URL` yok): kitle sıfır sayılır |
+
+**core kapalıysa** tanıtım postası kimseye gitmez; liste postası hesabı core'ca
+doğrulanamayan ve rızası okunamayan adrese gitmez (kapalı yönde). Tanıtım
+kuralı bayraktan bağımsız her zaman uygulanır: bayrak açıkken kuyruğa girmiş
+tanıtım postası bayrak kapatılınca herkese gitmez.
+
+| Değişken | |
+|---|---|
+| `SKYMAIL_PROMOTIONAL` | `off` (ya da boş, varsayılan): `commercial_content_absent: false` reddedilir. `on`: `duyuru`'da kabul edilir; `GET /v1/mail_tasks/tracking-mode` `promotional_available: true` döner |
+| `SKYMAIL_LIST_CONSENT` | `off` (ya da boş, varsayılan): liste postası bugünkü gibi. `on`: hesapsız liste alıcısına duyuru rızası aranır |
+
+Başka değer açılışı durdurur; ikisinden biri `on` iken `CORE_URL` gerekir.
+Açılış logu `promotional`, `list_consent` ve `core` alanlarını yazar.
+
+**core sözleşmesi.** SkyMail'in servis hesabı token'ıyla:
+`GET /v1/consents/audience?purpose=promotional|event_invitations` (core
+istemcisi rolü `consent:audience:read`; sayfa 1000) ve
+`POST /internal/v1/audiences/recipients:resolve` (rol `audience:read`;
+tur başına en çok 1000 adres). Rıza kaydı core'da `CONTACT_CONSENT_KEY` ile
+açılır; anahtar yokken kitle `503` döner. Bu yüzden production'da iki bayrak
+da rıza kaydı açılana (data-lifecycle 10) kadar kapalı kalır.
+
+**Açılış sırası.** core rıza kaydı canlı + SkyMail servis hesabına iki rol →
+`SKYMAIL_PROMOTIONAL=on` → arayüz (skymail-frontend: "Bu posta tanıtım
+içeriyor" seçimi) → `SKYMAIL_LIST_CONSENT=on`. Geri dönüş: bayrak `off` +
+yeniden dağıtım; kuyruktaki tanıtım postası yine yalnız izinliye gider.
 
 ## Tek tık çıkış ucu (`SKYMAIL_UNSUBSCRIBE_LINK`, `mail_unsubscribes`)
 

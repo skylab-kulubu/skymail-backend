@@ -203,7 +203,7 @@ func (h *mailApprovalHandlerImpl) approvalPurpose(send approvalSend) (mailer.Sen
 	case send.formSourceID != nil:
 		target = targetFormSource
 	}
-	chosen, err := choosePurpose(on, send.askedPurpose, target)
+	chosen, err := choosePurpose(on, h.mailer.PromotionalAvailable(), send.askedPurpose, target)
 	if err != nil {
 		return mailer.SendPurpose{}, err
 	}

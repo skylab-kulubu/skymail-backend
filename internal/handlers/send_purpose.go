@@ -21,8 +21,11 @@ import (
 //     sender's statement that the mail is about the recipient's own
 //     application or transaction; it is tracked as any person's send is
 //     (Yusuf: every mail is tracked; SKYMAIL_TRACKING_OPERATOR);
-//   - no send may declare commercial content (6563: that needs İYS consent,
-//     which the club cannot have; ADR 0072 decision 9);
+//   - a duyuru send may say it is promotional (commercial_content_absent
+//     false: its main purpose is promoting a product or a service) only
+//     while SKYMAIL_PROMOTIONAL is on; it then goes only to those who
+//     consented to promotional mail (KVKK aydınlatma s6 §5.10; mailer,
+//     consent_gate.go). No islem send is promotional;
 //   - a duyuru send names core's category;
 //   - a service's single mail is always islem, whatever it says;
 //   - a person's send whose body names no purpose (an older client) is
@@ -55,7 +58,7 @@ var (
 	errTransactionalStatementRequired = apperrors.New("mail_task.transactional_statement_required",
 		"An islem send needs transactional_statement true: the mail is about the recipient's own application or transaction.", fiber.StatusBadRequest)
 	errCommercialContent = apperrors.New("mail_task.commercial_content_not_allowed",
-		"SkyMail sends no commercial content (6563 needs İYS consent, which the club cannot have): commercial_content_absent is true or left out.", fiber.StatusBadRequest)
+		"commercial_content_absent false makes a mail promotional (its main purpose is promoting a product or a service: a discount code, a company's job posting, a sale, a raffle), which goes only to those who consented to promotional mail: it is allowed on a duyuru send while SkyMail's promotional sends are on (tracking-mode promotional_available), and never on an islem send.", fiber.StatusBadRequest)
 	errCategoryRequired = apperrors.New("mail_task.category_required",
 		"A duyuru send needs a category: club:duyuru, club:haber, team:<group id>:duyuru or team:<group id>:haber.", fiber.StatusBadRequest)
 	errCategoryInvalid = apperrors.New("mail_task.category_invalid",
@@ -90,9 +93,11 @@ func isDuyuru(p mailer.SendPurpose) bool {
 // choosePurpose checks the purpose a body names for a send to target: the
 // zero SendPurpose while purposes are off (on false) or when the body names
 // none, which the caller then gives its default; otherwise the purpose the
-// send is written with, or why it is refused. Tracking is the tracking
-// rules' (SKYMAIL_TRACKING, SKYMAIL_TRACKING_OPERATOR), whatever the purpose.
-func choosePurpose(on bool, asked requests.SendPurpose, target sendTarget) (mailer.SendPurpose, error) {
+// send is written with, or why it is refused. promotional is
+// SKYMAIL_PROMOTIONAL: a duyuru send may then be promotional. Tracking is the
+// tracking rules' (SKYMAIL_TRACKING, SKYMAIL_TRACKING_OPERATOR), whatever the
+// purpose.
+func choosePurpose(on, promotional bool, asked requests.SendPurpose, target sendTarget) (mailer.SendPurpose, error) {
 	if !on {
 		return mailer.SendPurpose{}, nil
 	}
@@ -102,7 +107,8 @@ func choosePurpose(on bool, asked requests.SendPurpose, target sendTarget) (mail
 		}
 		return mailer.SendPurpose{}, nil
 	}
-	if asked.CommercialContentAbsent != nil && !*asked.CommercialContentAbsent {
+	if asked.CommercialContentAbsent != nil && !*asked.CommercialContentAbsent &&
+		(!promotional || *asked.Purpose != mailer.PurposeDuyuru) {
 		return mailer.SendPurpose{}, errCommercialContent
 	}
 	switch *asked.Purpose {

@@ -17,7 +17,7 @@ type SendPurpose struct {
 	Category *string `json:"category" example:"club:duyuru"`
 	// With islem, required and true: the sender's statement that the mail is about the recipient's own application or transaction (a changed place or time, a missing document, a result). Ignored with duyuru.
 	TransactionalStatement *bool `json:"transactional_statement"`
-	// The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false is refused with either purpose (400 mail_task.commercial_content_not_allowed: promotional mail goes only to those who opted in, which SkyMail does not send). With duyuru, true is kept; a later version requires it. Ignored with islem.
+	// The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyMail's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.
 	CommercialContentAbsent *bool `json:"commercial_content_absent"`
 }
 
