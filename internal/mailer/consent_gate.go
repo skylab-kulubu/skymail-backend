@@ -33,6 +33,9 @@ import (
 //     that covers announcements (not davet-v1, core #289 review B6), and
 //     not to one due its renewal question. A Keycloak group's members are
 //     accounts, and a row that knows its recipient's account is not held.
+//     Nor is a mail its sender stated is about the list's own event or work
+//     (own_event_statement; s6 row 15: 5/2-c, no consent): it still goes in
+//     the duyuru stream, with its way out.
 //
 // The check is made where the dispatcher takes the bulk rows, in the same
 // transaction and before the send budget counts them, every turn: a consent
@@ -50,9 +53,10 @@ import (
 //     with a backoff by its age while core does not answer (a circuit
 //     breaker keeps core unasked for consentBreakerOpen after a failure).
 //     Not knowing a consent is not its absence: a list's member is never
-//     held because core was down. A row still waiting consentUndecidedAfter
-//     after it was queued is written failed, consent: unavailable (no
-//     suppressed: prefix: it was never decided).
+//     held because core was down. A row that core, failing (its breaker
+//     open), still has not answered for consentUndecidedAfter after it was
+//     queued is written failed, consent: unavailable (no suppressed: prefix:
+//     it was never decided).
 //
 // Every duyuru mail is queued in the bulk lane, so the system lane is not
 // checked; its rows are handed to the workers before the bulk lane is taken.
@@ -137,7 +141,14 @@ func ConsentGateFromEnv(getenv func(string) string) (ConsentGate, error) {
 // and a duyuru lane that is not off (List-Unsubscribe is written only
 // there). Anything less stops startup: SkyMail never says promotional sends
 // are on while their mail would go out without its one-click way out.
+//
+// SKYMAIL_LIST_CONSENT=on needs SKYMAIL_MAIL_PURPOSE=on too: without
+// purposes no send can state that it is about the list's own event, so the
+// gate would hold every such mail to a guest.
 func (g ConsentGate) CheckWith(lanes SendLanes) error {
+	if g.ListConsent && !lanes.Purpose {
+		return fmt.Errorf("%s=on needs %s=on", ListConsentEnv, PurposeEnv)
+	}
 	if !g.Promotional {
 		return nil
 	}
@@ -162,6 +173,9 @@ func WithConsentGate(gate ConsentGate) Option {
 // PromotionalAvailable says SKYMAIL_PROMOTIONAL is on: a duyuru send may be
 // promotional.
 func (m *mailerImpl) PromotionalAvailable() bool { return m.consents.Promotional }
+
+// ListConsentAvailable says SKYMAIL_LIST_CONSENT is on.
+func (m *mailerImpl) ListConsentAvailable() bool { return m.consents.ListConsent }
 
 // consentCache is what core said, shared by the dispatcher and the fetch
 // that runs after its transaction.
@@ -248,7 +262,9 @@ func (m *mailerImpl) gateConsents(ctx context.Context, q *database.Queries, logg
 		case row.Promotional:
 			promotional = append(promotional, gated)
 		case AccountMail(row.Key, row.System):
-		case m.consents.ListConsent && row.ToList && row.RecipientSub == nil &&
+		// A mail stated to be about the list's own event or work goes
+		// without the consent (s6 row 15, 5/2-c), in the duyuru stream still.
+		case m.consents.ListConsent && row.ToList && row.RecipientSub == nil && !row.OwnEvent &&
 			LaneOf(m.lanes.purposeOf(row.Purpose), row.Key, row.System, Priority(row.Priority)) == LaneDuyuru:
 			list = append(list, gated)
 		}
@@ -353,7 +369,10 @@ func (m *mailerImpl) writeWaiting(ctx context.Context, q *database.Queries, logg
 	for _, row := range rows {
 		age := now.Sub(row.queued)
 		switch {
-		case age >= consentUndecidedAfter:
+		// Only while core really fails: a cold or stale cache is no
+		// failure, and an old row (a full day's budget, a paused sender)
+		// is asked about like any other.
+		case open && age >= consentUndecidedAfter:
 			undecided = append(undecided, row.id)
 		case open:
 			byDelay[consentBackoff(age)] = append(byDelay[consentBackoff(age)], row.id)

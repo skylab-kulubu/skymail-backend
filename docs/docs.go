@@ -466,6 +466,10 @@ const docTemplate = `{
                     "notification": {
                         "$ref": "#/components/schemas/handlers.MailApprovalNotification"
                     },
+                    "own_event_statement": {
+                        "description": "On a duyuru send to a list or a group, the sender's statement that the mail is about the list's own event or work (KVKK notice s6 row 15), kept with the send's sender and time; null otherwise.",
+                        "type": "boolean"
+                    },
                     "preview": {
                         "$ref": "#/components/schemas/handlers.MailApprovalPreview"
                     },
@@ -641,6 +645,10 @@ const docTemplate = `{
                     },
                     "last_event": {
                         "$ref": "#/components/schemas/handlers.MailApprovalEvent"
+                    },
+                    "own_event_statement": {
+                        "description": "On a duyuru send to a list or a group, the sender's statement that the mail is about the list's own event or work (KVKK notice s6 row 15), kept with the send's sender and time; null otherwise.",
+                        "type": "boolean"
                     },
                     "purpose": {
                         "description": "islem or duyuru. Null for a send queued while SkyMail's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).",
@@ -848,6 +856,10 @@ const docTemplate = `{
                     },
                     "mail_list_name": {
                         "type": "string"
+                    },
+                    "own_event_statement": {
+                        "description": "On a duyuru send to a list or a group, the sender's statement that the mail is about the list's own event or work (KVKK notice s6 row 15), kept with the send's sender and time; null otherwise.",
+                        "type": "boolean"
                     },
                     "purpose": {
                         "description": "islem or duyuru. Null for a send queued while SkyMail's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).",
@@ -1314,6 +1326,10 @@ const docTemplate = `{
                         "type": "array",
                         "uniqueItems": false
                     },
+                    "list_consent_available": {
+                        "description": "True while SKYMAIL_LIST_CONSENT=on, as tracking-mode says it: the list send form shows the own event statement box.",
+                        "type": "boolean"
+                    },
                     "purpose_available": {
                         "description": "True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru) and a duyuru send its category, and the purpose picks the mailbox it goes out from. The send form shows its purpose, category and statements only then; while it is false they are ignored.",
                         "type": "boolean"
@@ -1758,6 +1774,10 @@ const docTemplate = `{
             },
             "handlers.TrackingMode": {
                 "properties": {
+                    "list_consent_available": {
+                        "description": "True while SKYMAIL_LIST_CONSENT=on: a list's address without an account gets a duyuru only with its announcement consent, unless the send states own_event_statement (the mail is about the list's own event or work). The list send form shows that box only then.",
+                        "type": "boolean"
+                    },
                     "promotional_available": {
                         "description": "True while SKYMAIL_PROMOTIONAL=on (with purpose_available): a duyuru send may say it is promotional (commercial_content_absent false: its main purpose is promoting a product or a service, such as a discount code, a company's job posting, a sale or a raffle), and then goes only to those who consented to promotional mail, each with the link that withdraws that consent. False: such a send is refused (400 mail_task.commercial_content_not_allowed).",
                         "type": "boolean"
@@ -2033,6 +2053,10 @@ const docTemplate = `{
                     },
                     "mail_list_id": {
                         "type": "string"
+                    },
+                    "own_event_statement": {
+                        "description": "With duyuru to a list or a Keycloak group, while SkyMail holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.",
+                        "type": "boolean"
                     },
                     "purpose": {
                         "description": "islem: about the recipient's own application or transaction, only to people one by one (POST /mail_tasks/single, a Mail onayı request to people) or to a Forms source's respondents, with transactional_statement true, never with a category, tracked as any send; it goes out from bilgi@ without List-Unsubscribe and skips the unsubscribe record. duyuru: an announcement to an audience, with a category; it goes out from duyuru@ and follows the preference and the unsubscribe record. A list or a Keycloak group is always duyuru.",
@@ -2375,6 +2399,10 @@ const docTemplate = `{
                     "form_source_id": {
                         "type": "string"
                     },
+                    "own_event_statement": {
+                        "description": "With duyuru to a list or a Keycloak group, while SkyMail holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.",
+                        "type": "boolean"
+                    },
                     "purpose": {
                         "description": "islem: about the recipient's own application or transaction, only to people one by one (POST /mail_tasks/single, a Mail onayı request to people) or to a Forms source's respondents, with transactional_statement true, never with a category, tracked as any send; it goes out from bilgi@ without List-Unsubscribe and skips the unsubscribe record. duyuru: an announcement to an audience, with a category; it goes out from duyuru@ and follows the preference and the unsubscribe record. A list or a Keycloak group is always duyuru.",
                         "enum": [
@@ -2452,6 +2480,10 @@ const docTemplate = `{
                         "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyMail's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.",
                         "type": "boolean"
                     },
+                    "own_event_statement": {
+                        "description": "With duyuru to a list or a Keycloak group, while SkyMail holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.",
+                        "type": "boolean"
+                    },
                     "purpose": {
                         "description": "islem: about the recipient's own application or transaction, only to people one by one (POST /mail_tasks/single, a Mail onayı request to people) or to a Forms source's respondents, with transactional_statement true, never with a category, tracked as any send; it goes out from bilgi@ without List-Unsubscribe and skips the unsubscribe record. duyuru: an announcement to an audience, with a category; it goes out from duyuru@ and follows the preference and the unsubscribe record. A list or a Keycloak group is always duyuru.",
                         "enum": [
@@ -2520,6 +2552,10 @@ const docTemplate = `{
                     "mail_list_id": {
                         "description": "An internal mailing list or a Keycloak group. Choose exactly one of this,\nmanual recipients or form_source_id.",
                         "type": "string"
+                    },
+                    "own_event_statement": {
+                        "description": "With duyuru to a list or a Keycloak group, while SkyMail holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.",
+                        "type": "boolean"
                     },
                     "purpose": {
                         "description": "islem: about the recipient's own application or transaction, only to people one by one (POST /mail_tasks/single, a Mail onayı request to people) or to a Forms source's respondents, with transactional_statement true, never with a category, tracked as any send; it goes out from bilgi@ without List-Unsubscribe and skips the unsubscribe record. duyuru: an announcement to an audience, with a category; it goes out from duyuru@ and follows the preference and the unsubscribe record. A list or a Keycloak group is always duyuru.",

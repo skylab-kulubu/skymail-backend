@@ -483,6 +483,7 @@ Arayüz bayrağı `GET /v1/mail_tasks/tracking-mode` ve `/summary`'nin
 | `category` | `duyuru`'da zorunlu, `islem`'de yasak: `club:duyuru`, `club:haber`, `team:<Keycloak grup id>:duyuru`, `team:<id>:haber`. Grup id'si UUID'dir, küçük harfle yazılır. Grubun gerçekten ekip olup olmadığını core söyler (bilet 09) |
 | `transactional_statement` | `islem`'de zorunlu ve `true`: "bu posta alıcının kendi başvurusu ya da işlemi hakkındadır". `duyuru`'da yok sayılır |
 | `commercial_content_absent` | "Postanın asıl amacı tanıtım değildir" beyanı (KVKK aydınlatma metni s6 §5.10; ADR 0072 karar 9): kısa sponsor teşekkürü ve logo serbesttir; indirim kodu, şirket iş ilanı, satış ya da çekiliş postayı tanıtım yapar. `false` postayı tanıtım postası yapar: `SKYMAIL_PROMOTIONAL=on` iken `duyuru`'da kabul edilir ve posta yalnız tanıtım izni verene gider ("Tanıtım postası ve hesapsız liste alıcısı"); bayrak kapalıyken ve `islem`'de her zaman reddedilir. `duyuru`'da `true` saklanır, yokluğunun reddi bilet 09'un `SKYMAIL_BULK_PREFERENCE` bayrağıyla gelir. `islem`'de `true` yok sayılır |
+| `own_event_statement` | Liste ya da Keycloak grubuna `duyuru`'da, `SKYMAIL_LIST_CONSENT=on` iken: "Bu posta listenin oluşturulduğu etkinlik ya da çalışmayla ilgilidir" beyanı (s6 satır 15, Yusuf'un T3 kararı 2026-10-24). Gönderimle, göndereni ve zamanıyla saklanır (`mail_tasks`, `mail_approvals`). Beyanlı posta listenin hesapsız adresine duyuru rızası aranmadan, yine `duyuru` akışında çıkış bağlantısıyla gider. Bayrak kapalıyken, kişiye, Forms kaynağına ve `islem`'de yok sayılır |
 
 **Kurallar** (Yusuf, 2026-10-21; hepsi `400`, hiçbir şey kuyruğa girmez):
 
@@ -579,6 +580,10 @@ izni olan kişiye gider:
   metniyle verilmişse (yalnız davet) ya da yenileme sorusu bekliyorsa
   (`renewalDue`) sayılmaz. Keycloak grubu üyeleri hesaptır, satırında hesap
   (`recipient_sub`) olan alıcı ve kişiye tek posta bu kurala girmez.
+  Gönderen postanın listenin kendi etkinliği ya da çalışmasıyla ilgili
+  olduğunu beyan ettiyse (`own_event_statement: true`; s6 satır 15, 5/2-c)
+  rıza aranmaz: posta bütün liste alıcılarına, yine duyuru akışında ve çıkış
+  bağlantısıyla gider; beyan gönderim kaydında kalır.
 
 **Ne zaman.** Dağıtıcı toplu satırları alırken, aynı işlemde, çıkış kaydından
 sonra ve gönderim bütçesi saymadan önce, her turda karar verir. core'a ne
@@ -593,7 +598,7 @@ satırları (giriş kodları) toplu şerit alınmadan önce işçilere verilir.
 | `suppressed: no_promotional_consent` | tanıtım izni yok: `failed`, atlanmış sayılır |
 | `suppressed: no_announcement_consent` | hesapsız adres, duyuru rızası yok: `failed`, atlanmış sayılır |
 | bekler | cevap henüz bilinmiyor: satır `pending`'e döner, deneme ve bütçe sayılmaz; okuma sürerken 1 saniye, core cevap vermiyorken yaşına göre 1, 2, 5, 10, en çok 15 dakika sonra yeniden alınır |
-| `consent: unavailable` | kuyruğa alındıktan 48 saat sonra hâlâ cevap yok: `failed`, belirsiz (atlanmış sayılmaz) |
+| `consent: unavailable` | core başarısızken (devre kesici açık) satır kuyruğa alınalı 48 saati geçti: `failed`, belirsiz (atlanmış sayılmaz). core sağlamken eski satır da sorulur, kapanmaz |
 
 **core kapalıysa** bilinmeyen rıza yok sayılmaz: satır bekler, gönderilmez
 (kapalı yönde). core başarısız olunca 30 saniye sorulmaz (devre kesici).
@@ -608,7 +613,7 @@ hesap şablonuyla (`keycloak.*`, `account.*`) gönderilen tanıtım da izin arar
 | Değişken | |
 |---|---|
 | `SKYMAIL_PROMOTIONAL` | `off` (ya da boş, varsayılan): `commercial_content_absent: false` reddedilir. `on`: `duyuru`'da kabul edilir; `GET /v1/mail_tasks/tracking-mode` `promotional_available: true` döner |
-| `SKYMAIL_LIST_CONSENT` | `off` (ya da boş, varsayılan): liste postası bugünkü gibi. `on`: hesapsız liste alıcısına duyuru rızası aranır |
+| `SKYMAIL_LIST_CONSENT` | `off` (ya da boş, varsayılan): liste postası bugünkü gibi, `own_event_statement` yok sayılır. `on`: hesapsız liste alıcısına duyuru rızası aranır, beyanlı posta hariç; `tracking-mode` `list_consent_available: true` döner |
 
 Başka değer açılışı durdurur; ikisinden biri `on` iken `CORE_URL` gerekir.
 `SKYMAIL_PROMOTIONAL=on` ayrıca `SKYMAIL_MAIL_PURPOSE=on`,
@@ -616,6 +621,11 @@ Başka değer açılışı durdurur; ikisinden biri `on` iken `CORE_URL` gerekir
 (`SKYMAIL_SEND_DUYURU=graph|xoauth2`) ister: tanıtım postası izni geri alma
 bağlantısını hem künyede hem tek tık başlığında taşımalıdır. Biri eksikse
 açılış durur (yarım yapılandırmayla "tanıtım açık" denmez).
+`SKYMAIL_LIST_CONSENT=on` da `SKYMAIL_MAIL_PURPOSE=on` ister: amaç yokken
+"listenin kendi etkinliği" beyanı verilemez ve kapı her misafir postasını
+tutardı. Hesap şablonuyla (`keycloak.*`, `account.*`) tanıtım gönderimi
+`400 mail_task.promotional_account_template` döner: hesap postası ne tek tık
+başlığını ne künye satırını taşır.
 Açılış logu `promotional`, `list_consent` ve `core` alanlarını yazar.
 
 **core sözleşmesi.** SkyMail'in servis hesabı token'ıyla:

@@ -119,6 +119,10 @@ type SendPurpose struct {
 	Category                *string
 	TransactionalStatement  *bool
 	CommercialContentAbsent *bool
+	// OwnEventStatement: on a duyuru send to a list or a Keycloak group,
+	// the sender's statement that the mail is about the list's own event or
+	// work (s6 row 15); kept only while SKYMAIL_LIST_CONSENT is on.
+	OwnEventStatement *bool
 }
 
 // PurposeEnv switches purposes on: off (the default, also when unset) or on.

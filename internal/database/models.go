@@ -283,6 +283,7 @@ type MailApproval struct {
 	Category                *string `json:"category"`
 	TransactionalStatement  *bool   `json:"transactional_statement"`
 	CommercialContentAbsent *bool   `json:"commercial_content_absent"`
+	OwnEventStatement       *bool   `json:"own_event_statement"`
 }
 
 type MailApprovalEvent struct {
@@ -458,6 +459,8 @@ type MailTask struct {
 	Category                *string `json:"category"`
 	TransactionalStatement  *bool   `json:"transactional_statement"`
 	CommercialContentAbsent *bool   `json:"commercial_content_absent"`
+	// On a duyuru send to a list or a group: the sender's statement that the mail is about the list's own event or work (s6 row 15); NULL otherwise.
+	OwnEventStatement *bool `json:"own_event_statement"`
 }
 
 // A send's links that are the same for every recipient, each with its random token: the only addresses /t/c redirects to.

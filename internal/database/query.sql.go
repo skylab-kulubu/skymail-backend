@@ -1027,13 +1027,14 @@ const createMailApproval = `-- name: CreateMailApproval :one
 INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, submitter_email_unverified, template_id,
                             template_version_id, mail_list_id, form_source_id, body_variables, created_at, submitted_at, deadline_at,
                             updated_at, tracking_requested, purpose, category, transactional_statement,
-                            commercial_content_absent)
+                            commercial_content_absent, own_event_statement)
 VALUES ($1, $2, $3,
         $4, $5,
         $6, $7, $8, $9, $10, $10,
         $11, $10, $12::boolean, $13::text,
-        $14::text, $15::boolean, $16::boolean)
-RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id, purpose, category, transactional_statement, commercial_content_absent
+        $14::text, $15::boolean, $16::boolean,
+        $17::boolean)
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement
 `
 
 type CreateMailApprovalParams struct {
@@ -1053,6 +1054,7 @@ type CreateMailApprovalParams struct {
 	Category                 *string    `json:"category"`
 	TransactionalStatement   *bool      `json:"transactional_statement"`
 	CommercialContentAbsent  *bool      `json:"commercial_content_absent"`
+	OwnEventStatement        *bool      `json:"own_event_statement"`
 }
 
 // A new Mail onayı request, pending until its deadline. Every later write of
@@ -1080,6 +1082,7 @@ func (q *Queries) CreateMailApproval(ctx context.Context, arg CreateMailApproval
 		arg.Category,
 		arg.TransactionalStatement,
 		arg.CommercialContentAbsent,
+		arg.OwnEventStatement,
 	)
 	var i MailApproval
 	err := row.Scan(
@@ -1103,6 +1106,7 @@ func (q *Queries) CreateMailApproval(ctx context.Context, arg CreateMailApproval
 		&i.Category,
 		&i.TransactionalStatement,
 		&i.CommercialContentAbsent,
+		&i.OwnEventStatement,
 	)
 	return i, err
 }
@@ -1193,12 +1197,14 @@ WITH active_source AS (
       AND ml.archived_at IS NULL
 ), inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, body_variables, content_sensitive_at_send,
-                            tracking_requested, purpose, category, transactional_statement, commercial_content_absent)
+                            tracking_requested, purpose, category, transactional_statement, commercial_content_absent,
+                            own_event_statement)
         SELECT $3, template_id, mail_list_id, $4, content_sensitive,
                $5::boolean, $6::text, $7::text,
-               $8::boolean, $9::boolean
+               $8::boolean, $9::boolean,
+               $10::boolean
         FROM active_source
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1224,6 +1230,7 @@ type CreateMailTaskParams struct {
 	Category                *string    `json:"category"`
 	TransactionalStatement  *bool      `json:"transactional_statement"`
 	CommercialContentAbsent *bool      `json:"commercial_content_absent"`
+	OwnEventStatement       *bool      `json:"own_event_statement"`
 }
 
 type CreateMailTaskRow struct {
@@ -1253,6 +1260,7 @@ func (q *Queries) CreateMailTask(ctx context.Context, arg CreateMailTaskParams) 
 		arg.Category,
 		arg.TransactionalStatement,
 		arg.CommercialContentAbsent,
+		arg.OwnEventStatement,
 	)
 	if err != nil {
 		return nil, err
@@ -1323,7 +1331,7 @@ WITH active_template AS (
                $7::text, $8::text,
                $9::boolean, $10::boolean
         FROM active_template
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -2041,7 +2049,8 @@ SELECT q.id,
        mt.purpose,
        mt.category,
        (mt.purpose IS NOT DISTINCT FROM 'duyuru' AND mt.commercial_content_absent IS FALSE)::boolean AS promotional,
-       (ml.id IS NOT NULL)::boolean AS to_list
+       (ml.id IS NOT NULL)::boolean AS to_list,
+       (mt.own_event_statement IS TRUE)::boolean AS own_event
 FROM mail_queue q
          JOIN mail_tasks mt ON mt.id = q.task_id
          LEFT JOIN templates t ON t.id = mt.template_id
@@ -2070,6 +2079,7 @@ type GetConsentGateClaimedRowsRow struct {
 	Category       *string    `json:"category"`
 	Promotional    bool       `json:"promotional"`
 	ToList         bool       `json:"to_list"`
+	OwnEvent       bool       `json:"own_event"`
 }
 
 // The claimed e-mail rows among ids whose send a contact consent may hold
@@ -2098,6 +2108,7 @@ func (q *Queries) GetConsentGateClaimedRows(ctx context.Context, arg GetConsentG
 			&i.Category,
 			&i.Promotional,
 			&i.ToList,
+			&i.OwnEvent,
 		); err != nil {
 			return nil, err
 		}
@@ -2165,7 +2176,7 @@ func (q *Queries) GetDailySentCounts(ctx context.Context, arg GetDailySentCounts
 }
 
 const getMailApproval = `-- name: GetMailApproval :one
-SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.tracking_requested, a.form_source_id, a.purpose, a.category, a.transactional_statement, a.commercial_content_absent,
+SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.tracking_requested, a.form_source_id, a.purpose, a.category, a.transactional_statement, a.commercial_content_absent, a.own_event_statement,
        t.name                             AS template_name,
        t.key                              AS template_key,
        t.published_version_id             AS template_published_version_id,
@@ -2238,6 +2249,7 @@ func (q *Queries) GetMailApproval(ctx context.Context, id uuid.UUID) (GetMailApp
 		&i.MailApproval.Category,
 		&i.MailApproval.TransactionalStatement,
 		&i.MailApproval.CommercialContentAbsent,
+		&i.MailApproval.OwnEventStatement,
 		&i.TemplateName,
 		&i.TemplateKey,
 		&i.TemplatePublishedVersionID,
@@ -2412,7 +2424,7 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 }
 
 const getMailTaskById = `-- name: GetMailTaskById :one
-SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id, mt.notification_id, mt.purpose, mt.category, mt.transactional_statement, mt.commercial_content_absent,
+SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id, mt.notification_id, mt.purpose, mt.category, mt.transactional_statement, mt.commercial_content_absent, mt.own_event_statement,
        t.name  AS template_name,
        ml.name AS mail_list_name
 FROM mail_tasks mt
@@ -2446,6 +2458,7 @@ type GetMailTaskByIdRow struct {
 	Category                *string    `json:"category"`
 	TransactionalStatement  *bool      `json:"transactional_statement"`
 	CommercialContentAbsent *bool      `json:"commercial_content_absent"`
+	OwnEventStatement       *bool      `json:"own_event_statement"`
 	TemplateName            *string    `json:"template_name"`
 	MailListName            *string    `json:"mail_list_name"`
 }
@@ -2478,6 +2491,7 @@ func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTas
 		&i.Category,
 		&i.TransactionalStatement,
 		&i.CommercialContentAbsent,
+		&i.OwnEventStatement,
 		&i.TemplateName,
 		&i.MailListName,
 	)
@@ -3333,11 +3347,13 @@ func (q *Queries) InsertMailBounce(ctx context.Context, arg InsertMailBouncePara
 
 const insertMailTask = `-- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, form_source_id, body_variables, content_sensitive_at_send,
-                        tracking_requested, purpose, category, transactional_statement, commercial_content_absent)
+                        tracking_requested, purpose, category, transactional_statement, commercial_content_absent,
+                        own_event_statement)
 SELECT $1, $2, $3, $4, $5,
        CASE WHEN template_key_content_locked(templates.key) THEN 'true' ELSE COALESCE(templates.content_sensitive::text, 'unset') END,
        $6::boolean, $7::text, $8::text,
-       $9::boolean, $10::boolean
+       $9::boolean, $10::boolean,
+       $11::boolean
 FROM templates
 WHERE templates.id = $2
   AND archived_at IS NULL
@@ -3355,6 +3371,7 @@ type InsertMailTaskParams struct {
 	Category                *string    `json:"category"`
 	TransactionalStatement  *bool      `json:"transactional_statement"`
 	CommercialContentAbsent *bool      `json:"commercial_content_absent"`
+	OwnEventStatement       *bool      `json:"own_event_statement"`
 }
 
 type InsertMailTaskRow struct {
@@ -3383,6 +3400,7 @@ func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) 
 		arg.Category,
 		arg.TransactionalStatement,
 		arg.CommercialContentAbsent,
+		arg.OwnEventStatement,
 	)
 	var i InsertMailTaskRow
 	err := row.Scan(
@@ -3795,7 +3813,7 @@ func (q *Queries) ListMailApprovalRecipients(ctx context.Context, approvalID uui
 }
 
 const listMailApprovals = `-- name: ListMailApprovals :many
-SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.tracking_requested, a.form_source_id, a.purpose, a.category, a.transactional_statement, a.commercial_content_absent,
+SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.tracking_requested, a.form_source_id, a.purpose, a.category, a.transactional_statement, a.commercial_content_absent, a.own_event_statement,
        t.name                             AS template_name,
        t.key                              AS template_key,
        t.published_version_id             AS template_published_version_id,
@@ -3893,6 +3911,7 @@ func (q *Queries) ListMailApprovals(ctx context.Context, arg ListMailApprovalsPa
 			&i.MailApproval.Category,
 			&i.MailApproval.TransactionalStatement,
 			&i.MailApproval.CommercialContentAbsent,
+			&i.MailApproval.OwnEventStatement,
 			&i.TemplateName,
 			&i.TemplateKey,
 			&i.TemplatePublishedVersionID,
@@ -4018,7 +4037,8 @@ SELECT mt.id,
        mt.purpose,
        mt.category,
        mt.transactional_statement,
-       mt.commercial_content_absent
+       mt.commercial_content_absent,
+       mt.own_event_statement
 FROM page
          JOIN mail_tasks mt ON mt.id = page.id
          LEFT JOIN templates t ON mt.template_id = t.id
@@ -4089,6 +4109,7 @@ type ListMailTaskSendsRow struct {
 	Category                *string    `json:"category"`
 	TransactionalStatement  *bool      `json:"transactional_statement"`
 	CommercialContentAbsent *bool      `json:"commercial_content_absent"`
+	OwnEventStatement       *bool      `json:"own_event_statement"`
 }
 
 // A send as every screen shows it — the home screen, the send list and a
@@ -4145,6 +4166,7 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 			&i.Category,
 			&i.TransactionalStatement,
 			&i.CommercialContentAbsent,
+			&i.OwnEventStatement,
 		); err != nil {
 			return nil, err
 		}
@@ -4800,7 +4822,7 @@ func (q *Queries) LockBounceQueueRow(ctx context.Context, id uuid.UUID) (LockBou
 }
 
 const lockDueMailApproval = `-- name: LockDueMailApproval :one
-SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id, purpose, category, transactional_statement, commercial_content_absent
+SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement
 FROM mail_approvals
 WHERE state IN ('pending', 'returned')
   AND deadline_at <= $1
@@ -4834,12 +4856,13 @@ func (q *Queries) LockDueMailApproval(ctx context.Context, asOf time.Time) (Mail
 		&i.Category,
 		&i.TransactionalStatement,
 		&i.CommercialContentAbsent,
+		&i.OwnEventStatement,
 	)
 	return i, err
 }
 
 const lockMailApproval = `-- name: LockMailApproval :one
-SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id, purpose, category, transactional_statement, commercial_content_absent
+SELECT id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement
 FROM mail_approvals
 WHERE id = $1
     FOR UPDATE NOWAIT
@@ -4873,6 +4896,7 @@ func (q *Queries) LockMailApproval(ctx context.Context, id uuid.UUID) (MailAppro
 		&i.Category,
 		&i.TransactionalStatement,
 		&i.CommercialContentAbsent,
+		&i.OwnEventStatement,
 	)
 	return i, err
 }
@@ -6054,11 +6078,12 @@ SET state               = 'pending',
     category                  = $8::text,
     transactional_statement   = $9::boolean,
     commercial_content_absent = $10::boolean,
-    submitted_at        = $11,
-    deadline_at         = $12,
-    updated_at          = $11
-WHERE id = $13
-RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id, purpose, category, transactional_statement, commercial_content_absent
+    own_event_statement       = $11::boolean,
+    submitted_at        = $12,
+    deadline_at         = $13,
+    updated_at          = $12
+WHERE id = $14
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement
 `
 
 type ResubmitMailApprovalParams struct {
@@ -6072,6 +6097,7 @@ type ResubmitMailApprovalParams struct {
 	Category                *string    `json:"category"`
 	TransactionalStatement  *bool      `json:"transactional_statement"`
 	CommercialContentAbsent *bool      `json:"commercial_content_absent"`
+	OwnEventStatement       *bool      `json:"own_event_statement"`
 	At                      time.Time  `json:"at"`
 	DeadlineAt              time.Time  `json:"deadline_at"`
 	ID                      uuid.UUID  `json:"id"`
@@ -6093,6 +6119,7 @@ func (q *Queries) ResubmitMailApproval(ctx context.Context, arg ResubmitMailAppr
 		arg.Category,
 		arg.TransactionalStatement,
 		arg.CommercialContentAbsent,
+		arg.OwnEventStatement,
 		arg.At,
 		arg.DeadlineAt,
 		arg.ID,
@@ -6119,6 +6146,7 @@ func (q *Queries) ResubmitMailApproval(ctx context.Context, arg ResubmitMailAppr
 		&i.Category,
 		&i.TransactionalStatement,
 		&i.CommercialContentAbsent,
+		&i.OwnEventStatement,
 	)
 	return i, err
 }
@@ -6194,7 +6222,7 @@ SET state       = $1,
     deadline_at = COALESCE($2, deadline_at),
     updated_at  = $3
 WHERE id = $4
-RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id, purpose, category, transactional_statement, commercial_content_absent
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement
 `
 
 type SetMailApprovalStateParams struct {
@@ -6234,6 +6262,7 @@ func (q *Queries) SetMailApprovalState(ctx context.Context, arg SetMailApprovalS
 		&i.Category,
 		&i.TransactionalStatement,
 		&i.CommercialContentAbsent,
+		&i.OwnEventStatement,
 	)
 	return i, err
 }
@@ -6243,7 +6272,7 @@ UPDATE mail_approvals
 SET body_variables = $1,
     updated_at     = $2
 WHERE id = $3
-RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id, purpose, category, transactional_statement, commercial_content_absent
+RETURNING id, submitter_sub, submitter_name, submitter_email, submitter_email_unverified, state, template_id, template_version_id, mail_list_id, body_variables, created_at, submitted_at, deadline_at, updated_at, tracking_requested, form_source_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement
 `
 
 type SetMailApprovalVariablesParams struct {
@@ -6276,6 +6305,7 @@ func (q *Queries) SetMailApprovalVariables(ctx context.Context, arg SetMailAppro
 		&i.Category,
 		&i.TransactionalStatement,
 		&i.CommercialContentAbsent,
+		&i.OwnEventStatement,
 	)
 	return i, err
 }

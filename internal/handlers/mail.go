@@ -139,8 +139,11 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 	}
 	// A list or a Keycloak group is always duyuru.
 	purposesOn := h.mailer.PurposeAvailable()
-	purpose, err := choosePurpose(purposesOn, h.mailer.PromotionalAvailable(), params.SendPurpose, targetAudience)
+	purpose, err := choosePurpose(purposesOn, h.mailer.PromotionalAvailable(), h.mailer.ListConsentAvailable(), params.SendPurpose, targetAudience)
 	if err != nil {
+		return err
+	}
+	if err := refuseAccountPromotional(c.Context(), h.db, params.TemplateID, purpose); err != nil {
 		return err
 	}
 	purpose = purposeOrDefault(purposesOn, purpose, duyuruByDefault)
@@ -217,6 +220,7 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 		Category:                purpose.Category,
 		TransactionalStatement:  purpose.TransactionalStatement,
 		CommercialContentAbsent: purpose.CommercialContentAbsent,
+		OwnEventStatement:       purpose.OwnEventStatement,
 	})
 	if err != nil {
 		return err
@@ -270,7 +274,10 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	purposesOn := h.mailer.PurposeAvailable()
 	var purpose mailer.SendPurpose
 	if !service {
-		if purpose, err = choosePurpose(purposesOn, h.mailer.PromotionalAvailable(), params.SendPurpose, targetPeople); err != nil {
+		if purpose, err = choosePurpose(purposesOn, h.mailer.PromotionalAvailable(), h.mailer.ListConsentAvailable(), params.SendPurpose, targetPeople); err != nil {
+			return err
+		}
+		if err := refuseAccountPromotional(c.Context(), h.db, templateID, purpose); err != nil {
 			return err
 		}
 	}
@@ -353,6 +360,8 @@ type SendPurposeFields struct {
 	TransactionalStatement *bool `json:"transactional_statement"`
 	// On a duyuru send, the sender's statement that its main purpose is not promotion (a short sponsor thanks or logo is allowed; KVKK notice s6 §5.10), as given; null when none was given, and on every islem send.
 	CommercialContentAbsent *bool `json:"commercial_content_absent"`
+	// On a duyuru send to a list or a group, the sender's statement that the mail is about the list's own event or work (KVKK notice s6 row 15), kept with the send's sender and time; null otherwise.
+	OwnEventStatement *bool `json:"own_event_statement"`
 }
 
 // GetTasks godoc
