@@ -79,3 +79,23 @@ func TestSanitizePassesNoOtherAttribute(t *testing.T) {
 		})
 	}
 }
+
+// A News record's body (hub ticket duyuru-haber 06, SPEC §5.7 G7) may also
+// strike text through, show code and a preformatted block, and draw a rule;
+// a script, a javascript: link, an image and a table still never reach a
+// mailbox.
+func TestSanitizeKeepsTheNewsElements(t *testing.T) {
+	body := `<p><s>eski</s> <code>go test</code></p><pre>satır 1
+satır 2</pre><hr><script>alert(1)</script><a href="javascript:alert(1)">x</a><img src="https://x.example/a.png"><table><tr><td>t</td></tr></table>`
+	got := sanitizeEmailHTML(body)
+	for _, want := range []string{"<s>eski</s>", "<code>go test</code>", "<pre>satır 1\nsatır 2</pre>", "<hr"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("sanitize = %q, want %q kept", got, want)
+		}
+	}
+	for _, notWant := range []string{"<script", "alert(1)</script>", "javascript:", "<img", "<table", "<td"} {
+		if strings.Contains(got, notWant) {
+			t.Errorf("sanitize = %q, want %q dropped", got, notWant)
+		}
+	}
+}

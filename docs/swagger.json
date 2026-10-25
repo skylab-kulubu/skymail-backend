@@ -1015,6 +1015,150 @@
                 },
                 "type": "object"
             },
+            "handlers.NewsSendAvailability": {
+                "properties": {
+                    "available": {
+                        "description": "True while SKYMAIL_NEWS_SEND=on: a News record may be previewed, tested and sent.",
+                        "type": "boolean"
+                    },
+                    "read_more": {
+                        "description": "Where the mail's \"Sitede oku\" opens: home (the site's home page) or pages (the record's own page).",
+                        "enum": [
+                            "home",
+                            "pages"
+                        ],
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.NewsSendCount": {
+                "properties": {
+                    "already_sent_task_id": {
+                        "description": "The send of this record to this audience, when there is one: a send now would be 409 news_send.already_sent.",
+                        "type": "string"
+                    },
+                    "counts": {
+                        "$ref": "#/components/schemas/handlers.NewsSendCounts"
+                    },
+                    "source": {
+                        "$ref": "#/components/schemas/handlers.NewsSendSource"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.NewsSendCounts": {
+                "description": "core's numbers for the audience (countOnly: no address is read). already_received is how many mailboxes this record's mail already went to, by any send of it: a send to this audience leaves out those among its people, so at most this many. no_unsubscribe_url is known only when sending (0 here).",
+                "properties": {
+                    "already_received": {
+                        "description": "Recipients left out because a row of this record already went to their mailbox (from an earlier send of it to another audience).",
+                        "type": "integer"
+                    },
+                    "followers": {
+                        "type": "integer"
+                    },
+                    "members": {
+                        "description": "core's: the audience's members and followers, total their sum.",
+                        "type": "integer"
+                    },
+                    "skipped": {
+                        "$ref": "#/components/schemas/handlers.NewsSendSkipped"
+                    },
+                    "total": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.NewsSendResult": {
+                "properties": {
+                    "category": {
+                        "description": "core's category of a duyuru send; null for any other.",
+                        "type": "string"
+                    },
+                    "counts": {
+                        "$ref": "#/components/schemas/handlers.NewsSendCounts"
+                    },
+                    "failed": {
+                        "type": "integer"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "purpose": {
+                        "description": "The send's purpose (ADR 0072 decision 2): islem or duyuru, as written on the send; null while SkyMail's purposes are off (GET /mail_tasks/tracking-mode purpose_available false).",
+                        "enum": [
+                            "islem",
+                            "duyuru"
+                        ],
+                        "type": "string"
+                    },
+                    "queued": {
+                        "description": "Rows queued to go, and rows written failed at queueing (a suppressed or unsubscribed address, a mail that did not render).",
+                        "type": "integer"
+                    },
+                    "source": {
+                        "$ref": "#/components/schemas/handlers.NewsSendSource"
+                    },
+                    "tracking": {
+                        "description": "Whether the send is tracked. A person's send: it asked for open and click tracking and got it — false when it did not ask, when SkyMail's tracking is off (GET /mail_tasks/summary tracking_available), or when its template is a System template or sensitive — or SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then true whatever it asked and whatever its template. A service's single mail does not ask: true only when SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) and its recipient is tracked (has an account core lets be tracked).",
+                        "type": "boolean"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.NewsSendSkipped": {
+                "properties": {
+                    "disabled": {
+                        "type": "integer"
+                    },
+                    "duplicate_email": {
+                        "type": "integer"
+                    },
+                    "no_email": {
+                        "type": "integer"
+                    },
+                    "no_unsubscribe_url": {
+                        "type": "integer"
+                    },
+                    "not_member": {
+                        "type": "integer"
+                    },
+                    "not_visible": {
+                        "type": "integer"
+                    },
+                    "opted_out": {
+                        "type": "integer"
+                    },
+                    "unverified": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.NewsSendSource": {
+                "properties": {
+                    "kind": {
+                        "enum": [
+                            "haber",
+                            "duyuru"
+                        ],
+                        "type": "string"
+                    },
+                    "ref": {
+                        "description": "news:\u003cslug\u003e, the record's canonical slug.",
+                        "example": "news:bahar-donemi-kayitlari",
+                        "type": "string"
+                    },
+                    "slug": {
+                        "type": "string"
+                    },
+                    "version": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
             "handlers.NotificationResult": {
                 "properties": {
                     "channels": {
@@ -2037,6 +2181,20 @@
                 },
                 "type": "object"
             },
+            "mailer.Rendered": {
+                "properties": {
+                    "html": {
+                        "type": "string"
+                    },
+                    "plain_text": {
+                        "type": "string"
+                    },
+                    "subject": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "requests.AddRecipient": {
                 "properties": {
                     "email": {
@@ -2096,6 +2254,22 @@
                 },
                 "required": [
                     "name"
+                ],
+                "type": "object"
+            },
+            "requests.CountNewsSend": {
+                "properties": {
+                    "audience": {
+                        "$ref": "#/components/schemas/requests.NewsSendAudience"
+                    },
+                    "slug": {
+                        "maxLength": 200,
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "audience",
+                    "slug"
                 ],
                 "type": "object"
             },
@@ -2275,6 +2449,32 @@
                 },
                 "required": [
                     "email"
+                ],
+                "type": "object"
+            },
+            "requests.NewsSendAudience": {
+                "properties": {
+                    "teams": {
+                        "description": "With teams, 1 to 32 teams, each a team's Keycloak Group path (/UYELER/\u003carea\u003e/\u003cteam\u003e) or id; refused with members.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "maxItems": 32,
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "type": {
+                        "description": "members: every Member (category club:\u003ckind\u003e). teams: the named teams, their sub-teams and their followers (team:\u003cid\u003e:\u003ckind\u003e).",
+                        "enum": [
+                            "members",
+                            "teams"
+                        ],
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "teams",
+                    "type"
                 ],
                 "type": "object"
             },
@@ -2529,6 +2729,51 @@
                 "required": [
                     "form_source_id",
                     "template_id"
+                ],
+                "type": "object"
+            },
+            "requests.SendNews": {
+                "properties": {
+                    "audience": {
+                        "$ref": "#/components/schemas/requests.NewsSendAudience"
+                    },
+                    "commercial_content_absent": {
+                        "description": "Required and true: the sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10): a short thanks to a sponsor or its logo is allowed.",
+                        "type": "boolean"
+                    },
+                    "format": {
+                        "description": "full: the whole body in the mail. summary: the summary and a link to read on.",
+                        "enum": [
+                            "full",
+                            "summary"
+                        ],
+                        "type": "string"
+                    },
+                    "preheader": {
+                        "description": "The preview text mail clients show beside the subject; empty: the record's summary.",
+                        "maxLength": 300,
+                        "type": "string"
+                    },
+                    "slug": {
+                        "description": "The record's slug in inscribed's news collection.",
+                        "example": "bahar-donemi-kayitlari",
+                        "maxLength": 200,
+                        "type": "string"
+                    },
+                    "subject": {
+                        "description": "The mail's subject; empty: the record's title, a duyuru's after \"Duyuru: \".",
+                        "maxLength": 200,
+                        "type": "string"
+                    },
+                    "tracking": {
+                        "description": "Open and click tracking, by the rules of every person's send (SKYMAIL_TRACKING, SKYMAIL_TRACKING_OPERATOR).",
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "audience",
+                    "format",
+                    "slug"
                 ],
                 "type": "object"
             },
@@ -5739,6 +5984,421 @@
                 "summary": "Mark one of my items unread",
                 "tags": [
                     "Inbox"
+                ]
+            }
+        },
+        "/news_sends": {
+            "post": {
+                "description": "Reads the record of slug from the CMS (inscribed, anonymously: only public records in Faz 1), asks core who it goes to (every Member, or some teams with their sub-teams and followers; core leaves out who turned the category off, a disabled, unverified or address-less account, and answers each person's own unsubscribe link and why they get it), and queues the club.news template to each in the bulk lane, as a duyuru of core's category with List-Unsubscribe from that link. The send keeps the record as it was (source.version; a later edit changes the web, never the mail). A record's mail goes to a mailbox once: an address a row of this record already went to (an earlier send to another audience) is left out and counted already_received; the same record to the same audience again is 409 news_send.already_sent with that send's id. Only a person with skymail:announcements:send sends directly; Mail onayı for the others comes with a later version. Off unless SKYMAIL_NEWS_SEND=on (503 news_send.not_enabled).",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.SendNews",
+                                        "summary": "send",
+                                        "description": "The record, the audience and the mail"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The record, the audience and the mail",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.NewsSendResult"
+                                }
+                            }
+                        },
+                        "description": "Created"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error; news_send.commercial_statement_required; news_send.teams_invalid; news_send.team_unknown; news_send.slug_too_long"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.forbidden: no skymail:announcements:send"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "news_send.not_found: unknown or archived"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "news_send.already_sent (params.task_id); news_send.private_record; news_send.template_missing"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "news_send.no_recipients (params: the counts)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "news_send.not_enabled; news_send.cms_unavailable; news_send.audience_unavailable: nothing was queued"
+                    }
+                },
+                "summary": "Mail a published News record to an audience",
+                "tags": [
+                    "News sends"
+                ]
+            }
+        },
+        "/news_sends/availability": {
+            "get": {
+                "description": "available while SKYMAIL_NEWS_SEND=on; the send form shows \"Haberden gönder\" only then. A setting of SkyMail, not of any send.",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.NewsSendAvailability"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    }
+                },
+                "summary": "Whether News records may be mailed",
+                "tags": [
+                    "News sends"
+                ]
+            }
+        },
+        "/news_sends/count": {
+            "post": {
+                "description": "The live count of the send form: core counts the audience as the send would resolve it (members, followers, and who it leaves out: turned off, disabled, unverified, without an address) with countOnly, so no address is read and the form may ask often; already_received is how many mailboxes this record's mail already reached by any send of it. The exact number left out is the send's (counts.already_received of POST /news_sends). Nothing is queued.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.CountNewsSend",
+                                        "summary": "count",
+                                        "description": "The record and the audience"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The record and the audience",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.NewsSendCount"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error; news_send.teams_invalid; news_send.team_unknown"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "news_send.not_found"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "news_send.private_record; news_send.template_missing"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "news_send.not_enabled; news_send.cms_unavailable; news_send.audience_unavailable"
+                    }
+                },
+                "summary": "Count who a News send would reach",
+                "tags": [
+                    "News sends"
+                ]
+            }
+        },
+        "/news_sends/preview": {
+            "post": {
+                "description": "The subject, the HTML and the plain text a send of these fields would queue, rendered on the server with the club.news template exactly as the send renders (desktop and mobile previews show the same HTML), for the caller as its reader: your name and address, the sample unsubscribe link (the preferences page, which changes nothing) and words for why you got it in core's shape. A real recipient's are core's. Nothing is queued; commercial_content_absent is not asked here.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.SendNews",
+                                        "summary": "send",
+                                        "description": "The record and the mail, as POST /news_sends takes them"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The record and the mail, as POST /news_sends takes them",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/mailer.Rendered"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error; news_send.teams_invalid"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "news_send.not_found"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "news_send.private_record; news_send.template_missing"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "news_send.not_enabled; news_send.cms_unavailable"
+                    }
+                },
+                "summary": "Render a News send's mail",
+                "tags": [
+                    "News sends"
+                ]
+            }
+        },
+        "/news_sends/test": {
+            "post": {
+                "description": "Queues the mail a send of these fields would make to your own verified primary e-mail (the token's) and to nobody else: the body has no address field. The subject opens with \"[Deneme]\"; the unsubscribe link is the sample one (the preferences page, which changes nothing). It goes as a duyuru from the duyuru mailbox, as the send would, but is no News send: it has no source, counts in no report of the record and is no mailbox's \"already received\". At most 3 a minute per person (429 news_send.test_rate_limited, Retry-After). commercial_content_absent is not asked here.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "oneOf": [
+                                    {
+                                        "type": "object"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/requests.SendNews",
+                                        "summary": "send",
+                                        "description": "The record and the mail, as POST /news_sends takes them"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "The record and the mail, as POST /news_sends takes them",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.CreatedMailTask"
+                                }
+                            }
+                        },
+                        "description": "Created"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "validation.error; news_send.teams_invalid"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.forbidden: no skymail:announcements:send or skymail:mails:write"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "news_send.not_found"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "news_send.no_test_address; news_send.private_record; news_send.template_missing"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "news_send.test_rate_limited"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "news_send.not_enabled; news_send.cms_unavailable"
+                    }
+                },
+                "summary": "Send a News send's mail to yourself",
+                "tags": [
+                    "News sends"
                 ]
             }
         },

@@ -914,8 +914,8 @@ INSERT INTO mail_queue (
     task_id, recipient_full_name, recipient_email,
     subject, body, body_html, priority, recipient_sub,
     tracking_token, tracking_skip_reason, suppressed_but_sent,
-    list_unsubscribe_url, preference_checked_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
+    list_unsubscribe_url, source_ref, preference_checked_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
 
 -- A recipient whose mail did not render, say a template that slices an empty
 -- full name, is written failed, with the render error the send's page shows:
@@ -2445,3 +2445,41 @@ SELECT ((SELECT count(*)
 SELECT id
 FROM mail_suppressions
 WHERE id = sqlc.arg(id);
+
+-- A News send's source (POST /v1/news_sends; hub ticket duyuru-haber 06):
+-- written in the transaction that queues the send, after its rows.
+-- name: SetMailTaskNewsSource :exec
+UPDATE mail_tasks
+SET source_kind     = 'news',
+    source_ref      = sqlc.arg(source_ref)::text,
+    source_version  = sqlc.arg(source_version)::int,
+    source_snapshot = sqlc.arg(source_snapshot)::jsonb,
+    source_audience = sqlc.arg(source_audience)::text,
+    source_counts   = sqlc.arg(source_counts)::jsonb
+WHERE id = sqlc.arg(id);
+
+-- Holds a News record's sends back from each other until the transaction
+-- ends: the send that checks who already got the record's mail and queues
+-- the rest is the only one doing so (idx_mail_queue_news_once is the net).
+-- name: LockNewsSource :exec
+SELECT pg_advisory_xact_lock(hashtextextended('skymail news ' || sqlc.arg(source_ref)::text, 0));
+
+-- The send of a News record to an audience, if there is one (open or done).
+-- name: GetNewsSendByAudience :one
+SELECT id FROM mail_tasks
+WHERE source_ref = sqlc.arg(source_ref)::text AND source_audience = sqlc.arg(source_audience)::text;
+
+-- The mailboxes a row of a News record was queued to go to, lower-cased:
+-- every send of the record leaves them out ("zaten aldı").
+-- name: ListNewsSourceAddresses :many
+SELECT DISTINCT lower(recipient_email)::text AS address
+FROM mail_queue
+WHERE source_ref = sqlc.arg(source_ref)::text;
+
+-- A person's test mails of a template in the last minute: a News send's
+-- test (POST /v1/news_sends/test) is a send of club.news to its sender
+-- without a source, at most 3 a minute.
+-- name: CountRecentNewsTests :one
+SELECT count(*)::int FROM mail_tasks
+WHERE sent_by = sqlc.arg(sent_by)::text AND template_id = sqlc.arg(template_id)::uuid AND source_ref IS NULL
+  AND created_at > now() - interval '1 minute';
