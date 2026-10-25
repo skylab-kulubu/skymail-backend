@@ -12,6 +12,9 @@ type AppError struct {
 	Message string                 `json:"message"`
 	Params  map[string]interface{} `json:"params,omitempty"`
 	Status  int                    `json:"-"`
+	// RetryAfter, when positive, is the Retry-After header's seconds: the
+	// request may be tried again then.
+	RetryAfter int `json:"-"`
 }
 
 func (e *AppError) Error() string {
@@ -29,6 +32,13 @@ func New(code string, message string, status int) *AppError {
 func (e *AppError) WithParams(params map[string]interface{}) *AppError {
 	newErr := *e
 	newErr.Params = params
+	return &newErr
+}
+
+// WithRetryAfter is e answered with a Retry-After of seconds.
+func (e *AppError) WithRetryAfter(seconds int) *AppError {
+	newErr := *e
+	newErr.RetryAfter = seconds
 	return &newErr
 }
 

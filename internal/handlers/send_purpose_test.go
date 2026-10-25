@@ -67,7 +67,7 @@ func TestChoosePurpose(t *testing.T) {
 			mailer.SendPurpose{Purpose: strp("duyuru"), Category: strp("team:6f1d2c3b-0a9e-4f8d-8c7b-6a5e4d3c2b1a:haber"), CommercialContentAbsent: boolp(true)}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := choosePurpose(tc.on, tc.promotional, tc.listConsent, tc.asked, tc.target)
+			got, err := choosePurpose(tc.on, tc.promotional, tc.listConsent, false, tc.asked, tc.target)
 			if !errors.Is(err, tc.err) || (tc.err == nil && err != nil) {
 				t.Fatalf("error %v, want %v", err, tc.err)
 			}
@@ -75,6 +75,36 @@ func TestChoosePurpose(t *testing.T) {
 				t.Errorf("purpose %s, want %s", show(got), show(tc.want))
 			}
 		})
+	}
+}
+
+// While every duyuru send obeys the recipients' preferences
+// (SKYMAIL_BULK_PREFERENCE; abonelik-cikisi 09), a duyuru send that names its
+// purpose states whether its main purpose is promotion; islem never does,
+// and a body that names no purpose (an older client) still gets its default.
+func TestChoosePurposeNeedsTheCommercialStatement(t *testing.T) {
+	duyuru := requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru")}
+	if _, err := choosePurpose(true, false, false, true, duyuru, targetAudience); !errors.Is(err, errCommercialStatementRequired) {
+		t.Errorf("duyuru without the statement: %v, want %v", err, errCommercialStatementRequired)
+	}
+	if _, err := choosePurpose(true, false, false, false, duyuru, targetAudience); err != nil {
+		t.Errorf("the check off: %v", err)
+	}
+	stated := duyuru
+	stated.CommercialContentAbsent = boolp(true)
+	if got, err := choosePurpose(true, false, false, true, stated, targetPeople); err != nil || got.CommercialContentAbsent == nil || !*got.CommercialContentAbsent {
+		t.Errorf("stated: %s %v", show(got), err)
+	}
+	promotional := duyuru
+	promotional.CommercialContentAbsent = boolp(false)
+	if _, err := choosePurpose(true, true, false, true, promotional, targetAudience); err != nil {
+		t.Errorf("stated promotional, SKYMAIL_PROMOTIONAL on: %v", err)
+	}
+	if _, err := choosePurpose(true, false, false, true, requests.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true)}, targetPeople); err != nil {
+		t.Errorf("islem: %v", err)
+	}
+	if got, err := choosePurpose(true, false, false, true, requests.SendPurpose{}, targetAudience); err != nil || got.Purpose != nil {
+		t.Errorf("none named: %s %v, want the caller's default", show(got), err)
 	}
 }
 

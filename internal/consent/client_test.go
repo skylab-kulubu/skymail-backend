@@ -3,6 +3,7 @@ package consent_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -167,5 +168,89 @@ func TestMatchedAsksInBatches(t *testing.T) {
 	}
 	if len(matched) != consent.ResolveBatch+1 || !matched["uye@example.com"] || matched["misafir0@example.com"] {
 		t.Errorf("matched %d addresses, uye %v", len(matched), matched["uye@example.com"])
+	}
+}
+
+// Resolve sends each recipient by sub or by address, in one call of at most
+// ResolveBatch, and reads every field of the answer in the order asked
+// (abonelik-cikisi 09).
+func TestResolveReadsTheWholeAnswer(t *testing.T) {
+	var body map[string]any
+	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != consent.ResolvePath || r.Header.Get("Authorization") != "Bearer svc" {
+			t.Errorf("asked %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprint(w, `{"results":[
+			{"matched":true,"sub":"7d3c1f6e-0000-4000-8000-000000000001","allowed":true,"reason":null,"unsubscribeUrl":"https://api.example.org/v1/communication-preferences/unsubscribe?t=a"},
+			{"matched":false},
+			{"matched":true,"sub":"7d3c1f6e-0000-4000-8000-000000000002","allowed":false,"reason":"opted_out"},
+			{"matched":true,"allowed":false,"reason":"ambiguous"}]}`)
+	}))
+	defer core.Close()
+
+	results, err := consent.NewClient(core.URL, token("svc"), nil).Resolve(context.Background(), "team:2b0f8a4e-0f4c-4a43-9b0b-1d1e2f3a4b5c:duyuru", []consent.Recipient{
+		{Sub: "7d3c1f6e-0000-4000-8000-000000000001"}, {Email: "misafir@example.com"}, {Email: "uye@example.com"}, {Email: "iki@example.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["channel"] != "email" || body["category"] != "team:2b0f8a4e-0f4c-4a43-9b0b-1d1e2f3a4b5c:duyuru" {
+		t.Errorf("asked %v", body)
+	}
+	if asked, _ := json.Marshal(body["recipients"]); string(asked) != `[{"sub":"7d3c1f6e-0000-4000-8000-000000000001"},{"email":"misafir@example.com"},{"email":"uye@example.com"},{"email":"iki@example.com"}]` {
+		t.Errorf("recipients %s", asked)
+	}
+	want := []consent.Result{
+		{Matched: true, Sub: "7d3c1f6e-0000-4000-8000-000000000001", Allowed: true, UnsubscribeURL: "https://api.example.org/v1/communication-preferences/unsubscribe?t=a"},
+		{},
+		{Matched: true, Sub: "7d3c1f6e-0000-4000-8000-000000000002", Reason: "opted_out"},
+		{Matched: true, Reason: "ambiguous"},
+	}
+	if len(results) != len(want) {
+		t.Fatalf("results %+v", results)
+	}
+	for i := range want {
+		if results[i] != want[i] {
+			t.Errorf("result %d = %+v, want %+v", i, results[i], want[i])
+		}
+	}
+}
+
+// core's 400 recipients_resolve_category_unknown is ErrCategoryUnknown;
+// every other refusal, a short answer, a reason off the contract or an
+// allowed answer without its link is no answer at all.
+func TestResolveRefusesWhatIsNotTheContract(t *testing.T) {
+	for name, answer := range map[string]struct {
+		status int
+		body   string
+		want   error
+	}{
+		"unknown team":       {http.StatusBadRequest, `{"code":"recipients_resolve_category_unknown"}`, consent.ErrCategoryUnknown},
+		"invalid request":    {http.StatusBadRequest, `{"code":"recipients_resolve_invalid"}`, nil},
+		"directory down":     {http.StatusServiceUnavailable, `{"code":"recipients_resolve_directory_unavailable"}`, nil},
+		"short":              {http.StatusOK, `{"results":[]}`, nil},
+		"unknown reason":     {http.StatusOK, `{"results":[{"matched":true,"allowed":false,"reason":"maybe"}]}`, nil},
+		"allowed, no link":   {http.StatusOK, `{"results":[{"matched":true,"allowed":true}]}`, nil},
+		"not allowed, empty": {http.StatusOK, `{"results":[{"matched":true,"allowed":false}]}`, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(answer.status)
+				fmt.Fprint(w, answer.body)
+			}))
+			defer core.Close()
+			results, err := consent.NewClient(core.URL, token("svc"), nil).Resolve(context.Background(), "club:duyuru", []consent.Recipient{{Email: "a@example.com"}})
+			switch {
+			case err == nil:
+				t.Fatalf("results %+v, want an error", results)
+			case answer.want != nil && !errors.Is(err, answer.want):
+				t.Errorf("err %v, want %v", err, answer.want)
+			case answer.want == nil && errors.Is(err, consent.ErrCategoryUnknown):
+				t.Errorf("err %v is not an unknown category", err)
+			}
+		})
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -173,6 +174,20 @@ func main() {
 	if (consentGate.Promotional || consentGate.ListConsent) && trackingConfig.CoreURL == "" {
 		log.Fatal().Msg("SKYMAIL_PROMOTIONAL=on and SKYMAIL_LIST_CONSENT=on need CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
 	}
+	// The bulk preference check (README, "Toplu postada tercih"):
+	// SKYMAIL_BULK_PREFERENCE, off unless on; on needs purposes, the one-click
+	// header, SkyMail's own link with a key, and CORE_URL.
+	preferenceGate, err := mailer.PreferenceGateFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid bulk preference configuration")
+	}
+	preferenceGate.Links = unsubscribeConfig
+	if err := preferenceGate.CheckWith(sendLanes); err != nil {
+		log.Fatal().Err(err).Msg("invalid bulk preference configuration")
+	}
+	if preferenceGate.On && trackingConfig.CoreURL == "" {
+		log.Fatal().Msg("SKYMAIL_BULK_PREFERENCE=on needs CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
+	}
 	if migrationConfig.Mode == migrations.ModeApply {
 		// A stop signal ends a wait for another process's migrations, never
 		// a migration under way.
@@ -218,10 +233,14 @@ func main() {
 	logSendLanes(sendLanes)
 	logUnsubscribeLink(unsubscribeConfig)
 	if trackingConfig.CoreURL != "" {
-		consentGate.Core = consent.NewClient(trackingConfig.CoreURL, kcClient, nil)
+		coreClient := consent.NewClient(trackingConfig.CoreURL, kcClient, nil)
+		consentGate.Core = coreClient
+		preferenceGate.Core = coreClient
 	}
 	log.Info().Bool("promotional", consentGate.Promotional).Bool("list_consent", consentGate.ListConsent).Bool("core", consentGate.Core != nil).
 		Msg("contact consents (SKYMAIL_PROMOTIONAL, SKYMAIL_LIST_CONSENT)")
+	log.Info().Bool("bulk_preference", preferenceGate.On).Bool("core", preferenceGate.Core != nil).
+		Msg("bulk preference check (SKYMAIL_BULK_PREFERENCE)")
 	db := database.NewStore(conn)
 	mailerService := mailer.NewMailer(db, mailer.SMTPConfig{
 		FromEmail: cfg.SMTPFrom,
@@ -235,6 +254,7 @@ func main() {
 		mailer.WithReservedDomainsRefused(),
 		mailer.WithSendLanes(sendLanes),
 		mailer.WithConsentGate(consentGate),
+		mailer.WithPreferenceGate(preferenceGate),
 		mailer.WithTracking(mailer.Tracking{
 			Config:      trackingConfig,
 			Preferences: tracking.NewCoreClient(trackingConfig.CoreURL, kcClient, nil),
@@ -927,6 +947,9 @@ func errorHandler(ctx fiber.Ctx, err error) error {
 
 	var appError *apperrors.AppError
 	if errors.As(err, &appError) {
+		if appError.RetryAfter > 0 {
+			ctx.Set(fiber.HeaderRetryAfter, strconv.Itoa(appError.RetryAfter))
+		}
 		return ctx.Status(appError.Status).JSON(appError)
 	}
 

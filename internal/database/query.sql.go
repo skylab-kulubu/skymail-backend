@@ -1172,18 +1172,19 @@ func (q *Queries) CreateMailFormSource(ctx context.Context, arg CreateMailFormSo
 }
 
 type CreateMailQueueItemsParams struct {
-	TaskID             uuid.UUID  `json:"task_id"`
-	RecipientFullName  string     `json:"recipient_full_name"`
-	RecipientEmail     string     `json:"recipient_email"`
-	Subject            string     `json:"subject"`
-	Body               string     `json:"body"`
-	BodyHtml           *string    `json:"body_html"`
-	Priority           int16      `json:"priority"`
-	RecipientSub       *uuid.UUID `json:"recipient_sub"`
-	TrackingToken      []byte     `json:"-"`
-	TrackingSkipReason *string    `json:"tracking_skip_reason"`
-	SuppressedButSent  bool       `json:"suppressed_but_sent"`
-	ListUnsubscribeUrl *string    `json:"-"`
+	TaskID              uuid.UUID  `json:"task_id"`
+	RecipientFullName   string     `json:"recipient_full_name"`
+	RecipientEmail      string     `json:"recipient_email"`
+	Subject             string     `json:"subject"`
+	Body                string     `json:"body"`
+	BodyHtml            *string    `json:"body_html"`
+	Priority            int16      `json:"priority"`
+	RecipientSub        *uuid.UUID `json:"recipient_sub"`
+	TrackingToken       []byte     `json:"-"`
+	TrackingSkipReason  *string    `json:"tracking_skip_reason"`
+	SuppressedButSent   bool       `json:"suppressed_but_sent"`
+	ListUnsubscribeUrl  *string    `json:"-"`
+	PreferenceCheckedAt *time.Time `json:"preference_checked_at"`
 }
 
 const createMailTask = `-- name: CreateMailTask :many
@@ -2546,6 +2547,36 @@ func (q *Queries) GetMailTaskTrackingExclusion(ctx context.Context, taskID uuid.
 	return i, err
 }
 
+const getMailingListAddresses = `-- name: GetMailingListAddresses :many
+SELECT r.email
+FROM recipients r
+         JOIN mailing_list_recipients mlr ON r.id = mlr.recipient_id
+WHERE mlr.mail_list_id = $1
+`
+
+// A list's addresses, for the bulk preference check before its send is
+// queued (mailer, preference_gate.go): the send's insert reads the list
+// again, in its transaction.
+func (q *Queries) GetMailingListAddresses(ctx context.Context, mailListID uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, getMailingListAddresses, mailListID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			return nil, err
+		}
+		items = append(items, email)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getMailingListById = `-- name: GetMailingListById :one
 SELECT id, name, description, created_at, updated_at, archived_at, archived_by
 FROM mailing_lists
@@ -2699,6 +2730,90 @@ func (q *Queries) GetOwnedMailFormSource(ctx context.Context, arg GetOwnedMailFo
 		&i.ConsumeRequestHash,
 	)
 	return i, err
+}
+
+const getPreferenceGateClaimedRows = `-- name: GetPreferenceGateClaimedRows :many
+SELECT q.id,
+       q.recipient_email,
+       q.recipient_sub,
+       q.priority,
+       q.created_at,
+       q.preference_checked_at,
+       (q.list_unsubscribe_url IS NOT NULL)::boolean AS has_link,
+       t.key,
+       coalesce(t.system, false)::boolean AS system,
+       mt.purpose,
+       mt.category,
+       (nt.required IS TRUE)::boolean AS required_notification
+FROM mail_queue q
+         JOIN mail_tasks mt ON mt.id = q.task_id
+         LEFT JOIN templates t ON t.id = mt.template_id
+         LEFT JOIN notifications n ON n.id = mt.notification_id
+         LEFT JOIN notification_types nt ON nt.key = n.type
+WHERE q.id = ANY ($1::uuid[])
+  AND q.channel = 'email'
+  AND q.status = 'processing'
+  AND q.claimed_by = $2::text
+`
+
+type GetPreferenceGateClaimedRowsParams struct {
+	Ids       []uuid.UUID `json:"ids"`
+	ClaimedBy string      `json:"claimed_by"`
+}
+
+type GetPreferenceGateClaimedRowsRow struct {
+	ID                   uuid.UUID  `json:"id"`
+	RecipientEmail       string     `json:"recipient_email"`
+	RecipientSub         *uuid.UUID `json:"recipient_sub"`
+	Priority             int16      `json:"priority"`
+	CreatedAt            *time.Time `json:"created_at"`
+	PreferenceCheckedAt  *time.Time `json:"preference_checked_at"`
+	HasLink              bool       `json:"has_link"`
+	Key                  *string    `json:"key"`
+	System               bool       `json:"system"`
+	Purpose              *string    `json:"purpose"`
+	Category             *string    `json:"category"`
+	RequiredNotification bool       `json:"required_notification"`
+}
+
+// Gives claimed rows the link their mail is sent with: a promotional mail's
+// is the grant's withdraw link, which ends the promotional consent.
+// The bulk rows this process just took, as the bulk preference check reads
+// them (mailer, preference_gate.go): whether core gave a verdict about the
+// row when it was queued, whom to ask about again, the send's category, and
+// what picks the row's lane. A required notification type never carries a
+// link (POST /v1/notifications refuses one), so the safety net leaves it be.
+func (q *Queries) GetPreferenceGateClaimedRows(ctx context.Context, arg GetPreferenceGateClaimedRowsParams) ([]GetPreferenceGateClaimedRowsRow, error) {
+	rows, err := q.db.Query(ctx, getPreferenceGateClaimedRows, arg.Ids, arg.ClaimedBy)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetPreferenceGateClaimedRowsRow
+	for rows.Next() {
+		var i GetPreferenceGateClaimedRowsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RecipientEmail,
+			&i.RecipientSub,
+			&i.Priority,
+			&i.CreatedAt,
+			&i.PreferenceCheckedAt,
+			&i.HasLink,
+			&i.Key,
+			&i.System,
+			&i.Purpose,
+			&i.Category,
+			&i.RequiredNotification,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getRecipientByEmail = `-- name: GetRecipientByEmail :one
@@ -4025,6 +4140,10 @@ SELECT mt.id,
        rc.sent,
        rc.failed,
        rc.suppressed,
+       rc.opted_out,
+       rc.unsubscribed,
+       rc.inactive,
+       rc.ambiguous,
        rc.suppressed_but_sent,
        rc.undelivered,
        single.recipient_full_name   AS single_recipient_full_name,
@@ -4049,6 +4168,10 @@ FROM page
                                     count(*) FILTER (WHERE q.status = 'sent')       AS sent,
                                     count(*) FILTER (WHERE q.status = 'failed')     AS failed,
                                     count(*) FILTER (WHERE q.status = 'failed' AND q.error LIKE 'suppressed:%') AS suppressed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: opted_out') AS opted_out,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'suppressed: unsubscribed') AS unsubscribed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: inactive') AS inactive,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: ambiguous') AS ambiguous,
                                     count(*) FILTER (WHERE q.suppressed_but_sent) AS suppressed_but_sent,
                                     count(*) FILTER (WHERE EXISTS (SELECT 1
                                                                    FROM mail_bounces b
@@ -4096,6 +4219,10 @@ type ListMailTaskSendsRow struct {
 	Sent                    int64      `json:"sent"`
 	Failed                  int64      `json:"failed"`
 	Suppressed              int64      `json:"suppressed"`
+	OptedOut                int64      `json:"opted_out"`
+	Unsubscribed            int64      `json:"unsubscribed"`
+	Inactive                int64      `json:"inactive"`
+	Ambiguous               int64      `json:"ambiguous"`
 	SuppressedButSent       int64      `json:"suppressed_but_sent"`
 	Undelivered             int64      `json:"undelivered"`
 	SingleRecipientFullName *string    `json:"single_recipient_full_name"`
@@ -4153,6 +4280,10 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 			&i.Sent,
 			&i.Failed,
 			&i.Suppressed,
+			&i.OptedOut,
+			&i.Unsubscribed,
+			&i.Inactive,
+			&i.Ambiguous,
 			&i.SuppressedButSent,
 			&i.Undelivered,
 			&i.SingleRecipientFullName,
@@ -5277,7 +5408,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, preference_checked_at
 `
 
 type ProcessBulkQueueItemsParams struct {
@@ -5321,6 +5452,7 @@ func (q *Queries) ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueu
 			&i.SentAt,
 			&i.SuppressedButSent,
 			&i.ListUnsubscribeUrl,
+			&i.PreferenceCheckedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -5344,7 +5476,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, preference_checked_at
 `
 
 type ProcessSystemQueueItemsParams struct {
@@ -5392,6 +5524,7 @@ func (q *Queries) ProcessSystemQueueItems(ctx context.Context, arg ProcessSystem
 			&i.SentAt,
 			&i.SuppressedButSent,
 			&i.ListUnsubscribeUrl,
+			&i.PreferenceCheckedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -6191,6 +6324,28 @@ func (q *Queries) SendWindowCounts(ctx context.Context, arg SendWindowCountsPara
 	return items, nil
 }
 
+const setClaimedRowsPreferenceCheckedAt = `-- name: SetClaimedRowsPreferenceCheckedAt :execrows
+UPDATE mail_queue
+SET preference_checked_at = $1::timestamptz
+WHERE id = ANY ($2::uuid[])
+  AND status = 'processing'
+  AND claimed_by = $3::text
+`
+
+type SetClaimedRowsPreferenceCheckedAtParams struct {
+	At        time.Time   `json:"at"`
+	Ids       []uuid.UUID `json:"ids"`
+	ClaimedBy string      `json:"claimed_by"`
+}
+
+func (q *Queries) SetClaimedRowsPreferenceCheckedAt(ctx context.Context, arg SetClaimedRowsPreferenceCheckedAtParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setClaimedRowsPreferenceCheckedAt, arg.At, arg.Ids, arg.ClaimedBy)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setClaimedRowsUnsubscribeURL = `-- name: SetClaimedRowsUnsubscribeURL :execrows
 UPDATE mail_queue q
 SET list_unsubscribe_url = ($1::text[])[array_position($2::uuid[], q.id)]
@@ -6205,8 +6360,6 @@ type SetClaimedRowsUnsubscribeURLParams struct {
 	ClaimedBy string      `json:"claimed_by"`
 }
 
-// Gives claimed rows the link their mail is sent with: a promotional mail's
-// is the grant's withdraw link, which ends the promotional consent.
 // links[i] is ids[i]'s.
 func (q *Queries) SetClaimedRowsUnsubscribeURL(ctx context.Context, arg SetClaimedRowsUnsubscribeURLParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setClaimedRowsUnsubscribeURL, arg.Links, arg.Ids, arg.ClaimedBy)

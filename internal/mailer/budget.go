@@ -208,7 +208,10 @@ func (m *mailerImpl) claimBulk(ctx context.Context, logger *zerolog.Logger, maxR
 			if taken, err = m.skipUnsubscribed(ctx, q, logger, rows); err != nil {
 				return err
 			}
-			taken, err = m.gateConsents(ctx, q, logger, taken)
+			if taken, err = m.gateConsents(ctx, q, logger, taken); err != nil {
+				return err
+			}
+			taken, err = m.gatePreferences(ctx, q, logger, taken)
 			return err
 		})
 		if err != nil {
@@ -260,6 +263,11 @@ func (m *mailerImpl) claimBulk(ctx context.Context, logger *zerolog.Logger, maxR
 		}
 		// So is a mail a contact consent holds back (consent_gate.go).
 		if rows, err = m.gateConsents(ctx, q, logger, rows); err != nil || len(rows) == 0 {
+			return err
+		}
+		// And a duyuru mail the bulk preference check holds back
+		// (preference_gate.go).
+		if rows, err = m.gatePreferences(ctx, q, logger, rows); err != nil || len(rows) == 0 {
 			return err
 		}
 		if err := countSends(ctx, q, at, PriorityBulk, len(rows)); err != nil {

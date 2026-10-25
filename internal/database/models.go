@@ -387,6 +387,8 @@ type MailQueue struct {
 	SuppressedButSent bool `json:"suppressed_but_sent"`
 	// The recipient's one-click unsubscribe link, as core signed it; null for a row without one. Never served.
 	ListUnsubscribeUrl *string `json:"-"`
+	// When core last allowed this recipient a duyuru mail (recipients:resolve); NULL when core gave no verdict about the row.
+	PreferenceCheckedAt *time.Time `json:"preference_checked_at"`
 }
 
 type MailSendWindow struct {

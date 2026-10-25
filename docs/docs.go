@@ -1010,7 +1010,19 @@ const docTemplate = `{
             },
             "handlers.QueueTotals": {
                 "properties": {
+                    "ambiguous": {
+                        "description": "Skipped, never sent: two or more accounts hold the address, so no one preference stands for it (in failed too).",
+                        "type": "integer"
+                    },
                     "failed": {
+                        "type": "integer"
+                    },
+                    "inactive": {
+                        "description": "Skipped, never sent: core says the account is disabled or being erased (in failed too).",
+                        "type": "integer"
+                    },
+                    "opted_out": {
+                        "description": "Skipped, never sent: the person turned the send's category off in core (communication preferences; in failed too).",
                         "type": "integer"
                     },
                     "pending": {
@@ -1023,7 +1035,7 @@ const docTemplate = `{
                         "type": "integer"
                     },
                     "suppressed": {
-                        "description": "Written failed when queued, never sent: the address is suppressed (in failed too).",
+                        "description": "Written failed, never sent, skipped: the address is suppressed — a bounce, an unsubscribe, a missing contact consent (in failed too).",
                         "type": "integer"
                     },
                     "suppressed_but_sent": {
@@ -1032,6 +1044,10 @@ const docTemplate = `{
                     },
                     "undelivered": {
                         "description": "Sent, then a delivery status notification said the address does not exist (in sent too).",
+                        "type": "integer"
+                    },
+                    "unsubscribed": {
+                        "description": "Skipped, never sent: the address left SkyMail's duyuru stream through its own link (in suppressed and failed too).",
                         "type": "integer"
                     }
                 },
@@ -3252,7 +3268,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "validation.error"
+                        "description": "validation.error; mail_task.category_unknown: the duyuru send's team is no team (SKYMAIL_BULK_PREFERENCE)"
                     },
                     "403": {
                         "content": {
@@ -3303,6 +3319,16 @@ const docTemplate = `{
                             }
                         },
                         "description": "Internal Server Error"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE), core did not say whom the send may go to at the approval; nothing is queued and the request stays as it was"
                     }
                 },
                 "summary": "Approve a request and send it",
@@ -3871,7 +3897,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "Bad Request. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_required, mail_task.category_invalid"
+                        "description": "Bad Request. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team"
                     },
                     "422": {
                         "content": {
@@ -3892,6 +3918,16 @@ const docTemplate = `{
                             }
                         },
                         "description": "Internal Server Error"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE; README, \\\"Toplu postada tercih\\\"), core did not say whom the send may go to; nothing is queued"
                     }
                 },
                 "summary": "Create a new mail task",
@@ -3945,7 +3981,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "Invalid request or caller-supplied recipient/metadata fields. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid (duyuru). A retry whose purpose differs is not the same request: 409 form_source.consumed"
+                        "description": "Invalid request or caller-supplied recipient/metadata fields. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team. A retry whose purpose differs is not the same request: 409 form_source.consumed"
                     },
                     "403": {
                         "content": {
@@ -4005,7 +4041,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "Transactional sending unavailable"
+                        "description": "Transactional sending unavailable; mail_task.preference_unavailable (Retry-After): a duyuru send while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing is queued, the source is not consumed"
                     }
                 },
                 "summary": "Send to an immutable Forms audience",
@@ -4056,7 +4092,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "Bad Request. A person's purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid (duyuru)"
+                        "description": "Bad Request. A person's purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team"
                     },
                     "500": {
                         "content": {
@@ -4067,6 +4103,16 @@ const docTemplate = `{
                             }
                         },
                         "description": "Internal Server Error"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_task.preference_unavailable (Retry-After): a person's duyuru mail while every duyuru send obeys the recipient's preferences (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing is queued"
                     }
                 },
                 "summary": "Send a single email",
@@ -5824,7 +5870,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "validation.error; notification.idempotency_key_required; notification.allowed_channels_required, notification.unsubscribe_url_not_allowed, notification.unsubscribe_url_invalid (params.recipient: its index); notification.expires_at_past"
+                        "description": "validation.error; notification.idempotency_key_required; notification.allowed_channels_required, notification.unsubscribe_url_not_allowed, notification.unsubscribe_url_invalid, notification.unsubscribe_url_required (an optional bulk-lane type's e-mail recipient without one while SKYMAIL_BULK_PREFERENCE is on) (params.recipient: its index); notification.expires_at_past"
                     },
                     "403": {
                         "content": {

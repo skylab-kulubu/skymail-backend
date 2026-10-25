@@ -218,6 +218,29 @@ func formSourceTracking(ctx context.Context, db *database.Store, m mailer.Transa
 	return m.ResolvePeopleTracking(ctx, templateID, formSourceRecipientInfos(rows))
 }
 
+// formSourcePreferences is what core says, while the bulk preference check
+// is on, about a Forms source's respondents for a duyuru send of purpose,
+// asked before the transaction that locks the source (mailer,
+// preference_gate.go). The source is immutable, so the people asked about
+// are the people the send goes to. Nil when the check is off, the send is
+// not duyuru, the source cannot be read (the transaction then refuses it)
+// or — direct — it is consumed already: the send is a retry, answered with
+// the send it made, and core is not asked again.
+func formSourcePreferences(ctx context.Context, db *database.Store, m mailer.Transactional, sourceID uuid.UUID, owner string, purpose mailer.SendPurpose, direct bool) (*mailer.PreferenceVerdicts, error) {
+	if !m.PreferenceAvailable() || !isDuyuru(purpose) {
+		return nil, nil
+	}
+	source, err := db.GetOwnedMailFormSource(ctx, database.GetOwnedMailFormSourceParams{ID: sourceID, OwnerSub: owner})
+	if err != nil || source.InvalidatedAt != nil || (direct && source.ConsumedAt != nil) {
+		return nil, nil
+	}
+	rows, err := db.ListMailFormSourceRecipients(ctx, source.ID)
+	if err != nil {
+		return nil, err
+	}
+	return m.ResolvePreferences(ctx, purpose, formSourceRecipientInfos(rows))
+}
+
 // An exact retry returns the committed target before the preparation TTL is
 // considered. It never creates another target, even after an approval edit.
 func formSourceRetry(s database.MailFormSource, kind string, hash []byte, now time.Time) (*uuid.UUID, error) {
@@ -351,13 +374,13 @@ func (h *mailHandlerImpl) GetFormSource(c fiber.Ctx) error {
 //	@Produce		json
 //	@Success		201	{object}	handlers.CreatedMailTask	"New task"
 //	@Success		200	{object}	handlers.CreatedMailTask	"Same task for an exact retry"
-//	@Failure		400	{object}	apperrors.AppError			"Invalid request or caller-supplied recipient/metadata fields. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid (duyuru). A retry whose purpose differs is not the same request: 409 form_source.consumed"
+//	@Failure		400	{object}	apperrors.AppError			"Invalid request or caller-supplied recipient/metadata fields. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team. A retry whose purpose differs is not the same request: 409 form_source.consumed"
 //	@Failure		403	{object}	apperrors.AppError			"Current send-or-write permission required"
 //	@Failure		404	{object}	apperrors.AppError			"No such source owned by the caller"
 //	@Failure		409	{object}	apperrors.AppError			"Source invalidated, consumed differently or busy"
 //	@Failure		410	{object}	apperrors.AppError			"Prepare the Forms audience again"
 //	@Failure		422	{object}	apperrors.AppError			"Template or variables unavailable or invalid"
-//	@Failure		503	{object}	apperrors.AppError			"Transactional sending unavailable"
+//	@Failure		503	{object}	apperrors.AppError			"Transactional sending unavailable; mail_task.preference_unavailable (Retry-After): a duyuru send while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing is queued, the source is not consumed"
 //	@Router			/mail_tasks/form-source [post]
 func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 	var p requests.SendFormSource
@@ -382,7 +405,7 @@ func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 	// A Forms source's respondents get duyuru unless the sender declares the
 	// mail about their own application (islem); either is tracked as before.
 	purposesOn := m.PurposeAvailable()
-	named, err := choosePurpose(purposesOn, m.PromotionalAvailable(), m.ListConsentAvailable(), p.SendPurpose, targetFormSource)
+	named, err := choosePurpose(purposesOn, m.PromotionalAvailable(), m.ListConsentAvailable(), m.PreferenceAvailable(), p.SendPurpose, targetFormSource)
 	if err != nil {
 		return err
 	}
@@ -396,6 +419,10 @@ func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 	}
 	tracked := m.OperatorTrackingAlways()
 	preferences := formSourceTracking(c.Context(), h.db, m, p.FormSourceID, owner, p.TemplateID, true)
+	verdicts, err := formSourcePreferences(c.Context(), h.db, m, p.FormSourceID, owner, purpose, true)
+	if err != nil {
+		return err
+	}
 	var id uuid.UUID
 	repeated := false
 	err = h.db.InTx(c.Context(), func(q *database.Queries) error {
@@ -419,7 +446,7 @@ func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 		if _, err = checkFormSourceTemplate(c.Context(), q, p.TemplateID, variables, to[0]); err != nil {
 			return err
 		}
-		id, err = m.Queue(q, mailer.PriorityBulk).EnqueueWithRecipients(c.Context(), mailer.EnqueueWithRecipientsParams{
+		id, err = m.Queue(q, mailer.PriorityBulk).WithPreferences(verdicts).EnqueueWithRecipients(c.Context(), mailer.EnqueueWithRecipientsParams{
 			SentBy: owner, TemplateID: p.TemplateID, FormSourceID: &source.ID, BodyVariables: variables, Recipients: to,
 			Tracking: tracked, Preferences: preferences, Purpose: purpose,
 		})
@@ -452,7 +479,7 @@ func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 
 func (h *mailApprovalHandlerImpl) submitFormSource(c fiber.Ctx, caller approvalCaller, p requests.SubmitMailApproval, send approvalSend) error {
 	// Checked already (approvalPurpose): what the body named, for the hash.
-	named, err := choosePurpose(h.mailer.PurposeAvailable(), h.mailer.PromotionalAvailable(), h.mailer.ListConsentAvailable(), send.askedPurpose, targetFormSource)
+	named, err := choosePurpose(h.mailer.PurposeAvailable(), h.mailer.PromotionalAvailable(), h.mailer.ListConsentAvailable(), h.mailer.PreferenceAvailable(), send.askedPurpose, targetFormSource)
 	if err != nil {
 		return err
 	}

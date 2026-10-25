@@ -595,3 +595,35 @@ func TestAnUnsubscribeURLGoesOnlyWithAnOptionalBulkType(t *testing.T) {
 		t.Errorf("an empty unsubscribe_url is written: %s %v", raw, err)
 	}
 }
+
+// While every duyuru mail must carry its way out (SKYMAIL_BULK_PREFERENCE;
+// abonelik-cikisi 09), an e-mail recipient of an optional bulk-lane type
+// needs core's unsubscribe_url; one the e-mail does not go to does not, nor
+// does a required type's.
+func TestTheBulkPreferenceCheckNeedsANotificationsLink(t *testing.T) {
+	w := newNotificationWorld(t, mailer.WithSendLanes(mailer.SendLanes{Purpose: true}), mailer.WithPreferenceGate(mailer.PreferenceGate{On: true}))
+	if _, err := w.store.Conn.Exec(context.Background(), `
+		INSERT INTO templates (key, name, subject, html_content, plain_text_content, react_email_content, content_sensitive)
+		VALUES ('club.digest', 'Duyuru', 'Duyuru', '<p>{{.FullName}}</p>', '{{.FullName}}', '', false);
+		INSERT INTO notification_types (key, category, required, default_channels, lane) VALUES ('club.digest', 'news', false, '{email}', 'bulk')`); err != nil {
+		t.Fatal(err)
+	}
+	token := bearer(t, coreService, true, coreRoles...)
+	link := "https://api.yildizskylab.com/v1/communication-preferences/unsubscribe?t=AQEBGqzN0x8K-_c2Vj"
+	linked := recipient(personAyse, "", "email")
+	linked["unsubscribe_url"] = link
+	s := w.post(token, "digest-no-link", notification("club.digest", linked, recipient(personMehmet, "", "email")))
+	if s.status != fiber.StatusBadRequest || s.error.Code != "notification.unsubscribe_url_required" || s.error.Params["recipient"] != float64(1) {
+		t.Fatalf("%d %s, want 400 notification.unsubscribe_url_required for recipient 1", s.status, s.raw)
+	}
+	noEmail := recipient(personMehmet, "")
+	noEmail["allowed_channels"] = []string{}
+	s = w.post(token, "digest-no-email", notification("club.digest", linked, noEmail))
+	if s.status != fiber.StatusCreated {
+		t.Fatalf("a recipient the e-mail does not go to: %d %s", s.status, s.raw)
+	}
+	s = w.post(token, "certificate", notification("core.certificate", recipient(personMehmet, "", "email")))
+	if s.status != fiber.StatusCreated {
+		t.Fatalf("a required type: %d %s", s.status, s.raw)
+	}
+}

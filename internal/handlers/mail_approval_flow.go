@@ -203,7 +203,7 @@ func (h *mailApprovalHandlerImpl) approvalPurpose(ctx context.Context, send appr
 	case send.formSourceID != nil:
 		target = targetFormSource
 	}
-	chosen, err := choosePurpose(on, h.mailer.PromotionalAvailable(), h.mailer.ListConsentAvailable(), send.askedPurpose, target)
+	chosen, err := choosePurpose(on, h.mailer.PromotionalAvailable(), h.mailer.ListConsentAvailable(), h.mailer.PreferenceAvailable(), send.askedPurpose, target)
 	if err != nil {
 		return mailer.SendPurpose{}, err
 	}
@@ -485,6 +485,10 @@ type approvalPrepared struct {
 	tracking *mailer.TrackingPreferences
 	// A resubmission's send, as its checks passed it.
 	checked checkedSend
+	// What core said about the send's recipients, asked before the lock
+	// while the bulk preference check is on (mailer, preference_gate.go):
+	// the verdict is the approval's, not the submission's.
+	verdicts *mailer.PreferenceVerdicts
 }
 
 // approvalAction is one action on a request.
@@ -556,6 +560,13 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 			return err
 		}
 	}
+	// core's preferences, at the approval: core not answering refuses the
+	// action (503), and the request stays as it was.
+	if action.sends {
+		if prepared.verdicts, err = h.approvalPreferences(ctx, view, prepared); err != nil {
+			return err
+		}
+	}
 
 	var notice approvalNotice
 	expired := false
@@ -615,6 +626,37 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	}
 	answer.Notification = notification
 	return c.JSON(answer)
+}
+
+// approvalPreferences asks core, while the bulk preference check is on and
+// the request's send is duyuru, about the recipients the send will go to:
+// its people, its Forms source's respondents, its internal list's addresses
+// or its Keycloak group's members (asked for already). Before the lock: a
+// recipient the request names that was not asked about gets no link, and the
+// dispatcher never sends it.
+func (h *mailApprovalHandlerImpl) approvalPreferences(ctx context.Context, view database.GetMailApprovalRow, prepared approvalPrepared) (*mailer.PreferenceVerdicts, error) {
+	a := view.MailApproval
+	purpose := h.queuedPurpose(a)
+	if !h.mailer.PreferenceAvailable() || !isDuyuru(purpose) {
+		return nil, nil
+	}
+	switch {
+	case a.FormSourceID != nil:
+		return formSourcePreferences(ctx, h.db, h.mailer, *a.FormSourceID, a.SubmitterSub, purpose, false)
+	case a.MailListID == nil:
+		return h.mailer.ResolvePreferences(ctx, purpose, recipientsOfView(view))
+	case view.InternalMailList:
+		addresses, err := h.db.GetMailingListAddresses(ctx, *a.MailListID)
+		if err != nil {
+			return nil, err
+		}
+		recipients := make([]mailer.RecipientInfo, len(addresses))
+		for i, address := range addresses {
+			recipients[i] = mailer.RecipientInfo{Email: address}
+		}
+		return h.mailer.ResolvePreferences(ctx, purpose, recipients)
+	}
+	return h.mailer.ResolvePreferences(ctx, purpose, prepared.groupMembers)
 }
 
 // authorizeApproval lets an approver decide any request — their own too
@@ -780,7 +822,7 @@ func (h *mailApprovalHandlerImpl) queue(ctx context.Context, q *database.Queries
 	// An islem send (to people or a Forms source, declared about the
 	// recipient's own application) waits in the bulk lane too, is tracked as
 	// any approved send, and goes out from bilgi@.
-	sends := h.mailer.Queue(q, mailer.PriorityBulk)
+	sends := h.mailer.Queue(q, mailer.PriorityBulk).WithPreferences(prepared.verdicts)
 	purpose := h.queuedPurpose(a)
 	a.Purpose, a.Category, a.TransactionalStatement, a.CommercialContentAbsent, a.OwnEventStatement =
 		purpose.Purpose, purpose.Category, purpose.TransactionalStatement, purpose.CommercialContentAbsent, purpose.OwnEventStatement
