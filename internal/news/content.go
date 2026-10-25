@@ -95,10 +95,10 @@ func ReadMoreURL(mode string, record Record) string {
 	return SiteURL + "/" + section + "/" + url.PathEscape(record.Slug)
 }
 
-// webLink is link when it is an absolute http or https address (mailto too
-// with mailto), else empty: a record's image or button never carries
-// javascript: or a relative path into a mailbox.
-func webLink(link string, mailto bool) string {
+// webLink is link when it is an absolute http or https address, or a mailto
+// one, else empty: a record's button never carries javascript: or a relative
+// path into a mailbox.
+func webLink(link string) string {
 	parsed, err := url.Parse(strings.TrimSpace(link))
 	if err != nil {
 		return ""
@@ -106,16 +106,48 @@ func webLink(link string, mailto bool) string {
 	switch {
 	case (parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != "" && parsed.User == nil:
 		return parsed.String()
-	case mailto && parsed.Scheme == "mailto" && parsed.Opaque != "":
+	case parsed.Scheme == "mailto" && parsed.Opaque != "":
 		return parsed.String()
 	}
 	return ""
 }
 
+// DefaultImageHosts are the hosts a record's cover is shown from when
+// SKYMAIL_NEWS_IMAGE_HOSTS is unset: the club's own domain and its
+// subdomains.
+var DefaultImageHosts = []string{"yildizskylab.com"}
+
+// imageLink is link when it is an https address on one of hosts (a host, or
+// a subdomain of one), else empty. A cover from anywhere else is left out of
+// the mail: an image a third party serves would tell it when the mail is
+// opened, a pixel in all but name, tracking or not.
+func imageLink(link string, hosts []string) string {
+	parsed, err := url.Parse(strings.TrimSpace(link))
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.Hostname() == "" {
+		return ""
+	}
+	host := strings.ToLower(parsed.Hostname())
+	for _, allowed := range hosts {
+		allowed = strings.ToLower(strings.TrimSpace(allowed))
+		if allowed != "" && (host == allowed || strings.HasSuffix(host, "."+allowed)) {
+			return parsed.String()
+		}
+	}
+	return ""
+}
+
+// MailOptions are SkyMail's settings a News mail is made with.
+type MailOptions struct {
+	// ReadMore is SKYMAIL_NEWS_READ_MORE: ReadMoreHome or ReadMorePages.
+	ReadMore string
+	// ImageHosts are the hosts a cover may come from (SKYMAIL_NEWS_IMAGE_HOSTS).
+	ImageHosts []string
+}
+
 // Variables are the club.news template's variables for a send of record
 // (SPEC §5.7 madde 3): the same for every recipient. Each recipient's own
 // AudienceReason, CategoryLabel and UnsubscribeUrl come from core.
-func Variables(record Record, format, subject, preheader, readMore string) map[string]any {
+func Variables(record Record, format, subject, preheader string, options MailOptions) map[string]any {
 	full := format == FormatFull
 	if strings.TrimSpace(preheader) == "" {
 		preheader = record.Summary
@@ -127,18 +159,18 @@ func Variables(record Record, format, subject, preheader, readMore string) map[s
 		"Summary":     record.Summary,
 		"BodyHtml":    "",
 		"FullBody":    full,
-		"HeroUrl":     webLink(record.HeroImage, false),
+		"HeroUrl":     imageLink(record.HeroImage, options.ImageHosts),
 		"HeroAlt":     record.HeroAlt,
 		"CtaHref":     "",
 		"CtaLabel":    "",
-		"ReadMoreUrl": ReadMoreURL(readMore, record),
+		"ReadMoreUrl": ReadMoreURL(options.ReadMore, record),
 		"KindLabel":   KindLabel(record.Kind),
 	}
 	if full {
 		vars["BodyHtml"] = BodyHTML(record.Body)
 	}
 	if record.Cta != nil {
-		if href := webLink(record.Cta.Href, true); href != "" {
+		if href := webLink(record.Cta.Href); href != "" {
 			vars["CtaHref"] = href
 			vars["CtaLabel"] = record.Cta.Label
 			if record.Cta.Label == "" {

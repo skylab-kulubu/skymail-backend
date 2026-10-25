@@ -59,6 +59,7 @@ type fakeAudiences struct {
 	answers map[string]news.Audience
 	err     error
 	asked   []news.AudienceRequest
+	counted int
 }
 
 func (f *fakeAudiences) Resolve(_ context.Context, asked news.AudienceRequest) (news.Audience, error) {
@@ -69,6 +70,17 @@ func (f *fakeAudiences) Resolve(_ context.Context, asked news.AudienceRequest) (
 		return news.Audience{}, f.err
 	}
 	return f.answers[news.AudienceKey(asked.Type, asked.Teams)], nil
+}
+
+func (f *fakeAudiences) Count(_ context.Context, asked news.AudienceRequest) (news.Counts, news.Skipped, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.counted++
+	if f.err != nil {
+		return news.Counts{}, news.Skipped{}, f.err
+	}
+	answer := f.answers[news.AudienceKey(asked.Type, asked.Teams)]
+	return answer.Counts, answer.Skipped, nil
 }
 
 type newsWorld struct {
@@ -456,6 +468,10 @@ func TestNewsSendTestGoesToTheCallerOnly(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM mail_queue WHERE recipient_email = 'hazirlayan@example.org' AND subject = '[Deneme] Duyuru: Kayıtlar açıldı' AND source_ref IS NULL`); n != handlers.NewsTestsPerMinute {
 		t.Fatalf("test rows to the caller = %d", n)
 	}
+	if n := w.count(`SELECT count(*) FROM mail_queue WHERE recipient_email = 'hazirlayan@example.org'
+		AND list_unsubscribe_url IS NULL AND body_html LIKE '%href="https://my.yildizskylab.com/communication-preferences"%'`); n != handlers.NewsTestsPerMinute {
+		t.Fatalf("test rows with the sample link in the body and no List-Unsubscribe = %d", n)
+	}
 	if n := w.count(`SELECT count(*) FROM mail_queue WHERE recipient_email <> 'hazirlayan@example.org'`) + w.count(`SELECT count(*) FROM mail_tasks WHERE source_ref IS NOT NULL`); n != 0 {
 		t.Fatalf("a test reached someone else or became a News send: %d", n)
 	}
@@ -487,21 +503,102 @@ func TestNewsSendCountIsWhoASendWouldReach(t *testing.T) {
 		return answer
 	}
 	before := count("members")
-	if before.Recipients != 3 || before.Counts.AlreadyReceived != 0 || before.Counts.Skipped.NoUnsubscribeURL != 1 || before.AlreadySentTaskID != nil {
+	if before.Counts.Total != 5 || before.Counts.Skipped.OptedOut != 3 || before.Counts.AlreadyReceived != 0 || before.AlreadySentTaskID != nil {
 		t.Fatalf("before = %+v", before)
+	}
+	if w.audiences.counted != 1 || len(w.audiences.asked) != 0 {
+		t.Fatalf("core asked %d counts and %d whole audiences, want one count and none", w.audiences.counted, len(w.audiences.asked))
 	}
 	team := w.post(bearer(t, yk, false, announcerRoles...), newsSend("kayitlar", "teams", "/UYELER/ARGE/WEBLAB"))
 	if team.status != fiber.StatusCreated {
 		t.Fatalf("team send: %d %s", team.status, team.raw)
 	}
 	after := count("members")
-	if after.Recipients != 1 || after.Counts.AlreadyReceived != 2 || after.AlreadySentTaskID != nil {
+	if after.Counts.AlreadyReceived != 2 || after.AlreadySentTaskID != nil {
 		t.Fatalf("after the team = %+v", after)
 	}
-	if again := count("teams", "/UYELER/ARGE/WEBLAB"); again.AlreadySentTaskID == nil || *again.AlreadySentTaskID != team.result.ID || again.Recipients != 0 {
+	if again := count("teams", "/UYELER/ARGE/WEBLAB"); again.AlreadySentTaskID == nil || *again.AlreadySentTaskID != team.result.ID {
 		t.Fatalf("the team again = %+v", again)
 	}
 	if n := w.count(`SELECT count(*) FROM mail_tasks`); n != 1 {
 		t.Fatalf("counting wrote sends: %d", n)
+	}
+}
+
+// Requests that race: six for the same record and audience make one send
+// (the others 409); a record's two audiences at once still reach each mailbox
+// once.
+func TestNewsSendIsOnceUnderConcurrentRequests(t *testing.T) {
+	w := newNewsWorld(t, true)
+	w.seedTemplate()
+	token := bearer(t, yk, false, announcerRoles...)
+
+	statuses := make(chan int, 6)
+	var wait sync.WaitGroup
+	for range 6 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			statuses <- w.post(token, newsSend("kayitlar", "members")).status
+		}()
+	}
+	wait.Wait()
+	close(statuses)
+	counted := map[int]int{}
+	for status := range statuses {
+		counted[status]++
+	}
+	if counted[fiber.StatusCreated] != 1 || counted[fiber.StatusConflict] != 5 {
+		t.Fatalf("six racing sends: %v, want one 201 and five 409", counted)
+	}
+	if n := w.count(`SELECT count(*) FROM mail_queue WHERE source_ref = 'news:kayitlar'`); n != 3 {
+		t.Fatalf("rows of the record = %d, want 3", n)
+	}
+
+	w.cms.mu.Lock()
+	w.cms.records["ikinci"] = news.Record{Slug: "ikinci", Version: 1, Title: "İkinci", Body: "b", Kind: news.KindNews, Audience: news.AudiencePublic}
+	w.cms.mu.Unlock()
+	var both sync.WaitGroup
+	for _, body := range []map[string]any{newsSend("ikinci", "members"), newsSend("ikinci", "teams", "/UYELER/ARGE/WEBLAB")} {
+		both.Add(1)
+		go func() {
+			defer both.Done()
+			w.post(token, body)
+		}()
+	}
+	both.Wait()
+	if n := w.count(`SELECT count(*) - count(DISTINCT lower(recipient_email)) FROM mail_queue WHERE source_ref = 'news:ikinci'`); n != 0 {
+		t.Fatalf("%d mailboxes got the record twice", n)
+	}
+	if n := w.count(`SELECT count(*) FROM mail_queue WHERE source_ref = 'news:ikinci'`); n != 3 {
+		t.Fatalf("rows of the second record = %d, want 3", n)
+	}
+}
+
+// An address SkyMail suppressed is written failed without the record's
+// source, so a later send of it asks again; a canonical slug past 200
+// characters is refused, not a server error.
+func TestNewsSendSuppressedAddressAndLongSlug(t *testing.T) {
+	w := newNewsWorld(t, true)
+	w.seedTemplate()
+	token := bearer(t, yk, false, announcerRoles...)
+	if _, err := w.store.Conn.Exec(context.Background(),
+		`INSERT INTO mail_suppressions (address, source, reason_code) VALUES ('mehmet@example.org', 'smtp', '550 5.1.1')`); err != nil {
+		t.Fatal(err)
+	}
+	sent := w.post(token, newsSend("kayitlar", "teams", "/UYELER/ARGE/WEBLAB"))
+	if sent.status != fiber.StatusCreated || sent.result.Queued != 1 || sent.result.Failed != 1 {
+		t.Fatalf("send: %d %s", sent.status, sent.raw)
+	}
+	if n := w.count(`SELECT count(*) FROM mail_queue WHERE recipient_email = 'mehmet@example.org' AND status = 'failed' AND source_ref IS NULL`); n != 1 {
+		t.Fatalf("the suppressed address: %d failed rows without a source, want 1", n)
+	}
+
+	long := strings.Repeat("a", 201)
+	w.cms.mu.Lock()
+	w.cms.records["uzun"] = news.Record{Slug: long, Version: 1, Title: "Uzun", Body: "b", Kind: news.KindNews, Audience: news.AudiencePublic}
+	w.cms.mu.Unlock()
+	if s := w.post(token, newsSend("uzun", "members")); s.status != fiber.StatusBadRequest || s.error.Code != "news_send.slug_too_long" {
+		t.Fatalf("a slug past 200: %d %s", s.status, s.raw)
 	}
 }

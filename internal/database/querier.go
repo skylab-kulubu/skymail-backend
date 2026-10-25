@@ -21,6 +21,10 @@ type Querier interface {
 	AddRecipientToMailingList(ctx context.Context, arg AddRecipientToMailingListParams) (AddRecipientToMailingListRow, error)
 	ArchiveMailingList(ctx context.Context, arg ArchiveMailingListParams) (MailingList, error)
 	ArchiveTemplate(ctx context.Context, arg ArchiveTemplateParams) (Template, error)
+	// Of the e-mails sent in the last days days (still sent: a relay's refusal is
+	// failed), how many a report later said did not reach their address (hard),
+	// failed otherwise (soft) or were delayed. A row counts once in each.
+	BounceRate(ctx context.Context, days int) (BounceRateRow, error)
 	// Empties the content of up to batch_size sends none of whose rows is still to
 	// go out (pending or processing) once they are older than retention_days,
 	// sensitive or not: a sensitive send's content is kept as long as any other's
@@ -190,6 +194,9 @@ type Querier interface {
 	GetAllTemplatesIncludingArchived(ctx context.Context, arg GetAllTemplatesIncludingArchivedParams) ([]Template, error)
 	GetArchivedMailingLists(ctx context.Context, arg GetArchivedMailingListsParams) ([]MailingList, error)
 	GetArchivedTemplates(ctx context.Context, arg GetArchivedTemplatesParams) ([]Template, error)
+	// The Graph delta link the NDR reader's next poll of mailbox starts from in
+	// mode; no row (or a NULL link) reads the inbox from the start.
+	GetBounceReaderDeltaLink(ctx context.Context, arg GetBounceReaderDeltaLinkParams) (*string, error)
 	// The claimed e-mail rows among ids whose send a contact consent may hold
 	// back (internal/mailer/consent_gate.go): a promotional duyuru send
 	// (commercial_content_absent false), or a send to an internal list. With the
@@ -311,6 +318,8 @@ type Querier interface {
 	// The last version a Template seed wrote of a template. Seed versions are
 	// always published, so this is the seed's last word on the template.
 	LastTemplateSeedVersion(ctx context.Context, templateID uuid.UUID) (TemplateVersionSummary, error)
+	// Every mailbox and mode the NDR reader has polled, without the delta link.
+	ListBounceReaderStates(ctx context.Context) ([]ListBounceReaderStatesRow, error)
 	// A page of one person's inbox, newest first: the items after the cursor
 	// (created_at, id), archived ones as archived says (exclude, include, only),
 	// none past its expiry.
@@ -468,6 +477,11 @@ type Querier interface {
 	// caller holds the row's lock and has checked that the version is a draft of
 	// this template.
 	PublishTemplateDraft(ctx context.Context, arg PublishTemplateDraftParams) (Template, error)
+	// Records one poll of a mailbox: its delta link when the poll reached the
+	// end (NULL keeps the one before, so a poll that failed half way starts
+	// again from there), when, its error (NULL: none) and what the reports it
+	// read came to, added to the counts.
+	RecordBounceReaderPoll(ctx context.Context, arg RecordBounceReaderPollParams) error
 	// Numbered after the request's last event; the caller holds its row lock.
 	RecordMailApprovalEvent(ctx context.Context, arg RecordMailApprovalEventParams) (MailApprovalEvent, error)
 	// Keeps on a template that a Template seed was refused, and why. Refusing the

@@ -71,7 +71,7 @@ func (h *newsSendHandlerImpl) mailOf(c fiber.Ctx, params requests.SendNews) (new
 		return newsMail{}, err
 	}
 	return newsMail{record: record, template: template,
-		variables: news.Variables(record, params.Format, params.Subject, params.Preheader, h.options.ReadMore)}, nil
+		variables: news.Variables(record, params.Format, params.Subject, params.Preheader, h.options.mail())}, nil
 }
 
 // sampleRecipient is the caller as a preview's and a test mail's reader: their
@@ -154,6 +154,10 @@ func (h *newsSendHandlerImpl) Test(c fiber.Ctx) error {
 	if recipient.Email == "" {
 		return errNewsNoTestAddress
 	}
+	// The sample link shows in the body only: a test mail carries no
+	// List-Unsubscribe, so a mail client offers no "unsubscribe" that would
+	// tell its sender they left.
+	recipient.UnsubscribeInBodyOnly = true
 	mail.variables["Subject"] = newsTestPrefix + mail.variables["Subject"].(string)
 	variables, err := json.Marshal(mail.variables)
 	if err != nil {
@@ -195,9 +199,8 @@ func (h *newsSendHandlerImpl) Test(c fiber.Ctx) error {
 
 // NewsSendCount answers POST /v1/news_sends/count.
 type NewsSendCount struct {
-	// Who a send now would queue: the audience less who is skipped and who already got the record.
-	Recipients int            `json:"recipients"`
-	Counts     NewsSendCounts `json:"counts"`
+	// core's numbers for the audience (countOnly: no address is read). already_received is how many mailboxes this record's mail already went to, by any send of it: a send to this audience leaves out those among its people, so at most this many. no_unsubscribe_url is known only when sending (0 here).
+	Counts NewsSendCounts `json:"counts"`
 	// The send of this record to this audience, when there is one: a send now would be 409 news_send.already_sent.
 	AlreadySentTaskID *uuid.UUID     `json:"already_sent_task_id"`
 	Source            NewsSendSource `json:"source"`
@@ -206,7 +209,7 @@ type NewsSendCount struct {
 // Count godoc
 //
 //	@Summary		Count who a News send would reach
-//	@Description	The live count of the send form: core resolves the audience as the send would (members, followers, and who it leaves out: turned off, disabled, unverified, without an address), and the mailboxes this record's mail already went to are counted already_received. recipients is who a send now would queue. Nothing is queued and no address is answered.
+//	@Description	The live count of the send form: core counts the audience as the send would resolve it (members, followers, and who it leaves out: turned off, disabled, unverified, without an address) with countOnly, so no address is read and the form may ask often; already_received is how many mailboxes this record's mail already reached by any send of it. The exact number left out is the send's (counts.already_received of POST /news_sends). Nothing is queued.
 //	@Tags			News sends
 //	@Accept			json
 //	@Produce		json
@@ -244,7 +247,7 @@ func (h *newsSendHandlerImpl) Count(c fiber.Ctx) error {
 	case !errors.Is(err, pgx.ErrNoRows):
 		return err
 	}
-	audience, err := h.audiences.Resolve(ctx, news.AudienceRequest{Type: params.Audience.Type, Teams: teams, NewsKind: record.Kind, Visibility: record.Audience})
+	counts, skipped, err := h.audiences.Count(ctx, news.AudienceRequest{Type: params.Audience.Type, Teams: teams, NewsKind: record.Kind, Visibility: record.Audience})
 	switch {
 	case errors.Is(err, news.ErrTeamUnknown):
 		return errNewsTeamUnknown
@@ -254,12 +257,11 @@ func (h *newsSendHandlerImpl) Count(c fiber.Ctx) error {
 		log.Error().Err(err).Msg("news send count: core did not answer the audience")
 		return errNewsAudienceUnavailable
 	}
-	answer.Counts = countsOf(audience)
-	recipients, _ := newsRecipients(audience.People, record.Kind, &answer.Counts)
+	answer.Counts = countsOf(news.Audience{Counts: counts, Skipped: skipped})
 	received, err := h.db.ListNewsSourceAddresses(ctx, sourceRef)
 	if err != nil {
 		return err
 	}
-	answer.Recipients = len(withoutReceived(recipients, received, &answer.Counts))
+	answer.Counts.AlreadyReceived = len(received)
 	return c.JSON(answer)
 }
