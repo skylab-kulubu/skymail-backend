@@ -238,6 +238,51 @@ func (q *Queries) ArchiveTemplate(ctx context.Context, arg ArchiveTemplateParams
 	return i, err
 }
 
+const bounceRate = `-- name: BounceRate :one
+SELECT count(*)                                                     AS sent,
+       count(*) FILTER (WHERE EXISTS (SELECT 1
+                                      FROM mail_bounces b
+                                      WHERE b.queue_id = q.id
+                                        AND b.kind = 'hard'
+                                        AND b.recipient_matched)) AS hard,
+       count(*) FILTER (WHERE EXISTS (SELECT 1
+                                      FROM mail_bounces b
+                                      WHERE b.queue_id = q.id
+                                        AND b.kind = 'soft'
+                                        AND b.recipient_matched)) AS soft,
+       count(*) FILTER (WHERE EXISTS (SELECT 1
+                                      FROM mail_bounces b
+                                      WHERE b.queue_id = q.id
+                                        AND b.kind = 'delay'
+                                        AND b.recipient_matched)) AS delay
+FROM mail_queue q
+WHERE q.channel = 'email'
+  AND q.status = 'sent'
+  AND q.sent_at >= now() - make_interval(days => $1::int)
+`
+
+type BounceRateRow struct {
+	Sent  int64 `json:"sent"`
+	Hard  int64 `json:"hard"`
+	Soft  int64 `json:"soft"`
+	Delay int64 `json:"delay"`
+}
+
+// Of the e-mails sent in the last days days (still sent: a relay's refusal is
+// failed), how many a report later said did not reach their address (hard),
+// failed otherwise (soft) or were delayed. A row counts once in each.
+func (q *Queries) BounceRate(ctx context.Context, days int) (BounceRateRow, error) {
+	row := q.db.QueryRow(ctx, bounceRate, days)
+	var i BounceRateRow
+	err := row.Scan(
+		&i.Sent,
+		&i.Hard,
+		&i.Soft,
+		&i.Delay,
+	)
+	return i, err
+}
+
 const clearDueMailContent = `-- name: ClearDueMailContent :many
 WITH due AS (SELECT mt.id
              FROM mail_tasks mt
@@ -2039,6 +2084,27 @@ func (q *Queries) GetArchivedTemplates(ctx context.Context, arg GetArchivedTempl
 	return items, nil
 }
 
+const getBounceReaderDeltaLink = `-- name: GetBounceReaderDeltaLink :one
+SELECT delta_link
+FROM mail_bounce_reader_state
+WHERE mailbox = $1::text
+  AND mode = $2::text
+`
+
+type GetBounceReaderDeltaLinkParams struct {
+	Mailbox string `json:"mailbox"`
+	Mode    string `json:"mode"`
+}
+
+// The Graph delta link the NDR reader's next poll of mailbox starts from in
+// mode; no row (or a NULL link) reads the inbox from the start.
+func (q *Queries) GetBounceReaderDeltaLink(ctx context.Context, arg GetBounceReaderDeltaLinkParams) (*string, error) {
+	row := q.db.QueryRow(ctx, getBounceReaderDeltaLink, arg.Mailbox, arg.Mode)
+	var delta_link *string
+	err := row.Scan(&delta_link)
+	return delta_link, err
+}
+
 const getConsentGateClaimedRows = `-- name: GetConsentGateClaimedRows :many
 SELECT q.id,
        q.recipient_email,
@@ -3667,6 +3733,78 @@ func (q *Queries) LastTemplateSeedVersion(ctx context.Context, templateID uuid.U
 		&i.Name,
 	)
 	return i, err
+}
+
+const listBounceReaderStates = `-- name: ListBounceReaderStates :many
+SELECT mailbox,
+       mode,
+       last_polled_at,
+       last_error,
+       reports,
+       not_dsn,
+       unmatched,
+       hard,
+       soft,
+       delay,
+       other_recipient,
+       duplicate,
+       no_failure,
+       unreadable
+FROM mail_bounce_reader_state
+ORDER BY mailbox, mode
+`
+
+type ListBounceReaderStatesRow struct {
+	Mailbox        string     `json:"mailbox"`
+	Mode           string     `json:"mode"`
+	LastPolledAt   *time.Time `json:"last_polled_at"`
+	LastError      *string    `json:"last_error"`
+	Reports        int64      `json:"reports"`
+	NotDsn         int64      `json:"not_dsn"`
+	Unmatched      int64      `json:"unmatched"`
+	Hard           int64      `json:"hard"`
+	Soft           int64      `json:"soft"`
+	Delay          int64      `json:"delay"`
+	OtherRecipient int64      `json:"other_recipient"`
+	Duplicate      int64      `json:"duplicate"`
+	NoFailure      int64      `json:"no_failure"`
+	Unreadable     int64      `json:"unreadable"`
+}
+
+// Every mailbox and mode the NDR reader has polled, without the delta link.
+func (q *Queries) ListBounceReaderStates(ctx context.Context) ([]ListBounceReaderStatesRow, error) {
+	rows, err := q.db.Query(ctx, listBounceReaderStates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListBounceReaderStatesRow
+	for rows.Next() {
+		var i ListBounceReaderStatesRow
+		if err := rows.Scan(
+			&i.Mailbox,
+			&i.Mode,
+			&i.LastPolledAt,
+			&i.LastError,
+			&i.Reports,
+			&i.NotDsn,
+			&i.Unmatched,
+			&i.Hard,
+			&i.Soft,
+			&i.Delay,
+			&i.OtherRecipient,
+			&i.Duplicate,
+			&i.NoFailure,
+			&i.Unreadable,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listInboxItems = `-- name: ListInboxItems :many
@@ -5557,6 +5695,75 @@ func (q *Queries) PublishTemplateDraft(ctx context.Context, arg PublishTemplateD
 		&i.Channel,
 	)
 	return i, err
+}
+
+const recordBounceReaderPoll = `-- name: RecordBounceReaderPoll :exec
+INSERT INTO mail_bounce_reader_state (mailbox, mode, delta_link, last_polled_at, last_error, reports, not_dsn,
+                                      unmatched, hard, soft, delay, other_recipient, duplicate, no_failure,
+                                      unreadable)
+VALUES ($1::text, $2::text, $3::text, $4::timestamptz,
+        $5::text, $6::bigint, $7::bigint,
+        $8::bigint, $9::bigint, $10::bigint, $11::bigint,
+        $12::bigint, $13::bigint, $14::bigint,
+        $15::bigint)
+ON CONFLICT (mailbox, mode) DO UPDATE SET delta_link      = COALESCE(EXCLUDED.delta_link,
+                                                                     mail_bounce_reader_state.delta_link),
+                                          last_polled_at  = EXCLUDED.last_polled_at,
+                                          last_error      = EXCLUDED.last_error,
+                                          reports         = mail_bounce_reader_state.reports + EXCLUDED.reports,
+                                          not_dsn         = mail_bounce_reader_state.not_dsn + EXCLUDED.not_dsn,
+                                          unmatched       = mail_bounce_reader_state.unmatched + EXCLUDED.unmatched,
+                                          hard            = mail_bounce_reader_state.hard + EXCLUDED.hard,
+                                          soft            = mail_bounce_reader_state.soft + EXCLUDED.soft,
+                                          delay           = mail_bounce_reader_state.delay + EXCLUDED.delay,
+                                          other_recipient = mail_bounce_reader_state.other_recipient +
+                                                            EXCLUDED.other_recipient,
+                                          duplicate       = mail_bounce_reader_state.duplicate + EXCLUDED.duplicate,
+                                          no_failure      = mail_bounce_reader_state.no_failure + EXCLUDED.no_failure,
+                                          unreadable      = mail_bounce_reader_state.unreadable + EXCLUDED.unreadable
+`
+
+type RecordBounceReaderPollParams struct {
+	Mailbox        string    `json:"mailbox"`
+	Mode           string    `json:"mode"`
+	DeltaLink      *string   `json:"delta_link"`
+	PolledAt       time.Time `json:"polled_at"`
+	LastError      *string   `json:"last_error"`
+	Reports        int64     `json:"reports"`
+	NotDsn         int64     `json:"not_dsn"`
+	Unmatched      int64     `json:"unmatched"`
+	Hard           int64     `json:"hard"`
+	Soft           int64     `json:"soft"`
+	Delay          int64     `json:"delay"`
+	OtherRecipient int64     `json:"other_recipient"`
+	Duplicate      int64     `json:"duplicate"`
+	NoFailure      int64     `json:"no_failure"`
+	Unreadable     int64     `json:"unreadable"`
+}
+
+// Records one poll of a mailbox: its delta link when the poll reached the
+// end (NULL keeps the one before, so a poll that failed half way starts
+// again from there), when, its error (NULL: none) and what the reports it
+// read came to, added to the counts.
+func (q *Queries) RecordBounceReaderPoll(ctx context.Context, arg RecordBounceReaderPollParams) error {
+	_, err := q.db.Exec(ctx, recordBounceReaderPoll,
+		arg.Mailbox,
+		arg.Mode,
+		arg.DeltaLink,
+		arg.PolledAt,
+		arg.LastError,
+		arg.Reports,
+		arg.NotDsn,
+		arg.Unmatched,
+		arg.Hard,
+		arg.Soft,
+		arg.Delay,
+		arg.OtherRecipient,
+		arg.Duplicate,
+		arg.NoFailure,
+		arg.Unreadable,
+	)
+	return err
 }
 
 const recordMailApprovalEvent = `-- name: RecordMailApprovalEvent :one

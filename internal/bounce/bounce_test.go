@@ -412,3 +412,59 @@ func TestTheTablesRefuseWhatTheyMustNotHold(t *testing.T) {
 		}
 	}
 }
+
+// A dry run (the reader's SKYMAIL_BOUNCE_READER=dry-run) says what the
+// report would do and writes nothing: no bounce, no suppression. The same
+// report then processed for real does it.
+func TestADryRunSaysWhatAReportWouldDoAndWritesNothing(t *testing.T) {
+	db := store(t)
+	evaluate := func(file, id string) bounce.Outcome {
+		t.Helper()
+		outcome, err := bounce.Evaluate(context.Background(), db, fqdn, bounce.NDR{ID: id, ReceivedAt: mustTime(receivedAt), MIME: bytes.NewReader(fixture(t, file))})
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		return outcome
+	}
+	for file, want := range map[string]bounce.Outcome{
+		"exchange-recipient-not-found.eml": bounce.OutcomeHard,
+		"exchange-delayed.eml":             bounce.OutcomeDelay,
+		"remote-mailbox-full.eml":          bounce.OutcomeSoft,
+		"auto-reply.eml":                   bounce.OutcomeNotDSN,
+		"rotator-alarm.eml":                bounce.OutcomeUnmatched,
+	} {
+		if got := evaluate(file, "<dry-"+file+">"); got != want {
+			t.Errorf("%s: outcome = %q, want %q", file, got, want)
+		}
+	}
+	if n := count(t, db, `SELECT count(*) FROM mail_bounces`); n != 0 {
+		t.Errorf("a dry run wrote %d bounces", n)
+	}
+	if n := count(t, db, `SELECT count(*) FROM mail_suppressions`); n != 0 {
+		t.Errorf("a dry run wrote %d suppressions", n)
+	}
+	if got := process(t, db, "exchange-recipient-not-found.eml", "<dry-exchange-recipient-not-found.eml>"); got != bounce.OutcomeHard {
+		t.Errorf("for real after the dry run: outcome = %q, want %q", got, bounce.OutcomeHard)
+	}
+	// A report recorded before is a duplicate to the dry run too.
+	if got := evaluate("exchange-recipient-not-found.eml", "<dry-exchange-recipient-not-found.eml>"); got != bounce.OutcomeDuplicate {
+		t.Errorf("dry run of a recorded report: outcome = %q, want %q", got, bounce.OutcomeDuplicate)
+	}
+}
+
+// A report that says it is a delivery status notification but cannot be read
+// is ErrUnreadable: the reader counts it and goes on, it does not try it
+// again and again. Its error quotes nothing of the report.
+func TestAReportThatCannotBeReadIsErrUnreadable(t *testing.T) {
+	db := store(t)
+	// More parts than a report has: the parser gives up.
+	raw := "Message-ID: <broken@outlook.example>\r\nContent-Type: multipart/report; report-type=delivery-status; boundary=\"b\"\r\n\r\n" +
+		strings.Repeat("--b\r\nContent-Type: text/plain\r\n\r\nyok@std.example.org\r\n", 30) + "--b--\r\n"
+	_, err := bounce.Process(context.Background(), db, fqdn, bounce.NDR{ID: "<broken@outlook.example>", MIME: strings.NewReader(raw)})
+	if !errors.Is(err, bounce.ErrUnreadable) {
+		t.Fatalf("err = %v, want ErrUnreadable", err)
+	}
+	if strings.Contains(err.Error(), "yok@") {
+		t.Errorf("the error quotes the report: %v", err)
+	}
+}
