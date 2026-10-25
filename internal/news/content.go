@@ -163,3 +163,28 @@ func AudienceKey(kind string, teams []string) string {
 	slices.Sort(sorted)
 	return AudienceTypeTeams + ":" + strings.Join(slices.Compact(sorted), ",")
 }
+
+// SampleUnsubscribeURL is the unsubscribe link of a preview and a test mail
+// (SPEC §5.7 madde 7): the Account center's preferences page, which changes
+// nothing when visited. A real send's link is core's, each recipient's own.
+const SampleUnsubscribeURL = "https://my.yildizskylab.com/communication-preferences"
+
+// SampleAudience is what a preview and a test mail say about why the reader
+// got it, in the shape core's audience writes it (core docs/news-audience.md,
+// "Answer"): for every Member core's own words, for teams the first team's
+// code (the last part of its Group path) as core names a team without its
+// Turkish name. A real send's words are core's, each recipient's own.
+func SampleAudience(audienceType string, teams []string, kind string) (reason, categoryLabel string) {
+	kindLabel := "Haberler"
+	if kind == KindAnnouncement {
+		kindLabel = "Duyurular"
+	}
+	if audienceType != AudienceTypeTeams || len(teams) == 0 {
+		return "SKY LAB üyesi olduğun için", "Kulüp geneli · " + kindLabel
+	}
+	team := strings.TrimSpace(teams[0])
+	if i := strings.LastIndex(team, "/"); i >= 0 {
+		team = team[i+1:]
+	}
+	return team + " ekibinde olduğun için", team + " · " + kindLabel
+}

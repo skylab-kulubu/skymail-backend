@@ -802,6 +802,27 @@ func (q *Queries) CountMailingLists(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countRecentNewsTests = `-- name: CountRecentNewsTests :one
+SELECT count(*)::int FROM mail_tasks
+WHERE sent_by = $1::text AND template_id = $2::uuid AND source_ref IS NULL
+  AND created_at > now() - interval '1 minute'
+`
+
+type CountRecentNewsTestsParams struct {
+	SentBy     string    `json:"sent_by"`
+	TemplateID uuid.UUID `json:"template_id"`
+}
+
+// A person's test mails of a template in the last minute: a News send's
+// test (POST /v1/news_sends/test) is a send of club.news to its sender
+// without a source, at most 3 a minute.
+func (q *Queries) CountRecentNewsTests(ctx context.Context, arg CountRecentNewsTestsParams) (int, error) {
+	row := q.db.QueryRow(ctx, countRecentNewsTests, arg.SentBy, arg.TemplateID)
+	var column_1 int
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countRecipients = `-- name: CountRecipients :one
 SELECT count(*)
 FROM recipients

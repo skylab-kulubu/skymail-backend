@@ -2341,3 +2341,11 @@ WHERE source_ref = sqlc.arg(source_ref)::text AND source_audience = sqlc.arg(sou
 SELECT DISTINCT lower(recipient_email)::text AS address
 FROM mail_queue
 WHERE source_ref = sqlc.arg(source_ref)::text;
+
+-- A person's test mails of a template in the last minute: a News send's
+-- test (POST /v1/news_sends/test) is a send of club.news to its sender
+-- without a source, at most 3 a minute.
+-- name: CountRecentNewsTests :one
+SELECT count(*)::int FROM mail_tasks
+WHERE sent_by = sqlc.arg(sent_by)::text AND template_id = sqlc.arg(template_id)::uuid AND source_ref IS NULL
+  AND created_at > now() - interval '1 minute';

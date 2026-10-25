@@ -194,3 +194,13 @@ func TestAudienceKey(t *testing.T) {
 		t.Errorf("keys %q %q", a, b)
 	}
 }
+
+// A preview's words for why the reader got it are in core's shape.
+func TestSampleAudience(t *testing.T) {
+	if reason, label := SampleAudience(AudienceTypeMembers, nil, KindAnnouncement); reason != "SKY LAB üyesi olduğun için" || label != "Kulüp geneli · Duyurular" {
+		t.Errorf("members: %q %q", reason, label)
+	}
+	if reason, label := SampleAudience(AudienceTypeTeams, []string{"/UYELER/ARGE/WEBLAB", "/UYELER/X"}, KindNews); reason != "WEBLAB ekibinde olduğun için" || label != "WEBLAB · Haberler" {
+		t.Errorf("teams: %q %q", reason, label)
+	}
+}

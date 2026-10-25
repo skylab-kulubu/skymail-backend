@@ -70,7 +70,14 @@ func logNewsSend(cfg newsSendConfig) {
 
 // registerNewsSendRoutes serves POST /v1/news_sends (hub ticket duyuru-haber
 // 06): a person with skymail:announcements:send mails a published News
-// record directly.
+// record directly. Its preview, test mail and live count (bilet 07, 08) are
+// also for who prepares a send to submit (skymail:mails:write).
 func registerNewsSendRoutes(api fiber.Router, auth middlewares.AuthMiddleware, sends handlers.NewsSendHandler) {
-	api.Post("/news_sends", auth.RequireAnyPermission(handlers.AnnouncementsSendRole), sends.Send)
+	prepares := auth.RequireAnyPermission(handlers.AnnouncementsSendRole, "skymail:mails:write")
+	group := api.Group("/news_sends")
+	group.Get("/availability", sends.Availability)
+	group.Post("/preview", prepares, sends.Preview)
+	group.Post("/test", prepares, sends.Test)
+	group.Post("/count", prepares, sends.Count)
+	group.Post("/", auth.RequireAnyPermission(handlers.AnnouncementsSendRole), sends.Send)
 }

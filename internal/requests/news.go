@@ -25,3 +25,10 @@ type SendNews struct {
 	// Open and click tracking, by the rules of every person's send (SKYMAIL_TRACKING, SKYMAIL_TRACKING_OPERATOR).
 	Tracking bool `json:"tracking"`
 }
+
+// CountNewsSend asks how many a News send would reach (POST
+// /v1/news_sends/count): the live count of the send form.
+type CountNewsSend struct {
+	Slug     string           `json:"slug" validate:"required,max=200"`
+	Audience NewsSendAudience `json:"audience" validate:"required"`
+}

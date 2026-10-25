@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
@@ -112,12 +114,51 @@ func newNewsWorld(t *testing.T, enabled bool) *newsWorld {
 	}}
 
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
-	auth := middlewares.NewAuthMiddleware("skymail", claimsUserinfo(t), middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skymail", newsUserinfo(t), middlewares.AudienceOff)
 	api := protectedAPI(app, auth, nil)
 	m := mailer.NewMailer(store, mailer.SMTPConfig{}, mailer.SenderOn, mailer.WithSendLanes(mailer.SendLanes{Purpose: true}))
 	registerNewsSendRoutes(api, auth, handlers.NewNewsSendHandler(store, m, cms, audiences,
 		handlers.NewsSendOptions{Enabled: enabled, ReadMore: news.ReadMoreHome}))
 	return &newsWorld{t: t, store: store, app: app, cms: cms, audiences: audiences}
+}
+
+// newsUserinfo answers userinfo as claimsUserinfo does, and with the
+// bearer's test_email as its verified address and test_name as its name.
+func newsUserinfo(t *testing.T) string {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Split(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), ".")
+		if r.URL.Path != "/protocol/openid-connect/userinfo" || len(parts) != 3 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		payload, _ := base64.RawURLEncoding.DecodeString(parts[1])
+		var claims struct {
+			Sub   string   `json:"sub"`
+			Roles []string `json:"test_roles"`
+			Email string   `json:"test_email"`
+			Name  string   `json:"test_name"`
+		}
+		_ = json.Unmarshal(payload, &claims)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"sub": claims.Sub, "email": claims.Email, "email_verified": claims.Email != "", "name": claims.Name,
+			"resource_access": map[string]any{"skymail": map[string]any{"roles": claims.Roles}},
+		})
+	}))
+	t.Cleanup(server.Close)
+	return server.URL
+}
+
+// personBearer is a person's token with a verified address.
+func personBearer(t *testing.T, sub, email, name string, roles ...string) string {
+	t.Helper()
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": sub, "azp": "skymail-ui", "test_roles": roles,
+		"test_email": email, "test_name": name}).SignedString([]byte("fixture-only"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
 }
 
 func (w *newsWorld) seedTemplate() {
@@ -143,11 +184,16 @@ type newsSent struct {
 
 func (w *newsWorld) post(token string, body any) newsSent {
 	w.t.Helper()
+	return w.postTo("/v1/news_sends", token, body)
+}
+
+func (w *newsWorld) postTo(path, token string, body any) newsSent {
+	w.t.Helper()
 	raw, err := json.Marshal(body)
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/v1/news_sends", bytes.NewReader(raw))
+	request := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := w.app.Test(request, fiber.TestConfig{Timeout: 30 * time.Second})
@@ -343,5 +389,119 @@ func TestNewsSendRefusals(t *testing.T) {
 	}
 	if n := w.count(`SELECT count(*) FROM mail_tasks`) + w.count(`SELECT count(*) FROM mail_queue`); n != 0 {
 		t.Fatalf("a refused send wrote %d rows", n)
+	}
+}
+
+// The preview is the mail the send would queue, for the caller: the same
+// HTML as a queued row but for the recipient's own words and link; nothing
+// is written.
+func TestNewsSendPreviewIsTheSendsMail(t *testing.T) {
+	w := newNewsWorld(t, true)
+	w.seedTemplate()
+	preparer := personBearer(t, yk, "hazirlayan@example.org", "Hazırlayan Kişi", "skymail:access", "skymail:mails:write")
+
+	preview := w.postTo("/v1/news_sends/preview", preparer, newsSend("kayitlar", "teams", "/UYELER/ARGE/WEBLAB"))
+	if preview.status != fiber.StatusOK {
+		t.Fatalf("preview: %d %s", preview.status, preview.raw)
+	}
+	var rendered mailer.Rendered
+	if err := json.Unmarshal(preview.raw, &rendered); err != nil {
+		t.Fatal(err)
+	}
+	if rendered.Subject != "Duyuru: Kayıtlar açıldı" || !strings.Contains(rendered.HTML, "WEBLAB ekibinde olduğun için · WEBLAB · Duyurular") ||
+		!strings.Contains(rendered.HTML, `href="https://my.yildizskylab.com/communication-preferences"`) || strings.Contains(rendered.HTML, "<script") {
+		t.Fatalf("preview = %+v", rendered)
+	}
+	if n := w.count(`SELECT count(*) FROM mail_tasks`); n != 0 {
+		t.Fatalf("a preview wrote %d sends", n)
+	}
+
+	sent := w.post(bearer(t, yk, false, announcerRoles...), newsSend("kayitlar", "teams", "/UYELER/ARGE/WEBLAB"))
+	if sent.status != fiber.StatusCreated {
+		t.Fatalf("send: %d %s", sent.status, sent.raw)
+	}
+	var html string
+	if err := w.store.Conn.QueryRow(context.Background(), `SELECT body_html FROM mail_queue WHERE task_id = $1 AND recipient_email = 'ayse@example.org'`,
+		sent.result.ID).Scan(&html); err != nil {
+		t.Fatal(err)
+	}
+	ownWords := strings.NewReplacer("WEBLAB ekibinde olduğun için · Kulüp geneli · Duyurular", "",
+		"https://core.example/v1/communication-preferences/unsubscribe?t=01", "")
+	sampleWords := strings.NewReplacer("WEBLAB ekibinde olduğun için · WEBLAB · Duyurular", "",
+		"https://my.yildizskylab.com/communication-preferences", "")
+	if ownWords.Replace(html) != sampleWords.Replace(rendered.HTML) {
+		t.Fatalf("the preview's HTML differs from the send's beyond the recipient's words:\n%s\n---\n%s", rendered.HTML, html)
+	}
+}
+
+// A test mail goes to the caller's own address only, opens with [Deneme],
+// is no News send (no source, no "already received"), and at most 3 a minute.
+func TestNewsSendTestGoesToTheCallerOnly(t *testing.T) {
+	w := newNewsWorld(t, true)
+	w.seedTemplate()
+	preparer := personBearer(t, yk, "hazirlayan@example.org", "Hazırlayan Kişi", "skymail:access", "skymail:mails:write")
+
+	body := newsSend("kayitlar", "members")
+	body["recipient_email"] = "baskasi@example.org"
+	body["recipients"] = []string{"baskasi@example.org"}
+	for i := 0; i < handlers.NewsTestsPerMinute; i++ {
+		test := w.postTo("/v1/news_sends/test", preparer, body)
+		if test.status != fiber.StatusCreated {
+			t.Fatalf("test %d: %d %s", i+1, test.status, test.raw)
+		}
+	}
+	if s := w.postTo("/v1/news_sends/test", preparer, body); s.status != fiber.StatusTooManyRequests || s.error.Code != "news_send.test_rate_limited" {
+		t.Fatalf("the fourth test in a minute: %d %s", s.status, s.raw)
+	}
+	if n := w.count(`SELECT count(*) FROM mail_queue WHERE recipient_email = 'hazirlayan@example.org' AND subject = '[Deneme] Duyuru: Kayıtlar açıldı' AND source_ref IS NULL`); n != handlers.NewsTestsPerMinute {
+		t.Fatalf("test rows to the caller = %d", n)
+	}
+	if n := w.count(`SELECT count(*) FROM mail_queue WHERE recipient_email <> 'hazirlayan@example.org'`) + w.count(`SELECT count(*) FROM mail_tasks WHERE source_ref IS NOT NULL`); n != 0 {
+		t.Fatalf("a test reached someone else or became a News send: %d", n)
+	}
+	if s := w.postTo("/v1/news_sends/test", personBearer(t, yk, "", "", "skymail:access", "skymail:mails:write"), body); s.status != fiber.StatusConflict || s.error.Code != "news_send.no_test_address" {
+		t.Fatalf("no verified address: %d %s", s.status, s.raw)
+	}
+	if s := w.postTo("/v1/news_sends/test", personBearer(t, yk, "a@example.org", "", "skymail:access"), body); s.status != fiber.StatusForbidden {
+		t.Fatalf("without a role: %d %s", s.status, s.raw)
+	}
+}
+
+// The live count is the send's numbers without queueing: who would get it,
+// who already did, and the send of this audience if there is one.
+func TestNewsSendCountIsWhoASendWouldReach(t *testing.T) {
+	w := newNewsWorld(t, true)
+	w.seedTemplate()
+	preparer := personBearer(t, yk, "hazirlayan@example.org", "", "skymail:access", "skymail:mails:write")
+	count := func(audienceType string, teams ...string) handlers.NewsSendCount {
+		t.Helper()
+		body := newsSend("kayitlar", audienceType, teams...)
+		s := w.postTo("/v1/news_sends/count", preparer, map[string]any{"slug": body["slug"], "audience": body["audience"]})
+		if s.status != fiber.StatusOK {
+			t.Fatalf("count: %d %s", s.status, s.raw)
+		}
+		var answer handlers.NewsSendCount
+		if err := json.Unmarshal(s.raw, &answer); err != nil {
+			t.Fatal(err)
+		}
+		return answer
+	}
+	before := count("members")
+	if before.Recipients != 3 || before.Counts.AlreadyReceived != 0 || before.Counts.Skipped.NoUnsubscribeURL != 1 || before.AlreadySentTaskID != nil {
+		t.Fatalf("before = %+v", before)
+	}
+	team := w.post(bearer(t, yk, false, announcerRoles...), newsSend("kayitlar", "teams", "/UYELER/ARGE/WEBLAB"))
+	if team.status != fiber.StatusCreated {
+		t.Fatalf("team send: %d %s", team.status, team.raw)
+	}
+	after := count("members")
+	if after.Recipients != 1 || after.Counts.AlreadyReceived != 2 || after.AlreadySentTaskID != nil {
+		t.Fatalf("after the team = %+v", after)
+	}
+	if again := count("teams", "/UYELER/ARGE/WEBLAB"); again.AlreadySentTaskID == nil || *again.AlreadySentTaskID != team.result.ID || again.Recipients != 0 {
+		t.Fatalf("the team again = %+v", again)
+	}
+	if n := w.count(`SELECT count(*) FROM mail_tasks`); n != 1 {
+		t.Fatalf("counting wrote sends: %d", n)
 	}
 }
