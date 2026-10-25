@@ -329,6 +329,26 @@ type MailBounce struct {
 	ReceivedAt  time.Time `json:"received_at"`
 }
 
+// The NDR reader's Graph delta link, last poll and counts, one row a sender mailbox and mode. No personal data.
+type MailBounceReaderState struct {
+	Mailbox        string     `json:"mailbox"`
+	Mode           string     `json:"mode"`
+	DeltaLink      *string    `json:"delta_link"`
+	LastPolledAt   *time.Time `json:"last_polled_at"`
+	LastError      *string    `json:"last_error"`
+	Reports        int64      `json:"reports"`
+	NotDsn         int64      `json:"not_dsn"`
+	Unmatched      int64      `json:"unmatched"`
+	Hard           int64      `json:"hard"`
+	Soft           int64      `json:"soft"`
+	Delay          int64      `json:"delay"`
+	OtherRecipient int64      `json:"other_recipient"`
+	Duplicate      int64      `json:"duplicate"`
+	NoFailure      int64      `json:"no_failure"`
+	Unreadable     int64      `json:"unreadable"`
+	CreatedAt      time.Time  `json:"created_at"`
+}
+
 type MailFormSource struct {
 	ID                 uuid.UUID  `json:"id"`
 	OwnerSub           string     `json:"owner_sub"`
