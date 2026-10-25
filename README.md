@@ -104,7 +104,10 @@ yazar. Amaç, Keycloak'ın public adında `/admin`'i kenarda kapatabilmek
 (Keycloak'ın reverse proxy kılavuzu `/admin/`'i dışarı açmaz).
 
 Mail onayı bildirimlerindeki linkler `SKYMAIL_UI_URL` altına kurulur
-(varsayılan `https://mail.yildizskylab.com`).
+(varsayılan `https://iletisim.yildizskylab.com`, iletişim konsolunun adresi;
+iletişim-servisi 11). Eski `https://mail.yildizskylab.com` yolu ve sorguyu
+koruyarak kalıcı 301 ile yeni adrese yönlenir, eski postalardaki linkler
+çalışmaya devam eder.
 
 ## `/v1` token audience'ı (`V1_TOKEN_AUDIENCE_MODE`)
 
