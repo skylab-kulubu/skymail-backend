@@ -95,16 +95,37 @@ type NDR struct {
 // could not be recorded once.
 var ErrNoID = errors.New("the report has no id")
 
+// ErrUnreadable says the message is a delivery status notification that
+// cannot be read (a broken MIME structure, too many parts or recipients):
+// reading it again gives the same error, so the reader counts it and goes
+// on. The error never quotes the report.
+var ErrUnreadable = errors.New("the report cannot be read")
+
+// errDryRun rolls Evaluate's transaction back.
+var errDryRun = errors.New("dry run")
+
 // Process reads one report and records it. fqdn is SMTP_FQDN, the domain of
-// SkyMail's Message-IDs. An error is a report that could not be read or a
-// database failure: nothing was recorded, and the reader may try it again.
+// SkyMail's Message-IDs. An error is a report that could not be read
+// (ErrUnreadable, ErrNoID) or a database failure: nothing was recorded, and
+// the reader may try it again.
 func Process(ctx context.Context, store *database.Store, fqdn string, ndr NDR) (Outcome, error) {
+	return process(ctx, store, fqdn, ndr, true)
+}
+
+// Evaluate is Process without writing (the reader's dry-run): it runs the
+// same statements in a transaction it rolls back, so its outcome is what
+// Process would do now, a report recorded before being a duplicate.
+func Evaluate(ctx context.Context, store *database.Store, fqdn string, ndr NDR) (Outcome, error) {
+	return process(ctx, store, fqdn, ndr, false)
+}
+
+func process(ctx context.Context, store *database.Store, fqdn string, ndr NDR, commit bool) (Outcome, error) {
 	report, err := dsn.Parse(ndr.MIME)
 	if errors.Is(err, dsn.ErrNotDSN) {
 		return OutcomeNotDSN, nil
 	}
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", ErrUnreadable, err)
 	}
 	queueID, ok := report.QueueID(fqdn)
 	if !ok {
@@ -127,8 +148,14 @@ func Process(ctx context.Context, store *database.Store, fqdn string, ndr NDR) (
 	var outcome Outcome
 	err = store.InTx(ctx, func(q *database.Queries) error {
 		outcome, err = record(ctx, q, queueID, idHash, received, report.Recipients)
+		if err == nil && !commit {
+			return errDryRun
+		}
 		return err
 	})
+	if errors.Is(err, errDryRun) {
+		return outcome, nil
+	}
 	if err != nil {
 		return "", fmt.Errorf("record the report: %w", err)
 	}

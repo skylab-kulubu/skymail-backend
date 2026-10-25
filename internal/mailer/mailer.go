@@ -305,6 +305,9 @@ type mailerImpl struct {
 	// channels makes a worker's sender of each channel it sends (channel.go);
 	// tests replace them.
 	channels map[string]newChannelSender
+	// requestDSN asks the relay, when it offers DSN (RFC 3461), for a report
+	// of a failure only, with the headers only (WithDSNRequest).
+	requestDSN bool
 	// clientOptions are added to the workers' SMTP client options; tests
 	// set them.
 	clientOptions []mail.Option

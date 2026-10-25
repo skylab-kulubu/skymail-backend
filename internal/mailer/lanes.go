@@ -310,6 +310,13 @@ func WithSendLanes(lanes SendLanes) Option {
 	}
 }
 
+// WithDSNRequest asks the relay for delivery status notifications of a
+// failure only, with the returned mail's headers only (RFC 3461 RET=HDRS,
+// NOTIFY=FAILURE), when its EHLO offers DSN: the NDR reader's reports carry
+// less of the mail (hub ticket skymail-bounce-isleme 04, ADR 0073 decision
+// 9). main turns it on with SKYMAIL_BOUNCE_READER.
+func WithDSNRequest(on bool) Option { return func(m *mailerImpl) { m.requestDSN = on } }
+
 // tokenSource is a scope's access token (msauth.TokenSource).
 type tokenSource interface {
 	Token(ctx context.Context) (string, error)

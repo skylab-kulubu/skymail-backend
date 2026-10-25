@@ -116,7 +116,7 @@ func (m *mailerImpl) newEmailSender() (ChannelSender, error) {
 // smtpOptions are the options every SMTP client of a worker has: STARTTLS
 // required, each send bounded by sendBudget from its dial.
 func (m *mailerImpl) smtpOptions() []mail.Option {
-	return []mail.Option{
+	options := []mail.Option{
 		mail.WithDialContextFunc(dialWithin(m.sendBudget)),
 		mail.WithPort(m.smtpConfig.Port),
 		mail.WithTLSPolicy(mail.TLSMandatory),
@@ -125,6 +125,16 @@ func (m *mailerImpl) smtpOptions() []mail.Option {
 		// fail a send that has gone through.
 		mail.WithoutNoop(),
 	}
+	if m.requestDSN {
+		// RET=HDRS NOTIFY=FAILURE, only when the relay's EHLO offers DSN
+		// (go-mail checks): a remote server returns the headers, not the
+		// mail, and reports a failure only. Never mail.WithDSN(): its
+		// NOTIFY=SUCCESS would bring a report of every delivery.
+		options = append(options,
+			mail.WithDSNMailReturnType(mail.DSNMailReturnHeadersOnly),
+			mail.WithDSNRcptNotifyType(mail.DSNRcptNotifyFailure))
+	}
+	return options
 }
 
 // newSMTPClient is a worker's SMTP client of the off path: AUTH LOGIN (or
