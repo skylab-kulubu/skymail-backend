@@ -54,7 +54,7 @@ const (
 	approvalRequestedKey = "mail.approval-requested"
 	approvalResolvedKey  = "mail.approval-resolved"
 	// Where the SkyMail UI is when SKYMAIL_UI_URL does not say.
-	DefaultSkyMailUIURL = "https://mail.yildizskylab.com"
+	DefaultSkyMailUIURL = "https://iletisim.yildizskylab.com"
 	// Who sends the mail SkyMail sends of its own accord: an expiry's notice.
 	skymailSender = "skymail"
 )
