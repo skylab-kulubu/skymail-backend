@@ -372,9 +372,49 @@ ortaktır; Exchange'in dakikada 30 ileti sınırı kutu başınadır.
 Exchange Online dış alıcıyı `RCPT TO`'da reddetmez, postayı alır ve sonra
 gönderen kutusuna bir teslim raporu (NDR, RFC 3464) yollar. Bu raporları
 okuyan `internal/bounce` (`Process`) bir raporu kuyruk satırına bağlar ve
-kaydeder; raporu kutudan çeken okuyucu ayrı iştir (hub bileti
-skymail-bounce-isleme 04), bu sürümde yoktur. Bugün listeyi dolduran yol
-relay'in senkron kalıcı reddidir (aşağıda).
+kaydeder; raporları kutudan okuyucu çeker (`internal/bouncereader`,
+`SKYMAIL_BOUNCE_READER`, aşağıda; hub bileti skymail-bounce-isleme 04, ADR
+0073). Okuyucu kapalıyken listeyi dolduran yol relay'in senkron kalıcı
+reddidir (aşağıda).
+
+- **Okuyucu** (`SKYMAIL_BOUNCE_READER`, varsayılan `off`): her 5 dakikada
+  gönderen kutularının (`SKYMAIL_BOUNCE_MAILBOXES`) Gelen Kutusu'nu Graph'ın
+  delta sorgusuyla okur (`mailFolders/inbox/messages/delta`, yalnız
+  `internetMessageId` ve `receivedDateTime`); her yeni öğenin MIME'ını
+  (`$value`, en çok 10 MB) bellekte `internal/bounce`'a verir, saklamaz.
+  Kimlik gönderen şeritlerinin uygulamasıdır (`GRAPH_*`, `internal/msauth`,
+  kapsam Graph); yetki Exchange RBAC for Applications `Application Mail.Read`,
+  yalnız gönderen kutularına: okuyucu kutuda hiçbir şeyi silemez ya da
+  taşıyamaz (raporları kutunun saklama etiketi 30 günde siler). Birden çok
+  replikada aynı anda tek süreç okur (Postgres advisory lock). Okuyucu açıkken
+  SMTP postası, relay EHLO'da `DSN` ilan ediyorsa, `RET=HDRS NOTIFY=FAILURE`
+  ister: uzak sunucu postanın yalnız başlıklarını ve yalnız reddi bildirir
+  (`NOTIFY=SUCCESS` hiç istenmez).
+
+  | Değişken | Değer |
+  |---|---|
+  | `SKYMAIL_BOUNCE_READER` | `off` (ya da boş, varsayılan): hiçbir kutu okunmaz, başka değişken okunmaz. `dry-run`: okur, her raporun ne yapacağını sayar (`bounce.Evaluate`: aynı sorgular, geri alınan işlem), ret ve bastırma yazmaz. `on`: kaydeder ve bastırır. Başka değer açılışı durdurur |
+  | `SKYMAIL_BOUNCE_MAILBOXES` | `dry-run`/`on` için zorunlu: gönderen kutuları, virgülle ayrılmış yalın adresler (ör. `hesap@bildirim.yildizskylab.com,bilgi@bildirim.yildizskylab.com,skylab@duyuru.yildizskylab.com`); en çok 10 |
+  | `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_KEY`, `GRAPH_CLIENT_CERT` | `dry-run`/`on` için zorunlu; gönderen şeritlerininkiyle aynı değerler |
+
+  Okuyucunun kutudaki yeri (delta bağlantısı) ve sayıları
+  `mail_bounce_reader_state`'te kutu ve kip başına durur; `dry-run`'ın yeri
+  ayrıdır, yani `on`'a geçince Gelen Kutusu baştan okunur ve dry-run'ın
+  saydığı raporlar kaydedilir. Yarıda kalan okuma (Graph hatası, 401, 429)
+  delta bağlantısını ilerletmez; sonraki okuma aynı yerden başlar, daha önce
+  kaydedilen rapor `tekrar` sayılır. Okunamayan rapor (bozuk MIME, 10 MB'tan
+  büyük) sayılır ve geçilir. Graph'ın bağlantısı Graph'tan başka bir yere
+  gidiyorsa okuma durur (token oraya gitmez). Her okuma
+  `bounce reader: read the mailbox` satırına kutu ve sayıları yazar
+  (`kalici`, `yumusak`, `gecikme`, `eslesmedi`, `dsn_degil`, `alici_farkli`,
+  `tekrar`, `diger`, `okunamadi`); adres ve rapor metni yazılmaz. Açılış
+  satırı `bounce reader (SKYMAIL_BOUNCE_READER, SKYMAIL_BOUNCE_MAILBOXES)`.
+- **Bounce oranı** (`GET /v1/suppressions/bounces?days=7`,
+  `skymail:suppressions:manage`; giriş akışının "bounce %5'i aşarsa"
+  eşiği için): son `days` günde (1–90) gönderilen e-postalardan kaçının
+  sonradan kalıcı (`hard`), yumuşak (`soft`) ya da gecikme (`delay`) raporu
+  aldığı ve `hard_rate = hard / sent`; `reader` her kutunun son okuması,
+  hatası (Graph'ın durumu ve kodu) ve sayılarıdır, delta bağlantısı olmadan.
 
 - **Ayrıştırma** (`internal/dsn`, yalnız stdlib): üst tür `multipart/report;
   report-type=delivery-status` olmalı; yalnız `message/delivery-status`

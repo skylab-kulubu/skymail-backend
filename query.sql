@@ -2139,6 +2139,87 @@ WHERE address = ANY (sqlc.arg(addresses)::text[]);
 INSERT INTO mail_bounces (queue_id, source, kind, action, status, smtp_code)
 VALUES (sqlc.arg(queue_id), 'smtp', 'hard', 'failed', sqlc.narg(status)::text, sqlc.arg(smtp_code)::int);
 
+-- The Graph delta link the NDR reader's next poll of mailbox starts from in
+-- mode; no row (or a NULL link) reads the inbox from the start.
+-- name: GetBounceReaderDeltaLink :one
+SELECT delta_link
+FROM mail_bounce_reader_state
+WHERE mailbox = sqlc.arg(mailbox)::text
+  AND mode = sqlc.arg(mode)::text;
+
+-- Records one poll of a mailbox: its delta link when the poll reached the
+-- end (NULL keeps the one before, so a poll that failed half way starts
+-- again from there), when, its error (NULL: none) and what the reports it
+-- read came to, added to the counts.
+-- name: RecordBounceReaderPoll :exec
+INSERT INTO mail_bounce_reader_state (mailbox, mode, delta_link, last_polled_at, last_error, reports, not_dsn,
+                                      unmatched, hard, soft, delay, other_recipient, duplicate, no_failure,
+                                      unreadable)
+VALUES (sqlc.arg(mailbox)::text, sqlc.arg(mode)::text, sqlc.narg(delta_link)::text, sqlc.arg(polled_at)::timestamptz,
+        sqlc.narg(last_error)::text, sqlc.arg(reports)::bigint, sqlc.arg(not_dsn)::bigint,
+        sqlc.arg(unmatched)::bigint, sqlc.arg(hard)::bigint, sqlc.arg(soft)::bigint, sqlc.arg(delay)::bigint,
+        sqlc.arg(other_recipient)::bigint, sqlc.arg(duplicate)::bigint, sqlc.arg(no_failure)::bigint,
+        sqlc.arg(unreadable)::bigint)
+ON CONFLICT (mailbox, mode) DO UPDATE SET delta_link      = COALESCE(EXCLUDED.delta_link,
+                                                                     mail_bounce_reader_state.delta_link),
+                                          last_polled_at  = EXCLUDED.last_polled_at,
+                                          last_error      = EXCLUDED.last_error,
+                                          reports         = mail_bounce_reader_state.reports + EXCLUDED.reports,
+                                          not_dsn         = mail_bounce_reader_state.not_dsn + EXCLUDED.not_dsn,
+                                          unmatched       = mail_bounce_reader_state.unmatched + EXCLUDED.unmatched,
+                                          hard            = mail_bounce_reader_state.hard + EXCLUDED.hard,
+                                          soft            = mail_bounce_reader_state.soft + EXCLUDED.soft,
+                                          delay           = mail_bounce_reader_state.delay + EXCLUDED.delay,
+                                          other_recipient = mail_bounce_reader_state.other_recipient +
+                                                            EXCLUDED.other_recipient,
+                                          duplicate       = mail_bounce_reader_state.duplicate + EXCLUDED.duplicate,
+                                          no_failure      = mail_bounce_reader_state.no_failure + EXCLUDED.no_failure,
+                                          unreadable      = mail_bounce_reader_state.unreadable + EXCLUDED.unreadable;
+
+-- Every mailbox and mode the NDR reader has polled, without the delta link.
+-- name: ListBounceReaderStates :many
+SELECT mailbox,
+       mode,
+       last_polled_at,
+       last_error,
+       reports,
+       not_dsn,
+       unmatched,
+       hard,
+       soft,
+       delay,
+       other_recipient,
+       duplicate,
+       no_failure,
+       unreadable
+FROM mail_bounce_reader_state
+ORDER BY mailbox, mode;
+
+-- Of the e-mails sent in the last days days (still sent: a relay's refusal is
+-- failed), how many a report later said did not reach their address (hard),
+-- failed otherwise (soft) or were delayed. A row counts once in each.
+-- name: BounceRate :one
+SELECT count(*)                                                     AS sent,
+       count(*) FILTER (WHERE EXISTS (SELECT 1
+                                      FROM mail_bounces b
+                                      WHERE b.queue_id = q.id
+                                        AND b.kind = 'hard'
+                                        AND b.recipient_matched)) AS hard,
+       count(*) FILTER (WHERE EXISTS (SELECT 1
+                                      FROM mail_bounces b
+                                      WHERE b.queue_id = q.id
+                                        AND b.kind = 'soft'
+                                        AND b.recipient_matched)) AS soft,
+       count(*) FILTER (WHERE EXISTS (SELECT 1
+                                      FROM mail_bounces b
+                                      WHERE b.queue_id = q.id
+                                        AND b.kind = 'delay'
+                                        AND b.recipient_matched)) AS delay
+FROM mail_queue q
+WHERE q.channel = 'email'
+  AND q.status = 'sent'
+  AND q.sent_at >= now() - make_interval(days => sqlc.arg(days)::int);
+
 -- Removes a suppression: the address is mailed again. What it said is
 -- returned for the removal's record, never the address.
 -- name: DeleteSuppression :one

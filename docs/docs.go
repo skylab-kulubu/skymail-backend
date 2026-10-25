@@ -182,6 +182,101 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
+            "handlers.BounceReaderState": {
+                "properties": {
+                    "delay": {
+                        "type": "integer"
+                    },
+                    "duplicate": {
+                        "type": "integer"
+                    },
+                    "hard": {
+                        "type": "integer"
+                    },
+                    "last_error": {
+                        "description": "The last poll's failure, Graph's status and code (graph: 403\nErrorAccessDenied); null when it read the mailbox to the end.",
+                        "type": "string"
+                    },
+                    "last_polled_at": {
+                        "description": "null before the first poll that reached Graph.",
+                        "type": "string"
+                    },
+                    "mailbox": {
+                        "description": "The club's sender mailbox.",
+                        "example": "hesap@bildirim.yildizskylab.com",
+                        "type": "string"
+                    },
+                    "mode": {
+                        "enum": [
+                            "dry-run",
+                            "on"
+                        ],
+                        "type": "string"
+                    },
+                    "no_failure": {
+                        "type": "integer"
+                    },
+                    "not_dsn": {
+                        "type": "integer"
+                    },
+                    "other_recipient": {
+                        "type": "integer"
+                    },
+                    "reports": {
+                        "type": "integer"
+                    },
+                    "soft": {
+                        "type": "integer"
+                    },
+                    "unmatched": {
+                        "type": "integer"
+                    },
+                    "unreadable": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.BounceSummary": {
+                "properties": {
+                    "days": {
+                        "example": 7,
+                        "type": "integer"
+                    },
+                    "delay": {
+                        "example": 1,
+                        "type": "integer"
+                    },
+                    "hard": {
+                        "description": "Of them, how many a report said did not reach their address\n(permanent), failed otherwise (soft) or were delayed.",
+                        "example": 6,
+                        "type": "integer"
+                    },
+                    "hard_rate": {
+                        "description": "hard / sent; 0 when nothing was sent.",
+                        "example": 0.005,
+                        "type": "number"
+                    },
+                    "reader": {
+                        "description": "Each sender mailbox the reader has polled, in each mode.",
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.BounceReaderState"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "sent": {
+                        "description": "E-mails sent in the window (a relay's refusal is not sent).",
+                        "example": 1200,
+                        "type": "integer"
+                    },
+                    "soft": {
+                        "example": 2,
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
             "handlers.ChannelResult": {
                 "properties": {
                     "failed": {
@@ -6014,6 +6109,67 @@ const docTemplate = `{
                     }
                 },
                 "summary": "List the suppression list",
+                "tags": [
+                    "Suppressions"
+                ]
+            }
+        },
+        "/suppressions/bounces": {
+            "get": {
+                "description": "Of the e-mails sent in the last days days (1 to 90, 7 by default), how many a delivery status notification later said did not reach their address (hard), failed otherwise (soft) or were delayed, and hard_rate = hard / sent. reader is each sender mailbox's last poll and counts, without the reader's place in the mailbox. Needs skymail:suppressions:manage. No address of a person.",
+                "parameters": [
+                    {
+                        "description": "The window, in days (1 to 90)",
+                        "in": "query",
+                        "name": "days",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.BounceSummary"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "The bounce rate and the NDR reader's state",
                 "tags": [
                     "Suppressions"
                 ]

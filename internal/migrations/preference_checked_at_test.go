@@ -18,8 +18,8 @@ func TestPreferenceHeldRecipientsAreSkipped(t *testing.T) {
 	database := testpostgres.StartDatabase(t)
 	ctx := context.Background()
 	runner := migrationRunner(t, database.URL)
-	if err := runner.Migrate(ownEventStatement); err != nil {
-		t.Fatalf("migrate to %d: %v", ownEventStatement, err)
+	if err := runner.Migrate(bounceReaderState); err != nil {
+		t.Fatalf("migrate to %d: %v", bounceReaderState, err)
 	}
 	var templateID, task string
 	if err := database.Pool.QueryRow(ctx, `

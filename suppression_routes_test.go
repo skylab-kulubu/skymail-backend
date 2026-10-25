@@ -208,3 +208,58 @@ func TestASendCountsItsSuppressedAndUndeliveredRecipients(t *testing.T) {
 		}
 	}
 }
+
+// The bounce rate (login-ux spec §8's "bounce > 5%" threshold) and the NDR
+// reader's state are read with skymail:suppressions:manage: of the e-mails
+// sent in the last days, how many a report said did not reach their address,
+// and each mailbox's last poll and counts, without its delta link.
+func TestTheBounceRateAndTheReadersStateNeedTheRole(t *testing.T) {
+	app, store := suppressionApp(t, handlers.SuppressionsManageRole)
+	ctx := context.Background()
+	if _, err := store.Conn.Exec(ctx, `
+		UPDATE mail_queue SET sent_at = now() - interval '1 day' WHERE status = 'sent';
+		INSERT INTO mail_bounce_reader_state (mailbox, mode, delta_link, last_polled_at, reports, hard)
+		VALUES ('hesap@bildirim.example.org', 'on', 'https://graph.microsoft.com/v1.0/users/x/mailFolders/inbox/messages/delta?$deltatoken=secret-place', now(), 3, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	response, body := call(t, app, http.MethodGet, "/v1/suppressions/bounces?days=7")
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d: %s", response.StatusCode, body)
+	}
+	var got struct {
+		Days     int     `json:"days"`
+		Sent     int64   `json:"sent"`
+		Hard     int64   `json:"hard"`
+		Soft     int64   `json:"soft"`
+		Delay    int64   `json:"delay"`
+		HardRate float64 `json:"hard_rate"`
+		Reader   []struct {
+			Mailbox string `json:"mailbox"`
+			Mode    string `json:"mode"`
+			Reports int64  `json:"reports"`
+			Hard    int64  `json:"hard"`
+		} `json:"reader"`
+	}
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Days != 7 || got.Sent != 2 || got.Hard != 1 || got.HardRate != 0.5 || len(got.Reader) != 1 ||
+		got.Reader[0].Mailbox != "hesap@bildirim.example.org" || got.Reader[0].Reports != 3 || got.Reader[0].Hard != 1 {
+		t.Errorf("bounces = %+v", got)
+	}
+	for _, secret := range []string{"deltatoken", "secret-place", "ayse", "@uzak"} {
+		if strings.Contains(body, secret) {
+			t.Errorf("the answer holds %q: %s", secret, body)
+		}
+	}
+	for _, days := range []string{"0", "91", "x"} {
+		if response, _ := call(t, app, http.MethodGet, "/v1/suppressions/bounces?days="+days); response.StatusCode != http.StatusBadRequest {
+			t.Errorf("days=%s: status = %d, want 400", days, response.StatusCode)
+		}
+	}
+
+	other, _ := suppressionApp(t, handlers.UnsubscribesReactivateRole)
+	if response, _ := call(t, other, http.MethodGet, "/v1/suppressions/bounces"); response.StatusCode != http.StatusForbidden {
+		t.Errorf("without skymail:suppressions:manage: status = %d, want 403", response.StatusCode)
+	}
+}

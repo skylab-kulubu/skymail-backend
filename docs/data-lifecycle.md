@@ -263,6 +263,7 @@ bastırma listesi"; hub spec skymail-bounce-isleme §5):
 | `mail_suppressions` (lower-cased address, `recipient_sub`, `source`, `reason_code` — codes only —, first and last seen, count, last queue row, `exempt_flagged_at`) | until an operator removes it (`DELETE /v1/suppressions/{id}`) or the person is erased: nothing removes it by itself (Yusuf, 2026-10-20) | Account erasure deletes the person's |
 | `mail_suppression_removals` (who, when, the removed row's source, code, count and first seen) — no address | without end: the record of who removed what | Account erasure replaces the actor with Silinmiş kullanıcı |
 | `mail_queue.suppressed_but_sent` | with the row | — |
+| `mail_bounce_reader_state` (a sender mailbox — the club's, not a person's —, the reader's mode, Graph's delta link, last poll, its error as Graph's status and code, counts) — no personal data | while the reader reads the mailbox | — |
 
 A recipient at a suppressed address is written failed when the send is
 queued (`suppressed: <source> <code>`), never sent; account mail
