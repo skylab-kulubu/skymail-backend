@@ -163,21 +163,21 @@ func TestBodyHTMLTurnsPlainTextIntoParagraphs(t *testing.T) {
 func TestVariablesOfARecord(t *testing.T) {
 	record := Record{Slug: "kayitlar", Title: "Kayıtlar açıldı", Summary: "Özet", Body: "Gövde", Kind: KindAnnouncement,
 		HeroImage: "javascript:alert(1)", Cta: &Link{Href: "https://forms.example/f"}}
-	vars := Variables(record, FormatSummary, "", "", ReadMoreHome)
+	vars := Variables(record, FormatSummary, "", "", MailOptions{ReadMore: ReadMoreHome})
 	if vars["Subject"] != "Duyuru: Kayıtlar açıldı" || vars["Preheader"] != "Özet" || vars["BodyHtml"] != "" || vars["FullBody"] != false {
 		t.Fatalf("vars = %v", vars)
 	}
 	if vars["ReadMoreUrl"] != "https://yildizskylab.com/" || vars["HeroUrl"] != "" || vars["CtaHref"] != "https://forms.example/f" || vars["CtaLabel"] != "Bağlantıyı aç" {
 		t.Fatalf("vars = %v", vars)
 	}
-	vars = Variables(record, FormatFull, " Kendi konum ", "Önizleme", ReadMorePages)
+	vars = Variables(record, FormatFull, " Kendi konum ", "Önizleme", MailOptions{ReadMore: ReadMorePages})
 	if vars["Subject"] != "Kendi konum" || vars["Preheader"] != "Önizleme" || vars["BodyHtml"] != "<p>Gövde</p>" || vars["KindLabel"] != "Duyuru" {
 		t.Fatalf("vars = %v", vars)
 	}
 	if vars["ReadMoreUrl"] != "https://yildizskylab.com/duyurular/kayitlar" {
 		t.Fatalf("read more = %v", vars["ReadMoreUrl"])
 	}
-	news := Variables(Record{Slug: "a", Title: "Haber", Body: "b", Kind: KindNews}, FormatFull, "", "", ReadMorePages)
+	news := Variables(Record{Slug: "a", Title: "Haber", Body: "b", Kind: KindNews}, FormatFull, "", "", MailOptions{ReadMore: ReadMorePages})
 	if news["Subject"] != "Haber" || !strings.HasSuffix(news["ReadMoreUrl"].(string), "/haberler/a") {
 		t.Fatalf("news vars = %v", news)
 	}
@@ -192,5 +192,43 @@ func TestAudienceKey(t *testing.T) {
 	b := AudienceKey(AudienceTypeTeams, []string{"/UYELER/A", "/UYELER/B"})
 	if a != b || a != "teams:/UYELER/A,/UYELER/B" {
 		t.Errorf("keys %q %q", a, b)
+	}
+}
+
+// A page that does not reach core says why without its address, which
+// carries the last user id of the page before.
+func TestCoreErrorsCarryNoUserID(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls > 1 {
+			hijacker, _ := w.(http.Hijacker)
+			conn, _, _ := hijacker.Hijack()
+			_ = conn.Close()
+			return
+		}
+		_, _ = io.WriteString(w, `{"items":[],"next":"1a000000-0000-4000-8000-0000000000ff","counts":{},"skipped":{}}`)
+	}))
+	t.Cleanup(server.Close)
+	_, err := NewCore(server.URL, token("servis"), nil).Resolve(context.Background(), AudienceRequest{Type: AudienceTypeMembers})
+	if err == nil || strings.Contains(err.Error(), "1a000000") || strings.Contains(err.Error(), "after=") {
+		t.Fatalf("error = %v, want one without the page's address", err)
+	}
+}
+
+// A cover is shown only over https from the club's hosts.
+func TestCoverOnlyFromTheClubsHosts(t *testing.T) {
+	hosts := MailOptions{ImageHosts: DefaultImageHosts}
+	for link, want := range map[string]string{
+		"https://api.yildizskylab.com/v1/media/a.png": "https://api.yildizskylab.com/v1/media/a.png",
+		"https://yildizskylab.com/a.png":              "https://yildizskylab.com/a.png",
+		"http://api.yildizskylab.com/a.png":           "",
+		"https://tracker.example/p.gif":               "",
+		"https://yildizskylab.com.evil.example/a.png": "",
+		"https://evilyildizskylab.com/a.png":          "",
+	} {
+		if got := Variables(Record{Title: "t", Body: "b", HeroImage: link}, FormatFull, "", "", hosts)["HeroUrl"]; got != want {
+			t.Errorf("HeroUrl(%q) = %q, want %q", link, got, want)
+		}
 	}
 }

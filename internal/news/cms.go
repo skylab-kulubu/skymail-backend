@@ -115,7 +115,7 @@ func (c *CMS) Get(ctx context.Context, slug string) (Record, error) {
 	request.Header.Set("Accept", "application/json")
 	response, err := c.http.Do(request)
 	if err != nil {
-		return Record{}, fmt.Errorf("news cms: %w", err)
+		return Record{}, fmt.Errorf("news cms: %w", withoutURL(err))
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == http.StatusNotFound {

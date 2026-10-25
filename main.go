@@ -179,7 +179,7 @@ func main() {
 	if err := consentGate.CheckWith(sendLanes); err != nil {
 		log.Fatal().Err(err).Msg("invalid contact consent configuration")
 	}
-	newsSends, err := newsSendConfigFromEnv(config.Value, trackingConfig.CoreURL)
+	newsSends, err := newsSendConfigFromEnv(config.Value, trackingConfig.CoreURL, sendLanes)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid News send configuration")
 	}

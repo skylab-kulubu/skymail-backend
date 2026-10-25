@@ -31,6 +31,10 @@ const NewsSendEnv = "SKYMAIL_NEWS_SEND"
 // 11) or pages (/haberler/<slug>, /duyurular/<slug>).
 const NewsReadMoreEnv = "SKYMAIL_NEWS_READ_MORE"
 
+// maxNewsSlug is the longest slug a send keeps (mail_tasks.source_ref is
+// news:<slug> of at most 200; requests.SendNews asks the same).
+const maxNewsSlug = 200
+
 // Why a person core answered is not queued, beside core's own skips.
 const skipNoUnsubscribeURL = "no_unsubscribe_url"
 
@@ -55,6 +59,8 @@ var (
 		"A named team is no team (core: an area, a leaders' or Privileged group, or an unknown one).", fiber.StatusBadRequest)
 	errNewsAudienceUnavailable = apperrors.New("news_send.audience_unavailable",
 		"core did not answer who the record goes to. Nothing was queued; retry.", fiber.StatusServiceUnavailable)
+	errNewsSlugTooLong = apperrors.New("news_send.slug_too_long",
+		"The record's slug is longer than 200 characters: SkyMail keeps a News send's source as news:<slug> of at most 200.", fiber.StatusBadRequest)
 	errNewsNoRecipients = apperrors.New("news_send.no_recipients",
 		"Nobody is left to send the record to: params says who was left out and why.", fiber.StatusUnprocessableEntity)
 )
@@ -75,6 +81,13 @@ type NewsSendOptions struct {
 	Enabled bool
 	// ReadMore is SKYMAIL_NEWS_READ_MORE: news.ReadMoreHome or ReadMorePages.
 	ReadMore string
+	// ImageHosts are SKYMAIL_NEWS_IMAGE_HOSTS: the hosts a record's cover
+	// may come from; a cover from anywhere else is left out.
+	ImageHosts []string
+}
+
+func (o NewsSendOptions) mail() news.MailOptions {
+	return news.MailOptions{ReadMore: o.ReadMore, ImageHosts: o.ImageHosts}
 }
 
 type NewsSendHandler interface {
@@ -183,6 +196,9 @@ func (h *newsSendHandlerImpl) Send(c fiber.Ctx) error {
 		log.Error().Err(err).Msg("news send: the CMS did not answer the record")
 		return errNewsCMSUnavailable
 	}
+	if len(record.Slug) > maxNewsSlug {
+		return errNewsSlugTooLong
+	}
 	if record.Audience != news.AudiencePublic {
 		return errNewsPrivate
 	}
@@ -222,7 +238,7 @@ func (h *newsSendHandlerImpl) Send(c fiber.Ctx) error {
 			OptedOut: audience.Skipped.OptedOut, DuplicateEmail: audience.Skipped.DuplicateEmail}}
 	recipients, category := newsRecipients(audience.People, record.Kind, &counts)
 
-	variables, err := json.Marshal(news.Variables(record, params.Format, params.Subject, params.Preheader, h.options.ReadMore))
+	variables, err := json.Marshal(news.Variables(record, params.Format, params.Subject, params.Preheader, h.options.mail()))
 	if err != nil {
 		return err
 	}

@@ -817,8 +817,9 @@ bileti duyuru-haber 06; ADR 0067). Varsayılan kapalı; kapalıyken uç
 
 | Değişken | Anlamı |
 |---|---|
-| `SKYMAIL_NEWS_SEND` | `off` (varsayılan) ya da `on`. `on` iken `SKYMAIL_NEWS_CMS_URL` ve `CORE_URL` zorunlu; yoksa açılış durur |
+| `SKYMAIL_NEWS_SEND` | `off` (varsayılan) ya da `on`. `on` iken `SKYMAIL_NEWS_CMS_URL`, `CORE_URL`, `SKYMAIL_LIST_UNSUBSCRIBE=on` ve `SKYMAIL_MAIL_PURPOSE=on` zorunlu; biri eksikse açılış durur (haber postası tek tık çıkış başlığı ya da amacı, kategorisi ve beyanı olmadan gitmez) |
 | `SKYMAIL_NEWS_CMS_URL` | inscribed'ın adresi, `/cms` yolu olmadan (`http://inscribed:8080` ya da `https://api.yildizskylab.com/api`) |
+| `SKYMAIL_NEWS_IMAGE_HOSTS` | kapak görselinin gelebileceği hostlar, virgülle; her biri alt alan adlarını da kapsar. Varsayılan `yildizskylab.com`. Kapak yalnız `https` ve bu hostlardan gösterilir, öteki atlanır (üçüncü taraf görseli fiilen bir açılma pikseli olur) |
 | `SKYMAIL_NEWS_READ_MORE` | "Devamını oku" nereye gider: `home` (varsayılan, sitenin ana sayfası; sitenin haber sayfaları gelene kadar, bilet 11) ya da `pages` (`/haberler/<slug>`, `/duyurular/<slug>`) |
 
 - **Yetki.** Yalnız `skymail:announcements:send` (ADMIN, YK; Karar D4)
@@ -845,7 +846,10 @@ bileti duyuru-haber 06; ADR 0067). Varsayılan kapalı; kapalıyken uç
   başarısız yazılan satır (bastırılmış ya da çıkmış adres, render hatası)
   `source_ref` taşımaz.
 - **Posta.** System template `club.news` (skymail-frontend, Template seed);
-  yoksa `409 news_send.template_missing`. Toplu şerit, `duyuru` amacı ve
+  yoksa `409 news_send.template_missing`. Kanonik slug 200 karakteri aşarsa
+  `400 news_send.slug_too_long`. Birden çok ekipli gönderimde görevin
+  kategorisi core'un ilk `team:` kategorisidir (rapor sütunu); çıkış
+  bağlantısı her kişide kendi kategorilerini kapatır. Toplu şerit, `duyuru` amacı ve
   core'un kategorisi (`SKYMAIL_MAIL_PURPOSE` açıkken), List-Unsubscribe
   satırın core bağlantısından (`SKYMAIL_LIST_UNSUBSCRIBE` açıkken). Gövde
   e-posta izin listesinden geçer; haber için `s`, `code`, `pre`, `hr` eklendi.

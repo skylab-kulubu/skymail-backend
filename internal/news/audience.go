@@ -187,7 +187,7 @@ func (c *Core) call(ctx context.Context, query url.Values, asked AudienceRequest
 	request.Header.Set("Accept", "application/json")
 	response, err := c.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("news audience: %w", err)
+		return fmt.Errorf("news audience: %w", withoutURL(err))
 	}
 	defer func() { _ = response.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxPage+1))
@@ -212,4 +212,15 @@ func (c *Core) call(ctx context.Context, query url.Values, asked AudienceRequest
 		return errors.New("news audience: core's answer is off the contract")
 	}
 	return nil
+}
+
+// withoutURL is a request's error without the address it was sent to: a
+// page's address carries the last user id of the page before (?after=), a
+// person's pseudonymous id, which logs never hold.
+func withoutURL(err error) error {
+	var failed *url.Error
+	if errors.As(err, &failed) {
+		return fmt.Errorf("%s: %w", failed.Op, failed.Err)
+	}
+	return err
 }
