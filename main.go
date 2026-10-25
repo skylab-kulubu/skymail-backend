@@ -34,6 +34,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
+	"github.com/skylab-kulubu/skymail-backend/internal/news"
 	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
 	"github.com/skylab-kulubu/skymail-backend/internal/unsubscribe"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
@@ -178,6 +179,10 @@ func main() {
 	if err := consentGate.CheckWith(sendLanes); err != nil {
 		log.Fatal().Err(err).Msg("invalid contact consent configuration")
 	}
+	newsSends, err := newsSendConfigFromEnv(config.Value, trackingConfig.CoreURL, sendLanes)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid News send configuration")
+	}
 	if (consentGate.Promotional || consentGate.ListConsent) && trackingConfig.CoreURL == "" {
 		log.Fatal().Msg("SKYMAIL_PROMOTIONAL=on and SKYMAIL_LIST_CONSENT=on need CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
 	}
@@ -226,6 +231,7 @@ func main() {
 	logSendLanes(sendLanes)
 	logBounceReader(bounceReaderConfig)
 	logUnsubscribeLink(unsubscribeConfig)
+	logNewsSend(newsSends)
 	if trackingConfig.CoreURL != "" {
 		consentGate.Core = consent.NewClient(trackingConfig.CoreURL, kcClient, nil)
 	}
@@ -327,6 +333,8 @@ func main() {
 	registerMailApprovalRoutes(api, authMiddleware, approvalHandler)
 	registerNotificationRoutes(api, authMiddleware, handlers.NewNotificationHandler(db, mailerService, kcClient))
 	registerSuppressionRoutes(api, authMiddleware, handlers.NewSuppressionHandler(db))
+	registerNewsSendRoutes(api, authMiddleware, handlers.NewNewsSendHandler(db, mailerService,
+		news.NewCMS(newsSends.CMSURL, nil), news.NewCore(trackingConfig.CoreURL, kcClient, nil), newsSends.Options))
 
 	// The background work's context: shutdown cancels it only after the
 	// mailer has stopped (or its time ran out), which cuts off a send still

@@ -20,10 +20,16 @@ import (
 // data-pm-no-track). Such a link keeps its own address and is never sent
 // through /t/ (tracking.Links, tracking.Decorate). No other data- attribute
 // passes. There is no switch for a whole send.
+//
+// A News record's body (POST /v1/news_sends; hub ticket duyuru-haber 06,
+// SPEC §5.7 G7) goes through the same list, which also keeps what its editor
+// writes beyond the free body's: struck-through text, code, a preformatted
+// block and a rule. Images and tables stay out.
 var emailPolicy = sync.OnceValue(func() *bluemonday.Policy {
 	p := bluemonday.NewPolicy()
 
-	p.AllowElements("p", "br", "strong", "b", "em", "i", "u", "ul", "ol", "li", "h2", "h3", "blockquote")
+	p.AllowElements("p", "br", "strong", "b", "em", "i", "u", "ul", "ol", "li", "h2", "h3", "blockquote",
+		"s", "code", "pre", "hr")
 	p.AllowAttrs("href").OnElements("a")
 	p.AllowAttrs(tracking.NoTrackAttribute).Matching(noTrackValue).OnElements("a")
 	p.AllowURLSchemes("http", "https", "mailto")

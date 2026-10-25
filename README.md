@@ -812,6 +812,75 @@ kuyruğa alır. `Idempotency-Key` zorunlu; yalnız servis hesabı ve
 (`PUT /v1/notification_types/{key}`). Kanallar e-posta ve uygulama içi kutu.
 Sözleşme: [`docs/notifications.md`](docs/notifications.md).
 
+## Haberden gönderim (`POST /v1/news_sends`, `SKYMAIL_NEWS_SEND`)
+
+Yayımlanmış bir News kaydını (inscribed `news`) bir kitleye postalar (hub
+bileti duyuru-haber 06; ADR 0067). Varsayılan kapalı; kapalıyken uç
+`503 news_send.not_enabled` döner.
+
+| Değişken | Anlamı |
+|---|---|
+| `SKYMAIL_NEWS_SEND` | `off` (varsayılan) ya da `on`. `on` iken `SKYMAIL_NEWS_CMS_URL`, `CORE_URL`, `SKYMAIL_LIST_UNSUBSCRIBE=on` ve `SKYMAIL_MAIL_PURPOSE=on` zorunlu; biri eksikse açılış durur (haber postası tek tık çıkış başlığı ya da amacı, kategorisi ve beyanı olmadan gitmez) |
+| `SKYMAIL_NEWS_CMS_URL` | inscribed'ın adresi, `/cms` yolu olmadan (`http://inscribed:8080` ya da `https://api.yildizskylab.com/api`) |
+| `SKYMAIL_NEWS_IMAGE_HOSTS` | kapak görselinin gelebileceği hostlar, virgülle; her biri alt alan adlarını da kapsar. Varsayılan `yildizskylab.com`. Kapak yalnız `https` ve bu hostlardan gösterilir, öteki atlanır (üçüncü taraf görseli fiilen bir açılma pikseli olur) |
+| `SKYMAIL_NEWS_READ_MORE` | "Devamını oku" nereye gider: `home` (varsayılan, sitenin ana sayfası; sitenin haber sayfaları gelene kadar, bilet 11) ya da `pages` (`/haberler/<slug>`, `/duyurular/<slug>`) |
+
+- **Yetki.** Yalnız `skymail:announcements:send` (ADMIN, YK; Karar D4)
+  doğrudan gönderir. Öteki kişilerin Mail onayına sunması sonraki dilimde.
+- **Kayıt.** inscribed'dan anonim okunur (`GET /cms/collections/news/{slug}`).
+  Bilinmeyen ya da arşivli kayıt `404 news_send.not_found`. Faz 1'de yalnız
+  herkese açık kayıt postalanır; başka görünürlük `409 news_send.private_record`.
+  Şema v2'nin alanları yoksa anlamları geçerli: `kind` yoksa `haber`,
+  `audience` yoksa `herkes`; düz metin gövde paragraflara çevrilir.
+- **Anlık görüntü.** Kayıt gönderimde olduğu gibi `mail_tasks.source_snapshot`'a
+  yazılır, sürümüyle (`source_version`). Sonraki düzenleme web'i değiştirir,
+  postayı ve raporu değiştirmez.
+- **Kitle core'dan.** `POST /v1/audiences/resolve` (core `docs/news-audience.md`),
+  SkyMail'in servis hesabıyla, 500'lük sayfalarla. core tercihi kapalı,
+  devre dışı, doğrulanmamış ve adressiz hesabı dışarıda bırakır, kişiye
+  kendi çıkış bağlantısını ve "neden aldın" metnini verir. Bağlantısız kişi
+  kuyruğa alınmaz (`skipped.no_unsubscribe_url`). core cevap vermezse hiçbir
+  şey yazılmaz: `503 news_send.audience_unavailable`.
+- **Bir kez.** Bir kaydın postası bir posta kutusuna bir kez gider:
+  `mail_queue.source_ref = news:<slug>` ve `(source_ref, lower(recipient_email))`
+  kısmi tekil indeksi. Önce ekibe sonra bütün üyelere gönderilirse ekiptekiler
+  `already_received` sayılır. Aynı kayıt aynı kitleye ikinci kez
+  `409 news_send.already_sent` (`params.task_id`) döner. Kuyruğa alırken
+  başarısız yazılan satır (bastırılmış ya da çıkmış adres, render hatası)
+  `source_ref` taşımaz.
+- **Posta.** System template `club.news` (skymail-frontend, Template seed);
+  yoksa `409 news_send.template_missing`. Kanonik slug 200 karakteri aşarsa
+  `400 news_send.slug_too_long`. Birden çok ekipli gönderimde görevin
+  kategorisi core'un ilk `team:` kategorisidir (rapor sütunu); çıkış
+  bağlantısı her kişide kendi kategorilerini kapatır. Toplu şerit, `duyuru` amacı ve
+  core'un kategorisi (`SKYMAIL_MAIL_PURPOSE` açıkken), List-Unsubscribe
+  satırın core bağlantısından (`SKYMAIL_LIST_UNSUBSCRIBE` açıkken). Gövde
+  e-posta izin listesinden geçer; haber için `s`, `code`, `pre`, `hr` eklendi.
+  Konu varsayılanı başlık, duyuruda başında "Duyuru: ".
+- **Şablon değişkenleri.** Gönderimin: `Subject`, `Preheader`, `Title`,
+  `Summary`, `BodyHtml` (`safeHTML` ile; yalnız `format=full`), `FullBody`,
+  `HeroUrl`, `HeroAlt`, `CtaHref`, `CtaLabel`, `ReadMoreUrl`, `KindLabel`.
+  Alıcının (core'dan): `AudienceReason`, `CategoryLabel`, `UnsubscribeUrl`.
+- **Rıza ve çıkış.** Alıcıların hepsi hesaptır (`recipient_sub`), bu yüzden
+  `SKYMAIL_LIST_CONSENT`'in hesapsız adres kuralı bu gönderime uygulanmaz.
+  SkyMail'in çıkış kaydı (`mail_unsubscribes`) kuyruğa alırken uygulanır.
+- **Günlük.** Yalnız sayılar (`news_send_queued`): kişi, adres, bağlantı ve
+  kaydın metni yazılmaz.
+- **Önizleme, deneme, canlı sayı (bilet 07, 08).** `skymail:announcements:send`
+  ya da `skymail:mails:write` ile:
+  - `POST /v1/news_sends/preview`: gönderimin kuyruğa alacağı konu, HTML ve
+    düz metin, çağıran okur olarak (örnek çıkış bağlantısı: tercihler sayfası;
+    "neden aldın" core'un biçiminde örnek). Hiçbir şey yazılmaz.
+  - `POST /v1/news_sends/test`: postayı yalnız çağıranın token'daki doğrulanmış
+    adresine gönderir; konu "[Deneme]" ile başlar, kaynağı yoktur ("bir kez"e
+    ve rapora girmez). Örnek çıkış bağlantısı yalnız gövdededir, List-Unsubscribe
+    başlığı yoktur. Kişi başına dakikada en çok 3 (`429`).
+  - `POST /v1/news_sends/count`: core'un yalnız sayıları (`countOnly`, adres
+    okunmaz): üyeler, takipçiler, atlananlar; `already_received` kaydın bugüne
+    dek ulaştığı posta kutusu sayısı (bu kitleden atlanacakların üst sınırı;
+    kesin sayı gönderimde); bu kitleye gönderim varsa `already_sent_task_id`.
+  - `GET /v1/news_sends/availability`: `SKYMAIL_NEWS_SEND` açık mı.
+
 ## Uygulama içi kutu (`/v1/me/inbox`)
 
 Türün kanallarında `inbox` varsa her alıcıya, tercihine bakılmadan, bir kutu

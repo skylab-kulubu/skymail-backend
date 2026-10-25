@@ -407,6 +407,8 @@ type MailQueue struct {
 	SuppressedButSent bool `json:"suppressed_but_sent"`
 	// The recipient's one-click unsubscribe link, as core signed it; null for a row without one. Never served.
 	ListUnsubscribeUrl *string `json:"-"`
+	// news:<slug> on a row of a News send queued to go: the key of the record's once-per-mailbox rule.
+	SourceRef *string `json:"source_ref"`
 }
 
 type MailSendWindow struct {
@@ -480,7 +482,14 @@ type MailTask struct {
 	TransactionalStatement  *bool   `json:"transactional_statement"`
 	CommercialContentAbsent *bool   `json:"commercial_content_absent"`
 	// On a duyuru send to a list or a group: the sender's statement that the mail is about the list's own event or work (s6 row 15); NULL otherwise.
-	OwnEventStatement *bool `json:"own_event_statement"`
+	OwnEventStatement *bool   `json:"own_event_statement"`
+	SourceKind        *string `json:"source_kind"`
+	SourceRef         *string `json:"source_ref"`
+	SourceVersion     *int    `json:"source_version"`
+	// The News record the send was made of, as inscribed answered it then; no recipient.
+	SourceSnapshot []byte  `json:"source_snapshot"`
+	SourceAudience *string `json:"source_audience"`
+	SourceCounts   []byte  `json:"source_counts"`
 }
 
 // A send's links that are the same for every recipient, each with its random token: the only addresses /t/c redirects to.

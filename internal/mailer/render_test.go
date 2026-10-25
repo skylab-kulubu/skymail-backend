@@ -179,3 +179,27 @@ func TestParseMailTemplatesReturnsAllThreeWhenValid(t *testing.T) {
 		t.Errorf("subject rendered %q, want %q", got, "Merhaba Ali")
 	}
 }
+
+// A recipient's own variables (a News send's AudienceReason, core's words for
+// why the person gets it) render over the send's, and never over the
+// recipient's address, name or unsubscribe link (duyuru-haber 06).
+func TestRecipientVariablesRenderOverTheSends(t *testing.T) {
+	rendered, err := Render("{{.Title}}", "{{.AudienceReason}} {{.Email}}",
+		`<p>{{.AudienceReason}} · {{.CategoryLabel}} · {{.FullName}} · {{.UnsubscribeUrl}}</p>`,
+		[]byte(`{"Title":"Yeni dönem","AudienceReason":"gönderimin","CategoryLabel":"Kulüp geneli"}`),
+		RecipientInfo{FullName: "Ayşe Kaya", Email: "ayse@example.org", UnsubscribeURL: "https://core.example/u?t=1",
+			Variables: map[string]string{"AudienceReason": "AIRLAB ekibinde olduğun için", "Email": "baska@example.org",
+				"FullName": "Başkası", "UnsubscribeUrl": "https://evil.example/"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered.Subject != "Yeni dönem" {
+		t.Errorf("subject = %q", rendered.Subject)
+	}
+	if want := "AIRLAB ekibinde olduğun için ayse@example.org"; rendered.PlainText != want {
+		t.Errorf("plain text = %q, want %q", rendered.PlainText, want)
+	}
+	if want := "<p>AIRLAB ekibinde olduğun için · Kulüp geneli · Ayşe Kaya · https://core.example/u?t=1</p>"; rendered.HTML != want {
+		t.Errorf("html = %q, want %q", rendered.HTML, want)
+	}
+}

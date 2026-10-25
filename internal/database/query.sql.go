@@ -847,6 +847,27 @@ func (q *Queries) CountMailingLists(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countRecentNewsTests = `-- name: CountRecentNewsTests :one
+SELECT count(*)::int FROM mail_tasks
+WHERE sent_by = $1::text AND template_id = $2::uuid AND source_ref IS NULL
+  AND created_at > now() - interval '1 minute'
+`
+
+type CountRecentNewsTestsParams struct {
+	SentBy     string    `json:"sent_by"`
+	TemplateID uuid.UUID `json:"template_id"`
+}
+
+// A person's test mails of a template in the last minute: a News send's
+// test (POST /v1/news_sends/test) is a send of club.news to its sender
+// without a source, at most 3 a minute.
+func (q *Queries) CountRecentNewsTests(ctx context.Context, arg CountRecentNewsTestsParams) (int, error) {
+	row := q.db.QueryRow(ctx, countRecentNewsTests, arg.SentBy, arg.TemplateID)
+	var column_1 int
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countRecipients = `-- name: CountRecipients :one
 SELECT count(*)
 FROM recipients
@@ -1229,6 +1250,7 @@ type CreateMailQueueItemsParams struct {
 	TrackingSkipReason *string    `json:"tracking_skip_reason"`
 	SuppressedButSent  bool       `json:"suppressed_but_sent"`
 	ListUnsubscribeUrl *string    `json:"-"`
+	SourceRef          *string    `json:"source_ref"`
 }
 
 const createMailTask = `-- name: CreateMailTask :many
@@ -1249,7 +1271,7 @@ WITH active_source AS (
                $8::boolean, $9::boolean,
                $10::boolean
         FROM active_source
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, source_kind, source_ref, source_version, source_snapshot, source_audience, source_counts
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1376,7 +1398,7 @@ WITH active_template AS (
                $7::text, $8::text,
                $9::boolean, $10::boolean
         FROM active_template
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, source_kind, source_ref, source_version, source_snapshot, source_audience, source_counts
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -2490,7 +2512,7 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 }
 
 const getMailTaskById = `-- name: GetMailTaskById :one
-SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id, mt.notification_id, mt.purpose, mt.category, mt.transactional_statement, mt.commercial_content_absent, mt.own_event_statement,
+SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id, mt.notification_id, mt.purpose, mt.category, mt.transactional_statement, mt.commercial_content_absent, mt.own_event_statement, mt.source_kind, mt.source_ref, mt.source_version, mt.source_snapshot, mt.source_audience, mt.source_counts,
        t.name  AS template_name,
        ml.name AS mail_list_name
 FROM mail_tasks mt
@@ -2525,6 +2547,12 @@ type GetMailTaskByIdRow struct {
 	TransactionalStatement  *bool      `json:"transactional_statement"`
 	CommercialContentAbsent *bool      `json:"commercial_content_absent"`
 	OwnEventStatement       *bool      `json:"own_event_statement"`
+	SourceKind              *string    `json:"source_kind"`
+	SourceRef               *string    `json:"source_ref"`
+	SourceVersion           *int       `json:"source_version"`
+	SourceSnapshot          []byte     `json:"source_snapshot"`
+	SourceAudience          *string    `json:"source_audience"`
+	SourceCounts            []byte     `json:"source_counts"`
 	TemplateName            *string    `json:"template_name"`
 	MailListName            *string    `json:"mail_list_name"`
 }
@@ -2558,6 +2586,12 @@ func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTas
 		&i.TransactionalStatement,
 		&i.CommercialContentAbsent,
 		&i.OwnEventStatement,
+		&i.SourceKind,
+		&i.SourceRef,
+		&i.SourceVersion,
+		&i.SourceSnapshot,
+		&i.SourceAudience,
+		&i.SourceCounts,
 		&i.TemplateName,
 		&i.MailListName,
 	)
@@ -2653,6 +2687,24 @@ func (q *Queries) GetMailingListByIdIncludingArchived(ctx context.Context, id uu
 		&i.ArchivedBy,
 	)
 	return i, err
+}
+
+const getNewsSendByAudience = `-- name: GetNewsSendByAudience :one
+SELECT id FROM mail_tasks
+WHERE source_ref = $1::text AND source_audience = $2::text
+`
+
+type GetNewsSendByAudienceParams struct {
+	SourceRef      string `json:"source_ref"`
+	SourceAudience string `json:"source_audience"`
+}
+
+// The send of a News record to an audience, if there is one (open or done).
+func (q *Queries) GetNewsSendByAudience(ctx context.Context, arg GetNewsSendByAudienceParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getNewsSendByAudience, arg.SourceRef, arg.SourceAudience)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getNotificationByIdempotencyKey = `-- name: GetNotificationByIdempotencyKey :one
@@ -4316,6 +4368,34 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 	return items, nil
 }
 
+const listNewsSourceAddresses = `-- name: ListNewsSourceAddresses :many
+SELECT DISTINCT lower(recipient_email)::text AS address
+FROM mail_queue
+WHERE source_ref = $1::text
+`
+
+// The mailboxes a row of a News record was queued to go to, lower-cased:
+// every send of the record leaves them out ("zaten aldı").
+func (q *Queries) ListNewsSourceAddresses(ctx context.Context, sourceRef string) ([]string, error) {
+	rows, err := q.db.Query(ctx, listNewsSourceAddresses, sourceRef)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var address string
+		if err := rows.Scan(&address); err != nil {
+			return nil, err
+		}
+		items = append(items, address)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNotificationTypes = `-- name: ListNotificationTypes :many
 SELECT key, category, required, default_channels, lane, archived_at, created_at, updated_at
 FROM notification_types
@@ -5067,6 +5147,18 @@ func (q *Queries) LockMailFormSource(ctx context.Context, id uuid.UUID) (MailFor
 	return i, err
 }
 
+const lockNewsSource = `-- name: LockNewsSource :exec
+SELECT pg_advisory_xact_lock(hashtextextended('skymail news ' || $1::text, 0))
+`
+
+// Holds a News record's sends back from each other until the transaction
+// ends: the send that checks who already got the record's mail and queues
+// the rest is the only one doing so (idx_mail_queue_news_once is the net).
+func (q *Queries) LockNewsSource(ctx context.Context, sourceRef string) error {
+	_, err := q.db.Exec(ctx, lockNewsSource, sourceRef)
+	return err
+}
+
 const lockOwnedMailFormSource = `-- name: LockOwnedMailFormSource :one
 SELECT id, owner_sub, form_id, form_title, prepared_at, expires_at, response_count, recipient_count, skipped_count, duplicate_count, snapshot_hash, invalidated_at, consumed_at, consumed_approval_id, consumed_task_id, consume_request_hash FROM mail_form_sources WHERE id=$1 AND owner_sub=$2 FOR UPDATE NOWAIT
 `
@@ -5415,7 +5507,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref
 `
 
 type ProcessBulkQueueItemsParams struct {
@@ -5459,6 +5551,7 @@ func (q *Queries) ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueu
 			&i.SentAt,
 			&i.SuppressedButSent,
 			&i.ListUnsubscribeUrl,
+			&i.SourceRef,
 		); err != nil {
 			return nil, err
 		}
@@ -5482,7 +5575,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref
 `
 
 type ProcessSystemQueueItemsParams struct {
@@ -5530,6 +5623,7 @@ func (q *Queries) ProcessSystemQueueItems(ctx context.Context, arg ProcessSystem
 			&i.SentAt,
 			&i.SuppressedButSent,
 			&i.ListUnsubscribeUrl,
+			&i.SourceRef,
 		); err != nil {
 			return nil, err
 		}
@@ -6577,6 +6671,40 @@ func (q *Queries) SetMailQueueItemSent(ctx context.Context, arg SetMailQueueItem
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setMailTaskNewsSource = `-- name: SetMailTaskNewsSource :exec
+UPDATE mail_tasks
+SET source_kind     = 'news',
+    source_ref      = $1::text,
+    source_version  = $2::int,
+    source_snapshot = $3::jsonb,
+    source_audience = $4::text,
+    source_counts   = $5::jsonb
+WHERE id = $6
+`
+
+type SetMailTaskNewsSourceParams struct {
+	SourceRef      string    `json:"source_ref"`
+	SourceVersion  int       `json:"source_version"`
+	SourceSnapshot []byte    `json:"source_snapshot"`
+	SourceAudience string    `json:"source_audience"`
+	SourceCounts   []byte    `json:"source_counts"`
+	ID             uuid.UUID `json:"id"`
+}
+
+// A News send's source (POST /v1/news_sends; hub ticket duyuru-haber 06):
+// written in the transaction that queues the send, after its rows.
+func (q *Queries) SetMailTaskNewsSource(ctx context.Context, arg SetMailTaskNewsSourceParams) error {
+	_, err := q.db.Exec(ctx, setMailTaskNewsSource,
+		arg.SourceRef,
+		arg.SourceVersion,
+		arg.SourceSnapshot,
+		arg.SourceAudience,
+		arg.SourceCounts,
+		arg.ID,
+	)
+	return err
 }
 
 const setMailTaskNotification = `-- name: SetMailTaskNotification :exec

@@ -85,6 +85,10 @@ type Querier interface {
 	// numbers CountMailTaskSends gives for each status filter.
 	CountMailTasksByStatus(ctx context.Context) (CountMailTasksByStatusRow, error)
 	CountMailingLists(ctx context.Context) (int64, error)
+	// A person's test mails of a template in the last minute: a News send's
+	// test (POST /v1/news_sends/test) is a send of club.news to its sender
+	// without a source, at most 3 a minute.
+	CountRecentNewsTests(ctx context.Context, arg CountRecentNewsTestsParams) (int, error)
 	CountRecipients(ctx context.Context) (int64, error)
 	CountRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) (int64, error)
 	// After a restore from backup (docs/data-lifecycle.md, Backup and restore),
@@ -238,6 +242,8 @@ type Querier interface {
 	GetMailTaskTrackingExclusion(ctx context.Context, taskID uuid.UUID) (GetMailTaskTrackingExclusionRow, error)
 	GetMailingListById(ctx context.Context, id uuid.UUID) (MailingList, error)
 	GetMailingListByIdIncludingArchived(ctx context.Context, id uuid.UUID) (MailingList, error)
+	// The send of a News record to an audience, if there is one (open or done).
+	GetNewsSendByAudience(ctx context.Context, arg GetNewsSendByAudienceParams) (uuid.UUID, error)
 	GetNotificationByIdempotencyKey(ctx context.Context, arg GetNotificationByIdempotencyKeyParams) (GetNotificationByIdempotencyKeyRow, error)
 	GetNotificationType(ctx context.Context, key string) (NotificationType, error)
 	GetNotificationVariant(ctx context.Context, arg GetNotificationVariantParams) (NotificationVariant, error)
@@ -337,6 +343,9 @@ type Querier interface {
 	// lists every send and a NULL status every status. The page is cut first so
 	// only its rows are counted.
 	ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error)
+	// The mailboxes a row of a News record was queued to go to, lower-cased:
+	// every send of the record leaves them out ("zaten aldı").
+	ListNewsSourceAddresses(ctx context.Context, sourceRef string) ([]string, error)
 	ListNotificationTypes(ctx context.Context) ([]NotificationType, error)
 	ListNotificationVariants(ctx context.Context) ([]NotificationVariant, error)
 	// An operator's versions of a template numbered after the given one, oldest
@@ -395,6 +404,10 @@ type Querier interface {
 	// that send needs.
 	LockMailApproval(ctx context.Context, id uuid.UUID) (MailApproval, error)
 	LockMailFormSource(ctx context.Context, id uuid.UUID) (MailFormSource, error)
+	// Holds a News record's sends back from each other until the transaction
+	// ends: the send that checks who already got the record's mail and queues
+	// the rest is the only one doing so (idx_mail_queue_news_once is the net).
+	LockNewsSource(ctx context.Context, sourceRef string) error
 	LockOwnedMailFormSource(ctx context.Context, arg LockOwnedMailFormSourceParams) (MailFormSource, error)
 	// Serialises the bulk lane's take across processes: under it a process reads
 	// the send windows, takes as many bulk rows as they leave room for and counts
@@ -561,6 +574,9 @@ type Querier interface {
 	// then); zero rows says so. A sent or failed row keeps its claim: the process
 	// that finished it.
 	SetMailQueueItemSent(ctx context.Context, arg SetMailQueueItemSentParams) (int64, error)
+	// A News send's source (POST /v1/news_sends; hub ticket duyuru-haber 06):
+	// written in the transaction that queues the send, after its rows.
+	SetMailTaskNewsSource(ctx context.Context, arg SetMailTaskNewsSourceParams) error
 	SetMailTaskNotification(ctx context.Context, arg SetMailTaskNotificationParams) error
 	// Puts each row's masked mail in place of what was sent; an empty HTML is
 	// none. Only a row of the send that still holds a mail, of a send not masked
