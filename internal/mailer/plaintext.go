@@ -42,13 +42,19 @@ func walkForText(node *html.Node, out *strings.Builder, depth int) {
 	for child := node.FirstChild; child != nil; child = child.NextSibling {
 		switch child.Type {
 		case html.TextNode:
+			if preformatted(node) {
+				out.WriteString(child.Data)
+				continue
+			}
 			out.WriteString(strings.ReplaceAll(child.Data, "\n", " "))
 
 		case html.ElementNode:
 			switch child.Data {
 			case "br":
 				out.WriteString("\n")
-			case "p", "h2", "h3", "blockquote", "div":
+			case "hr":
+				out.WriteString("\n\n")
+			case "p", "h2", "h3", "blockquote", "div", "pre":
 				out.WriteString("\n\n")
 				walkForText(child, out, depth)
 				out.WriteString("\n\n")
@@ -95,6 +101,16 @@ func walkListForText(node *html.Node, out *strings.Builder, list *listState, dep
 		}
 		out.WriteString("\n" + marker + strings.TrimSpace(collapseBlankLines(inner.String())))
 	}
+}
+
+// preformatted says node is inside a <pre>: its text keeps its line breaks.
+func preformatted(node *html.Node) bool {
+	for ; node != nil; node = node.Parent {
+		if node.Type == html.ElementNode && node.Data == "pre" {
+			return true
+		}
+	}
+	return false
 }
 
 func attr(node *html.Node, name string) string {
