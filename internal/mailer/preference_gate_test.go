@@ -474,3 +474,21 @@ func TestATestMailToItsSenderIsLeftBe(t *testing.T) {
 		t.Errorf("self_test %v %v, want true", selfTest, err)
 	}
 }
+
+// A test mail goes to its sender alone: more than one recipient is refused
+// and nothing is written.
+func TestATestMailWithSeveralRecipientsIsRefused(t *testing.T) {
+	db := suppressionQueue(t)
+	m := preferenceMailer(t, db, preferenceCore(), true)
+	_, err := m.EnqueueWithRecipients(context.Background(), mailer.EnqueueWithRecipientsParams{
+		SentBy: laneSender, TemplateID: initialTemplate, BodyVariables: []byte(`{}`), Purpose: duyuruSend(true), SelfTest: true,
+		Recipients: []mailer.RecipientInfo{{FullName: "Ayse", Email: "ayse@example.com"}, {FullName: "Baris", Email: "baris@example.com"}},
+	})
+	if !errors.Is(err, mailer.ErrSelfTestRecipients) {
+		t.Fatalf("err %v, want %v", err, mailer.ErrSelfTestRecipients)
+	}
+	var tasks int
+	if err := db.Conn.QueryRow(context.Background(), `SELECT count(*) FROM mail_tasks`).Scan(&tasks); err != nil || tasks != 0 {
+		t.Errorf("%d sends written (%v), want none", tasks, err)
+	}
+}

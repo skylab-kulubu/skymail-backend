@@ -914,7 +914,15 @@ func (q *queue) enqueueSingle(ctx context.Context, arg database.CreateSingleMail
 	return row.TaskID, result, err
 }
 
+// ErrSelfTestRecipients refuses a test mail (SelfTest) with other than one
+// recipient: the bulk preference check leaves a test mail be only because it
+// goes to its own sender alone.
+var ErrSelfTestRecipients = errors.New("mailer: a test mail (SelfTest) goes to exactly one recipient, its sender")
+
 func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, bool, error) {
+	if params.SelfTest && len(params.Recipients) != 1 {
+		return uuid.Nil, false, ErrSelfTestRecipients
+	}
 	kind := q.tracking.trackingOf(params.Tracking, params.System)
 	task, err := q.q.InsertMailTask(ctx, database.InsertMailTaskParams{
 		SentBy:                  params.SentBy,
