@@ -5927,7 +5927,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "validation.error; news_send.commercial_statement_required; news_send.teams_invalid; news_send.team_unknown"
+                        "description": "validation.error; news_send.commercial_statement_required; news_send.teams_invalid; news_send.team_unknown; news_send.slug_too_long"
                     },
                     "403": {
                         "content": {
