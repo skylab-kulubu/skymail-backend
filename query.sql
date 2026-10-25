@@ -2309,8 +2309,6 @@ WHERE id = ANY (sqlc.arg(ids)::uuid[])
   AND status = 'processing'
   AND claimed_by = sqlc.arg(claimed_by)::text;
 
--- Gives claimed rows the link their mail is sent with: a promotional mail's
--- is the grant's withdraw link, which ends the promotional consent.
 -- The bulk rows this process just took, as the bulk preference check reads
 -- them (mailer, preference_gate.go): whether core gave a verdict about the
 -- row when it was queued, whom to ask about again, the send's category, and
@@ -2347,6 +2345,8 @@ WHERE id = ANY (sqlc.arg(ids)::uuid[])
   AND status = 'processing'
   AND claimed_by = sqlc.arg(claimed_by)::text;
 
+-- Gives claimed rows the link their mail is sent with: a promotional mail's
+-- is the grant's withdraw link, which ends the promotional consent.
 -- name: SetClaimedRowsUnsubscribeURL :execrows
 -- links[i] is ids[i]'s.
 UPDATE mail_queue q

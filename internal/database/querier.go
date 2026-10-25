@@ -252,8 +252,6 @@ type Querier interface {
 	GetNotificationType(ctx context.Context, key string) (NotificationType, error)
 	GetNotificationVariant(ctx context.Context, arg GetNotificationVariantParams) (NotificationVariant, error)
 	GetOwnedMailFormSource(ctx context.Context, arg GetOwnedMailFormSourceParams) (MailFormSource, error)
-	// Gives claimed rows the link their mail is sent with: a promotional mail's
-	// is the grant's withdraw link, which ends the promotional consent.
 	// The bulk rows this process just took, as the bulk preference check reads
 	// them (mailer, preference_gate.go): whether core gave a verdict about the
 	// row when it was queued, whom to ask about again, the send's category, and
@@ -572,6 +570,8 @@ type Querier interface {
 	// hours starting at or after hour_since (every hour of the last 24).
 	SendWindowCounts(ctx context.Context, arg SendWindowCountsParams) ([]MailSendWindow, error)
 	SetClaimedRowsPreferenceCheckedAt(ctx context.Context, arg SetClaimedRowsPreferenceCheckedAtParams) (int64, error)
+	// Gives claimed rows the link their mail is sent with: a promotional mail's
+	// is the grant's withdraw link, which ends the promotional consent.
 	// links[i] is ids[i]'s.
 	SetClaimedRowsUnsubscribeURL(ctx context.Context, arg SetClaimedRowsUnsubscribeURLParams) (int64, error)
 	// A NULL deadline leaves the request's deadline as it is.

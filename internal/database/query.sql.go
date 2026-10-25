@@ -2898,8 +2898,6 @@ type GetPreferenceGateClaimedRowsRow struct {
 	RequiredNotification bool       `json:"required_notification"`
 }
 
-// Gives claimed rows the link their mail is sent with: a promotional mail's
-// is the grant's withdraw link, which ends the promotional consent.
 // The bulk rows this process just took, as the bulk preference check reads
 // them (mailer, preference_gate.go): whether core gave a verdict about the
 // row when it was queued, whom to ask about again, the send's category, and
@@ -6668,6 +6666,8 @@ type SetClaimedRowsUnsubscribeURLParams struct {
 	ClaimedBy string      `json:"claimed_by"`
 }
 
+// Gives claimed rows the link their mail is sent with: a promotional mail's
+// is the grant's withdraw link, which ends the promotional consent.
 // links[i] is ids[i]'s.
 func (q *Queries) SetClaimedRowsUnsubscribeURL(ctx context.Context, arg SetClaimedRowsUnsubscribeURLParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setClaimedRowsUnsubscribeURL, arg.Links, arg.Ids, arg.ClaimedBy)
