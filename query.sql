@@ -614,6 +614,15 @@ WHERE mlr.mail_list_id = $1
 ORDER BY r.created_at DESC
 LIMIT $2 OFFSET $3;
 
+-- A list's addresses, for the bulk preference check before its send is
+-- queued (mailer, preference_gate.go): the send's insert reads the list
+-- again, in its transaction.
+-- name: GetMailingListAddresses :many
+SELECT r.email
+FROM recipients r
+         JOIN mailing_list_recipients mlr ON r.id = mlr.recipient_id
+WHERE mlr.mail_list_id = $1;
+
 -- name: CountRecipientsByMailingListId :one
 SELECT count(*)
 FROM recipients r
@@ -905,8 +914,8 @@ INSERT INTO mail_queue (
     task_id, recipient_full_name, recipient_email,
     subject, body, body_html, priority, recipient_sub,
     tracking_token, tracking_skip_reason, suppressed_but_sent,
-    list_unsubscribe_url, source_ref
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
+    list_unsubscribe_url, source_ref, preference_checked_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
 
 -- A recipient whose mail did not render, say a template that slices an empty
 -- full name, is written failed, with the render error the send's page shows:
@@ -1293,12 +1302,12 @@ RETURNING mt.id, (SELECT count(*) FROM rows WHERE rows.task_id = mt.id) AS rows_
 -- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, form_source_id, body_variables, content_sensitive_at_send,
                         tracking_requested, purpose, category, transactional_statement, commercial_content_absent,
-                        own_event_statement)
+                        own_event_statement, self_test)
 SELECT sqlc.arg(sent_by), sqlc.arg(template_id), sqlc.narg(mail_list_id), sqlc.narg(form_source_id), sqlc.arg(body_variables),
        CASE WHEN template_key_content_locked(templates.key) THEN 'true' ELSE COALESCE(templates.content_sensitive::text, 'unset') END,
        sqlc.arg(tracking_requested)::boolean, sqlc.narg(purpose)::text, sqlc.narg(category)::text,
        sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean,
-       sqlc.narg(own_event_statement)::boolean
+       sqlc.narg(own_event_statement)::boolean, sqlc.arg(self_test)::boolean
 FROM templates
 WHERE templates.id = sqlc.arg(template_id)
   AND archived_at IS NULL
@@ -1394,6 +1403,10 @@ SELECT mt.id,
        rc.sent,
        rc.failed,
        rc.suppressed,
+       rc.opted_out,
+       rc.unsubscribed,
+       rc.inactive,
+       rc.ambiguous,
        rc.suppressed_but_sent,
        rc.undelivered,
        single.recipient_full_name   AS single_recipient_full_name,
@@ -1418,6 +1431,10 @@ FROM page
                                     count(*) FILTER (WHERE q.status = 'sent')       AS sent,
                                     count(*) FILTER (WHERE q.status = 'failed')     AS failed,
                                     count(*) FILTER (WHERE q.status = 'failed' AND q.error LIKE 'suppressed:%') AS suppressed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: opted_out') AS opted_out,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'suppressed: unsubscribed') AS unsubscribed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: inactive') AS inactive,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: ambiguous') AS ambiguous,
                                     count(*) FILTER (WHERE q.suppressed_but_sent) AS suppressed_but_sent,
                                     count(*) FILTER (WHERE EXISTS (SELECT 1
                                                                    FROM mail_bounces b
@@ -2288,6 +2305,42 @@ SET status          = 'pending',
     claimed_at      = NULL,
     claimed_by      = NULL,
     next_attempt_at = NOW() + (sqlc.arg(delay_ms)::int * INTERVAL '1 millisecond')
+WHERE id = ANY (sqlc.arg(ids)::uuid[])
+  AND status = 'processing'
+  AND claimed_by = sqlc.arg(claimed_by)::text;
+
+-- The bulk rows this process just took, as the bulk preference check reads
+-- them (mailer, preference_gate.go): whether core gave a verdict about the
+-- row when it was queued, whom to ask about again, the send's category, and
+-- what picks the row's lane. A required notification type never carries a
+-- link (POST /v1/notifications refuses one), so the safety net leaves it be.
+-- name: GetPreferenceGateClaimedRows :many
+SELECT q.id,
+       q.recipient_email,
+       q.recipient_sub,
+       q.priority,
+       q.created_at,
+       q.preference_checked_at,
+       (q.list_unsubscribe_url IS NOT NULL)::boolean AS has_link,
+       t.key,
+       coalesce(t.system, false)::boolean AS system,
+       mt.purpose,
+       mt.category,
+       mt.self_test,
+       (nt.required IS TRUE)::boolean AS required_notification
+FROM mail_queue q
+         JOIN mail_tasks mt ON mt.id = q.task_id
+         LEFT JOIN templates t ON t.id = mt.template_id
+         LEFT JOIN notifications n ON n.id = mt.notification_id
+         LEFT JOIN notification_types nt ON nt.key = n.type
+WHERE q.id = ANY (sqlc.arg(ids)::uuid[])
+  AND q.channel = 'email'
+  AND q.status = 'processing'
+  AND q.claimed_by = sqlc.arg(claimed_by)::text;
+
+-- name: SetClaimedRowsPreferenceCheckedAt :execrows
+UPDATE mail_queue
+SET preference_checked_at = sqlc.arg(at)::timestamptz
 WHERE id = ANY (sqlc.arg(ids)::uuid[])
   AND status = 'processing'
   AND claimed_by = sqlc.arg(claimed_by)::text;

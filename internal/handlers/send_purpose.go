@@ -69,6 +69,8 @@ var (
 		"category is club:duyuru, club:haber, team:<group id>:duyuru or team:<group id>:haber.", fiber.StatusBadRequest)
 	errCategoryNotAllowed = apperrors.New("mail_task.category_not_allowed",
 		"An islem send has no category.", fiber.StatusBadRequest)
+	errCommercialStatementRequired = apperrors.New("mail_task.commercial_statement_required",
+		"A duyuru send needs commercial_content_absent: true, the statement that its main purpose is not promotion (a short sponsor thanks or logo is allowed), while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE).", fiber.StatusBadRequest)
 )
 
 // clubAnnouncements is the category a send that names none has always been
@@ -100,10 +102,14 @@ func isDuyuru(p mailer.SendPurpose) bool {
 // send is written with, or why it is refused. promotional is
 // SKYMAIL_PROMOTIONAL: a duyuru send may then be promotional. listConsent is
 // SKYMAIL_LIST_CONSENT: a duyuru send to a list or a group then keeps its
-// own event statement. Tracking is the
+// own event statement. commercialRequired is SKYMAIL_BULK_PREFERENCE: a
+// duyuru send that names its purpose must then state whether its main
+// purpose is promotion (commercial_content_absent; abonelik-cikisi 03 and
+// 09); a body that names no purpose (an older client) still gets its
+// default. Tracking is the
 // tracking rules' (SKYMAIL_TRACKING, SKYMAIL_TRACKING_OPERATOR), whatever the
 // purpose.
-func choosePurpose(on, promotional, listConsent bool, asked requests.SendPurpose, target sendTarget) (mailer.SendPurpose, error) {
+func choosePurpose(on, promotional, listConsent, commercialRequired bool, asked requests.SendPurpose, target sendTarget) (mailer.SendPurpose, error) {
 	if !on {
 		return mailer.SendPurpose{}, nil
 	}
@@ -136,6 +142,9 @@ func choosePurpose(on, promotional, listConsent bool, asked requests.SendPurpose
 		category, ok := canonicalCategory(*asked.Category)
 		if !ok {
 			return mailer.SendPurpose{}, errCategoryInvalid.WithParams(map[string]interface{}{"category": *asked.Category})
+		}
+		if commercialRequired && asked.CommercialContentAbsent == nil {
+			return mailer.SendPurpose{}, errCommercialStatementRequired
 		}
 		purpose := mailer.PurposeDuyuru
 		chosen := mailer.SendPurpose{Purpose: &purpose, Category: &category, CommercialContentAbsent: asked.CommercialContentAbsent}

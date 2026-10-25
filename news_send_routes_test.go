@@ -472,6 +472,11 @@ func TestNewsSendTestGoesToTheCallerOnly(t *testing.T) {
 		AND list_unsubscribe_url IS NULL AND body_html LIKE '%href="https://my.yildizskylab.com/communication-preferences"%'`); n != handlers.NewsTestsPerMinute {
 		t.Fatalf("test rows with the sample link in the body and no List-Unsubscribe = %d", n)
 	}
+	// The bulk preference check leaves a test mail be (abonelik-cikisi 09):
+	// it goes to its own sender and carries no List-Unsubscribe.
+	if n := w.count(`SELECT count(*) FROM mail_tasks WHERE self_test`); n != handlers.NewsTestsPerMinute {
+		t.Fatalf("test sends marked self_test = %d", n)
+	}
 	if n := w.count(`SELECT count(*) FROM mail_queue WHERE recipient_email <> 'hazirlayan@example.org'`) + w.count(`SELECT count(*) FROM mail_tasks WHERE source_ref IS NOT NULL`); n != 0 {
 		t.Fatalf("a test reached someone else or became a News send: %d", n)
 	}

@@ -212,8 +212,25 @@ func (m *recordingMailer) Queue(q *database.Queries, priority mailer.Priority) m
 // approval's, in the approval's transaction; the notifications are not.
 type recordingQueue struct {
 	m     *recordingMailer
-	queue mailer.Queue
+	queue queueSends
 	inTx  bool
+}
+
+// queueSends is the sends a Mailer and a Queue both make.
+type queueSends interface {
+	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error)
+	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
+	EnqueueTrackedSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *mailer.TrackingPreferences) (uuid.UUID, error)
+	EnqueueWithRecipients(ctx context.Context, params mailer.EnqueueWithRecipientsParams) (uuid.UUID, error)
+}
+
+// WithPreferences is the queue with what core said about a send's
+// recipients, recorded the same way.
+func (r recordingQueue) WithPreferences(verdicts *mailer.PreferenceVerdicts) mailer.Queue {
+	if queue, ok := r.queue.(mailer.Queue); ok {
+		r.queue = queue.WithPreferences(verdicts)
+	}
+	return r
 }
 
 // hold keeps an approval's send at the gate, when there is one.

@@ -240,6 +240,10 @@ type Querier interface {
 	// template says so now or said so when the send was queued, or its key is
 	// locked sensitive). A send without a template is never tracked.
 	GetMailTaskTrackingExclusion(ctx context.Context, taskID uuid.UUID) (GetMailTaskTrackingExclusionRow, error)
+	// A list's addresses, for the bulk preference check before its send is
+	// queued (mailer, preference_gate.go): the send's insert reads the list
+	// again, in its transaction.
+	GetMailingListAddresses(ctx context.Context, mailListID uuid.UUID) ([]string, error)
 	GetMailingListById(ctx context.Context, id uuid.UUID) (MailingList, error)
 	GetMailingListByIdIncludingArchived(ctx context.Context, id uuid.UUID) (MailingList, error)
 	// The send of a News record to an audience, if there is one (open or done).
@@ -248,6 +252,12 @@ type Querier interface {
 	GetNotificationType(ctx context.Context, key string) (NotificationType, error)
 	GetNotificationVariant(ctx context.Context, arg GetNotificationVariantParams) (NotificationVariant, error)
 	GetOwnedMailFormSource(ctx context.Context, arg GetOwnedMailFormSourceParams) (MailFormSource, error)
+	// The bulk rows this process just took, as the bulk preference check reads
+	// them (mailer, preference_gate.go): whether core gave a verdict about the
+	// row when it was queued, whom to ask about again, the send's category, and
+	// what picks the row's lane. A required notification type never carries a
+	// link (POST /v1/notifications refuses one), so the safety net leaves it be.
+	GetPreferenceGateClaimedRows(ctx context.Context, arg GetPreferenceGateClaimedRowsParams) ([]GetPreferenceGateClaimedRowsRow, error)
 	GetRecipientByEmail(ctx context.Context, email string) (Recipient, error)
 	GetRecipients(ctx context.Context, arg GetRecipientsParams) ([]Recipient, error)
 	GetRecipientsByMailingListId(ctx context.Context, arg GetRecipientsByMailingListIdParams) ([]Recipient, error)
@@ -559,6 +569,7 @@ type Querier interface {
 	// after minute_since (the current minute and the one before it) and the
 	// hours starting at or after hour_since (every hour of the last 24).
 	SendWindowCounts(ctx context.Context, arg SendWindowCountsParams) ([]MailSendWindow, error)
+	SetClaimedRowsPreferenceCheckedAt(ctx context.Context, arg SetClaimedRowsPreferenceCheckedAtParams) (int64, error)
 	// Gives claimed rows the link their mail is sent with: a promotional mail's
 	// is the grant's withdraw link, which ends the promotional consent.
 	// links[i] is ids[i]'s.

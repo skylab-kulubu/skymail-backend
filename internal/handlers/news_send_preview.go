@@ -186,6 +186,9 @@ func (h *newsSendHandlerImpl) Test(c fiber.Ctx) error {
 		taskID, err = h.mailer.Queue(q, mailer.PriorityBulk).EnqueueWithRecipients(ctx, mailer.EnqueueWithRecipientsParams{
 			SentBy: sentBy, TemplateID: mail.template.ID, BodyVariables: variables,
 			Recipients: []mailer.RecipientInfo{recipient}, Purpose: purpose,
+			// To the caller's own verified address alone: the bulk preference
+			// check leaves it be (abonelik-cikisi 09).
+			SelfTest: true,
 		})
 		return err
 	})

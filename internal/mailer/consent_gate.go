@@ -357,13 +357,37 @@ func (c *consentCache) decide(promotional, list []gatedRow) verdict {
 // open; a row waiting past consentUndecidedAfter is written failed,
 // undecided.
 func (m *mailerImpl) writeWaiting(ctx context.Context, q *database.Queries, logger *zerolog.Logger, rows []gatedRow) error {
-	if len(rows) == 0 {
-		return nil
-	}
 	c := m.consentCache
 	c.mu.Lock()
 	now, open, fetchDelay := c.now(), c.now().Before(c.openUntil), c.fetchDelay
 	c.mu.Unlock()
+	return m.deferWaiting(ctx, q, logger, rows, waitingRule{
+		now: now, open: open, fetchDelay: fetchDelay, undecidedAfter: consentUndecidedAfter, undecidedError: consentUndecidedError,
+		undecidedMessage: "Core never said whether recipients consented: written failed, undecided, never sent",
+		waitingMessage:   "Recipients wait for core's consent answer: put back, nothing tried",
+	})
+}
+
+// waitingRule is how rows waiting for core are put back at now: open says
+// core's breaker is open, fetchDelay how soon a row is taken again while core may
+// be asked, and a row waiting undecidedAfter while core fails is written
+// failed with undecidedError.
+type waitingRule struct {
+	now                              time.Time
+	open                             bool
+	fetchDelay, undecidedAfter       time.Duration
+	undecidedError                   string
+	undecidedMessage, waitingMessage string
+}
+
+// deferWaiting puts rows waiting for an answer of core back to pending,
+// nothing tried, as rule says (the contact consents', consent_gate.go, and
+// the bulk preference check's, preference_gate.go).
+func (m *mailerImpl) deferWaiting(ctx context.Context, q *database.Queries, logger *zerolog.Logger, rows []gatedRow, rule waitingRule) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	now := rule.now
 	byDelay := map[time.Duration][]uuid.UUID{}
 	var undecided []uuid.UUID
 	for _, row := range rows {
@@ -372,33 +396,31 @@ func (m *mailerImpl) writeWaiting(ctx context.Context, q *database.Queries, logg
 		// Only while core really fails: a cold or stale cache is no
 		// failure, and an old row (a full day's budget, a paused sender)
 		// is asked about like any other.
-		case open && age >= consentUndecidedAfter:
+		case rule.open && age >= rule.undecidedAfter:
 			undecided = append(undecided, row.id)
-		case open:
+		case rule.open:
 			byDelay[consentBackoff(age)] = append(byDelay[consentBackoff(age)], row.id)
 		default:
-			byDelay[fetchDelay] = append(byDelay[fetchDelay], row.id)
+			byDelay[rule.fetchDelay] = append(byDelay[rule.fetchDelay], row.id)
 		}
 	}
 	for delay, ids := range byDelay {
 		if _, err := q.DeferClaimedRows(ctx, database.DeferClaimedRowsParams{
 			Ids: ids, ClaimedBy: m.claimant, DelayMs: int(delay / time.Millisecond),
 		}); err != nil {
-			return fmt.Errorf("put back rows waiting for core's consent answer: %w", err)
+			return fmt.Errorf("put back rows waiting for core's answer: %w", err)
 		}
 	}
 	if len(undecided) > 0 {
 		if _, err := q.SkipUnsubscribedClaimedRows(ctx, database.SkipUnsubscribedClaimedRowsParams{
-			Ids: undecided, ClaimedBy: m.claimant, Error: consentUndecidedError,
+			Ids: undecided, ClaimedBy: m.claimant, Error: rule.undecidedError,
 		}); err != nil {
 			return fmt.Errorf("close rows core never answered for: %w", err)
 		}
-		logger.Warn().Int("count", len(undecided)).Dur("waited", consentUndecidedAfter).
-			Msg("Core never said whether recipients consented: written failed, undecided, never sent")
+		logger.Warn().Int("count", len(undecided)).Dur("waited", rule.undecidedAfter).Msg(rule.undecidedMessage)
 	}
 	if waiting := len(rows) - len(undecided); waiting > 0 {
-		logger.Info().Int("count", waiting).Bool("core_breaker_open", open).
-			Msg("Recipients wait for core's consent answer: put back, nothing tried")
+		logger.Info().Int("count", waiting).Bool("core_breaker_open", rule.open).Msg(rule.waitingMessage)
 	}
 	return nil
 }

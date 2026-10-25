@@ -409,6 +409,8 @@ type MailQueue struct {
 	ListUnsubscribeUrl *string `json:"-"`
 	// news:<slug> on a row of a News send queued to go: the key of the record's once-per-mailbox rule.
 	SourceRef *string `json:"source_ref"`
+	// When core last allowed this recipient a duyuru mail (recipients:resolve); NULL when core gave no verdict about the row.
+	PreferenceCheckedAt *time.Time `json:"preference_checked_at"`
 }
 
 type MailSendWindow struct {
@@ -490,6 +492,8 @@ type MailTask struct {
 	SourceSnapshot []byte  `json:"source_snapshot"`
 	SourceAudience *string `json:"source_audience"`
 	SourceCounts   []byte  `json:"source_counts"`
+	// A send to its own sender's verified address alone (a test mail): the bulk preference check leaves it be.
+	SelfTest bool `json:"self_test"`
 }
 
 // A send's links that are the same for every recipient, each with its random token: the only addresses /t/c redirects to.

@@ -128,9 +128,10 @@ func operatorTracking(ctx context.Context, m mailer.Mailer, asked bool, template
 //	@Produce		json
 //	@Param			task	body		requests.CreateMailTask	true	"Mail task details"
 //	@Success		201		{object}	handlers.CreatedMailTask
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_required, mail_task.category_invalid"
+//	@Failure		400		{object}	apperrors.AppError	"Bad Request. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team"
 //	@Failure		422		{object}	apperrors.AppError	"mail.audience_unavailable: the Keycloak group is unknown or gone"
 //	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		503		{object}	apperrors.AppError	"mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE; README, \"Toplu postada tercih\"), core did not say whom the send may go to; nothing is queued"
 //	@Router			/mail_tasks [post]
 func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 	var params requests.CreateMailTask
@@ -139,7 +140,7 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 	}
 	// A list or a Keycloak group is always duyuru.
 	purposesOn := h.mailer.PurposeAvailable()
-	purpose, err := choosePurpose(purposesOn, h.mailer.PromotionalAvailable(), h.mailer.ListConsentAvailable(), params.SendPurpose, targetAudience)
+	purpose, err := choosePurpose(purposesOn, h.mailer.PromotionalAvailable(), h.mailer.ListConsentAvailable(), h.mailer.PreferenceAvailable(), params.SendPurpose, targetAudience)
 	if err != nil {
 		return err
 	}
@@ -238,8 +239,9 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			mail	body		requests.SendSingleMail	true	"Mail details"
 //	@Success		201		{object}	handlers.CreatedMailTask
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request. A person's purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid (duyuru)"
+//	@Failure		400		{object}	apperrors.AppError	"Bad Request. A person's purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team"
 //	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		503		{object}	apperrors.AppError	"mail_task.preference_unavailable (Retry-After): a person's duyuru mail while every duyuru send obeys the recipient's preferences (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing is queued"
 //	@Router			/mail_tasks/single [post]
 func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	var params requests.SendSingleMail
@@ -274,7 +276,7 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	purposesOn := h.mailer.PurposeAvailable()
 	var purpose mailer.SendPurpose
 	if !service {
-		if purpose, err = choosePurpose(purposesOn, h.mailer.PromotionalAvailable(), h.mailer.ListConsentAvailable(), params.SendPurpose, targetPeople); err != nil {
+		if purpose, err = choosePurpose(purposesOn, h.mailer.PromotionalAvailable(), h.mailer.ListConsentAvailable(), h.mailer.PreferenceAvailable(), params.SendPurpose, targetPeople); err != nil {
 			return err
 		}
 		if err := refuseAccountPromotional(c.Context(), h.db, templateID, purpose); err != nil {

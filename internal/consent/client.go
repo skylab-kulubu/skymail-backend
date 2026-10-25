@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -46,7 +47,13 @@ const (
 	// maxAnswer bounds what is read of one answer: 1000 items, each an
 	// address and two links, fit many times over.
 	maxAnswer = 4 << 20
+	// maxProblem bounds what is read of a refusal for its code.
+	maxProblem = 4 << 10
 )
+
+// codePattern is the shape of core's problem codes: a refusal's code is kept
+// only when it is one, never free text.
+var codePattern = regexp.MustCompile(`^[a-z][a-z0-9_.]{0,79}$`)
 
 // TokenSource is SkyMail's service account token (KEYCLOAK_SERVICE_CLIENT_ID).
 type TokenSource interface {
@@ -134,20 +141,110 @@ func (c *Client) Audience(ctx context.Context, purpose string) ([]Item, error) {
 	return nil, fmt.Errorf("consent audience: more than %d pages", maxAudiencePages)
 }
 
-type resolveItem struct {
-	Email string `json:"email"`
+// The reasons core gives for allowed false (core docs/news-audience.md,
+// "Decision").
+const (
+	ReasonOptedOut  = "opted_out"
+	ReasonInactive  = "inactive"
+	ReasonAmbiguous = "ambiguous"
+)
+
+// ErrCategoryUnknown is core's 400 recipients_resolve_category_unknown: the
+// send's team category names a Group that is no team's own.
+var ErrCategoryUnknown = errors.New("recipients resolve: the category names no team")
+
+// Recipient is one recipient asked about: by Keycloak subject when the send
+// knows it, else by address. Exactly one is set.
+type Recipient struct {
+	Email string `json:"email,omitempty"`
+	Sub   string `json:"sub,omitempty"`
+}
+
+// Result is core's answer about one recipient (ADR 0072 decision 3).
+type Result struct {
+	// Matched: the recipient is an account's (by sub, or a verified address).
+	// Not matched, SkyMail's own record and link apply.
+	Matched bool
+	// Sub is the account's subject; empty for ambiguous.
+	Sub string
+	// Allowed: the mail may go, with UnsubscribeURL, the person's one-click
+	// link for exactly the category asked.
+	Allowed        bool
+	Reason         string
+	UnsubscribeURL string
 }
 
 type resolveRequest struct {
-	Channel    string        `json:"channel"`
-	Category   string        `json:"category"`
-	Recipients []resolveItem `json:"recipients"`
+	Channel    string      `json:"channel"`
+	Category   string      `json:"category"`
+	Recipients []Recipient `json:"recipients"`
+}
+
+type resolvedItem struct {
+	Matched        bool    `json:"matched"`
+	Sub            string  `json:"sub"`
+	Allowed        bool    `json:"allowed"`
+	Reason         *string `json:"reason"`
+	UnsubscribeURL string  `json:"unsubscribeUrl"`
 }
 
 type resolveAnswer struct {
-	Results *[]struct {
-		Matched bool `json:"matched"`
-	} `json:"results"`
+	Results *[]resolvedItem `json:"results"`
+}
+
+// Resolve asks core, in one call, about at most ResolveBatch recipients for
+// category (core docs/news-audience.md, "Recipients"): one result per
+// recipient, in the order asked. Every error is no answer for anyone, and
+// names no person: ErrCategoryUnknown for a team category core does not
+// know; any other refusal, core not answering, or an answer off the contract
+// (a short list, a reason core does not give, an allowed result without its
+// link) is not knowing.
+func (c *Client) Resolve(ctx context.Context, category string, recipients []Recipient) ([]Result, error) {
+	items, err := c.resolve(ctx, category, recipients)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]Result, len(items))
+	for i, got := range items {
+		if !got.Matched {
+			continue
+		}
+		result := Result{Matched: true, Sub: got.Sub, Allowed: got.Allowed}
+		if got.Reason != nil {
+			result.Reason = *got.Reason
+		}
+		switch {
+		case result.Allowed && (got.UnsubscribeURL == "" || result.Reason != ""):
+			return nil, errors.New("recipients resolve: an allowed result without its link")
+		case result.Allowed:
+			result.UnsubscribeURL = got.UnsubscribeURL
+		case result.Reason != ReasonOptedOut && result.Reason != ReasonInactive && result.Reason != ReasonAmbiguous:
+			return nil, errors.New("recipients resolve: a reason core does not give")
+		}
+		results[i] = result
+	}
+	return results, nil
+}
+
+// resolve is one recipients:resolve call: core's answer about each
+// recipient, in the order asked.
+func (c *Client) resolve(ctx context.Context, category string, recipients []Recipient) ([]resolvedItem, error) {
+	if len(recipients) == 0 || len(recipients) > ResolveBatch {
+		return nil, fmt.Errorf("recipients resolve: %d recipients, want 1 to %d", len(recipients), ResolveBatch)
+	}
+	var answer resolveAnswer
+	err := c.call(ctx, http.MethodPost, ResolvePath, resolveRequest{Channel: "email", Category: category, Recipients: recipients}, &answer)
+	var refused *StatusError
+	if errors.As(err, &refused) && refused.Status == http.StatusBadRequest && refused.Code == "recipients_resolve_category_unknown" {
+		return nil, ErrCategoryUnknown
+	}
+	if err != nil {
+		return nil, fmt.Errorf("recipients resolve: %w", err)
+	}
+	if answer.Results == nil || len(*answer.Results) != len(recipients) {
+		return nil, errors.New("recipients resolve: core did not answer about every recipient asked about")
+	}
+	return *answer.Results, nil
 }
 
 // Matched says, for each of addresses (normalized; each asked once), whether
@@ -168,22 +265,33 @@ func (c *Client) Matched(ctx context.Context, category string, addresses []strin
 	}
 	for start := 0; start < len(unique); start += ResolveBatch {
 		batch := unique[start:min(start+ResolveBatch, len(unique))]
-		asked := resolveRequest{Channel: "email", Category: category, Recipients: make([]resolveItem, len(batch))}
+		asked := make([]Recipient, len(batch))
 		for i, address := range batch {
-			asked.Recipients[i] = resolveItem{Email: address}
+			asked[i] = Recipient{Email: address}
 		}
-		var answer resolveAnswer
-		if err := c.call(ctx, http.MethodPost, ResolvePath, asked, &answer); err != nil {
-			return nil, fmt.Errorf("recipients resolve: %w", err)
+		results, err := c.resolve(ctx, category, asked)
+		if err != nil {
+			return nil, err
 		}
-		if answer.Results == nil || len(*answer.Results) != len(batch) {
-			return nil, errors.New("recipients resolve: core did not answer about every recipient asked about")
-		}
-		for i, result := range *answer.Results {
+		for i, result := range results {
 			matched[batch[i]] = result.Matched
 		}
 	}
 	return matched, nil
+}
+
+// StatusError is core answering something other than 200: its status and,
+// when its body is a problem document, its code. Never a person.
+type StatusError struct {
+	Status int
+	Code   string
+}
+
+func (e *StatusError) Error() string {
+	if e.Code != "" {
+		return fmt.Sprintf("core answered %d %s", e.Status, e.Code)
+	}
+	return fmt.Sprintf("core answered %d", e.Status)
 }
 
 // call sends one request to core and decodes a 200 answer into answer.
@@ -215,8 +323,15 @@ func (c *Client) call(ctx context.Context, method, path string, body, answer any
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		refused := &StatusError{Status: response.StatusCode}
+		var problem struct {
+			Code string `json:"code"`
+		}
+		if json.NewDecoder(io.LimitReader(response.Body, maxProblem)).Decode(&problem) == nil && codePattern.MatchString(problem.Code) {
+			refused.Code = problem.Code
+		}
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxAnswer))
-		return fmt.Errorf("core answered %d", response.StatusCode)
+		return refused
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, maxAnswer)).Decode(answer); err != nil {
 		return errors.New("core's answer is not the contract's JSON")
