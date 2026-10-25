@@ -1250,7 +1250,7 @@ WITH active_source AS (
                $8::boolean, $9::boolean,
                $10::boolean
         FROM active_source
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, self_test
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1377,7 +1377,7 @@ WITH active_template AS (
                $7::text, $8::text,
                $9::boolean, $10::boolean
         FROM active_template
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, self_test
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -2491,7 +2491,7 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 }
 
 const getMailTaskById = `-- name: GetMailTaskById :one
-SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id, mt.notification_id, mt.purpose, mt.category, mt.transactional_statement, mt.commercial_content_absent, mt.own_event_statement,
+SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id, mt.notification_id, mt.purpose, mt.category, mt.transactional_statement, mt.commercial_content_absent, mt.own_event_statement, mt.self_test,
        t.name  AS template_name,
        ml.name AS mail_list_name
 FROM mail_tasks mt
@@ -2526,6 +2526,7 @@ type GetMailTaskByIdRow struct {
 	TransactionalStatement  *bool      `json:"transactional_statement"`
 	CommercialContentAbsent *bool      `json:"commercial_content_absent"`
 	OwnEventStatement       *bool      `json:"own_event_statement"`
+	SelfTest                bool       `json:"self_test"`
 	TemplateName            *string    `json:"template_name"`
 	MailListName            *string    `json:"mail_list_name"`
 }
@@ -2559,6 +2560,7 @@ func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTas
 		&i.TransactionalStatement,
 		&i.CommercialContentAbsent,
 		&i.OwnEventStatement,
+		&i.SelfTest,
 		&i.TemplateName,
 		&i.MailListName,
 	)
@@ -2810,6 +2812,7 @@ SELECT q.id,
        coalesce(t.system, false)::boolean AS system,
        mt.purpose,
        mt.category,
+       mt.self_test,
        (nt.required IS TRUE)::boolean AS required_notification
 FROM mail_queue q
          JOIN mail_tasks mt ON mt.id = q.task_id
@@ -2839,6 +2842,7 @@ type GetPreferenceGateClaimedRowsRow struct {
 	System               bool       `json:"system"`
 	Purpose              *string    `json:"purpose"`
 	Category             *string    `json:"category"`
+	SelfTest             bool       `json:"self_test"`
 	RequiredNotification bool       `json:"required_notification"`
 }
 
@@ -2870,6 +2874,7 @@ func (q *Queries) GetPreferenceGateClaimedRows(ctx context.Context, arg GetPrefe
 			&i.System,
 			&i.Purpose,
 			&i.Category,
+			&i.SelfTest,
 			&i.RequiredNotification,
 		); err != nil {
 			return nil, err
@@ -3529,12 +3534,12 @@ func (q *Queries) InsertMailBounce(ctx context.Context, arg InsertMailBouncePara
 const insertMailTask = `-- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, form_source_id, body_variables, content_sensitive_at_send,
                         tracking_requested, purpose, category, transactional_statement, commercial_content_absent,
-                        own_event_statement)
+                        own_event_statement, self_test)
 SELECT $1, $2, $3, $4, $5,
        CASE WHEN template_key_content_locked(templates.key) THEN 'true' ELSE COALESCE(templates.content_sensitive::text, 'unset') END,
        $6::boolean, $7::text, $8::text,
        $9::boolean, $10::boolean,
-       $11::boolean
+       $11::boolean, $12::boolean
 FROM templates
 WHERE templates.id = $2
   AND archived_at IS NULL
@@ -3553,6 +3558,7 @@ type InsertMailTaskParams struct {
 	TransactionalStatement  *bool      `json:"transactional_statement"`
 	CommercialContentAbsent *bool      `json:"commercial_content_absent"`
 	OwnEventStatement       *bool      `json:"own_event_statement"`
+	SelfTest                bool       `json:"self_test"`
 }
 
 type InsertMailTaskRow struct {
@@ -3582,6 +3588,7 @@ func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) 
 		arg.TransactionalStatement,
 		arg.CommercialContentAbsent,
 		arg.OwnEventStatement,
+		arg.SelfTest,
 	)
 	var i InsertMailTaskRow
 	err := row.Scan(

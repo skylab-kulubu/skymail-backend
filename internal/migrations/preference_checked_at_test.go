@@ -83,11 +83,20 @@ func TestPreferenceHeldRecipientsAreSkipped(t *testing.T) {
 		t.Errorf("undecided: %s, want failed", got)
 	}
 
+	var selfTest bool
+	if err := database.Pool.QueryRow(ctx, `SELECT self_test FROM mail_tasks WHERE id = $1`, task).Scan(&selfTest); err != nil || selfTest {
+		t.Errorf("an old send's self_test: %v %v, want false", selfTest, err)
+	}
+
 	if err := runner.Steps(-1); err != nil {
 		t.Fatalf("down: %v", err)
 	}
 	if column() {
 		t.Fatal("after down: preference_checked_at kept")
+	}
+	var selfTestColumns int
+	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_name = 'mail_tasks' AND column_name = 'self_test'`).Scan(&selfTestColumns); err != nil || selfTestColumns != 0 {
+		t.Fatalf("after down: self_test kept (%d, %v)", selfTestColumns, err)
 	}
 	if err := runner.Migrate(preferenceCheckedAt); err != nil {
 		t.Fatalf("up again: %v", err)

@@ -47,6 +47,9 @@ import (
 //     unsubscribe record is read there anyway (unsubscribe.go).
 //   - The safety net: a duyuru row without a link is never sent; it is
 //     written failed, unsubscribe_missing.
+//   - A test mail to its own sender's verified address alone (self_test, a
+//     News send's test) is neither asked about nor held: it reaches nobody
+//     else and carries no List-Unsubscribe.
 //
 // Off, nothing of this runs: every send goes as before.
 
@@ -327,7 +330,7 @@ func (q *queue) preferenceOf(sub *uuid.UUID, address string) preferenceOutcome {
 // template's).
 func (q *queue) gated(ctx context.Context, rows []commonMailRow) (bool, error) {
 	purpose := q.lanes.purposeOf(rows[0].Purpose)
-	if q.preferences == nil || !q.preferences.On || purpose == nil || *purpose != PurposeDuyuru {
+	if q.preferences == nil || !q.preferences.On || purpose == nil || *purpose != PurposeDuyuru || rows[0].SelfTest {
 		return false, nil
 	}
 	template, err := q.q.GetMailTaskTemplateKey(ctx, rows[0].TaskID)
@@ -452,7 +455,8 @@ func (m *mailerImpl) gatePreferences(ctx context.Context, q *database.Queries, l
 	missing := map[uuid.UUID]string{}
 	var checked []checkedRow
 	for _, row := range found {
-		if LaneOf(m.lanes.purposeOf(row.Purpose), row.Key, row.System, Priority(row.Priority)) != LaneDuyuru {
+		// A test mail to its own sender reaches nobody else (self_test).
+		if row.SelfTest || LaneOf(m.lanes.purposeOf(row.Purpose), row.Key, row.System, Priority(row.Priority)) != LaneDuyuru {
 			continue
 		}
 		// A required notification type (a ticket, a certificate) may carry

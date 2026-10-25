@@ -745,7 +745,9 @@ ucu geldiğinde eklenir.
 unsubscribe_missing` (atlanmış sayılmaz). Bayrak açılmadan önce kuyruğa girmiş
 bağlantısız duyuru satırı da böyle düşer: bayrak kuyruk boşken açılır.
 Zorunlu bildirim türünün satırı (bilet, sertifika) bağlantı taşıyamaz, bu
-kurala girmez. Toplu
+kurala girmez. Gönderenin yalnız kendi doğrulanmış adresine giden deneme postası
+(`mail_tasks.self_test`; haberden gönderimin deneme postası, List-Unsubscribe
+taşımaz) ne sorulur ne bu kurala girer: kimseye ulaşmaz. Toplu
 şeritli isteğe bağlı bildirim türünde e-postası gidecek alıcının
 `unsubscribe_url`'i yoksa `400 notification.unsubscribe_url_required`.
 
@@ -772,8 +774,8 @@ Başka değer açılışı durdurur. `on` şunları ister, eksikse açılış du
 SkyMail'in servis hesabında core'un `audience:read` rolü zaten var.
 
 **Göç** (`20261025200000`, yalnız ekleme): `mail_queue.preference_checked_at`
-(nullable) ve `mail_task_status()`'ın üç `preference:` nedenini atlanmış
-sayması. Eski imaj sütunu okumaz, yazmaz.
+(nullable), `mail_tasks.self_test` (`NOT NULL DEFAULT false`, yeniden yazmaz)
+ve `mail_task_status()`'ın üç `preference:` nedenini atlanmış sayması. Eski imaj sütunu okumaz, yazmaz.
 
 **Geri dönüş.** `SKYMAIL_BULK_PREFERENCE=off` + yeniden dağıtım: core'a
 sorulmaz, bağlantısız satır başlıksız gider; çıkış kaydı uygulanmaya devam

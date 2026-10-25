@@ -29,4 +29,7 @@ $$;
 ALTER TABLE mail_queue
     DROP COLUMN IF EXISTS preference_checked_at;
 
+ALTER TABLE mail_tasks
+    DROP COLUMN IF EXISTS self_test;
+
 RESET lock_timeout;

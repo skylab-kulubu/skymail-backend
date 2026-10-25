@@ -26,6 +26,17 @@ SET lock_timeout = '5s';
 ALTER TABLE mail_queue
     ADD COLUMN preference_checked_at TIMESTAMPTZ;
 
+-- self_test: a send of a mail to its own sender's verified address, to see it
+-- before the real one (a News send's test mail, POST /v1/news_sends/test).
+-- The check neither asks core about it nor holds it for a missing link: it
+-- reaches nobody else, and carries no List-Unsubscribe. A default that is a
+-- constant rewrites nothing; an image from before writes false.
+ALTER TABLE mail_tasks
+    ADD COLUMN self_test BOOLEAN NOT NULL DEFAULT false;
+
+COMMENT ON COLUMN mail_tasks.self_test IS
+    'A send to its own sender''s verified address alone (a test mail): the bulk preference check leaves it be.';
+
 COMMENT ON COLUMN mail_queue.preference_checked_at IS
     'When core last allowed this recipient a duyuru mail (recipients:resolve); NULL when core gave no verdict about the row.';
 

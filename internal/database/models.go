@@ -483,6 +483,8 @@ type MailTask struct {
 	CommercialContentAbsent *bool   `json:"commercial_content_absent"`
 	// On a duyuru send to a list or a group: the sender's statement that the mail is about the list's own event or work (s6 row 15); NULL otherwise.
 	OwnEventStatement *bool `json:"own_event_statement"`
+	// A send to its own sender's verified address alone (a test mail): the bulk preference check leaves it be.
+	SelfTest bool `json:"self_test"`
 }
 
 // A send's links that are the same for every recipient, each with its random token: the only addresses /t/c redirects to.

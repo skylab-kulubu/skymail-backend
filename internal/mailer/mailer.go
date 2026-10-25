@@ -144,6 +144,11 @@ type EnqueueWithRecipientsParams struct {
 	// Purpose is the send's purpose and category (ADR 0072 decision 2),
 	// written on the send; the zero value is none, the rule of before.
 	Purpose SendPurpose
+	// SelfTest says the send goes to its own sender's verified address alone
+	// (a News send's test mail): the bulk preference check neither asks core
+	// about it nor holds it for a missing link (preference_gate.go). The
+	// caller sees to it that the only recipient is the sender.
+	SelfTest bool
 }
 
 type Mailer interface {
@@ -636,6 +641,8 @@ type commonMailRow struct {
 	// Purpose is the send's purpose as it is queued (mail_tasks.purpose):
 	// which stream's unsubscribe record applies (unsubscribe.go).
 	Purpose *string
+	// SelfTest: EnqueueWithRecipientsParams.SelfTest.
+	SelfTest bool
 }
 
 // queue writes sends through q: the pool's queries, or a transaction's, in
@@ -769,9 +776,12 @@ func (m *mailerImpl) EnqueueWithRecipients(ctx context.Context, params EnqueueWi
 	case params.Tracking && m.TrackingAvailable():
 		params.Preferences = m.ResolveTracking(ctx, params.TemplateID, params.MailListID, params.Recipients)
 	}
-	verdicts, err := m.ResolvePreferences(ctx, params.Purpose, params.Recipients)
-	if err != nil {
-		return uuid.Nil, err
+	var verdicts *PreferenceVerdicts
+	if !params.SelfTest {
+		var err error
+		if verdicts, err = m.ResolvePreferences(ctx, params.Purpose, params.Recipients); err != nil {
+			return uuid.Nil, err
+		}
 	}
 	return m.pooledWith(ctx, PriorityBulk, verdicts, func(q *queue) (uuid.UUID, bool, error) {
 		return q.enqueueWithRecipients(ctx, params)
@@ -898,6 +908,7 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 		TransactionalStatement:  params.Purpose.TransactionalStatement,
 		CommercialContentAbsent: params.Purpose.CommercialContentAbsent,
 		OwnEventStatement:       params.Purpose.OwnEventStatement,
+		SelfTest:                params.SelfTest,
 	})
 	if err != nil {
 		return uuid.Nil, false, err
@@ -929,6 +940,7 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 			RecipientSub:      sub,
 			UnsubscribeURL:    r.UnsubscribeURL,
 			Purpose:           params.Purpose.Purpose,
+			SelfTest:          params.SelfTest,
 		})
 	}
 

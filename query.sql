@@ -1302,12 +1302,12 @@ RETURNING mt.id, (SELECT count(*) FROM rows WHERE rows.task_id = mt.id) AS rows_
 -- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, form_source_id, body_variables, content_sensitive_at_send,
                         tracking_requested, purpose, category, transactional_statement, commercial_content_absent,
-                        own_event_statement)
+                        own_event_statement, self_test)
 SELECT sqlc.arg(sent_by), sqlc.arg(template_id), sqlc.narg(mail_list_id), sqlc.narg(form_source_id), sqlc.arg(body_variables),
        CASE WHEN template_key_content_locked(templates.key) THEN 'true' ELSE COALESCE(templates.content_sensitive::text, 'unset') END,
        sqlc.arg(tracking_requested)::boolean, sqlc.narg(purpose)::text, sqlc.narg(category)::text,
        sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean,
-       sqlc.narg(own_event_statement)::boolean
+       sqlc.narg(own_event_statement)::boolean, sqlc.arg(self_test)::boolean
 FROM templates
 WHERE templates.id = sqlc.arg(template_id)
   AND archived_at IS NULL
@@ -2328,6 +2328,7 @@ SELECT q.id,
        coalesce(t.system, false)::boolean AS system,
        mt.purpose,
        mt.category,
+       mt.self_test,
        (nt.required IS TRUE)::boolean AS required_notification
 FROM mail_queue q
          JOIN mail_tasks mt ON mt.id = q.task_id

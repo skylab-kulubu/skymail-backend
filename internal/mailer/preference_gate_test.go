@@ -440,3 +440,37 @@ func TestARowThatKnowsItsPersonIsDecidedInItsTurn(t *testing.T) {
 		t.Errorf("Barış: %+v, want held in his turn", got)
 	}
 }
+
+// A test mail to its own sender's verified address alone (self_test, a News
+// send's test mail, which carries no List-Unsubscribe) is neither asked
+// about when it is queued nor held in its turn for a missing link; another
+// duyuru send without a link still is.
+func TestATestMailToItsSenderIsLeftBe(t *testing.T) {
+	db := suppressionQueue(t)
+	core := preferenceCore()
+	m := preferenceMailer(t, db, core, true)
+	test, err := m.EnqueueWithRecipients(context.Background(), mailer.EnqueueWithRecipientsParams{
+		SentBy: laneSender, TemplateID: initialTemplate, BodyVariables: []byte(`{}`), Purpose: duyuruSend(true), SelfTest: true,
+		Recipients: []mailer.RecipientInfo{{FullName: "Ayse", Email: "ayse@example.com", Sub: &ayseSub}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asked := core.calls(); len(asked) != 0 {
+		t.Fatalf("core asked %v about a test mail", asked)
+	}
+	if link := storedLink(t, db, test, "ayse@example.com"); link != "" {
+		t.Fatalf("the test mail got a link %q", link)
+	}
+	taken := preferenceTurn(t, m)
+	if len(taken) != 1 || taken[0].TaskID != test {
+		t.Fatalf("taken %+v, want the test mail", taken)
+	}
+	if asked := core.calls(); len(asked) != 0 {
+		t.Errorf("core asked %v in the test mail's turn", asked)
+	}
+	var selfTest bool
+	if err := db.Conn.QueryRow(context.Background(), `SELECT self_test FROM mail_tasks WHERE id = $1`, test).Scan(&selfTest); err != nil || !selfTest {
+		t.Errorf("self_test %v %v, want true", selfTest, err)
+	}
+}
