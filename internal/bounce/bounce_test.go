@@ -457,7 +457,9 @@ func TestADryRunSaysWhatAReportWouldDoAndWritesNothing(t *testing.T) {
 // again and again. Its error quotes nothing of the report.
 func TestAReportThatCannotBeReadIsErrUnreadable(t *testing.T) {
 	db := store(t)
-	raw := "Message-ID: <broken@outlook.example>\r\nContent-Type: multipart/report; report-type=delivery-status; boundary=\"b\"\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nyok@std.example.org\r\n"
+	// More parts than a report has: the parser gives up.
+	raw := "Message-ID: <broken@outlook.example>\r\nContent-Type: multipart/report; report-type=delivery-status; boundary=\"b\"\r\n\r\n" +
+		strings.Repeat("--b\r\nContent-Type: text/plain\r\n\r\nyok@std.example.org\r\n", 30) + "--b--\r\n"
 	_, err := bounce.Process(context.Background(), db, fqdn, bounce.NDR{ID: "<broken@outlook.example>", MIME: strings.NewReader(raw)})
 	if !errors.Is(err, bounce.ErrUnreadable) {
 		t.Fatalf("err = %v, want ErrUnreadable", err)
