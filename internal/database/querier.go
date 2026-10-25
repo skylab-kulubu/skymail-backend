@@ -85,6 +85,10 @@ type Querier interface {
 	// numbers CountMailTaskSends gives for each status filter.
 	CountMailTasksByStatus(ctx context.Context) (CountMailTasksByStatusRow, error)
 	CountMailingLists(ctx context.Context) (int64, error)
+	// A person's test mails of a template in the last minute: a News send's
+	// test (POST /v1/news_sends/test) is a send of club.news to its sender
+	// without a source, at most 3 a minute.
+	CountRecentNewsTests(ctx context.Context, arg CountRecentNewsTestsParams) (int, error)
 	CountRecipients(ctx context.Context) (int64, error)
 	CountRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) (int64, error)
 	// After a restore from backup (docs/data-lifecycle.md, Backup and restore),

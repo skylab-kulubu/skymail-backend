@@ -73,6 +73,8 @@ type NewsSources interface {
 // NewsAudiences asks core who a record goes to (news.Core).
 type NewsAudiences interface {
 	Resolve(ctx context.Context, asked news.AudienceRequest) (news.Audience, error)
+	// Count is core's numbers only (countOnly): no address is read.
+	Count(ctx context.Context, asked news.AudienceRequest) (news.Counts, news.Skipped, error)
 }
 
 // NewsSendOptions configure NewsSendHandler.
@@ -92,6 +94,10 @@ func (o NewsSendOptions) mail() news.MailOptions {
 
 type NewsSendHandler interface {
 	Send(c fiber.Ctx) error
+	Availability(c fiber.Ctx) error
+	Preview(c fiber.Ctx) error
+	Test(c fiber.Ctx) error
+	Count(c fiber.Ctx) error
 }
 
 type newsSendHandlerImpl struct {
@@ -188,25 +194,7 @@ func (h *newsSendHandlerImpl) Send(c fiber.Ctx) error {
 	}
 	ctx := c.Context()
 
-	record, err := h.sources.Get(ctx, strings.TrimSpace(params.Slug))
-	if errors.Is(err, news.ErrNotFound) {
-		return errNewsNotFound
-	}
-	if err != nil {
-		log.Error().Err(err).Msg("news send: the CMS did not answer the record")
-		return errNewsCMSUnavailable
-	}
-	if len(record.Slug) > maxNewsSlug {
-		return errNewsSlugTooLong
-	}
-	if record.Audience != news.AudiencePublic {
-		return errNewsPrivate
-	}
-	key := news.TemplateKey
-	template, err := h.db.GetTemplateByKey(ctx, &key)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return errNewsTemplateMissing
-	}
+	record, template, err := h.load(ctx, params.Slug)
 	if err != nil {
 		return err
 	}
@@ -232,10 +220,7 @@ func (h *newsSendHandlerImpl) Send(c fiber.Ctx) error {
 		log.Error().Err(err).Msg("news send: core did not answer the audience")
 		return errNewsAudienceUnavailable
 	}
-	counts := NewsSendCounts{Members: audience.Counts.Members, Followers: audience.Counts.Followers, Total: audience.Counts.Total,
-		Skipped: NewsSendSkipped{NotMember: audience.Skipped.NotMember, NotVisible: audience.Skipped.NotVisible,
-			Disabled: audience.Skipped.Disabled, NoEmail: audience.Skipped.NoEmail, Unverified: audience.Skipped.Unverified,
-			OptedOut: audience.Skipped.OptedOut, DuplicateEmail: audience.Skipped.DuplicateEmail}}
+	counts := countsOf(audience)
 	recipients, category := newsRecipients(audience.People, record.Kind, &counts)
 
 	variables, err := json.Marshal(news.Variables(record, params.Format, params.Subject, params.Preheader, h.options.mail()))
@@ -311,6 +296,42 @@ func (h *newsSendHandlerImpl) Send(c fiber.Ctx) error {
 	}
 	logNewsSend(result, params.Audience.Type)
 	return c.Status(fiber.StatusCreated).JSON(result)
+}
+
+// load reads the published record of slug and the club.news template: what
+// every News route starts from.
+func (h *newsSendHandlerImpl) load(ctx context.Context, slug string) (news.Record, database.Template, error) {
+	record, err := h.sources.Get(ctx, strings.TrimSpace(slug))
+	if errors.Is(err, news.ErrNotFound) {
+		return news.Record{}, database.Template{}, errNewsNotFound
+	}
+	if err != nil {
+		log.Error().Err(err).Msg("news send: the CMS did not answer the record")
+		return news.Record{}, database.Template{}, errNewsCMSUnavailable
+	}
+	if len(record.Slug) > maxNewsSlug {
+		return news.Record{}, database.Template{}, errNewsSlugTooLong
+	}
+	if record.Audience != news.AudiencePublic {
+		return news.Record{}, database.Template{}, errNewsPrivate
+	}
+	key := news.TemplateKey
+	template, err := h.db.GetTemplateByKey(ctx, &key)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return news.Record{}, database.Template{}, errNewsTemplateMissing
+	}
+	if err != nil {
+		return news.Record{}, database.Template{}, err
+	}
+	return record, template, nil
+}
+
+// countsOf are core's numbers for an audience, as a send keeps them.
+func countsOf(audience news.Audience) NewsSendCounts {
+	return NewsSendCounts{Members: audience.Counts.Members, Followers: audience.Counts.Followers, Total: audience.Counts.Total,
+		Skipped: NewsSendSkipped{NotMember: audience.Skipped.NotMember, NotVisible: audience.Skipped.NotVisible,
+			Disabled: audience.Skipped.Disabled, NoEmail: audience.Skipped.NoEmail, Unverified: audience.Skipped.Unverified,
+			OptedOut: audience.Skipped.OptedOut, DuplicateEmail: audience.Skipped.DuplicateEmail}}
 }
 
 // newsRecipients are core's people as the queue takes them, each mailbox

@@ -124,6 +124,10 @@ type RecipientInfo struct {
 	// it). Email, FullName and UnsubscribeUrl are always the recipient's
 	// fields above: a variable of those names here is ignored.
 	Variables map[string]string
+	// UnsubscribeInBodyOnly renders UnsubscribeURL in the mail but keeps it
+	// off the row (no List-Unsubscribe): a News send's test mail, whose link
+	// is a sample that changes nothing.
+	UnsubscribeInBodyOnly bool
 }
 
 type EnqueueWithRecipientsParams struct {
@@ -622,6 +626,8 @@ type commonMailRow struct {
 	RecipientVariables map[string]string
 	// SourceRef is a News send's news:<slug> (EnqueueWithRecipientsParams).
 	SourceRef *string
+	// UnsubscribeInBodyOnly: RecipientInfo.UnsubscribeInBodyOnly.
+	UnsubscribeInBodyOnly bool
 	// Purpose is the send's purpose as it is queued (mail_tasks.purpose):
 	// which stream's unsubscribe record applies (unsubscribe.go).
 	Purpose *string
@@ -863,18 +869,19 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 			sub, _ = params.Preferences.accountOf(r.Email)
 		}
 		rows = append(rows, commonMailRow{
-			TaskID:             task.ID,
-			BodyVariables:      params.BodyVariables,
-			TemplateSubject:    tmpl.Subject,
-			HtmlContent:        tmpl.HtmlContent,
-			PlainTextContent:   tmpl.PlainTextContent,
-			RecipientFullName:  r.FullName,
-			RecipientEmail:     r.Email,
-			RecipientSub:       sub,
-			UnsubscribeURL:     r.UnsubscribeURL,
-			RecipientVariables: r.Variables,
-			SourceRef:          params.SourceRef,
-			Purpose:            params.Purpose.Purpose,
+			TaskID:                task.ID,
+			BodyVariables:         params.BodyVariables,
+			TemplateSubject:       tmpl.Subject,
+			HtmlContent:           tmpl.HtmlContent,
+			PlainTextContent:      tmpl.PlainTextContent,
+			RecipientFullName:     r.FullName,
+			RecipientEmail:        r.Email,
+			RecipientSub:          sub,
+			UnsubscribeURL:        r.UnsubscribeURL,
+			RecipientVariables:    r.Variables,
+			SourceRef:             params.SourceRef,
+			UnsubscribeInBodyOnly: r.UnsubscribeInBodyOnly,
+			Purpose:               params.Purpose.Purpose,
 		})
 	}
 
@@ -1120,7 +1127,7 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 			Priority:           int16(q.priority),
 			RecipientSub:       row.RecipientSub,
 			SuppressedButSent:  isSuppressed,
-			ListUnsubscribeUrl: nonEmpty(row.UnsubscribeURL),
+			ListUnsubscribeUrl: listUnsubscribeOf(row),
 			SourceRef:          row.SourceRef,
 		})
 		if isSuppressed {
@@ -1461,6 +1468,15 @@ func (m *mailerImpl) recordSendFailure(ctx context.Context, logger *zerolog.Logg
 }
 
 // nonEmpty is s, or nil when it is empty.
+// listUnsubscribeOf is the link a row keeps for List-Unsubscribe: the
+// recipient's, unless it goes in the body only.
+func listUnsubscribeOf(row commonMailRow) *string {
+	if row.UnsubscribeInBodyOnly {
+		return nil
+	}
+	return nonEmpty(row.UnsubscribeURL)
+}
+
 func nonEmpty(s string) *string {
 	if s == "" {
 		return nil

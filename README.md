@@ -863,6 +863,20 @@ bileti duyuru-haber 06; ADR 0067). Varsayılan kapalı; kapalıyken uç
   SkyMail'in çıkış kaydı (`mail_unsubscribes`) kuyruğa alırken uygulanır.
 - **Günlük.** Yalnız sayılar (`news_send_queued`): kişi, adres, bağlantı ve
   kaydın metni yazılmaz.
+- **Önizleme, deneme, canlı sayı (bilet 07, 08).** `skymail:announcements:send`
+  ya da `skymail:mails:write` ile:
+  - `POST /v1/news_sends/preview`: gönderimin kuyruğa alacağı konu, HTML ve
+    düz metin, çağıran okur olarak (örnek çıkış bağlantısı: tercihler sayfası;
+    "neden aldın" core'un biçiminde örnek). Hiçbir şey yazılmaz.
+  - `POST /v1/news_sends/test`: postayı yalnız çağıranın token'daki doğrulanmış
+    adresine gönderir; konu "[Deneme]" ile başlar, kaynağı yoktur ("bir kez"e
+    ve rapora girmez). Örnek çıkış bağlantısı yalnız gövdededir, List-Unsubscribe
+    başlığı yoktur. Kişi başına dakikada en çok 3 (`429`).
+  - `POST /v1/news_sends/count`: core'un yalnız sayıları (`countOnly`, adres
+    okunmaz): üyeler, takipçiler, atlananlar; `already_received` kaydın bugüne
+    dek ulaştığı posta kutusu sayısı (bu kitleden atlanacakların üst sınırı;
+    kesin sayı gönderimde); bu kitleye gönderim varsa `already_sent_task_id`.
+  - `GET /v1/news_sends/availability`: `SKYMAIL_NEWS_SEND` açık mı.
 
 ## Uygulama içi kutu (`/v1/me/inbox`)
 
