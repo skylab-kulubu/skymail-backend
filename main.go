@@ -332,6 +332,7 @@ func main() {
 	// Before protectedAPI: /v1/me is a person's own, with no role, and must
 	// not go through /v1's skymail:access chain.
 	registerInboxRoutes(app, authMiddleware, accountAccessGate, handlers.NewInboxHandler(db))
+	registerEmailDeliveryRoutes(app, authMiddleware, accountAccessGate, handlers.NewEmailDeliveryHandler(db))
 
 	api := protectedAPI(app, authMiddleware, accountAccessGate)
 
@@ -783,6 +784,15 @@ func registerInboxRoutes(app *fiber.App, auth middlewares.AuthMiddleware, gate a
 	me.Post("/:id/read", person, gated, inbox.Read)
 	me.Post("/:id/unread", person, gated, inbox.Unread)
 	me.Post("/:id/archive", person, gated, inbox.Archive)
+}
+
+// registerEmailDeliveryRoutes serves a person's own e-mail delivery (hub
+// ticket rabbitmq-olaylar 10) at /v1/me/email-delivery: which of their own
+// addresses mail does not reach, with the inbox's chain (a person's own token
+// issued for SkyMail, no role, the account access gate), registered before
+// /v1's skymail:access chain as the inbox is.
+func registerEmailDeliveryRoutes(app *fiber.App, auth middlewares.AuthMiddleware, gate accessgate.Reader, delivery handlers.EmailDeliveryHandler) {
+	app.Get("/v1/me/email-delivery", auth.AuthenticatePerson, middlewares.AccountAccessGate(gate), delivery.Get)
 }
 
 // inboxSweepInterval is how often the inbox sweep runs: an item is gone

@@ -4654,6 +4654,48 @@ func (q *Queries) ListOperatorVersionsAfter(ctx context.Context, arg ListOperato
 	return items, nil
 }
 
+const listPersonSuppressions = `-- name: ListPersonSuppressions :many
+SELECT address, first_seen
+FROM mail_suppressions
+WHERE recipient_sub = $1::uuid
+   OR address = ANY ($2::text[])
+ORDER BY first_seen, address
+`
+
+type ListPersonSuppressionsParams struct {
+	RecipientSub uuid.UUID `json:"recipient_sub"`
+	Addresses    []string  `json:"addresses"`
+}
+
+type ListPersonSuppressionsRow struct {
+	Address   string    `json:"address"`
+	FirstSeen time.Time `json:"first_seen"`
+}
+
+// A person's own suppressions (GET /v1/me/email-delivery; hub ticket
+// rabbitmq-olaylar 10): the rows suppressed with their sub, and the rows of
+// the addresses their token says are theirs (lower-cased). Each address once
+// (it is the key), oldest first.
+func (q *Queries) ListPersonSuppressions(ctx context.Context, arg ListPersonSuppressionsParams) ([]ListPersonSuppressionsRow, error) {
+	rows, err := q.db.Query(ctx, listPersonSuppressions, arg.RecipientSub, arg.Addresses)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPersonSuppressionsRow
+	for rows.Next() {
+		var i ListPersonSuppressionsRow
+		if err := rows.Scan(&i.Address, &i.FirstSeen); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPublishedMainModes = `-- name: ListPublishedMainModes :many
 SELECT t.id AS template_id, v.main_mode
 FROM templates t

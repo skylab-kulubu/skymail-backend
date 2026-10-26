@@ -1,6 +1,7 @@
 package middlewares
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/gofiber/fiber/v3"
@@ -32,8 +33,12 @@ type userInfo struct {
 	Name              string `json:"name"`
 	PreferredUsername string `json:"preferred_username"`
 	Email             string `json:"email"`
-	EmailVerified     bool   `json:"email_verified"`
-	ResourceAccess    map[string]struct {
+	// Nil when userinfo does not say (Keycloak's email scope says).
+	EmailVerified *bool `json:"email_verified"`
+	// The school address, when a mapper puts the user attribute schoolEmail
+	// there (Keycloak's profile scope in production).
+	SchoolEmail    string `json:"school_email"`
+	ResourceAccess map[string]struct {
 		Roles []string `json:"roles"`
 	} `json:"resource_access"`
 }
@@ -106,7 +111,7 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) er
 		c.Locals("user_name", name)
 	}
 	if email := strings.TrimSpace(info.Email); email != "" {
-		if info.EmailVerified {
+		if info.EmailVerified != nil && *info.EmailVerified {
 			c.Locals("user_email", email)
 		} else {
 			c.Locals("user_email_unverified", true)
@@ -128,7 +133,8 @@ var errPersonRequired = apperrors.New(
 // the audience is what keeps a token issued for another service out (401) —
 // and it must be a person's: a service account's token (client_id = azp)
 // gets 403 auth.person_required, and so does a token whose sub is not the one
-// userinfo accepted. Only the sub is kept ("user_id"); roles are not read.
+// userinfo accepted. The sub is kept ("user_id"), and the person's own
+// addresses (PersonAddresses); roles are not read.
 func (a *authMiddlewareImpl) AuthenticatePerson(c fiber.Ctx) error {
 	authHeader := c.Get("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") || len(authHeader) == len("Bearer ") {
@@ -153,7 +159,52 @@ func (a *authMiddlewareImpl) AuthenticatePerson(c fiber.Ctx) error {
 	}
 	c.Locals("user_id", info.ID)
 	c.Locals(acceptedTokenIdentityKey, identity)
+	c.Locals(personAddressesKey, info.ownAddresses(tokenStr))
 	return c.Next()
+}
+
+const personAddressesKey = "person_addresses"
+
+// PersonAddresses is what AuthenticatePerson found the caller's own
+// addresses to be (GET /v1/me/email-delivery; hub ticket rabbitmq-olaylar
+// 10): userinfo's email, unless userinfo says Keycloak has not verified it
+// (email_verified false), and the school address, school_email, from
+// userinfo or else from the token Keycloak accepted. Trimmed, lower-cased as
+// the suppression list keys an address, each once. Nil when there is none,
+// or on a route AuthenticatePerson did not run for.
+func PersonAddresses(c fiber.Ctx) []string {
+	addresses, _ := c.Locals(personAddressesKey).([]string)
+	return addresses
+}
+
+func (info userInfo) ownAddresses(tokenStr string) []string {
+	var addresses []string
+	add := func(address string) {
+		address = strings.ToLower(strings.TrimSpace(address))
+		if address != "" && !slices.Contains(addresses, address) {
+			addresses = append(addresses, address)
+		}
+	}
+	if info.EmailVerified == nil || *info.EmailVerified {
+		add(info.Email)
+	}
+	school := info.SchoolEmail
+	if strings.TrimSpace(school) == "" {
+		school = stringClaim(tokenStr, "school_email")
+	}
+	add(school)
+	return addresses
+}
+
+// stringClaim is a string claim of a token userinfo has accepted; "" when
+// the token does not carry it as a string.
+func stringClaim(tokenStr, name string) string {
+	claims := jwt.MapClaims{}
+	if _, _, err := jwt.NewParser().ParseUnverified(tokenStr, claims); err != nil {
+		return ""
+	}
+	value, _ := claims[name].(string)
+	return value
 }
 
 // PersonAudienceMissingEvent is the event of the line AuthenticatePerson
