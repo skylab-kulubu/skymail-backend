@@ -50,6 +50,7 @@ func (*recordingMailerStub) OperatorTrackingAlways() bool { return false }
 func (*recordingMailerStub) PurposeAvailable() bool       { return false }
 func (*recordingMailerStub) PromotionalAvailable() bool   { return false }
 func (*recordingMailerStub) ListConsentAvailable() bool   { return false }
+func (*recordingMailerStub) PreferenceAvailable() bool    { return false }
 
 func (m *recordingMailerStub) EnqueueSystemSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, _ *mailer.TrackingPreferences) (uuid.UUID, bool, error) {
 	id, err := m.EnqueueSingle(ctx, arg)

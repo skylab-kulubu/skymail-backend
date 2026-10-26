@@ -212,8 +212,25 @@ func (m *recordingMailer) Queue(q *database.Queries, priority mailer.Priority) m
 // approval's, in the approval's transaction; the notifications are not.
 type recordingQueue struct {
 	m     *recordingMailer
-	queue mailer.Queue
+	queue queueSends
 	inTx  bool
+}
+
+// queueSends is the sends a Mailer and a Queue both make.
+type queueSends interface {
+	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error)
+	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
+	EnqueueTrackedSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *mailer.TrackingPreferences) (uuid.UUID, error)
+	EnqueueWithRecipients(ctx context.Context, params mailer.EnqueueWithRecipientsParams) (uuid.UUID, error)
+}
+
+// WithPreferences is the queue with what core said about a send's
+// recipients, recorded the same way.
+func (r recordingQueue) WithPreferences(verdicts *mailer.PreferenceVerdicts) mailer.Queue {
+	if queue, ok := r.queue.(mailer.Queue); ok {
+		r.queue = queue.WithPreferences(verdicts)
+	}
+	return r
 }
 
 // hold keeps an approval's send at the gate, when there is one.
@@ -387,7 +404,7 @@ func newApprovalWorldWithPool(t *testing.T, poolSize int, opts ...mailer.Option)
 
 	w.handler = handlers.NewMailApprovalHandler(store, w.mail, w.directory, handlers.MailApprovalOptions{
 		ClientID: "skymail",
-		UIURL:    "https://mail.yildizskylab.com/",
+		UIURL:    "https://iletisim.yildizskylab.com/",
 		Now:      w.now,
 	})
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
@@ -647,7 +664,7 @@ func TestSubmittingASendQueuesNothingAndTellsTheApprovers(t *testing.T) {
 		t.Fatalf("approval-requested went to %s", got)
 	}
 	vars := notices[0].variables
-	link := "https://mail.yildizskylab.com/mail-approvals/show/" + answer.ID.String()
+	link := "https://iletisim.yildizskylab.com/mail-approvals/show/" + answer.ID.String()
 	if vars["RequesterName"] != "Elif Yıldız" || vars["TemplateName"] != "Serbest Gönderim" || vars["AudienceName"] != "Tüm üyeler" ||
 		vars["RecipientCount"] != "2" || vars["ApproveUrl"] != link || vars["PreviewUrl"] != link+"#preview" {
 		t.Errorf("approval-requested variables = %v", vars)
@@ -877,7 +894,7 @@ func TestApprovingSendsExactlyWhatWasSubmittedOnce(t *testing.T) {
 	vars := notices[0].variables
 	if vars["Decision"] != "approved" || vars["DecidedBy"] != "Fatih Naz" || vars["DecisionNote"] != "Güzel olmuş." ||
 		vars["TemplateName"] != "Serbest Gönderim" || vars["AudienceName"] != "Tüm üyeler" ||
-		vars["RequestUrl"] != "https://mail.yildizskylab.com/mail-approvals/show/"+submitted.ID.String() ||
+		vars["RequestUrl"] != "https://iletisim.yildizskylab.com/mail-approvals/show/"+submitted.ID.String() ||
 		vars["DeadlineAt"] != "30.09.2026 13:00" {
 		t.Errorf("approval-resolved variables = %v", vars)
 	}
@@ -1338,7 +1355,7 @@ func TestReadingAnOverdueRequestWritesAndSendsNothing(t *testing.T) {
 		t.Errorf("after the sweep: %s %s", read.State, read.kinds())
 	}
 	if notices := w.mail.of(w.resolved.ID); len(notices) != 1 || notices[0].variables["Decision"] != "expired" ||
-		notices[0].variables["RequestUrl"] != "https://mail.yildizskylab.com/mail-approvals/show/"+overdue.ID.String() ||
+		notices[0].variables["RequestUrl"] != "https://iletisim.yildizskylab.com/mail-approvals/show/"+overdue.ID.String() ||
 		notices[0].variables["DeadlineAt"] != "30.09.2026 13:00" {
 		t.Errorf("expiry notices = %+v", notices)
 	}

@@ -614,6 +614,15 @@ WHERE mlr.mail_list_id = $1
 ORDER BY r.created_at DESC
 LIMIT $2 OFFSET $3;
 
+-- A list's addresses, for the bulk preference check before its send is
+-- queued (mailer, preference_gate.go): the send's insert reads the list
+-- again, in its transaction.
+-- name: GetMailingListAddresses :many
+SELECT r.email
+FROM recipients r
+         JOIN mailing_list_recipients mlr ON r.id = mlr.recipient_id
+WHERE mlr.mail_list_id = $1;
+
 -- name: CountRecipientsByMailingListId :one
 SELECT count(*)
 FROM recipients r
@@ -905,8 +914,8 @@ INSERT INTO mail_queue (
     task_id, recipient_full_name, recipient_email,
     subject, body, body_html, priority, recipient_sub,
     tracking_token, tracking_skip_reason, suppressed_but_sent,
-    list_unsubscribe_url
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
+    list_unsubscribe_url, source_ref, preference_checked_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
 
 -- A recipient whose mail did not render, say a template that slices an empty
 -- full name, is written failed, with the render error the send's page shows:
@@ -1293,12 +1302,12 @@ RETURNING mt.id, (SELECT count(*) FROM rows WHERE rows.task_id = mt.id) AS rows_
 -- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, form_source_id, body_variables, content_sensitive_at_send,
                         tracking_requested, purpose, category, transactional_statement, commercial_content_absent,
-                        own_event_statement)
+                        own_event_statement, self_test)
 SELECT sqlc.arg(sent_by), sqlc.arg(template_id), sqlc.narg(mail_list_id), sqlc.narg(form_source_id), sqlc.arg(body_variables),
        CASE WHEN template_key_content_locked(templates.key) THEN 'true' ELSE COALESCE(templates.content_sensitive::text, 'unset') END,
        sqlc.arg(tracking_requested)::boolean, sqlc.narg(purpose)::text, sqlc.narg(category)::text,
        sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean,
-       sqlc.narg(own_event_statement)::boolean
+       sqlc.narg(own_event_statement)::boolean, sqlc.arg(self_test)::boolean
 FROM templates
 WHERE templates.id = sqlc.arg(template_id)
   AND archived_at IS NULL
@@ -1394,6 +1403,10 @@ SELECT mt.id,
        rc.sent,
        rc.failed,
        rc.suppressed,
+       rc.opted_out,
+       rc.unsubscribed,
+       rc.inactive,
+       rc.ambiguous,
        rc.suppressed_but_sent,
        rc.undelivered,
        single.recipient_full_name   AS single_recipient_full_name,
@@ -1418,6 +1431,10 @@ FROM page
                                     count(*) FILTER (WHERE q.status = 'sent')       AS sent,
                                     count(*) FILTER (WHERE q.status = 'failed')     AS failed,
                                     count(*) FILTER (WHERE q.status = 'failed' AND q.error LIKE 'suppressed:%') AS suppressed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: opted_out') AS opted_out,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'suppressed: unsubscribed') AS unsubscribed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: inactive') AS inactive,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: ambiguous') AS ambiguous,
                                     count(*) FILTER (WHERE q.suppressed_but_sent) AS suppressed_but_sent,
                                     count(*) FILTER (WHERE EXISTS (SELECT 1
                                                                    FROM mail_bounces b
@@ -2122,6 +2139,87 @@ WHERE address = ANY (sqlc.arg(addresses)::text[]);
 INSERT INTO mail_bounces (queue_id, source, kind, action, status, smtp_code)
 VALUES (sqlc.arg(queue_id), 'smtp', 'hard', 'failed', sqlc.narg(status)::text, sqlc.arg(smtp_code)::int);
 
+-- The Graph delta link the NDR reader's next poll of mailbox starts from in
+-- mode; no row (or a NULL link) reads the inbox from the start.
+-- name: GetBounceReaderDeltaLink :one
+SELECT delta_link
+FROM mail_bounce_reader_state
+WHERE mailbox = sqlc.arg(mailbox)::text
+  AND mode = sqlc.arg(mode)::text;
+
+-- Records one poll of a mailbox: its delta link when the poll reached the
+-- end (NULL keeps the one before, so a poll that failed half way starts
+-- again from there), when, its error (NULL: none) and what the reports it
+-- read came to, added to the counts.
+-- name: RecordBounceReaderPoll :exec
+INSERT INTO mail_bounce_reader_state (mailbox, mode, delta_link, last_polled_at, last_error, reports, not_dsn,
+                                      unmatched, hard, soft, delay, other_recipient, duplicate, no_failure,
+                                      unreadable)
+VALUES (sqlc.arg(mailbox)::text, sqlc.arg(mode)::text, sqlc.narg(delta_link)::text, sqlc.arg(polled_at)::timestamptz,
+        sqlc.narg(last_error)::text, sqlc.arg(reports)::bigint, sqlc.arg(not_dsn)::bigint,
+        sqlc.arg(unmatched)::bigint, sqlc.arg(hard)::bigint, sqlc.arg(soft)::bigint, sqlc.arg(delay)::bigint,
+        sqlc.arg(other_recipient)::bigint, sqlc.arg(duplicate)::bigint, sqlc.arg(no_failure)::bigint,
+        sqlc.arg(unreadable)::bigint)
+ON CONFLICT (mailbox, mode) DO UPDATE SET delta_link      = COALESCE(EXCLUDED.delta_link,
+                                                                     mail_bounce_reader_state.delta_link),
+                                          last_polled_at  = EXCLUDED.last_polled_at,
+                                          last_error      = EXCLUDED.last_error,
+                                          reports         = mail_bounce_reader_state.reports + EXCLUDED.reports,
+                                          not_dsn         = mail_bounce_reader_state.not_dsn + EXCLUDED.not_dsn,
+                                          unmatched       = mail_bounce_reader_state.unmatched + EXCLUDED.unmatched,
+                                          hard            = mail_bounce_reader_state.hard + EXCLUDED.hard,
+                                          soft            = mail_bounce_reader_state.soft + EXCLUDED.soft,
+                                          delay           = mail_bounce_reader_state.delay + EXCLUDED.delay,
+                                          other_recipient = mail_bounce_reader_state.other_recipient +
+                                                            EXCLUDED.other_recipient,
+                                          duplicate       = mail_bounce_reader_state.duplicate + EXCLUDED.duplicate,
+                                          no_failure      = mail_bounce_reader_state.no_failure + EXCLUDED.no_failure,
+                                          unreadable      = mail_bounce_reader_state.unreadable + EXCLUDED.unreadable;
+
+-- Every mailbox and mode the NDR reader has polled, without the delta link.
+-- name: ListBounceReaderStates :many
+SELECT mailbox,
+       mode,
+       last_polled_at,
+       last_error,
+       reports,
+       not_dsn,
+       unmatched,
+       hard,
+       soft,
+       delay,
+       other_recipient,
+       duplicate,
+       no_failure,
+       unreadable
+FROM mail_bounce_reader_state
+ORDER BY mailbox, mode;
+
+-- Of the e-mails sent in the last days days (still sent: a relay's refusal is
+-- failed), how many a report later said did not reach their address (hard),
+-- failed otherwise (soft) or were delayed. A row counts once in each.
+-- name: BounceRate :one
+SELECT count(*)                                                     AS sent,
+       count(*) FILTER (WHERE EXISTS (SELECT 1
+                                      FROM mail_bounces b
+                                      WHERE b.queue_id = q.id
+                                        AND b.kind = 'hard'
+                                        AND b.recipient_matched)) AS hard,
+       count(*) FILTER (WHERE EXISTS (SELECT 1
+                                      FROM mail_bounces b
+                                      WHERE b.queue_id = q.id
+                                        AND b.kind = 'soft'
+                                        AND b.recipient_matched)) AS soft,
+       count(*) FILTER (WHERE EXISTS (SELECT 1
+                                      FROM mail_bounces b
+                                      WHERE b.queue_id = q.id
+                                        AND b.kind = 'delay'
+                                        AND b.recipient_matched)) AS delay
+FROM mail_queue q
+WHERE q.channel = 'email'
+  AND q.status = 'sent'
+  AND q.sent_at >= now() - make_interval(days => sqlc.arg(days)::int);
+
 -- Removes a suppression: the address is mailed again. What it said is
 -- returned for the removal's record, never the address.
 -- name: DeleteSuppression :one
@@ -2207,6 +2305,42 @@ SET status          = 'pending',
     claimed_at      = NULL,
     claimed_by      = NULL,
     next_attempt_at = NOW() + (sqlc.arg(delay_ms)::int * INTERVAL '1 millisecond')
+WHERE id = ANY (sqlc.arg(ids)::uuid[])
+  AND status = 'processing'
+  AND claimed_by = sqlc.arg(claimed_by)::text;
+
+-- The bulk rows this process just took, as the bulk preference check reads
+-- them (mailer, preference_gate.go): whether core gave a verdict about the
+-- row when it was queued, whom to ask about again, the send's category, and
+-- what picks the row's lane. A required notification type never carries a
+-- link (POST /v1/notifications refuses one), so the safety net leaves it be.
+-- name: GetPreferenceGateClaimedRows :many
+SELECT q.id,
+       q.recipient_email,
+       q.recipient_sub,
+       q.priority,
+       q.created_at,
+       q.preference_checked_at,
+       (q.list_unsubscribe_url IS NOT NULL)::boolean AS has_link,
+       t.key,
+       coalesce(t.system, false)::boolean AS system,
+       mt.purpose,
+       mt.category,
+       mt.self_test,
+       (nt.required IS TRUE)::boolean AS required_notification
+FROM mail_queue q
+         JOIN mail_tasks mt ON mt.id = q.task_id
+         LEFT JOIN templates t ON t.id = mt.template_id
+         LEFT JOIN notifications n ON n.id = mt.notification_id
+         LEFT JOIN notification_types nt ON nt.key = n.type
+WHERE q.id = ANY (sqlc.arg(ids)::uuid[])
+  AND q.channel = 'email'
+  AND q.status = 'processing'
+  AND q.claimed_by = sqlc.arg(claimed_by)::text;
+
+-- name: SetClaimedRowsPreferenceCheckedAt :execrows
+UPDATE mail_queue
+SET preference_checked_at = sqlc.arg(at)::timestamptz
 WHERE id = ANY (sqlc.arg(ids)::uuid[])
   AND status = 'processing'
   AND claimed_by = sqlc.arg(claimed_by)::text;
@@ -2311,3 +2445,41 @@ SELECT ((SELECT count(*)
 SELECT id
 FROM mail_suppressions
 WHERE id = sqlc.arg(id);
+
+-- A News send's source (POST /v1/news_sends; hub ticket duyuru-haber 06):
+-- written in the transaction that queues the send, after its rows.
+-- name: SetMailTaskNewsSource :exec
+UPDATE mail_tasks
+SET source_kind     = 'news',
+    source_ref      = sqlc.arg(source_ref)::text,
+    source_version  = sqlc.arg(source_version)::int,
+    source_snapshot = sqlc.arg(source_snapshot)::jsonb,
+    source_audience = sqlc.arg(source_audience)::text,
+    source_counts   = sqlc.arg(source_counts)::jsonb
+WHERE id = sqlc.arg(id);
+
+-- Holds a News record's sends back from each other until the transaction
+-- ends: the send that checks who already got the record's mail and queues
+-- the rest is the only one doing so (idx_mail_queue_news_once is the net).
+-- name: LockNewsSource :exec
+SELECT pg_advisory_xact_lock(hashtextextended('skymail news ' || sqlc.arg(source_ref)::text, 0));
+
+-- The send of a News record to an audience, if there is one (open or done).
+-- name: GetNewsSendByAudience :one
+SELECT id FROM mail_tasks
+WHERE source_ref = sqlc.arg(source_ref)::text AND source_audience = sqlc.arg(source_audience)::text;
+
+-- The mailboxes a row of a News record was queued to go to, lower-cased:
+-- every send of the record leaves them out ("zaten aldı").
+-- name: ListNewsSourceAddresses :many
+SELECT DISTINCT lower(recipient_email)::text AS address
+FROM mail_queue
+WHERE source_ref = sqlc.arg(source_ref)::text;
+
+-- A person's test mails of a template in the last minute: a News send's
+-- test (POST /v1/news_sends/test) is a send of club.news to its sender
+-- without a source, at most 3 a minute.
+-- name: CountRecentNewsTests :one
+SELECT count(*)::int FROM mail_tasks
+WHERE sent_by = sqlc.arg(sent_by)::text AND template_id = sqlc.arg(template_id)::uuid AND source_ref IS NULL
+  AND created_at > now() - interval '1 minute';

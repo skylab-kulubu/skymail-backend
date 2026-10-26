@@ -64,6 +64,7 @@ type SuppressionHandler interface {
 	Delete(c fiber.Ctx) error
 	Reactivate(c fiber.Ctx) error
 	Reactivations(c fiber.Ctx) error
+	Bounces(c fiber.Ctx) error
 }
 
 type suppressionHandlerImpl struct {
@@ -360,4 +361,93 @@ func (h *suppressionHandlerImpl) Reactivations(c fiber.Ctx) error {
 	}
 	c.Response().Header.Set("X-Total-Count", strconv.FormatInt(total, 10))
 	return c.JSON(items)
+}
+
+// The window of GET /suppressions/bounces, in days.
+const (
+	defaultBounceDays = 7
+	maxBounceDays     = 90
+)
+
+// BounceSummary is the bounce rate of the e-mails sent in the last days and
+// the NDR reader's state.
+type BounceSummary struct {
+	Days int `json:"days" example:"7"`
+	// E-mails sent in the window (a relay's refusal is not sent).
+	Sent int64 `json:"sent" example:"1200"`
+	// Of them, how many a report said did not reach their address
+	// (permanent), failed otherwise (soft) or were delayed.
+	Hard  int64 `json:"hard" example:"6"`
+	Soft  int64 `json:"soft" example:"2"`
+	Delay int64 `json:"delay" example:"1"`
+	// hard / sent; 0 when nothing was sent.
+	HardRate float64 `json:"hard_rate" example:"0.005"`
+	// Each sender mailbox the reader has polled, in each mode.
+	Reader []BounceReaderState `json:"reader"`
+}
+
+// BounceReaderState is one sender mailbox's last poll and what its reports
+// came to since the reader started in that mode (SKYMAIL_BOUNCE_READER).
+type BounceReaderState struct {
+	// The club's sender mailbox.
+	Mailbox string `json:"mailbox" example:"hesap@bildirim.yildizskylab.com"`
+	Mode    string `json:"mode" enums:"dry-run,on"`
+	// null before the first poll that reached Graph.
+	LastPolledAt *time.Time `json:"last_polled_at"`
+	// The last poll's failure, Graph's status and code (graph: 403
+	// ErrorAccessDenied); null when it read the mailbox to the end.
+	LastError      *string `json:"last_error"`
+	Reports        int64   `json:"reports"`
+	NotDSN         int64   `json:"not_dsn"`
+	Unmatched      int64   `json:"unmatched"`
+	Hard           int64   `json:"hard"`
+	Soft           int64   `json:"soft"`
+	Delay          int64   `json:"delay"`
+	OtherRecipient int64   `json:"other_recipient"`
+	Duplicate      int64   `json:"duplicate"`
+	NoFailure      int64   `json:"no_failure"`
+	Unreadable     int64   `json:"unreadable"`
+}
+
+// Bounces godoc
+//
+//	@Summary		The bounce rate and the NDR reader's state
+//	@Description	Of the e-mails sent in the last days days (1 to 90, 7 by default), how many a delivery status notification later said did not reach their address (hard), failed otherwise (soft) or were delayed, and hard_rate = hard / sent. reader is each sender mailbox's last poll and counts, without the reader's place in the mailbox. Needs skymail:suppressions:manage. No address of a person.
+//	@Tags			Suppressions
+//	@Produce		json
+//	@Param			days	query		int	false	"The window, in days (1 to 90)"
+//	@Success		200		{object}	handlers.BounceSummary
+//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
+//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
+//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Router			/suppressions/bounces [get]
+func (h *suppressionHandlerImpl) Bounces(c fiber.Ctx) error {
+	days := defaultBounceDays
+	if raw := c.Query("days"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > maxBounceDays {
+			return fiber.NewError(fiber.StatusBadRequest, "days must be 1 to 90")
+		}
+		days = n
+	}
+	rate, err := h.db.BounceRate(c.Context(), days)
+	if err != nil {
+		return err
+	}
+	states, err := h.db.ListBounceReaderStates(c.Context())
+	if err != nil {
+		return err
+	}
+	summary := BounceSummary{Days: days, Sent: rate.Sent, Hard: rate.Hard, Soft: rate.Soft, Delay: rate.Delay, Reader: make([]BounceReaderState, 0, len(states))}
+	if rate.Sent > 0 {
+		summary.HardRate = float64(rate.Hard) / float64(rate.Sent)
+	}
+	for _, s := range states {
+		summary.Reader = append(summary.Reader, BounceReaderState{
+			Mailbox: s.Mailbox, Mode: s.Mode, LastPolledAt: s.LastPolledAt, LastError: s.LastError,
+			Reports: s.Reports, NotDSN: s.NotDsn, Unmatched: s.Unmatched, Hard: s.Hard, Soft: s.Soft, Delay: s.Delay,
+			OtherRecipient: s.OtherRecipient, Duplicate: s.Duplicate, NoFailure: s.NoFailure, Unreadable: s.Unreadable,
+		})
+	}
+	return c.JSON(summary)
 }

@@ -104,7 +104,10 @@ yazar. Amaç, Keycloak'ın public adında `/admin`'i kenarda kapatabilmek
 (Keycloak'ın reverse proxy kılavuzu `/admin/`'i dışarı açmaz).
 
 Mail onayı bildirimlerindeki linkler `SKYMAIL_UI_URL` altına kurulur
-(varsayılan `https://mail.yildizskylab.com`).
+(varsayılan `https://iletisim.yildizskylab.com`, iletişim konsolunun adresi;
+iletişim-servisi 11). Eski `https://mail.yildizskylab.com` yolu ve sorguyu
+koruyarak kalıcı 301 ile yeni adrese yönlenir, eski postalardaki linkler
+çalışmaya devam eder.
 
 ## `/v1` token audience'ı (`V1_TOKEN_AUDIENCE_MODE`)
 
@@ -323,11 +326,13 @@ skymail-bounce-isleme 11).** Çıkış bağlantısı core'undur: tercih core'da
 (`GET|POST /v1/communication-preferences/unsubscribe?t=…`; GET yalnız sayfa,
 POST `List-Unsubscribe=One-Click` bağlantının kategorilerini kapatır). SkyMail
 anahtarı tutmaz, kendi tercih kaydı yoktur; core'un verdiği bağlantıyı satırda
-(`mail_queue.list_unsubscribe_url`) taşır. Bugün bağlantıyı veren tek yol
-`POST /v1/notifications` alıcısının `unsubscribe_url`'idir (yalnız isteğe bağlı
-ve `bulk` şeritli türde; [`docs/notifications.md`](docs/notifications.md)).
-Liste, grup, Forms ve onaylı gönderimin satırında bağlantı yoktur: bu postalar
-core tercihine bakmaz, çıkış başlığı onurlandırılamaz.
+(`mail_queue.list_unsubscribe_url`) taşır. Bağlantı iki yoldan gelir:
+`POST /v1/notifications` alıcısının `unsubscribe_url`'i (yalnız isteğe bağlı
+ve `bulk` şeritli türde; [`docs/notifications.md`](docs/notifications.md)) ve
+`SKYMAIL_BULK_PREFERENCE=on` iken liste, grup, Forms, kişi ve onaylı duyuru
+gönderiminde core'un `recipients:resolve` cevabı ("Toplu postada tercih");
+hesabı olmayan adres SkyMail'in kendi bağlantısını alır. Bayrak kapalıyken bu
+gönderimlerin satırında bağlantı yoktur.
 
 | `SKYMAIL_LIST_UNSUBSCRIBE` | |
 |---|---|
@@ -370,9 +375,49 @@ ortaktır; Exchange'in dakikada 30 ileti sınırı kutu başınadır.
 Exchange Online dış alıcıyı `RCPT TO`'da reddetmez, postayı alır ve sonra
 gönderen kutusuna bir teslim raporu (NDR, RFC 3464) yollar. Bu raporları
 okuyan `internal/bounce` (`Process`) bir raporu kuyruk satırına bağlar ve
-kaydeder; raporu kutudan çeken okuyucu ayrı iştir (hub bileti
-skymail-bounce-isleme 04), bu sürümde yoktur. Bugün listeyi dolduran yol
-relay'in senkron kalıcı reddidir (aşağıda).
+kaydeder; raporları kutudan okuyucu çeker (`internal/bouncereader`,
+`SKYMAIL_BOUNCE_READER`, aşağıda; hub bileti skymail-bounce-isleme 04, ADR
+0073). Okuyucu kapalıyken listeyi dolduran yol relay'in senkron kalıcı
+reddidir (aşağıda).
+
+- **Okuyucu** (`SKYMAIL_BOUNCE_READER`, varsayılan `off`): her 5 dakikada
+  gönderen kutularının (`SKYMAIL_BOUNCE_MAILBOXES`) Gelen Kutusu'nu Graph'ın
+  delta sorgusuyla okur (`mailFolders/inbox/messages/delta`, yalnız
+  `internetMessageId` ve `receivedDateTime`); her yeni öğenin MIME'ını
+  (`$value`, en çok 10 MB) bellekte `internal/bounce`'a verir, saklamaz.
+  Kimlik gönderen şeritlerinin uygulamasıdır (`GRAPH_*`, `internal/msauth`,
+  kapsam Graph); yetki Exchange RBAC for Applications `Application Mail.Read`,
+  yalnız gönderen kutularına: okuyucu kutuda hiçbir şeyi silemez ya da
+  taşıyamaz (raporları kutunun saklama etiketi 30 günde siler). Birden çok
+  replikada aynı anda tek süreç okur (Postgres advisory lock). Okuyucu açıkken
+  SMTP postası, relay EHLO'da `DSN` ilan ediyorsa, `RET=HDRS NOTIFY=FAILURE`
+  ister: uzak sunucu postanın yalnız başlıklarını ve yalnız reddi bildirir
+  (`NOTIFY=SUCCESS` hiç istenmez).
+
+  | Değişken | Değer |
+  |---|---|
+  | `SKYMAIL_BOUNCE_READER` | `off` (ya da boş, varsayılan): hiçbir kutu okunmaz, başka değişken okunmaz. `dry-run`: okur, her raporun ne yapacağını sayar (`bounce.Evaluate`: aynı sorgular, geri alınan işlem), ret ve bastırma yazmaz. `on`: kaydeder ve bastırır. Başka değer açılışı durdurur |
+  | `SKYMAIL_BOUNCE_MAILBOXES` | `dry-run`/`on` için zorunlu: gönderen kutuları, virgülle ayrılmış yalın adresler (ör. `hesap@bildirim.yildizskylab.com,bilgi@bildirim.yildizskylab.com,skylab@duyuru.yildizskylab.com`); en çok 10 |
+  | `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_KEY`, `GRAPH_CLIENT_CERT` | `dry-run`/`on` için zorunlu; gönderen şeritlerininkiyle aynı değerler |
+
+  Okuyucunun kutudaki yeri (delta bağlantısı) ve sayıları
+  `mail_bounce_reader_state`'te kutu ve kip başına durur; `dry-run`'ın yeri
+  ayrıdır, yani `on`'a geçince Gelen Kutusu baştan okunur ve dry-run'ın
+  saydığı raporlar kaydedilir. Yarıda kalan okuma (Graph hatası, 401, 429)
+  delta bağlantısını ilerletmez; sonraki okuma aynı yerden başlar, daha önce
+  kaydedilen rapor `tekrar` sayılır. Okunamayan rapor (bozuk MIME, 10 MB'tan
+  büyük) sayılır ve geçilir. Graph'ın bağlantısı Graph'tan başka bir yere
+  gidiyorsa okuma durur (token oraya gitmez). Her okuma
+  `bounce reader: read the mailbox` satırına kutu ve sayıları yazar
+  (`kalici`, `yumusak`, `gecikme`, `eslesmedi`, `dsn_degil`, `alici_farkli`,
+  `tekrar`, `diger`, `okunamadi`); adres ve rapor metni yazılmaz. Açılış
+  satırı `bounce reader (SKYMAIL_BOUNCE_READER, SKYMAIL_BOUNCE_MAILBOXES)`.
+- **Bounce oranı** (`GET /v1/suppressions/bounces?days=7`,
+  `skymail:suppressions:manage`; giriş akışının "bounce %5'i aşarsa"
+  eşiği için): son `days` günde (1–90) gönderilen e-postalardan kaçının
+  sonradan kalıcı (`hard`), yumuşak (`soft`) ya da gecikme (`delay`) raporu
+  aldığı ve `hard_rate = hard / sent`; `reader` her kutunun son okuması,
+  hatası (Graph'ın durumu ve kodu) ve sayılarıdır, delta bağlantısı olmadan.
 
 - **Ayrıştırma** (`internal/dsn`, yalnız stdlib): üst tür `multipart/report;
   report-type=delivery-status` olmalı; yalnız `message/delivery-status`
@@ -482,7 +527,7 @@ Arayüz bayrağı `GET /v1/mail_tasks/tracking-mode` ve `/summary`'nin
 | `purpose` | `islem` ya da `duyuru` |
 | `category` | `duyuru`'da zorunlu, `islem`'de yasak: `club:duyuru`, `club:haber`, `team:<Keycloak grup id>:duyuru`, `team:<id>:haber`. Grup id'si UUID'dir, küçük harfle yazılır. Grubun gerçekten ekip olup olmadığını core söyler (bilet 09) |
 | `transactional_statement` | `islem`'de zorunlu ve `true`: "bu posta alıcının kendi başvurusu ya da işlemi hakkındadır". `duyuru`'da yok sayılır |
-| `commercial_content_absent` | "Postanın asıl amacı tanıtım değildir" beyanı (KVKK aydınlatma metni s6 §5.10; ADR 0072 karar 9): kısa sponsor teşekkürü ve logo serbesttir; indirim kodu, şirket iş ilanı, satış ya da çekiliş postayı tanıtım yapar. `false` postayı tanıtım postası yapar: `SKYMAIL_PROMOTIONAL=on` iken `duyuru`'da kabul edilir ve posta yalnız tanıtım izni verene gider ("Tanıtım postası ve hesapsız liste alıcısı"); bayrak kapalıyken ve `islem`'de her zaman reddedilir. `duyuru`'da `true` saklanır, yokluğunun reddi bilet 09'un `SKYMAIL_BULK_PREFERENCE` bayrağıyla gelir. `islem`'de `true` yok sayılır |
+| `commercial_content_absent` | "Postanın asıl amacı tanıtım değildir" beyanı (KVKK aydınlatma metni s6 §5.10; ADR 0072 karar 9): kısa sponsor teşekkürü ve logo serbesttir; indirim kodu, şirket iş ilanı, satış ya da çekiliş postayı tanıtım yapar. `false` postayı tanıtım postası yapar: `SKYMAIL_PROMOTIONAL=on` iken `duyuru`'da kabul edilir ve posta yalnız tanıtım izni verene gider ("Tanıtım postası ve hesapsız liste alıcısı"); bayrak kapalıyken ve `islem`'de her zaman reddedilir. `duyuru`'da `true` saklanır; `SKYMAIL_BULK_PREFERENCE=on` iken amacını `duyuru` diye adlandıran gönderimde zorunludur (`400 mail_task.commercial_statement_required`; amaç adlandırmayan eski istemci varsayılanını alır). `islem`'de `true` yok sayılır |
 | `own_event_statement` | Liste ya da Keycloak grubuna `duyuru`'da, `SKYMAIL_LIST_CONSENT=on` iken: "Bu posta listenin oluşturulduğu etkinlik ya da çalışmayla ilgilidir" beyanı (s6 satır 15, Yusuf'un T3 kararı 2026-10-24). Gönderimle, göndereni ve zamanıyla saklanır (`mail_tasks`, `mail_approvals`). Beyanlı posta listenin hesapsız adresine duyuru rızası aranmadan, yine `duyuru` akışında çıkış bağlantısıyla gider. Bayrak kapalıyken, kişiye, Forms kaynağına ve `islem`'de yok sayılır |
 
 **Kurallar** (Yusuf, 2026-10-21; hepsi `400`, hiçbir şey kuyruğa girmez):
@@ -496,13 +541,14 @@ Arayüz bayrağı `GET /v1/mail_tasks/tracking-mode` ve `/summary`'nin
 | `duyuru` ama `category` yok | `mail_task.category_required` |
 | `category` core'un biçiminde değil | `mail_task.category_invalid` |
 | `purpose` olmadan `category` ya da bir beyan | `mail_task.purpose_required` |
+| `SKYMAIL_BULK_PREFERENCE=on` iken `duyuru` ama `commercial_content_absent` yok | `mail_task.commercial_statement_required` |
 | `purpose` `islem`/`duyuru` dışında | `mail_task.purpose_invalid` |
 
 Denetim sırası: önce `purpose_required`, sonra `commercial_content_not_allowed`,
 sonra `purpose_invalid`, en son amacın kendi kuralları (`islem`: hedef,
-kategori, beyan; `duyuru`: kategori). Bilet 09 kategorinin core'da gerçekten
-bir ekip olduğunu sorar; olmayan ekip orada `400 mail_task.category_unknown`
-döner. Forms kaynağının birebir tekrarı aynı amacı taşımalıdır: amacı
+kategori, beyan; `duyuru`: kategori, sonra beyan). `SKYMAIL_BULK_PREFERENCE=on`
+iken kategorinin core'da gerçekten bir ekip olduğunu core söyler; olmayan ekip
+`400 mail_task.category_unknown` döner ("Toplu postada tercih"). Forms kaynağının birebir tekrarı aynı amacı taşımalıdır: amacı
 değişen tekrar başka bir istektir, `409 form_source.consumed` döner. Liste ya
 da gruba giden onay isteği onaylanırken saklı amaç yeniden denetlenir:
 `duyuru` değilse `duyuru` + `club:duyuru` gider.
@@ -545,8 +591,9 @@ düz metinde `SKY LAB duyurularını almak istemiyorsan: Abonelikten çık <…>
 Her parça ayrı denetlenir; şablon `{{.UnsubscribeUrl}}`'yi kendisi yazıyorsa
 (bilet 05'in künyesi) eklenmez. Satır kuyruktaki satıra ve gönderilen içerik
 ekranına yazılmaz, bağlantısı tıklama adresi almaz. Bağlantıyı bu bayrak
-üretmez: bugün yalnız `POST /v1/notifications`'ın `unsubscribe_url`'i verir;
-bilet 09'dan sonra her duyuru satırı taşır.
+üretmez: `POST /v1/notifications`'ın `unsubscribe_url`'i ve
+`SKYMAIL_BULK_PREFERENCE=on` iken her duyuru satırı ("Toplu postada tercih")
+taşır.
 
 **Göç** (`20261023100000`, yalnız ekleme): `mail_tasks` ve `mail_approvals`'a
 `purpose`, `category`, `transactional_statement`, `commercial_content_absent`
@@ -640,6 +687,102 @@ da rıza kaydı açılana (data-lifecycle 10) kadar kapalı kalır.
 `SKYMAIL_PROMOTIONAL=on` → arayüz (skymail-frontend: "Bu posta tanıtım
 içeriyor" seçimi) → `SKYMAIL_LIST_CONSENT=on`. Geri dönüş: bayrak `off` +
 yeniden dağıtım; kuyruktaki tanıtım postası yine yalnız izinliye gider.
+
+## Toplu postada tercih (`SKYMAIL_BULK_PREFERENCE`)
+
+ADR 0072 karar 3 ve 6; hub bileti abonelik-cikisi 09
+(`internal/mailer/preference_gate.go`). Bayrak açıkken panelin her `duyuru`
+gönderimi (liste, Keycloak grubu, Forms yanıtlayanları, kişiye `duyuru`, onaylı
+gönderim) gönderim anında core'daki tercihe uyar ve her postası tek tık çıkış
+bağlantısı taşır. Tek kontrol noktası SkyMail'dedir: kuyruğa alma ve dağıtıcı.
+
+**Kuyruğa alırken.** Gönderimin veritabanı işlemi başlamadan önce (Mail
+onayında onay anında, isteğin kilidinden önce; sunulduğu an değil) core'a
+`POST /internal/v1/audiences/recipients:resolve` ile sorulur: gönderimin
+kategorisiyle, en çok 1000'lik sayfalarla, `sub` biliniyorsa (Keycloak grubu
+üyeleri) `sub`, yoksa adres. Sayfa başına 10 saniye, gönderim başına toplam 30
+saniye. SkyMail core'u işlem ya da kilit tutarken beklemez.
+
+| core'un cevabı | Satır |
+|---|---|
+| `allowed` | kişinin core bağlantısı `list_unsubscribe_url` olur, `preference_checked_at` yazılır |
+| `allowed: false` | `failed`, deneme 0, `error = preference: opted_out`, `preference: inactive` ya da `preference: ambiguous`; atlanmış sayılır (`mail_task_status()` gönderimi "Başarısız" yapmaz) |
+| `matched: false` | SkyMail'in kendi bağlantısı (`/u/…`, "Tek tık çıkış ucu"); `preference_checked_at` boş |
+
+- **core yanıt vermezse** (zaman aşımı, `5xx`, sözleşme dışı cevap) hiçbir şey
+  yazılmaz: `503 mail_task.preference_unavailable`, `Retry-After: 30`. Onay
+  ucu da `503` döner, istek olduğu gibi bekler. Bu fail closed'dır (ADR 0072).
+- **Bilinmeyen ekip.** core'un `400 recipients_resolve_category_unknown`'ı
+  `400 mail_task.category_unknown` olur.
+- **İç liste.** Listenin adresleri işlemden önce okunur ve sorulur; işlem listeyi
+  yeniden okur. Arada eklenen adres sorulmamış olur: bağlantısız kalır ve
+  güvenlik ağı onu göndermez.
+- SkyMail'in çıkış kaydı ve bastırma listesi bugünkü gibi ayrıca uygulanır.
+- Bildirimler (`POST /v1/notifications`) kuyruğa alırken sorulmaz: bağlantıyı
+  core verir.
+
+**Her dağıtım turunda.** Dağıtıcı toplu satırları alırken, aynı işlemde,
+çıkış kaydından ve rıza kapısından sonra, gönderim bütçesi saymadan önce,
+core'un hüküm verdiği satırları (`preference_checked_at` dolu) ve kişisini
+bilen satırları (`recipient_sub` dolu; haberden gönderimin core kitlesinden
+gelen satırları da) kategorisiyle yeniden karara bağlar. Eşik yok: her tur karar verir. Karar süreç içi önbellekten verilir
+(hüküm en çok 60 saniye eski); bilinmeyen hüküm işlemden sonra arka planda,
+kategori başına tek istekle, en çok 5 saniyede sorulur ve satır bekler (rıza
+kapısının kalıbı). Kuyruğa alırken alınan hüküm ilk turlarda kullanılır.
+
+| Sonuç | |
+|---|---|
+| hâlâ `allowed` | gider; `preference_checked_at` turun hükmüyle güncellenir |
+| artık `allowed: false` | `failed`, `preference: <neden>`, gönderilmez |
+| bekler | hüküm henüz yok ya da core yanıt vermiyor: `pending`'e döner, deneme ve bütçe sayılmaz; core başarısızken (30 sn devre kesici) yaşına göre 1–15 dakika sonra |
+| `preference: unavailable` | core başarısızken satır 48 saati geçti: `failed`, belirsiz (atlanmış sayılmaz) |
+| `preference: category_unknown` | ekip kuyruğa alındıktan sonra silinmiş: `failed` (atlanmış sayılmaz) |
+
+Hesapsız satır (SkyMail bağlantılı) core'u beklemez. Tur başına bir log
+satırı yazılır (`"event":"bulk_preference_recheck"`, `asked`, `took`, `ok`);
+SkyMail'de metrik ucu yok, `skymail_bulk_preference_recheck_seconds` metrik
+ucu geldiğinde eklenir.
+
+**Güvenlik ağı.** Bayrak açıkken dağıtıcı `duyuru` şeridindeki bir satırı
+`list_unsubscribe_url` olmadan göndermez: `failed`, `error =
+unsubscribe_missing` (atlanmış sayılmaz). Bayrak açılmadan önce kuyruğa girmiş
+bağlantısız duyuru satırı da böyle düşer: bayrak kuyruk boşken açılır.
+Zorunlu bildirim türünün satırı (bilet, sertifika) bağlantı taşıyamaz, bu
+kurala girmez. Gönderenin yalnız kendi doğrulanmış adresine giden deneme postası
+(`mail_tasks.self_test`; haberden gönderimin deneme postası, List-Unsubscribe
+taşımaz) ne sorulur ne bu kurala girer: kimseye ulaşmaz. Toplu
+şeritli isteğe bağlı bildirim türünde e-postası gidecek alıcının
+`unsubscribe_url`'i yoksa `400 notification.unsubscribe_url_required`.
+
+**Servis token'ı.** Servisin `/single`'ı her zaman `islem`'dir ve sorulmaz
+(abonelik-cikisi 03 T3): bir servis duyuru niteliğindeki postayı `/single`
+döngüsüyle gönderirse tercih ve çıkış kaydı atlanır. Bugün Forms'un toplu
+gönderimi kişi token'ıyla Forms kaynağından, core'unki `/v1/notifications`'tan
+gider.
+
+**Rapor.** `GET /v1/mail_tasks` ve `/{id}` `recipient_counts`'ta `opted_out`,
+`unsubscribed` (SkyMail'in çıkış kaydı), `inactive` ve `ambiguous` döner;
+hepsi `failed` içindedir, `unsubscribed` `suppressed` içinde de.
+`GET /v1/mail_tasks/{id}/queue` satırın `error`'unda nedeni döner. Loglarda
+adres ve `sub` yok, yalnız sayılar.
+
+| Değişken | |
+|---|---|
+| `SKYMAIL_BULK_PREFERENCE` | `off` (ya da boş, varsayılan): hiçbir şey sorulmaz, bugünkü gibi. `on`: yukarıdaki her şey |
+
+Başka değer açılışı durdurur. `on` şunları ister, eksikse açılış durur:
+`SKYMAIL_MAIL_PURPOSE=on`, `SKYMAIL_LIST_UNSUBSCRIBE=on`, kapalı olmayan duyuru
+şeridi, `SKYMAIL_UNSUBSCRIBE_LINK=on` ve halkada bir anahtar, `CORE_URL`
+(takibin kullandığı iç adres). Açılış logu `bulk_preference` alanını yazar.
+SkyMail'in servis hesabında core'un `audience:read` rolü zaten var.
+
+**Göç** (`20261025200000`, yalnız ekleme): `mail_queue.preference_checked_at`
+(nullable), `mail_tasks.self_test` (`NOT NULL DEFAULT false`, yeniden yazmaz)
+ve `mail_task_status()`'ın üç `preference:` nedenini atlanmış sayması. Eski imaj sütunu okumaz, yazmaz.
+
+**Geri dönüş.** `SKYMAIL_BULK_PREFERENCE=off` + yeniden dağıtım: core'a
+sorulmaz, bağlantısız satır başlıksız gider; çıkış kaydı uygulanmaya devam
+eder. İmajı geri almak da güvenlidir; sütun kalır.
 
 ## Tek tık çıkış ucu (`SKYMAIL_UNSUBSCRIBE_LINK`, `mail_unsubscribes`)
 
@@ -768,6 +911,75 @@ kuyruğa alır. `Idempotency-Key` zorunlu; yalnız servis hesabı ve
 `skymail:notifications:send`. Türleri Template seed yazar
 (`PUT /v1/notification_types/{key}`). Kanallar e-posta ve uygulama içi kutu.
 Sözleşme: [`docs/notifications.md`](docs/notifications.md).
+
+## Haberden gönderim (`POST /v1/news_sends`, `SKYMAIL_NEWS_SEND`)
+
+Yayımlanmış bir News kaydını (inscribed `news`) bir kitleye postalar (hub
+bileti duyuru-haber 06; ADR 0067). Varsayılan kapalı; kapalıyken uç
+`503 news_send.not_enabled` döner.
+
+| Değişken | Anlamı |
+|---|---|
+| `SKYMAIL_NEWS_SEND` | `off` (varsayılan) ya da `on`. `on` iken `SKYMAIL_NEWS_CMS_URL`, `CORE_URL`, `SKYMAIL_LIST_UNSUBSCRIBE=on` ve `SKYMAIL_MAIL_PURPOSE=on` zorunlu; biri eksikse açılış durur (haber postası tek tık çıkış başlığı ya da amacı, kategorisi ve beyanı olmadan gitmez) |
+| `SKYMAIL_NEWS_CMS_URL` | inscribed'ın adresi, `/cms` yolu olmadan (`http://inscribed:8080` ya da `https://api.yildizskylab.com/api`) |
+| `SKYMAIL_NEWS_IMAGE_HOSTS` | kapak görselinin gelebileceği hostlar, virgülle; her biri alt alan adlarını da kapsar. Varsayılan `yildizskylab.com`. Kapak yalnız `https` ve bu hostlardan gösterilir, öteki atlanır (üçüncü taraf görseli fiilen bir açılma pikseli olur) |
+| `SKYMAIL_NEWS_READ_MORE` | "Devamını oku" nereye gider: `home` (varsayılan, sitenin ana sayfası; sitenin haber sayfaları gelene kadar, bilet 11) ya da `pages` (`/haberler/<slug>`, `/duyurular/<slug>`) |
+
+- **Yetki.** Yalnız `skymail:announcements:send` (ADMIN, YK; Karar D4)
+  doğrudan gönderir. Öteki kişilerin Mail onayına sunması sonraki dilimde.
+- **Kayıt.** inscribed'dan anonim okunur (`GET /cms/collections/news/{slug}`).
+  Bilinmeyen ya da arşivli kayıt `404 news_send.not_found`. Faz 1'de yalnız
+  herkese açık kayıt postalanır; başka görünürlük `409 news_send.private_record`.
+  Şema v2'nin alanları yoksa anlamları geçerli: `kind` yoksa `haber`,
+  `audience` yoksa `herkes`; düz metin gövde paragraflara çevrilir.
+- **Anlık görüntü.** Kayıt gönderimde olduğu gibi `mail_tasks.source_snapshot`'a
+  yazılır, sürümüyle (`source_version`). Sonraki düzenleme web'i değiştirir,
+  postayı ve raporu değiştirmez.
+- **Kitle core'dan.** `POST /v1/audiences/resolve` (core `docs/news-audience.md`),
+  SkyMail'in servis hesabıyla, 500'lük sayfalarla. core tercihi kapalı,
+  devre dışı, doğrulanmamış ve adressiz hesabı dışarıda bırakır, kişiye
+  kendi çıkış bağlantısını ve "neden aldın" metnini verir. Bağlantısız kişi
+  kuyruğa alınmaz (`skipped.no_unsubscribe_url`). core cevap vermezse hiçbir
+  şey yazılmaz: `503 news_send.audience_unavailable`.
+- **Bir kez.** Bir kaydın postası bir posta kutusuna bir kez gider:
+  `mail_queue.source_ref = news:<slug>` ve `(source_ref, lower(recipient_email))`
+  kısmi tekil indeksi. Önce ekibe sonra bütün üyelere gönderilirse ekiptekiler
+  `already_received` sayılır. Aynı kayıt aynı kitleye ikinci kez
+  `409 news_send.already_sent` (`params.task_id`) döner. Kuyruğa alırken
+  başarısız yazılan satır (bastırılmış ya da çıkmış adres, render hatası)
+  `source_ref` taşımaz.
+- **Posta.** System template `club.news` (skymail-frontend, Template seed);
+  yoksa `409 news_send.template_missing`. Kanonik slug 200 karakteri aşarsa
+  `400 news_send.slug_too_long`. Birden çok ekipli gönderimde görevin
+  kategorisi core'un ilk `team:` kategorisidir (rapor sütunu); çıkış
+  bağlantısı her kişide kendi kategorilerini kapatır. Toplu şerit, `duyuru` amacı ve
+  core'un kategorisi (`SKYMAIL_MAIL_PURPOSE` açıkken), List-Unsubscribe
+  satırın core bağlantısından (`SKYMAIL_LIST_UNSUBSCRIBE` açıkken). Gövde
+  e-posta izin listesinden geçer; haber için `s`, `code`, `pre`, `hr` eklendi.
+  Konu varsayılanı başlık, duyuruda başında "Duyuru: ".
+- **Şablon değişkenleri.** Gönderimin: `Subject`, `Preheader`, `Title`,
+  `Summary`, `BodyHtml` (`safeHTML` ile; yalnız `format=full`), `FullBody`,
+  `HeroUrl`, `HeroAlt`, `CtaHref`, `CtaLabel`, `ReadMoreUrl`, `KindLabel`.
+  Alıcının (core'dan): `AudienceReason`, `CategoryLabel`, `UnsubscribeUrl`.
+- **Rıza ve çıkış.** Alıcıların hepsi hesaptır (`recipient_sub`), bu yüzden
+  `SKYMAIL_LIST_CONSENT`'in hesapsız adres kuralı bu gönderime uygulanmaz.
+  SkyMail'in çıkış kaydı (`mail_unsubscribes`) kuyruğa alırken uygulanır.
+- **Günlük.** Yalnız sayılar (`news_send_queued`): kişi, adres, bağlantı ve
+  kaydın metni yazılmaz.
+- **Önizleme, deneme, canlı sayı (bilet 07, 08).** `skymail:announcements:send`
+  ya da `skymail:mails:write` ile:
+  - `POST /v1/news_sends/preview`: gönderimin kuyruğa alacağı konu, HTML ve
+    düz metin, çağıran okur olarak (örnek çıkış bağlantısı: tercihler sayfası;
+    "neden aldın" core'un biçiminde örnek). Hiçbir şey yazılmaz.
+  - `POST /v1/news_sends/test`: postayı yalnız çağıranın token'daki doğrulanmış
+    adresine gönderir; konu "[Deneme]" ile başlar, kaynağı yoktur ("bir kez"e
+    ve rapora girmez). Örnek çıkış bağlantısı yalnız gövdededir, List-Unsubscribe
+    başlığı yoktur. Kişi başına dakikada en çok 3 (`429`).
+  - `POST /v1/news_sends/count`: core'un yalnız sayıları (`countOnly`, adres
+    okunmaz): üyeler, takipçiler, atlananlar; `already_received` kaydın bugüne
+    dek ulaştığı posta kutusu sayısı (bu kitleden atlanacakların üst sınırı;
+    kesin sayı gönderimde); bu kitleye gönderim varsa `already_sent_task_id`.
+  - `GET /v1/news_sends/availability`: `SKYMAIL_NEWS_SEND` açık mı.
 
 ## Uygulama içi kutu (`/v1/me/inbox`)
 

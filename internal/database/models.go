@@ -329,6 +329,26 @@ type MailBounce struct {
 	ReceivedAt  time.Time `json:"received_at"`
 }
 
+// The NDR reader's Graph delta link, last poll and counts, one row a sender mailbox and mode. No personal data.
+type MailBounceReaderState struct {
+	Mailbox        string     `json:"mailbox"`
+	Mode           string     `json:"mode"`
+	DeltaLink      *string    `json:"delta_link"`
+	LastPolledAt   *time.Time `json:"last_polled_at"`
+	LastError      *string    `json:"last_error"`
+	Reports        int64      `json:"reports"`
+	NotDsn         int64      `json:"not_dsn"`
+	Unmatched      int64      `json:"unmatched"`
+	Hard           int64      `json:"hard"`
+	Soft           int64      `json:"soft"`
+	Delay          int64      `json:"delay"`
+	OtherRecipient int64      `json:"other_recipient"`
+	Duplicate      int64      `json:"duplicate"`
+	NoFailure      int64      `json:"no_failure"`
+	Unreadable     int64      `json:"unreadable"`
+	CreatedAt      time.Time  `json:"created_at"`
+}
+
 type MailFormSource struct {
 	ID                 uuid.UUID  `json:"id"`
 	OwnerSub           string     `json:"owner_sub"`
@@ -387,6 +407,10 @@ type MailQueue struct {
 	SuppressedButSent bool `json:"suppressed_but_sent"`
 	// The recipient's one-click unsubscribe link, as core signed it; null for a row without one. Never served.
 	ListUnsubscribeUrl *string `json:"-"`
+	// news:<slug> on a row of a News send queued to go: the key of the record's once-per-mailbox rule.
+	SourceRef *string `json:"source_ref"`
+	// When core last allowed this recipient a duyuru mail (recipients:resolve); NULL when core gave no verdict about the row.
+	PreferenceCheckedAt *time.Time `json:"preference_checked_at"`
 }
 
 type MailSendWindow struct {
@@ -460,7 +484,16 @@ type MailTask struct {
 	TransactionalStatement  *bool   `json:"transactional_statement"`
 	CommercialContentAbsent *bool   `json:"commercial_content_absent"`
 	// On a duyuru send to a list or a group: the sender's statement that the mail is about the list's own event or work (s6 row 15); NULL otherwise.
-	OwnEventStatement *bool `json:"own_event_statement"`
+	OwnEventStatement *bool   `json:"own_event_statement"`
+	SourceKind        *string `json:"source_kind"`
+	SourceRef         *string `json:"source_ref"`
+	SourceVersion     *int    `json:"source_version"`
+	// The News record the send was made of, as inscribed answered it then; no recipient.
+	SourceSnapshot []byte  `json:"source_snapshot"`
+	SourceAudience *string `json:"source_audience"`
+	SourceCounts   []byte  `json:"source_counts"`
+	// A send to its own sender's verified address alone (a test mail): the bulk preference check leaves it be.
+	SelfTest bool `json:"self_test"`
 }
 
 // A send's links that are the same for every recipient, each with its random token: the only addresses /t/c redirects to.

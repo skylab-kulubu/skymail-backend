@@ -129,8 +129,16 @@ type QueueCounts struct {
 // address does not exist; counted in sent).
 type QueueTotals struct {
 	QueueCounts
-	// Written failed when queued, never sent: the address is suppressed (in failed too).
+	// Written failed, never sent, skipped: the address is suppressed — a bounce, an unsubscribe, a missing contact consent (in failed too).
 	Suppressed int64 `json:"suppressed"`
+	// Skipped, never sent: the person turned the send's category off in core (communication preferences; in failed too).
+	OptedOut int64 `json:"opted_out"`
+	// Skipped, never sent: the address left SkyMail's duyuru stream through its own link (in suppressed and failed too).
+	Unsubscribed int64 `json:"unsubscribed"`
+	// Skipped, never sent: core says the account is disabled or being erased (in failed too).
+	Inactive int64 `json:"inactive"`
+	// Skipped, never sent: two or more accounts hold the address, so no one preference stands for it (in failed too).
+	Ambiguous int64 `json:"ambiguous"`
 	// Account mail sent to a suppressed address anyway, flagged (in its status too).
 	SuppressedButSent int64 `json:"suppressed_but_sent"`
 	// Sent, then a delivery status notification said the address does not exist (in sent too).
@@ -363,6 +371,10 @@ func recipientCounts(send database.ListMailTaskSendsRow) QueueTotals {
 			Failed:     send.Failed,
 		},
 		Suppressed:        send.Suppressed,
+		OptedOut:          send.OptedOut,
+		Unsubscribed:      send.Unsubscribed,
+		Inactive:          send.Inactive,
+		Ambiguous:         send.Ambiguous,
 		SuppressedButSent: send.SuppressedButSent,
 		Undelivered:       send.Undelivered,
 	}
