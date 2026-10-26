@@ -395,6 +395,18 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
+            "handlers.EmailDelivery": {
+                "properties": {
+                    "undeliverable": {
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.UndeliverableAddress"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    }
+                },
+                "type": "object"
+            },
             "handlers.FormMailSource": {
                 "properties": {
                     "duplicate_count": {
@@ -2184,6 +2196,20 @@ const docTemplate = `{
                     },
                     "withheld": {
                         "type": "boolean"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.UndeliverableAddress": {
+                "properties": {
+                    "address": {
+                        "example": "ayse@example.com",
+                        "type": "string"
+                    },
+                    "since": {
+                        "description": "When the address was first suppressed (UTC).",
+                        "example": "2026-10-21T09:00:00Z",
+                        "type": "string"
                     }
                 },
                 "type": "object"
@@ -5541,6 +5567,47 @@ const docTemplate = `{
                 "summary": "Restore an archived mailing list",
                 "tags": [
                     "Lists"
+                ]
+            }
+        },
+        "/me/email-delivery": {
+            "get": {
+                "description": "The caller's own addresses on the suppression list: the rows suppressed with their sub, and the rows of the addresses their token says are theirs — Keycloak's email (only when email_verified is true) and school_email — compared lower-cased and trimmed, each once, oldest first. since is when the address was first suppressed. No source, code or id; no parameter: someone else's address cannot be asked about. Only a person's own token issued for SkyMail (aud skymail) may call it; no role is needed. Served with Cache-Control: no-store.",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.EmailDelivery"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.unauthorized: no live token, or one not issued for SkyMail"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "auth.person_required: a service's token"
+                    }
+                },
+                "summary": "Which of my addresses mail does not reach",
+                "tags": [
+                    "Inbox"
                 ]
             }
         },

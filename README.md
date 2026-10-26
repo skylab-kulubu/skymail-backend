@@ -496,6 +496,19 @@ reddidir (aşağıda).
   `mail_suppression_removals`'a kim, ne zaman, kaynak, kod, sayı ve ilk
   görülme olarak yazılır; adres yazılmaz. Kaldırılan adrese yeniden
   gönderilir. Kendiliğinden düşme yoktur.
+- **Kişi ucu** (`GET /v1/me/email-delivery`, rol yok; kutu ile aynı zincir:
+  token `aud`'unda `skymail`, kişi token'ı, erişim kapısı): kişi kendi
+  adreslerinden hangisine posta ulaşmadığını kendi token'ıyla okur. Yalnız
+  `recipient_sub` = token `sub`'ı olan satırlar ve adresi token'ın kişiye ait
+  adreslerinden biri olan satırlar döner: userinfo `email` (yalnız `email_verified`
+  `true` ise; claim yoksa kullanılmaz, `/v1` gibi) ve `school_email` (userinfo'da yoksa token'dan);
+  küçük harf + kırpma ile karşılaştırılır, her adres bir kez. Parametre
+  almaz; başka adres ya da kişi sorgulanamaz. Yanıt
+  `{"undeliverable":[{"address","since"}]}` (`since` = ilk bastırılma, UTC),
+  `Cache-Control: no-store`; kaynak, kod ve kimlik dönmez. Log yalnız istek
+  kimliğini ve sayıyı yazar. Hesap Merkezi e-posta sayfasındaki "Bu adrese
+  posta ulaşmıyor." uyarısı buradan okunur. Kişi bastırmayı kaldıramaz
+  (yalnız operatör).
 - **Loglar**: adres ve rapor metni yazılmaz; kuyruk id'si, kaynak ve kod
   yazılır.
 
@@ -990,7 +1003,8 @@ girmez). Kişi kendi öğelerini kendi token'ıyla okur ve işaretler:
 `POST /v1/me/inbox/{id}/seen|read|unread|archive`, `POST /v1/me/inbox/read-all`,
 `POST /v1/me/inbox/seen-all`. Token `aud`'unda `skymail` olmalı
 (`V1_TOKEN_AUDIENCE_MODE`'dan bağımsız) ve kişi token'ı olmalı; rol, ve
-`skymail:access`, istenmez. Başkasının öğesi `404`. Öğe en çok 90 gün kalır
+`skymail:access`, istenmez. Başkasının öğesi `404`. Aynı zincirdeki öteki
+kişi ucu: `GET /v1/me/email-delivery` (bkz. [bastırma listesi](#geri-dönen-posta-ve-bastırma-listesi-mail_bounces-mail_suppressions)). Öğe en çok 90 gün kalır
 (bildirimin `expires_at`'i daha erken silebilir); kutu süpürmesi saatte bir
 siler, hesap silme kişinin bütün öğelerini siler. Bu sürümden önceki imaja
 dönmeden önce `inbox`'ı türlerden çıkarın. Sözleşme:

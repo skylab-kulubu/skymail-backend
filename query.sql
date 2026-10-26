@@ -2119,6 +2119,17 @@ SELECT address, source, reason_code
 FROM mail_suppressions
 WHERE address = ANY (sqlc.arg(addresses)::text[]);
 
+-- A person's own suppressions (GET /v1/me/email-delivery; hub ticket
+-- rabbitmq-olaylar 10): the rows suppressed with their sub, and the rows of
+-- the addresses their token says are theirs (lower-cased). Each address once
+-- (it is the key), oldest first.
+-- name: ListPersonSuppressions :many
+SELECT address, first_seen
+FROM mail_suppressions
+WHERE recipient_sub = sqlc.arg(recipient_sub)::uuid
+   OR address = ANY (sqlc.arg(addresses)::text[])
+ORDER BY first_seen, address;
+
 -- The key of a send's template and whether it is a system template, which
 -- together say whether it is account mail (mailer.AccountMail), and the
 -- send's purpose, which says its stream (mailer.LaneOf).

@@ -362,6 +362,11 @@ type Querier interface {
 	// first, drafts included and discarded drafts left out: operator work a seed
 	// written after them would pass over.
 	ListOperatorVersionsAfter(ctx context.Context, arg ListOperatorVersionsAfterParams) ([]TemplateVersionSummary, error)
+	// A person's own suppressions (GET /v1/me/email-delivery; hub ticket
+	// rabbitmq-olaylar 10): the rows suppressed with their sub, and the rows of
+	// the addresses their token says are theirs (lower-cased). Each address once
+	// (it is the key), oldest first.
+	ListPersonSuppressions(ctx context.Context, arg ListPersonSuppressionsParams) ([]ListPersonSuppressionsRow, error)
 	// The Authoring mode of each template's Main source as it is sent: its
 	// published version's.
 	ListPublishedMainModes(ctx context.Context, templateIds []uuid.UUID) ([]ListPublishedMainModesRow, error)
