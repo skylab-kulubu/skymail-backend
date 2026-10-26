@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/bounce"
+	"github.com/skylab-kulubu/skymail-backend/internal/bouncereader"
 	"github.com/skylab-kulubu/skymail-backend/internal/config"
 	"github.com/skylab-kulubu/skymail-backend/internal/consent"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
@@ -33,6 +35,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
+	"github.com/skylab-kulubu/skymail-backend/internal/news"
 	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
 	"github.com/skylab-kulubu/skymail-backend/internal/unsubscribe"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
@@ -116,6 +119,13 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid sender lane configuration")
 	}
+	// The NDR reader: off unless SKYMAIL_BOUNCE_READER says dry-run or on,
+	// and then with the sender mailboxes and the application's GRAPH_*
+	// (README, "Geri dönen posta ve bastırma listesi").
+	bounceReaderConfig, err := bouncereader.ConfigFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid bounce reader configuration")
+	}
 	keycloakAdminURL, err := keycloak.ParseAdminURL(cfg.KeycloakAdminURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid Keycloak configuration")
@@ -170,8 +180,26 @@ func main() {
 	if err := consentGate.CheckWith(sendLanes); err != nil {
 		log.Fatal().Err(err).Msg("invalid contact consent configuration")
 	}
+	newsSends, err := newsSendConfigFromEnv(config.Value, trackingConfig.CoreURL, sendLanes)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid News send configuration")
+	}
 	if (consentGate.Promotional || consentGate.ListConsent) && trackingConfig.CoreURL == "" {
 		log.Fatal().Msg("SKYMAIL_PROMOTIONAL=on and SKYMAIL_LIST_CONSENT=on need CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
+	}
+	// The bulk preference check (README, "Toplu postada tercih"):
+	// SKYMAIL_BULK_PREFERENCE, off unless on; on needs purposes, the one-click
+	// header, SkyMail's own link with a key, and CORE_URL.
+	preferenceGate, err := mailer.PreferenceGateFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid bulk preference configuration")
+	}
+	preferenceGate.Links = unsubscribeConfig
+	if err := preferenceGate.CheckWith(sendLanes); err != nil {
+		log.Fatal().Err(err).Msg("invalid bulk preference configuration")
+	}
+	if preferenceGate.On && trackingConfig.CoreURL == "" {
+		log.Fatal().Msg("SKYMAIL_BULK_PREFERENCE=on needs CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
 	}
 	if migrationConfig.Mode == migrations.ModeApply {
 		// A stop signal ends a wait for another process's migrations, never
@@ -216,12 +244,18 @@ func main() {
 	log.Info().Str("mode", string(trackingRetention)).Int("event_retention_days", tracking.EventRetentionDays).Int64("max_rows", trackingRetentionMaxRows).
 		Msg("open and click tracking retention (SKYMAIL_TRACKING_RETENTION)")
 	logSendLanes(sendLanes)
+	logBounceReader(bounceReaderConfig)
 	logUnsubscribeLink(unsubscribeConfig)
+	logNewsSend(newsSends)
 	if trackingConfig.CoreURL != "" {
-		consentGate.Core = consent.NewClient(trackingConfig.CoreURL, kcClient, nil)
+		coreClient := consent.NewClient(trackingConfig.CoreURL, kcClient, nil)
+		consentGate.Core = coreClient
+		preferenceGate.Core = coreClient
 	}
 	log.Info().Bool("promotional", consentGate.Promotional).Bool("list_consent", consentGate.ListConsent).Bool("core", consentGate.Core != nil).
 		Msg("contact consents (SKYMAIL_PROMOTIONAL, SKYMAIL_LIST_CONSENT)")
+	log.Info().Bool("bulk_preference", preferenceGate.On).Bool("core", preferenceGate.Core != nil).
+		Msg("bulk preference check (SKYMAIL_BULK_PREFERENCE)")
 	db := database.NewStore(conn)
 	mailerService := mailer.NewMailer(db, mailer.SMTPConfig{
 		FromEmail: cfg.SMTPFrom,
@@ -234,7 +268,11 @@ func main() {
 	}, mailSender, mailer.WithQueueLease(queueLease), mailer.WithRateBudget(rateBudget),
 		mailer.WithReservedDomainsRefused(),
 		mailer.WithSendLanes(sendLanes),
+		// With the reader, a relay that offers DSN is asked for failure
+		// reports with the headers only (RET=HDRS NOTIFY=FAILURE).
+		mailer.WithDSNRequest(bounceReaderConfig.Mode != bouncereader.ModeOff),
 		mailer.WithConsentGate(consentGate),
+		mailer.WithPreferenceGate(preferenceGate),
 		mailer.WithTracking(mailer.Tracking{
 			Config:      trackingConfig,
 			Preferences: tracking.NewCoreClient(trackingConfig.CoreURL, kcClient, nil),
@@ -315,6 +353,8 @@ func main() {
 	registerMailApprovalRoutes(api, authMiddleware, approvalHandler)
 	registerNotificationRoutes(api, authMiddleware, handlers.NewNotificationHandler(db, mailerService, kcClient))
 	registerSuppressionRoutes(api, authMiddleware, handlers.NewSuppressionHandler(db))
+	registerNewsSendRoutes(api, authMiddleware, handlers.NewNewsSendHandler(db, mailerService,
+		news.NewCMS(newsSends.CMSURL, nil), news.NewCore(trackingConfig.CoreURL, kcClient, nil), newsSends.Options))
 
 	// The background work's context: shutdown cancels it only after the
 	// mailer has stopped (or its time ran out), which cuts off a send still
@@ -339,6 +379,11 @@ func main() {
 	go func() {
 		defer close(inboxSweepStopped)
 		sweepInbox(workers, db, inboxSweepInterval)
+	}()
+	bounceReaderStopped := make(chan struct{})
+	go func() {
+		defer close(bounceReaderStopped)
+		bouncereader.New(db, cfg.SMTPFQDN, bounceReaderConfig, bouncereader.WithLogger(log.Logger)).Run(workers)
 	}()
 	trackingRetentionStopped := make(chan struct{})
 	go func() {
@@ -371,6 +416,7 @@ func main() {
 			{name: "the mail approval expiry sweep", done: approvalsStopped},
 			{name: "the mail content sweep", done: contentSweepStopped},
 			{name: "the inbox sweep", done: inboxSweepStopped},
+			{name: "the bounce reader", done: bounceReaderStopped},
 			{name: "the tracking retention run", done: trackingRetentionStopped},
 			{name: "the mailer's sends", done: mailerService.Stopped()},
 		},
@@ -380,6 +426,23 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("error starting server")
 	}
+}
+
+// logBounceReader writes the NDR reader's mode and mailboxes, and the
+// certificate's thumbprint and expiry when it reads. Nothing secret.
+func logBounceReader(config bouncereader.Config) {
+	line := log.Info().Str("mode", string(config.Mode))
+	if config.Mode != bouncereader.ModeOff {
+		line = line.Strs("mailboxes", config.Mailboxes).Dur("interval", bouncereader.PollInterval)
+		if creds := config.Credentials; creds != nil {
+			line = line.Str("certificate_x5t_s256", creds.Thumbprint()).Time("certificate_not_after", creds.NotAfter())
+			if time.Until(creds.NotAfter()) <= 0 {
+				log.Warn().Time("certificate_not_after", creds.NotAfter()).
+					Msg("bounce reader: the skymail-posta certificate has expired: Entra refuses its tokens, the reader cannot read the mailboxes; renew it (ops/wizards/skymail-posta-app-kaydi.sh)")
+			}
+		}
+	}
+	line.Msg("bounce reader (SKYMAIL_BOUNCE_READER, SKYMAIL_BOUNCE_MAILBOXES)")
 }
 
 // logSendLanes writes how each sender lane sends: its transport and From,
@@ -679,13 +742,15 @@ func registerMailApprovalRoutes(api fiber.Router, auth middlewares.AuthMiddlewar
 
 // registerSuppressionRoutes serves the suppression list and the unsubscribe
 // record (README, "Geri dönen posta ve bastırma listesi", "Tek tık çıkış
-// ucu"): a bounce is removed with skymail:suppressions:manage, an
+// ucu"): a bounce is removed with skymail:suppressions:manage, which also
+// reads the bounce rate and the NDR reader's state, an
 // unsubscribe reversed only with skymail:unsubscribes:reactivate, which also
 // reads the reversals; either role reads the list.
 func registerSuppressionRoutes(api fiber.Router, auth middlewares.AuthMiddleware, suppressions handlers.SuppressionHandler) {
 	group := api.Group("/suppressions")
 	group.Get("/", auth.RequireAnyPermission(handlers.SuppressionsManageRole, handlers.UnsubscribesReactivateRole), suppressions.List)
 	group.Get("/reactivations", auth.RequireAnyPermission(handlers.UnsubscribesReactivateRole), suppressions.Reactivations)
+	group.Get("/bounces", auth.RequireAnyPermission(handlers.SuppressionsManageRole), suppressions.Bounces)
 	group.Delete("/:id", auth.RequireAnyPermission(handlers.SuppressionsManageRole), suppressions.Delete)
 	group.Post("/:id/reactivate", auth.RequireAnyPermission(handlers.UnsubscribesReactivateRole), suppressions.Reactivate)
 }
@@ -927,6 +992,9 @@ func errorHandler(ctx fiber.Ctx, err error) error {
 
 	var appError *apperrors.AppError
 	if errors.As(err, &appError) {
+		if appError.RetryAfter > 0 {
+			ctx.Set(fiber.HeaderRetryAfter, strconv.Itoa(appError.RetryAfter))
+		}
 		return ctx.Status(appError.Status).JSON(appError)
 	}
 

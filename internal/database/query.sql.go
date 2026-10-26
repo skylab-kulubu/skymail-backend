@@ -238,6 +238,51 @@ func (q *Queries) ArchiveTemplate(ctx context.Context, arg ArchiveTemplateParams
 	return i, err
 }
 
+const bounceRate = `-- name: BounceRate :one
+SELECT count(*)                                                     AS sent,
+       count(*) FILTER (WHERE EXISTS (SELECT 1
+                                      FROM mail_bounces b
+                                      WHERE b.queue_id = q.id
+                                        AND b.kind = 'hard'
+                                        AND b.recipient_matched)) AS hard,
+       count(*) FILTER (WHERE EXISTS (SELECT 1
+                                      FROM mail_bounces b
+                                      WHERE b.queue_id = q.id
+                                        AND b.kind = 'soft'
+                                        AND b.recipient_matched)) AS soft,
+       count(*) FILTER (WHERE EXISTS (SELECT 1
+                                      FROM mail_bounces b
+                                      WHERE b.queue_id = q.id
+                                        AND b.kind = 'delay'
+                                        AND b.recipient_matched)) AS delay
+FROM mail_queue q
+WHERE q.channel = 'email'
+  AND q.status = 'sent'
+  AND q.sent_at >= now() - make_interval(days => $1::int)
+`
+
+type BounceRateRow struct {
+	Sent  int64 `json:"sent"`
+	Hard  int64 `json:"hard"`
+	Soft  int64 `json:"soft"`
+	Delay int64 `json:"delay"`
+}
+
+// Of the e-mails sent in the last days days (still sent: a relay's refusal is
+// failed), how many a report later said did not reach their address (hard),
+// failed otherwise (soft) or were delayed. A row counts once in each.
+func (q *Queries) BounceRate(ctx context.Context, days int) (BounceRateRow, error) {
+	row := q.db.QueryRow(ctx, bounceRate, days)
+	var i BounceRateRow
+	err := row.Scan(
+		&i.Sent,
+		&i.Hard,
+		&i.Soft,
+		&i.Delay,
+	)
+	return i, err
+}
+
 const clearDueMailContent = `-- name: ClearDueMailContent :many
 WITH due AS (SELECT mt.id
              FROM mail_tasks mt
@@ -802,6 +847,27 @@ func (q *Queries) CountMailingLists(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countRecentNewsTests = `-- name: CountRecentNewsTests :one
+SELECT count(*)::int FROM mail_tasks
+WHERE sent_by = $1::text AND template_id = $2::uuid AND source_ref IS NULL
+  AND created_at > now() - interval '1 minute'
+`
+
+type CountRecentNewsTestsParams struct {
+	SentBy     string    `json:"sent_by"`
+	TemplateID uuid.UUID `json:"template_id"`
+}
+
+// A person's test mails of a template in the last minute: a News send's
+// test (POST /v1/news_sends/test) is a send of club.news to its sender
+// without a source, at most 3 a minute.
+func (q *Queries) CountRecentNewsTests(ctx context.Context, arg CountRecentNewsTestsParams) (int, error) {
+	row := q.db.QueryRow(ctx, countRecentNewsTests, arg.SentBy, arg.TemplateID)
+	var column_1 int
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countRecipients = `-- name: CountRecipients :one
 SELECT count(*)
 FROM recipients
@@ -1172,18 +1238,20 @@ func (q *Queries) CreateMailFormSource(ctx context.Context, arg CreateMailFormSo
 }
 
 type CreateMailQueueItemsParams struct {
-	TaskID             uuid.UUID  `json:"task_id"`
-	RecipientFullName  string     `json:"recipient_full_name"`
-	RecipientEmail     string     `json:"recipient_email"`
-	Subject            string     `json:"subject"`
-	Body               string     `json:"body"`
-	BodyHtml           *string    `json:"body_html"`
-	Priority           int16      `json:"priority"`
-	RecipientSub       *uuid.UUID `json:"recipient_sub"`
-	TrackingToken      []byte     `json:"-"`
-	TrackingSkipReason *string    `json:"tracking_skip_reason"`
-	SuppressedButSent  bool       `json:"suppressed_but_sent"`
-	ListUnsubscribeUrl *string    `json:"-"`
+	TaskID              uuid.UUID  `json:"task_id"`
+	RecipientFullName   string     `json:"recipient_full_name"`
+	RecipientEmail      string     `json:"recipient_email"`
+	Subject             string     `json:"subject"`
+	Body                string     `json:"body"`
+	BodyHtml            *string    `json:"body_html"`
+	Priority            int16      `json:"priority"`
+	RecipientSub        *uuid.UUID `json:"recipient_sub"`
+	TrackingToken       []byte     `json:"-"`
+	TrackingSkipReason  *string    `json:"tracking_skip_reason"`
+	SuppressedButSent   bool       `json:"suppressed_but_sent"`
+	ListUnsubscribeUrl  *string    `json:"-"`
+	SourceRef           *string    `json:"source_ref"`
+	PreferenceCheckedAt *time.Time `json:"preference_checked_at"`
 }
 
 const createMailTask = `-- name: CreateMailTask :many
@@ -1204,7 +1272,7 @@ WITH active_source AS (
                $8::boolean, $9::boolean,
                $10::boolean
         FROM active_source
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, source_kind, source_ref, source_version, source_snapshot, source_audience, source_counts, self_test
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1331,7 +1399,7 @@ WITH active_template AS (
                $7::text, $8::text,
                $9::boolean, $10::boolean
         FROM active_template
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, source_kind, source_ref, source_version, source_snapshot, source_audience, source_counts, self_test
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -2038,6 +2106,27 @@ func (q *Queries) GetArchivedTemplates(ctx context.Context, arg GetArchivedTempl
 	return items, nil
 }
 
+const getBounceReaderDeltaLink = `-- name: GetBounceReaderDeltaLink :one
+SELECT delta_link
+FROM mail_bounce_reader_state
+WHERE mailbox = $1::text
+  AND mode = $2::text
+`
+
+type GetBounceReaderDeltaLinkParams struct {
+	Mailbox string `json:"mailbox"`
+	Mode    string `json:"mode"`
+}
+
+// The Graph delta link the NDR reader's next poll of mailbox starts from in
+// mode; no row (or a NULL link) reads the inbox from the start.
+func (q *Queries) GetBounceReaderDeltaLink(ctx context.Context, arg GetBounceReaderDeltaLinkParams) (*string, error) {
+	row := q.db.QueryRow(ctx, getBounceReaderDeltaLink, arg.Mailbox, arg.Mode)
+	var delta_link *string
+	err := row.Scan(&delta_link)
+	return delta_link, err
+}
+
 const getConsentGateClaimedRows = `-- name: GetConsentGateClaimedRows :many
 SELECT q.id,
        q.recipient_email,
@@ -2424,7 +2513,7 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 }
 
 const getMailTaskById = `-- name: GetMailTaskById :one
-SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id, mt.notification_id, mt.purpose, mt.category, mt.transactional_statement, mt.commercial_content_absent, mt.own_event_statement,
+SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id, mt.notification_id, mt.purpose, mt.category, mt.transactional_statement, mt.commercial_content_absent, mt.own_event_statement, mt.source_kind, mt.source_ref, mt.source_version, mt.source_snapshot, mt.source_audience, mt.source_counts, mt.self_test,
        t.name  AS template_name,
        ml.name AS mail_list_name
 FROM mail_tasks mt
@@ -2459,6 +2548,13 @@ type GetMailTaskByIdRow struct {
 	TransactionalStatement  *bool      `json:"transactional_statement"`
 	CommercialContentAbsent *bool      `json:"commercial_content_absent"`
 	OwnEventStatement       *bool      `json:"own_event_statement"`
+	SourceKind              *string    `json:"source_kind"`
+	SourceRef               *string    `json:"source_ref"`
+	SourceVersion           *int       `json:"source_version"`
+	SourceSnapshot          []byte     `json:"source_snapshot"`
+	SourceAudience          *string    `json:"source_audience"`
+	SourceCounts            []byte     `json:"source_counts"`
+	SelfTest                bool       `json:"self_test"`
 	TemplateName            *string    `json:"template_name"`
 	MailListName            *string    `json:"mail_list_name"`
 }
@@ -2492,6 +2588,13 @@ func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTas
 		&i.TransactionalStatement,
 		&i.CommercialContentAbsent,
 		&i.OwnEventStatement,
+		&i.SourceKind,
+		&i.SourceRef,
+		&i.SourceVersion,
+		&i.SourceSnapshot,
+		&i.SourceAudience,
+		&i.SourceCounts,
+		&i.SelfTest,
 		&i.TemplateName,
 		&i.MailListName,
 	)
@@ -2546,6 +2649,36 @@ func (q *Queries) GetMailTaskTrackingExclusion(ctx context.Context, taskID uuid.
 	return i, err
 }
 
+const getMailingListAddresses = `-- name: GetMailingListAddresses :many
+SELECT r.email
+FROM recipients r
+         JOIN mailing_list_recipients mlr ON r.id = mlr.recipient_id
+WHERE mlr.mail_list_id = $1
+`
+
+// A list's addresses, for the bulk preference check before its send is
+// queued (mailer, preference_gate.go): the send's insert reads the list
+// again, in its transaction.
+func (q *Queries) GetMailingListAddresses(ctx context.Context, mailListID uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, getMailingListAddresses, mailListID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			return nil, err
+		}
+		items = append(items, email)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getMailingListById = `-- name: GetMailingListById :one
 SELECT id, name, description, created_at, updated_at, archived_at, archived_by
 FROM mailing_lists
@@ -2587,6 +2720,24 @@ func (q *Queries) GetMailingListByIdIncludingArchived(ctx context.Context, id uu
 		&i.ArchivedBy,
 	)
 	return i, err
+}
+
+const getNewsSendByAudience = `-- name: GetNewsSendByAudience :one
+SELECT id FROM mail_tasks
+WHERE source_ref = $1::text AND source_audience = $2::text
+`
+
+type GetNewsSendByAudienceParams struct {
+	SourceRef      string `json:"source_ref"`
+	SourceAudience string `json:"source_audience"`
+}
+
+// The send of a News record to an audience, if there is one (open or done).
+func (q *Queries) GetNewsSendByAudience(ctx context.Context, arg GetNewsSendByAudienceParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getNewsSendByAudience, arg.SourceRef, arg.SourceAudience)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getNotificationByIdempotencyKey = `-- name: GetNotificationByIdempotencyKey :one
@@ -2699,6 +2850,91 @@ func (q *Queries) GetOwnedMailFormSource(ctx context.Context, arg GetOwnedMailFo
 		&i.ConsumeRequestHash,
 	)
 	return i, err
+}
+
+const getPreferenceGateClaimedRows = `-- name: GetPreferenceGateClaimedRows :many
+SELECT q.id,
+       q.recipient_email,
+       q.recipient_sub,
+       q.priority,
+       q.created_at,
+       q.preference_checked_at,
+       (q.list_unsubscribe_url IS NOT NULL)::boolean AS has_link,
+       t.key,
+       coalesce(t.system, false)::boolean AS system,
+       mt.purpose,
+       mt.category,
+       mt.self_test,
+       (nt.required IS TRUE)::boolean AS required_notification
+FROM mail_queue q
+         JOIN mail_tasks mt ON mt.id = q.task_id
+         LEFT JOIN templates t ON t.id = mt.template_id
+         LEFT JOIN notifications n ON n.id = mt.notification_id
+         LEFT JOIN notification_types nt ON nt.key = n.type
+WHERE q.id = ANY ($1::uuid[])
+  AND q.channel = 'email'
+  AND q.status = 'processing'
+  AND q.claimed_by = $2::text
+`
+
+type GetPreferenceGateClaimedRowsParams struct {
+	Ids       []uuid.UUID `json:"ids"`
+	ClaimedBy string      `json:"claimed_by"`
+}
+
+type GetPreferenceGateClaimedRowsRow struct {
+	ID                   uuid.UUID  `json:"id"`
+	RecipientEmail       string     `json:"recipient_email"`
+	RecipientSub         *uuid.UUID `json:"recipient_sub"`
+	Priority             int16      `json:"priority"`
+	CreatedAt            *time.Time `json:"created_at"`
+	PreferenceCheckedAt  *time.Time `json:"preference_checked_at"`
+	HasLink              bool       `json:"has_link"`
+	Key                  *string    `json:"key"`
+	System               bool       `json:"system"`
+	Purpose              *string    `json:"purpose"`
+	Category             *string    `json:"category"`
+	SelfTest             bool       `json:"self_test"`
+	RequiredNotification bool       `json:"required_notification"`
+}
+
+// The bulk rows this process just took, as the bulk preference check reads
+// them (mailer, preference_gate.go): whether core gave a verdict about the
+// row when it was queued, whom to ask about again, the send's category, and
+// what picks the row's lane. A required notification type never carries a
+// link (POST /v1/notifications refuses one), so the safety net leaves it be.
+func (q *Queries) GetPreferenceGateClaimedRows(ctx context.Context, arg GetPreferenceGateClaimedRowsParams) ([]GetPreferenceGateClaimedRowsRow, error) {
+	rows, err := q.db.Query(ctx, getPreferenceGateClaimedRows, arg.Ids, arg.ClaimedBy)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetPreferenceGateClaimedRowsRow
+	for rows.Next() {
+		var i GetPreferenceGateClaimedRowsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RecipientEmail,
+			&i.RecipientSub,
+			&i.Priority,
+			&i.CreatedAt,
+			&i.PreferenceCheckedAt,
+			&i.HasLink,
+			&i.Key,
+			&i.System,
+			&i.Purpose,
+			&i.Category,
+			&i.SelfTest,
+			&i.RequiredNotification,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getRecipientByEmail = `-- name: GetRecipientByEmail :one
@@ -3348,12 +3584,12 @@ func (q *Queries) InsertMailBounce(ctx context.Context, arg InsertMailBouncePara
 const insertMailTask = `-- name: InsertMailTask :one
 INSERT INTO mail_tasks (sent_by, template_id, mail_list_id, form_source_id, body_variables, content_sensitive_at_send,
                         tracking_requested, purpose, category, transactional_statement, commercial_content_absent,
-                        own_event_statement)
+                        own_event_statement, self_test)
 SELECT $1, $2, $3, $4, $5,
        CASE WHEN template_key_content_locked(templates.key) THEN 'true' ELSE COALESCE(templates.content_sensitive::text, 'unset') END,
        $6::boolean, $7::text, $8::text,
        $9::boolean, $10::boolean,
-       $11::boolean
+       $11::boolean, $12::boolean
 FROM templates
 WHERE templates.id = $2
   AND archived_at IS NULL
@@ -3372,6 +3608,7 @@ type InsertMailTaskParams struct {
 	TransactionalStatement  *bool      `json:"transactional_statement"`
 	CommercialContentAbsent *bool      `json:"commercial_content_absent"`
 	OwnEventStatement       *bool      `json:"own_event_statement"`
+	SelfTest                bool       `json:"self_test"`
 }
 
 type InsertMailTaskRow struct {
@@ -3401,6 +3638,7 @@ func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) 
 		arg.TransactionalStatement,
 		arg.CommercialContentAbsent,
 		arg.OwnEventStatement,
+		arg.SelfTest,
 	)
 	var i InsertMailTaskRow
 	err := row.Scan(
@@ -3636,6 +3874,78 @@ func (q *Queries) LastTemplateSeedVersion(ctx context.Context, templateID uuid.U
 		&i.Name,
 	)
 	return i, err
+}
+
+const listBounceReaderStates = `-- name: ListBounceReaderStates :many
+SELECT mailbox,
+       mode,
+       last_polled_at,
+       last_error,
+       reports,
+       not_dsn,
+       unmatched,
+       hard,
+       soft,
+       delay,
+       other_recipient,
+       duplicate,
+       no_failure,
+       unreadable
+FROM mail_bounce_reader_state
+ORDER BY mailbox, mode
+`
+
+type ListBounceReaderStatesRow struct {
+	Mailbox        string     `json:"mailbox"`
+	Mode           string     `json:"mode"`
+	LastPolledAt   *time.Time `json:"last_polled_at"`
+	LastError      *string    `json:"last_error"`
+	Reports        int64      `json:"reports"`
+	NotDsn         int64      `json:"not_dsn"`
+	Unmatched      int64      `json:"unmatched"`
+	Hard           int64      `json:"hard"`
+	Soft           int64      `json:"soft"`
+	Delay          int64      `json:"delay"`
+	OtherRecipient int64      `json:"other_recipient"`
+	Duplicate      int64      `json:"duplicate"`
+	NoFailure      int64      `json:"no_failure"`
+	Unreadable     int64      `json:"unreadable"`
+}
+
+// Every mailbox and mode the NDR reader has polled, without the delta link.
+func (q *Queries) ListBounceReaderStates(ctx context.Context) ([]ListBounceReaderStatesRow, error) {
+	rows, err := q.db.Query(ctx, listBounceReaderStates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListBounceReaderStatesRow
+	for rows.Next() {
+		var i ListBounceReaderStatesRow
+		if err := rows.Scan(
+			&i.Mailbox,
+			&i.Mode,
+			&i.LastPolledAt,
+			&i.LastError,
+			&i.Reports,
+			&i.NotDsn,
+			&i.Unmatched,
+			&i.Hard,
+			&i.Soft,
+			&i.Delay,
+			&i.OtherRecipient,
+			&i.Duplicate,
+			&i.NoFailure,
+			&i.Unreadable,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listInboxItems = `-- name: ListInboxItems :many
@@ -4025,6 +4335,10 @@ SELECT mt.id,
        rc.sent,
        rc.failed,
        rc.suppressed,
+       rc.opted_out,
+       rc.unsubscribed,
+       rc.inactive,
+       rc.ambiguous,
        rc.suppressed_but_sent,
        rc.undelivered,
        single.recipient_full_name   AS single_recipient_full_name,
@@ -4049,6 +4363,10 @@ FROM page
                                     count(*) FILTER (WHERE q.status = 'sent')       AS sent,
                                     count(*) FILTER (WHERE q.status = 'failed')     AS failed,
                                     count(*) FILTER (WHERE q.status = 'failed' AND q.error LIKE 'suppressed:%') AS suppressed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: opted_out') AS opted_out,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'suppressed: unsubscribed') AS unsubscribed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: inactive') AS inactive,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: ambiguous') AS ambiguous,
                                     count(*) FILTER (WHERE q.suppressed_but_sent) AS suppressed_but_sent,
                                     count(*) FILTER (WHERE EXISTS (SELECT 1
                                                                    FROM mail_bounces b
@@ -4096,6 +4414,10 @@ type ListMailTaskSendsRow struct {
 	Sent                    int64      `json:"sent"`
 	Failed                  int64      `json:"failed"`
 	Suppressed              int64      `json:"suppressed"`
+	OptedOut                int64      `json:"opted_out"`
+	Unsubscribed            int64      `json:"unsubscribed"`
+	Inactive                int64      `json:"inactive"`
+	Ambiguous               int64      `json:"ambiguous"`
 	SuppressedButSent       int64      `json:"suppressed_but_sent"`
 	Undelivered             int64      `json:"undelivered"`
 	SingleRecipientFullName *string    `json:"single_recipient_full_name"`
@@ -4153,6 +4475,10 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 			&i.Sent,
 			&i.Failed,
 			&i.Suppressed,
+			&i.OptedOut,
+			&i.Unsubscribed,
+			&i.Inactive,
+			&i.Ambiguous,
 			&i.SuppressedButSent,
 			&i.Undelivered,
 			&i.SingleRecipientFullName,
@@ -4171,6 +4497,34 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNewsSourceAddresses = `-- name: ListNewsSourceAddresses :many
+SELECT DISTINCT lower(recipient_email)::text AS address
+FROM mail_queue
+WHERE source_ref = $1::text
+`
+
+// The mailboxes a row of a News record was queued to go to, lower-cased:
+// every send of the record leaves them out ("zaten aldı").
+func (q *Queries) ListNewsSourceAddresses(ctx context.Context, sourceRef string) ([]string, error) {
+	rows, err := q.db.Query(ctx, listNewsSourceAddresses, sourceRef)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var address string
+		if err := rows.Scan(&address); err != nil {
+			return nil, err
+		}
+		items = append(items, address)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -4929,6 +5283,18 @@ func (q *Queries) LockMailFormSource(ctx context.Context, id uuid.UUID) (MailFor
 	return i, err
 }
 
+const lockNewsSource = `-- name: LockNewsSource :exec
+SELECT pg_advisory_xact_lock(hashtextextended('skymail news ' || $1::text, 0))
+`
+
+// Holds a News record's sends back from each other until the transaction
+// ends: the send that checks who already got the record's mail and queues
+// the rest is the only one doing so (idx_mail_queue_news_once is the net).
+func (q *Queries) LockNewsSource(ctx context.Context, sourceRef string) error {
+	_, err := q.db.Exec(ctx, lockNewsSource, sourceRef)
+	return err
+}
+
 const lockOwnedMailFormSource = `-- name: LockOwnedMailFormSource :one
 SELECT id, owner_sub, form_id, form_title, prepared_at, expires_at, response_count, recipient_count, skipped_count, duplicate_count, snapshot_hash, invalidated_at, consumed_at, consumed_approval_id, consumed_task_id, consume_request_hash FROM mail_form_sources WHERE id=$1 AND owner_sub=$2 FOR UPDATE NOWAIT
 `
@@ -5277,7 +5643,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref, preference_checked_at
 `
 
 type ProcessBulkQueueItemsParams struct {
@@ -5321,6 +5687,8 @@ func (q *Queries) ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueu
 			&i.SentAt,
 			&i.SuppressedButSent,
 			&i.ListUnsubscribeUrl,
+			&i.SourceRef,
+			&i.PreferenceCheckedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -5344,7 +5712,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref, preference_checked_at
 `
 
 type ProcessSystemQueueItemsParams struct {
@@ -5392,6 +5760,8 @@ func (q *Queries) ProcessSystemQueueItems(ctx context.Context, arg ProcessSystem
 			&i.SentAt,
 			&i.SuppressedButSent,
 			&i.ListUnsubscribeUrl,
+			&i.SourceRef,
+			&i.PreferenceCheckedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -5484,6 +5854,75 @@ func (q *Queries) PublishTemplateDraft(ctx context.Context, arg PublishTemplateD
 		&i.Channel,
 	)
 	return i, err
+}
+
+const recordBounceReaderPoll = `-- name: RecordBounceReaderPoll :exec
+INSERT INTO mail_bounce_reader_state (mailbox, mode, delta_link, last_polled_at, last_error, reports, not_dsn,
+                                      unmatched, hard, soft, delay, other_recipient, duplicate, no_failure,
+                                      unreadable)
+VALUES ($1::text, $2::text, $3::text, $4::timestamptz,
+        $5::text, $6::bigint, $7::bigint,
+        $8::bigint, $9::bigint, $10::bigint, $11::bigint,
+        $12::bigint, $13::bigint, $14::bigint,
+        $15::bigint)
+ON CONFLICT (mailbox, mode) DO UPDATE SET delta_link      = COALESCE(EXCLUDED.delta_link,
+                                                                     mail_bounce_reader_state.delta_link),
+                                          last_polled_at  = EXCLUDED.last_polled_at,
+                                          last_error      = EXCLUDED.last_error,
+                                          reports         = mail_bounce_reader_state.reports + EXCLUDED.reports,
+                                          not_dsn         = mail_bounce_reader_state.not_dsn + EXCLUDED.not_dsn,
+                                          unmatched       = mail_bounce_reader_state.unmatched + EXCLUDED.unmatched,
+                                          hard            = mail_bounce_reader_state.hard + EXCLUDED.hard,
+                                          soft            = mail_bounce_reader_state.soft + EXCLUDED.soft,
+                                          delay           = mail_bounce_reader_state.delay + EXCLUDED.delay,
+                                          other_recipient = mail_bounce_reader_state.other_recipient +
+                                                            EXCLUDED.other_recipient,
+                                          duplicate       = mail_bounce_reader_state.duplicate + EXCLUDED.duplicate,
+                                          no_failure      = mail_bounce_reader_state.no_failure + EXCLUDED.no_failure,
+                                          unreadable      = mail_bounce_reader_state.unreadable + EXCLUDED.unreadable
+`
+
+type RecordBounceReaderPollParams struct {
+	Mailbox        string    `json:"mailbox"`
+	Mode           string    `json:"mode"`
+	DeltaLink      *string   `json:"delta_link"`
+	PolledAt       time.Time `json:"polled_at"`
+	LastError      *string   `json:"last_error"`
+	Reports        int64     `json:"reports"`
+	NotDsn         int64     `json:"not_dsn"`
+	Unmatched      int64     `json:"unmatched"`
+	Hard           int64     `json:"hard"`
+	Soft           int64     `json:"soft"`
+	Delay          int64     `json:"delay"`
+	OtherRecipient int64     `json:"other_recipient"`
+	Duplicate      int64     `json:"duplicate"`
+	NoFailure      int64     `json:"no_failure"`
+	Unreadable     int64     `json:"unreadable"`
+}
+
+// Records one poll of a mailbox: its delta link when the poll reached the
+// end (NULL keeps the one before, so a poll that failed half way starts
+// again from there), when, its error (NULL: none) and what the reports it
+// read came to, added to the counts.
+func (q *Queries) RecordBounceReaderPoll(ctx context.Context, arg RecordBounceReaderPollParams) error {
+	_, err := q.db.Exec(ctx, recordBounceReaderPoll,
+		arg.Mailbox,
+		arg.Mode,
+		arg.DeltaLink,
+		arg.PolledAt,
+		arg.LastError,
+		arg.Reports,
+		arg.NotDsn,
+		arg.Unmatched,
+		arg.Hard,
+		arg.Soft,
+		arg.Delay,
+		arg.OtherRecipient,
+		arg.Duplicate,
+		arg.NoFailure,
+		arg.Unreadable,
+	)
+	return err
 }
 
 const recordMailApprovalEvent = `-- name: RecordMailApprovalEvent :one
@@ -6191,6 +6630,28 @@ func (q *Queries) SendWindowCounts(ctx context.Context, arg SendWindowCountsPara
 	return items, nil
 }
 
+const setClaimedRowsPreferenceCheckedAt = `-- name: SetClaimedRowsPreferenceCheckedAt :execrows
+UPDATE mail_queue
+SET preference_checked_at = $1::timestamptz
+WHERE id = ANY ($2::uuid[])
+  AND status = 'processing'
+  AND claimed_by = $3::text
+`
+
+type SetClaimedRowsPreferenceCheckedAtParams struct {
+	At        time.Time   `json:"at"`
+	Ids       []uuid.UUID `json:"ids"`
+	ClaimedBy string      `json:"claimed_by"`
+}
+
+func (q *Queries) SetClaimedRowsPreferenceCheckedAt(ctx context.Context, arg SetClaimedRowsPreferenceCheckedAtParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setClaimedRowsPreferenceCheckedAt, arg.At, arg.Ids, arg.ClaimedBy)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setClaimedRowsUnsubscribeURL = `-- name: SetClaimedRowsUnsubscribeURL :execrows
 UPDATE mail_queue q
 SET list_unsubscribe_url = ($1::text[])[array_position($2::uuid[], q.id)]
@@ -6370,6 +6831,40 @@ func (q *Queries) SetMailQueueItemSent(ctx context.Context, arg SetMailQueueItem
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setMailTaskNewsSource = `-- name: SetMailTaskNewsSource :exec
+UPDATE mail_tasks
+SET source_kind     = 'news',
+    source_ref      = $1::text,
+    source_version  = $2::int,
+    source_snapshot = $3::jsonb,
+    source_audience = $4::text,
+    source_counts   = $5::jsonb
+WHERE id = $6
+`
+
+type SetMailTaskNewsSourceParams struct {
+	SourceRef      string    `json:"source_ref"`
+	SourceVersion  int       `json:"source_version"`
+	SourceSnapshot []byte    `json:"source_snapshot"`
+	SourceAudience string    `json:"source_audience"`
+	SourceCounts   []byte    `json:"source_counts"`
+	ID             uuid.UUID `json:"id"`
+}
+
+// A News send's source (POST /v1/news_sends; hub ticket duyuru-haber 06):
+// written in the transaction that queues the send, after its rows.
+func (q *Queries) SetMailTaskNewsSource(ctx context.Context, arg SetMailTaskNewsSourceParams) error {
+	_, err := q.db.Exec(ctx, setMailTaskNewsSource,
+		arg.SourceRef,
+		arg.SourceVersion,
+		arg.SourceSnapshot,
+		arg.SourceAudience,
+		arg.SourceCounts,
+		arg.ID,
+	)
+	return err
 }
 
 const setMailTaskNotification = `-- name: SetMailTaskNotification :exec

@@ -21,6 +21,10 @@ type Querier interface {
 	AddRecipientToMailingList(ctx context.Context, arg AddRecipientToMailingListParams) (AddRecipientToMailingListRow, error)
 	ArchiveMailingList(ctx context.Context, arg ArchiveMailingListParams) (MailingList, error)
 	ArchiveTemplate(ctx context.Context, arg ArchiveTemplateParams) (Template, error)
+	// Of the e-mails sent in the last days days (still sent: a relay's refusal is
+	// failed), how many a report later said did not reach their address (hard),
+	// failed otherwise (soft) or were delayed. A row counts once in each.
+	BounceRate(ctx context.Context, days int) (BounceRateRow, error)
 	// Empties the content of up to batch_size sends none of whose rows is still to
 	// go out (pending or processing) once they are older than retention_days,
 	// sensitive or not: a sensitive send's content is kept as long as any other's
@@ -81,6 +85,10 @@ type Querier interface {
 	// numbers CountMailTaskSends gives for each status filter.
 	CountMailTasksByStatus(ctx context.Context) (CountMailTasksByStatusRow, error)
 	CountMailingLists(ctx context.Context) (int64, error)
+	// A person's test mails of a template in the last minute: a News send's
+	// test (POST /v1/news_sends/test) is a send of club.news to its sender
+	// without a source, at most 3 a minute.
+	CountRecentNewsTests(ctx context.Context, arg CountRecentNewsTestsParams) (int, error)
 	CountRecipients(ctx context.Context) (int64, error)
 	CountRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) (int64, error)
 	// After a restore from backup (docs/data-lifecycle.md, Backup and restore),
@@ -186,6 +194,9 @@ type Querier interface {
 	GetAllTemplatesIncludingArchived(ctx context.Context, arg GetAllTemplatesIncludingArchivedParams) ([]Template, error)
 	GetArchivedMailingLists(ctx context.Context, arg GetArchivedMailingListsParams) ([]MailingList, error)
 	GetArchivedTemplates(ctx context.Context, arg GetArchivedTemplatesParams) ([]Template, error)
+	// The Graph delta link the NDR reader's next poll of mailbox starts from in
+	// mode; no row (or a NULL link) reads the inbox from the start.
+	GetBounceReaderDeltaLink(ctx context.Context, arg GetBounceReaderDeltaLinkParams) (*string, error)
 	// The claimed e-mail rows among ids whose send a contact consent may hold
 	// back (internal/mailer/consent_gate.go): a promotional duyuru send
 	// (commercial_content_absent false), or a send to an internal list. With the
@@ -229,12 +240,24 @@ type Querier interface {
 	// template says so now or said so when the send was queued, or its key is
 	// locked sensitive). A send without a template is never tracked.
 	GetMailTaskTrackingExclusion(ctx context.Context, taskID uuid.UUID) (GetMailTaskTrackingExclusionRow, error)
+	// A list's addresses, for the bulk preference check before its send is
+	// queued (mailer, preference_gate.go): the send's insert reads the list
+	// again, in its transaction.
+	GetMailingListAddresses(ctx context.Context, mailListID uuid.UUID) ([]string, error)
 	GetMailingListById(ctx context.Context, id uuid.UUID) (MailingList, error)
 	GetMailingListByIdIncludingArchived(ctx context.Context, id uuid.UUID) (MailingList, error)
+	// The send of a News record to an audience, if there is one (open or done).
+	GetNewsSendByAudience(ctx context.Context, arg GetNewsSendByAudienceParams) (uuid.UUID, error)
 	GetNotificationByIdempotencyKey(ctx context.Context, arg GetNotificationByIdempotencyKeyParams) (GetNotificationByIdempotencyKeyRow, error)
 	GetNotificationType(ctx context.Context, key string) (NotificationType, error)
 	GetNotificationVariant(ctx context.Context, arg GetNotificationVariantParams) (NotificationVariant, error)
 	GetOwnedMailFormSource(ctx context.Context, arg GetOwnedMailFormSourceParams) (MailFormSource, error)
+	// The bulk rows this process just took, as the bulk preference check reads
+	// them (mailer, preference_gate.go): whether core gave a verdict about the
+	// row when it was queued, whom to ask about again, the send's category, and
+	// what picks the row's lane. A required notification type never carries a
+	// link (POST /v1/notifications refuses one), so the safety net leaves it be.
+	GetPreferenceGateClaimedRows(ctx context.Context, arg GetPreferenceGateClaimedRowsParams) ([]GetPreferenceGateClaimedRowsRow, error)
 	GetRecipientByEmail(ctx context.Context, email string) (Recipient, error)
 	GetRecipients(ctx context.Context, arg GetRecipientsParams) ([]Recipient, error)
 	GetRecipientsByMailingListId(ctx context.Context, arg GetRecipientsByMailingListIdParams) ([]Recipient, error)
@@ -305,6 +328,8 @@ type Querier interface {
 	// The last version a Template seed wrote of a template. Seed versions are
 	// always published, so this is the seed's last word on the template.
 	LastTemplateSeedVersion(ctx context.Context, templateID uuid.UUID) (TemplateVersionSummary, error)
+	// Every mailbox and mode the NDR reader has polled, without the delta link.
+	ListBounceReaderStates(ctx context.Context) ([]ListBounceReaderStatesRow, error)
 	// A page of one person's inbox, newest first: the items after the cursor
 	// (created_at, id), archived ones as archived says (exclude, include, only),
 	// none past its expiry.
@@ -328,6 +353,9 @@ type Querier interface {
 	// lists every send and a NULL status every status. The page is cut first so
 	// only its rows are counted.
 	ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error)
+	// The mailboxes a row of a News record was queued to go to, lower-cased:
+	// every send of the record leaves them out ("zaten aldı").
+	ListNewsSourceAddresses(ctx context.Context, sourceRef string) ([]string, error)
 	ListNotificationTypes(ctx context.Context) ([]NotificationType, error)
 	ListNotificationVariants(ctx context.Context) ([]NotificationVariant, error)
 	// An operator's versions of a template numbered after the given one, oldest
@@ -386,6 +414,10 @@ type Querier interface {
 	// that send needs.
 	LockMailApproval(ctx context.Context, id uuid.UUID) (MailApproval, error)
 	LockMailFormSource(ctx context.Context, id uuid.UUID) (MailFormSource, error)
+	// Holds a News record's sends back from each other until the transaction
+	// ends: the send that checks who already got the record's mail and queues
+	// the rest is the only one doing so (idx_mail_queue_news_once is the net).
+	LockNewsSource(ctx context.Context, sourceRef string) error
 	LockOwnedMailFormSource(ctx context.Context, arg LockOwnedMailFormSourceParams) (MailFormSource, error)
 	// Serialises the bulk lane's take across processes: under it a process reads
 	// the send windows, takes as many bulk rows as they leave room for and counts
@@ -455,6 +487,11 @@ type Querier interface {
 	// caller holds the row's lock and has checked that the version is a draft of
 	// this template.
 	PublishTemplateDraft(ctx context.Context, arg PublishTemplateDraftParams) (Template, error)
+	// Records one poll of a mailbox: its delta link when the poll reached the
+	// end (NULL keeps the one before, so a poll that failed half way starts
+	// again from there), when, its error (NULL: none) and what the reports it
+	// read came to, added to the counts.
+	RecordBounceReaderPoll(ctx context.Context, arg RecordBounceReaderPollParams) error
 	// Numbered after the request's last event; the caller holds its row lock.
 	RecordMailApprovalEvent(ctx context.Context, arg RecordMailApprovalEventParams) (MailApprovalEvent, error)
 	// Keeps on a template that a Template seed was refused, and why. Refusing the
@@ -532,6 +569,7 @@ type Querier interface {
 	// after minute_since (the current minute and the one before it) and the
 	// hours starting at or after hour_since (every hour of the last 24).
 	SendWindowCounts(ctx context.Context, arg SendWindowCountsParams) ([]MailSendWindow, error)
+	SetClaimedRowsPreferenceCheckedAt(ctx context.Context, arg SetClaimedRowsPreferenceCheckedAtParams) (int64, error)
 	// Gives claimed rows the link their mail is sent with: a promotional mail's
 	// is the grant's withdraw link, which ends the promotional consent.
 	// links[i] is ids[i]'s.
@@ -547,6 +585,9 @@ type Querier interface {
 	// then); zero rows says so. A sent or failed row keeps its claim: the process
 	// that finished it.
 	SetMailQueueItemSent(ctx context.Context, arg SetMailQueueItemSentParams) (int64, error)
+	// A News send's source (POST /v1/news_sends; hub ticket duyuru-haber 06):
+	// written in the transaction that queues the send, after its rows.
+	SetMailTaskNewsSource(ctx context.Context, arg SetMailTaskNewsSourceParams) error
 	SetMailTaskNotification(ctx context.Context, arg SetMailTaskNotificationParams) error
 	// Puts each row's masked mail in place of what was sent; an empty HTML is
 	// none. Only a row of the send that still holds a mail, of a send not masked

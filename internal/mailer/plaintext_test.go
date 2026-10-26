@@ -110,3 +110,13 @@ func TestPlainTextHandlesAnEmptyBody(t *testing.T) {
 		t.Errorf("got %q, want %q", got, "[]")
 	}
 }
+
+// A preformatted block keeps its lines in the plain-text part, and a rule
+// parts what is before it from what is after (duyuru-haber 06).
+func TestPlainTextKeepsPreformattedLinesAndRules(t *testing.T) {
+	got := plainTextFromHTML("<p>Önce</p><pre>satır 1\nsatır 2</pre><hr><p>Sonra</p>")
+	want := "Önce\n\nsatır 1\nsatır 2\n\nSonra"
+	if got != want {
+		t.Fatalf("plainTextFromHTML = %q, want %q", got, want)
+	}
+}

@@ -168,3 +168,18 @@ func SetConsentTiming(m Transactional, ttl, round, breaker, fetchDelay time.Dura
 
 // WaitConsentFetches waits for the consent fetches under way.
 func WaitConsentFetches(m Transactional) { m.(*mailerImpl).consentFetches.Wait() }
+
+// SetPreferenceTiming sets the bulk preference check's cache, fetch and
+// breaker times, and its clock when now is not nil.
+func SetPreferenceTiming(m Transactional, ttl, round, breaker, fetchDelay time.Duration, now func() time.Time) {
+	c := m.(*mailerImpl).preferenceCache
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ttl, c.roundTimeout, c.breakerOpen, c.fetchDelay = ttl, round, breaker, fetchDelay
+	if now != nil {
+		c.now = now
+	}
+}
+
+// WaitPreferenceFetches waits for the bulk preference fetches under way.
+func WaitPreferenceFetches(m Transactional) { m.(*mailerImpl).preferenceFetches.Wait() }

@@ -91,6 +91,11 @@ var (
 		"Only an optional notification type of the bulk lane takes an unsubscribe_url: a required or a system-lane type (a login code, a ticket, a confirmation) never carries one.",
 		fiber.StatusBadRequest,
 	)
+	errUnsubscribeURLRequired = apperrors.New(
+		"notification.unsubscribe_url_required",
+		"While every duyuru mail must carry a one-click way out (SKYMAIL_BULK_PREFERENCE), each e-mail recipient of an optional notification type of the bulk lane needs core's unsubscribe_url.",
+		fiber.StatusBadRequest,
+	)
 	errUnsubscribeURLInvalid = apperrors.New(
 		"notification.unsubscribe_url_invalid",
 		"An unsubscribe_url is an absolute https URL with a host and no user, at most 960 characters of visible ASCII without < > , or \".",
@@ -269,7 +274,7 @@ var errNotificationReplay = errors.New("idempotency key already used")
 //	@Param			notification	body		requests.SendNotification	true	"The notification"
 //	@Success		201				{object}	handlers.NotificationResult
 //	@Header			201				{string}	Idempotent-Replayed	"true when the answer is the first answer to this Idempotency-Key"
-//	@Failure		400				{object}	apperrors.AppError	"validation.error; notification.idempotency_key_required; notification.allowed_channels_required, notification.unsubscribe_url_not_allowed, notification.unsubscribe_url_invalid (params.recipient: its index); notification.expires_at_past"
+//	@Failure		400				{object}	apperrors.AppError	"validation.error; notification.idempotency_key_required; notification.allowed_channels_required, notification.unsubscribe_url_not_allowed, notification.unsubscribe_url_invalid, notification.unsubscribe_url_required (an optional bulk-lane type's e-mail recipient without one while SKYMAIL_BULK_PREFERENCE is on) (params.recipient: its index); notification.expires_at_past"
 //	@Failure		403				{object}	apperrors.AppError	"server.forbidden: no skymail:notifications:send; auth.service_account_required: a person's token"
 //	@Failure		409				{object}	apperrors.AppError	"notification.email_variant_missing: the type goes by e-mail and has no template of its key; notification.inbox_variant_missing"
 //	@Failure		422				{object}	apperrors.AppError	"notification.type_unknown; notification.idempotency_key_reused"
@@ -320,6 +325,16 @@ func (h *notificationHandlerImpl) Send(c fiber.Ctx) error {
 	// An unsubscribe link only on mail one may unsubscribe from (bounce
 	// ticket 11): an optional type in the bulk lane, never account or system
 	// mail.
+	// While every duyuru mail must carry its way out (abonelik-cikisi 09),
+	// a recipient of such a type the e-mail may go to needs its link: the
+	// dispatcher would never send its mail.
+	if h.mailer.PreferenceAvailable() && !kind.Required && kind.Lane == "bulk" && slices.Contains(kind.DefaultChannels, ChannelEmail) {
+		for i, r := range params.Recipients {
+			if r.UnsubscribeURL == "" && r.AllowedChannels != nil && slices.Contains(*r.AllowedChannels, ChannelEmail) {
+				return errUnsubscribeURLRequired.WithParams(map[string]interface{}{"recipient": i})
+			}
+		}
+	}
 	for i, r := range params.Recipients {
 		if r.UnsubscribeURL == "" {
 			continue

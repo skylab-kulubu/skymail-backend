@@ -119,6 +119,15 @@ type RecipientInfo struct {
 	// List-Unsubscribe (list_unsubscribe.go) and the mail renders it as
 	// .UnsubscribeUrl. Empty for none.
 	UnsubscribeURL string
+	// Variables are this recipient's own, over the send's (a News send's
+	// AudienceReason and CategoryLabel, core's words for why the person gets
+	// it). Email, FullName and UnsubscribeUrl are always the recipient's
+	// fields above: a variable of those names here is ignored.
+	Variables map[string]string
+	// UnsubscribeInBodyOnly renders UnsubscribeURL in the mail but keeps it
+	// off the row (no List-Unsubscribe): a News send's test mail, whose link
+	// is a sample that changes nothing.
+	UnsubscribeInBodyOnly bool
 }
 
 type EnqueueWithRecipientsParams struct {
@@ -144,6 +153,15 @@ type EnqueueWithRecipientsParams struct {
 	// Purpose is the send's purpose and category (ADR 0072 decision 2),
 	// written on the send; the zero value is none, the rule of before.
 	Purpose SendPurpose
+	// SelfTest says the send goes to its own sender's verified address alone
+	// (a News send's test mail): the bulk preference check neither asks core
+	// about it nor holds it for a missing link (preference_gate.go). The
+	// caller sees to it that the only recipient is the sender.
+	SelfTest bool
+	// SourceRef is a News send's news:<slug>, written on every row queued to
+	// go (mail_queue.source_ref, the record's once-per-mailbox index); nil
+	// for any other send.
+	SourceRef *string
 }
 
 type Mailer interface {
@@ -185,6 +203,11 @@ type Mailer interface {
 	// address without an account needs its announcement consent, unless the
 	// send states it is about the list's own event (consent_gate.go).
 	ListConsentAvailable() bool
+	// PreferenceAvailable says SKYMAIL_BULK_PREFERENCE is on: every duyuru
+	// send obeys core's preferences when it is queued and again right before
+	// each mail goes out (preference_gate.go); a duyuru send must state that
+	// its main purpose is not promotion.
+	PreferenceAvailable() bool
 	Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error)
 	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
 	// EnqueueSystemSingle queues a mail a service sends one person (a login
@@ -229,6 +252,12 @@ type Queue interface {
 	// core are never asked here: nil tracks no one.
 	EnqueueTrackedSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *TrackingPreferences) (uuid.UUID, error)
 	EnqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, error)
+	// WithPreferences is this Queue writing a duyuru send with what core said
+	// about its recipients before the transaction (ResolvePreferences): their
+	// links, and the recipients it holds back. Without it, while the bulk
+	// preference check is on, a duyuru send's rows get no link and the
+	// dispatcher never sends them (unsubscribe_missing).
+	WithPreferences(verdicts *PreferenceVerdicts) Queue
 }
 
 // Transactional is a Mailer that can also queue a send in a caller's
@@ -255,6 +284,13 @@ type Transactional interface {
 	// before the transaction and pass the answer with
 	// EnqueueWithRecipientsParams.System.
 	ResolveSystemTracking(ctx context.Context, recipients []RecipientInfo) *TrackingPreferences
+	// ResolvePreferences asks core, while the bulk preference check is on,
+	// about the recipients of a duyuru send of purpose (preference_gate.go).
+	// Call it before the transaction a Queue writes in and pass the answer to
+	// Queue.WithPreferences; its errors refuse the send (503
+	// mail_task.preference_unavailable, 400 mail_task.category_unknown). Nil
+	// with no error when the check is off or the send is not duyuru.
+	ResolvePreferences(ctx context.Context, purpose SendPurpose, recipients []RecipientInfo) (*PreferenceVerdicts, error)
 	// Wake asks the dispatcher to look at the queue now. Call it after the
 	// transaction a Queue wrote in commits; the dispatcher's tick finds the
 	// rows anyway, only later.
@@ -305,6 +341,9 @@ type mailerImpl struct {
 	// channels makes a worker's sender of each channel it sends (channel.go);
 	// tests replace them.
 	channels map[string]newChannelSender
+	// requestDSN asks the relay, when it offers DSN (RFC 3461), for a report
+	// of a failure only, with the headers only (WithDSNRequest).
+	requestDSN bool
 	// clientOptions are added to the workers' SMTP client options; tests
 	// set them.
 	clientOptions []mail.Option
@@ -317,6 +356,12 @@ type mailerImpl struct {
 	// consentFetches the fetches under way.
 	consentCache   *consentCache
 	consentFetches sync.WaitGroup
+	// preferences is the bulk preference check (WithPreferenceGate;
+	// preference_gate.go), preferenceCache what core said in the
+	// dispatcher's turns and preferenceFetches the fetches under way.
+	preferences       PreferenceGate
+	preferenceCache   *preferenceCache
+	preferenceFetches sync.WaitGroup
 	// refuseReserved writes a recipient in a reserved domain failed when a
 	// send is queued (WithReservedDomainsRefused); off by default.
 	refuseReserved bool
@@ -379,6 +424,7 @@ func NewMailer(db *database.Store, smtpConfig SMTPConfig, sender Sender, opts ..
 	}
 	m.templateKey = m.databaseTemplateKey
 	m.consentCache = newConsentCache()
+	m.preferenceCache = newPreferenceCache()
 	m.channels = map[string]newChannelSender{ChannelEmail: m.newEmailSender}
 	for _, opt := range opts {
 		opt(m)
@@ -605,9 +651,18 @@ type commonMailRow struct {
 	RecipientEmail    string
 	RecipientSub      *uuid.UUID
 	UnsubscribeURL    string
+	// RecipientVariables are the recipient's own variables
+	// (RecipientInfo.Variables).
+	RecipientVariables map[string]string
+	// SourceRef is a News send's news:<slug> (EnqueueWithRecipientsParams).
+	SourceRef *string
+	// UnsubscribeInBodyOnly: RecipientInfo.UnsubscribeInBodyOnly.
+	UnsubscribeInBodyOnly bool
 	// Purpose is the send's purpose as it is queued (mail_tasks.purpose):
 	// which stream's unsubscribe record applies (unsubscribe.go).
 	Purpose *string
+	// SelfTest: EnqueueWithRecipientsParams.SelfTest.
+	SelfTest bool
 }
 
 // queue writes sends through q: the pool's queries, or a transaction's, in
@@ -622,10 +677,25 @@ type queue struct {
 	// lanes are the mailer's (WithSendLanes): whether a send's purpose picks
 	// its stream (SKYMAIL_MAIL_PURPOSE).
 	lanes SendLanes
+	// preferences is the mailer's bulk preference check, and verdicts what
+	// core said about this send's recipients (WithPreferences).
+	preferences *PreferenceGate
+	verdicts    *PreferenceVerdicts
 }
 
 func (m *mailerImpl) Queue(q *database.Queries, priority Priority) Queue {
-	return &queue{q: q, logger: m.logger, priority: priority, tracking: &m.tracking, refuseReserved: m.refuseReserved, lanes: m.lanes}
+	return m.queueOf(q, priority, nil)
+}
+
+func (m *mailerImpl) queueOf(q *database.Queries, priority Priority, verdicts *PreferenceVerdicts) *queue {
+	return &queue{q: q, logger: m.logger, priority: priority, tracking: &m.tracking, refuseReserved: m.refuseReserved, lanes: m.lanes,
+		preferences: &m.preferences, verdicts: verdicts}
+}
+
+func (q *queue) WithPreferences(verdicts *PreferenceVerdicts) Queue {
+	with := *q
+	with.verdicts = verdicts
+	return &with
 }
 
 func (m *mailerImpl) Wake() { m.wake() }
@@ -635,11 +705,16 @@ func (m *mailerImpl) Wake() { m.wake() }
 // to queue leaves no send without rows behind. It wakes the dispatcher once
 // rows are queued.
 func (m *mailerImpl) pooled(ctx context.Context, priority Priority, write func(*queue) (uuid.UUID, bool, error)) (uuid.UUID, error) {
+	return m.pooledWith(ctx, priority, nil, write)
+}
+
+// pooledWith is pooled for a send core was asked about (ResolvePreferences).
+func (m *mailerImpl) pooledWith(ctx context.Context, priority Priority, verdicts *PreferenceVerdicts, write func(*queue) (uuid.UUID, bool, error)) (uuid.UUID, error) {
 	var id uuid.UUID
 	var queued bool
 	err := m.db.InTx(ctx, func(q *database.Queries) error {
 		var err error
-		id, queued, err = write(&queue{q: q, logger: m.logger, priority: priority, tracking: &m.tracking, refuseReserved: m.refuseReserved, lanes: m.lanes})
+		id, queued, err = write(m.queueOf(q, priority, verdicts))
 		return err
 	})
 	if err != nil {
@@ -650,7 +725,23 @@ func (m *mailerImpl) pooled(ctx context.Context, priority Priority, write func(*
 }
 
 func (m *mailerImpl) Enqueue(ctx context.Context, arg database.CreateMailTaskParams) (uuid.UUID, error) {
-	return m.pooled(ctx, PriorityBulk, func(q *queue) (uuid.UUID, bool, error) {
+	// A list's addresses are read, and core asked, before the transaction:
+	// the send's insert reads the list again.
+	var verdicts *PreferenceVerdicts
+	if m.gatedPurpose(arg.Purpose) && arg.MailListID != nil {
+		addresses, err := m.db.GetMailingListAddresses(ctx, *arg.MailListID)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		recipients := make([]RecipientInfo, len(addresses))
+		for i, address := range addresses {
+			recipients[i] = RecipientInfo{Email: address}
+		}
+		if verdicts, err = m.ResolvePreferences(ctx, SendPurpose{Purpose: arg.Purpose, Category: arg.Category}, recipients); err != nil {
+			return uuid.Nil, err
+		}
+	}
+	return m.pooledWith(ctx, PriorityBulk, verdicts, func(q *queue) (uuid.UUID, bool, error) {
 		return q.enqueue(ctx, arg)
 	})
 }
@@ -685,7 +776,12 @@ func (m *mailerImpl) EnqueueTrackedSingle(ctx context.Context, arg database.Crea
 	if preferences == nil && arg.TrackingRequested && arg.TemplateID != nil {
 		preferences = m.ResolvePeopleTracking(ctx, *arg.TemplateID, []RecipientInfo{{FullName: arg.RecipientFullName, Email: arg.RecipientEmail}})
 	}
-	return m.pooled(ctx, PriorityBulk, func(q *queue) (uuid.UUID, bool, error) {
+	verdicts, err := m.ResolvePreferences(ctx, SendPurpose{Purpose: arg.Purpose, Category: arg.Category},
+		[]RecipientInfo{{FullName: arg.RecipientFullName, Email: arg.RecipientEmail}})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return m.pooledWith(ctx, PriorityBulk, verdicts, func(q *queue) (uuid.UUID, bool, error) {
 		id, result, err := q.enqueueSingle(ctx, arg, preferences, false)
 		return id, result.queued, err
 	})
@@ -700,7 +796,14 @@ func (m *mailerImpl) EnqueueWithRecipients(ctx context.Context, params EnqueueWi
 	case params.Tracking && m.TrackingAvailable():
 		params.Preferences = m.ResolveTracking(ctx, params.TemplateID, params.MailListID, params.Recipients)
 	}
-	return m.pooled(ctx, PriorityBulk, func(q *queue) (uuid.UUID, bool, error) {
+	var verdicts *PreferenceVerdicts
+	if !params.SelfTest {
+		var err error
+		if verdicts, err = m.ResolvePreferences(ctx, params.Purpose, params.Recipients); err != nil {
+			return uuid.Nil, err
+		}
+	}
+	return m.pooledWith(ctx, PriorityBulk, verdicts, func(q *queue) (uuid.UUID, bool, error) {
 		return q.enqueueWithRecipients(ctx, params)
 	})
 }
@@ -811,7 +914,15 @@ func (q *queue) enqueueSingle(ctx context.Context, arg database.CreateSingleMail
 	return row.TaskID, result, err
 }
 
+// ErrSelfTestRecipients refuses a test mail (SelfTest) with other than one
+// recipient: the bulk preference check leaves a test mail be only because it
+// goes to its own sender alone.
+var ErrSelfTestRecipients = errors.New("mailer: a test mail (SelfTest) goes to exactly one recipient, its sender")
+
 func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRecipientsParams) (uuid.UUID, bool, error) {
+	if params.SelfTest && len(params.Recipients) != 1 {
+		return uuid.Nil, false, ErrSelfTestRecipients
+	}
 	kind := q.tracking.trackingOf(params.Tracking, params.System)
 	task, err := q.q.InsertMailTask(ctx, database.InsertMailTaskParams{
 		SentBy:                  params.SentBy,
@@ -825,6 +936,7 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 		TransactionalStatement:  params.Purpose.TransactionalStatement,
 		CommercialContentAbsent: params.Purpose.CommercialContentAbsent,
 		OwnEventStatement:       params.Purpose.OwnEventStatement,
+		SelfTest:                params.SelfTest,
 	})
 	if err != nil {
 		return uuid.Nil, false, err
@@ -846,16 +958,20 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 			sub, _ = params.Preferences.accountOf(r.Email)
 		}
 		rows = append(rows, commonMailRow{
-			TaskID:            task.ID,
-			BodyVariables:     params.BodyVariables,
-			TemplateSubject:   tmpl.Subject,
-			HtmlContent:       tmpl.HtmlContent,
-			PlainTextContent:  tmpl.PlainTextContent,
-			RecipientFullName: r.FullName,
-			RecipientEmail:    r.Email,
-			RecipientSub:      sub,
-			UnsubscribeURL:    r.UnsubscribeURL,
-			Purpose:           params.Purpose.Purpose,
+			TaskID:                task.ID,
+			BodyVariables:         params.BodyVariables,
+			TemplateSubject:       tmpl.Subject,
+			HtmlContent:           tmpl.HtmlContent,
+			PlainTextContent:      tmpl.PlainTextContent,
+			RecipientFullName:     r.FullName,
+			RecipientEmail:        r.Email,
+			RecipientSub:          sub,
+			UnsubscribeURL:        r.UnsubscribeURL,
+			RecipientVariables:    r.Variables,
+			SourceRef:             params.SourceRef,
+			UnsubscribeInBodyOnly: r.UnsubscribeInBodyOnly,
+			Purpose:               params.Purpose.Purpose,
+			SelfTest:              params.SelfTest,
 		})
 	}
 
@@ -956,8 +1072,11 @@ func (t mailTemplates) render(vars map[string]interface{}, recipient RecipientIn
 // only. A send passes the same variables to both.
 func (t mailTemplates) renderWith(textVars, htmlVars map[string]interface{}, recipient RecipientInfo) (Rendered, error) {
 	withRecipient := func(vars map[string]interface{}) map[string]interface{} {
-		data := make(map[string]interface{}, len(vars)+2)
+		data := make(map[string]interface{}, len(vars)+len(recipient.Variables)+3)
 		for k, v := range vars {
+			data[k] = v
+		}
+		for k, v := range recipient.Variables {
 			data[k] = v
 		}
 		data["Email"] = recipient.Email
@@ -1022,7 +1141,12 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 	if err != nil {
 		return queueResult{}, err
 	}
+	gated, err := q.gated(ctx, rows)
+	if err != nil {
+		return queueResult{}, err
+	}
 	var flagged []string
+	held := map[string]int{}
 
 	queueItems := make([]database.CreateMailQueueItemsParams, 0, len(rows))
 	var failed []database.CreateFailedMailQueueItemParams
@@ -1067,7 +1191,31 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 			})
 			continue
 		}
-		rendered, err := parsed.render(taskVars, RecipientInfo{FullName: row.RecipientFullName, Email: row.RecipientEmail, UnsubscribeURL: row.UnsubscribeURL})
+		// The bulk preference check (preference_gate.go): the link core gave
+		// for the person, SkyMail's own for an address without an account,
+		// or core's no.
+		var checked *time.Time
+		if gated {
+			outcome := q.preferenceOf(row.RecipientSub, row.RecipientEmail)
+			if outcome.skip != "" {
+				held[outcome.skip]++
+				failed = append(failed, database.CreateFailedMailQueueItemParams{
+					TaskID:            row.TaskID,
+					RecipientFullName: row.RecipientFullName,
+					RecipientEmail:    row.RecipientEmail,
+					Priority:          int16(q.priority),
+					Error:             outcome.skip,
+					RecipientSub:      row.RecipientSub,
+				})
+				continue
+			}
+			if outcome.link != "" {
+				row.UnsubscribeURL = outcome.link
+			}
+			checked = outcome.checked
+		}
+		rendered, err := parsed.render(taskVars, RecipientInfo{FullName: row.RecipientFullName, Email: row.RecipientEmail,
+			UnsubscribeURL: row.UnsubscribeURL, Variables: row.RecipientVariables})
 		if err != nil {
 			if strict {
 				return queueResult{}, err
@@ -1088,22 +1236,29 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 		htmlRes := rendered.HTML
 
 		queueItems = append(queueItems, database.CreateMailQueueItemsParams{
-			TaskID:             row.TaskID,
-			RecipientFullName:  row.RecipientFullName,
-			RecipientEmail:     row.RecipientEmail,
-			Subject:            rendered.Subject,
-			Body:               rendered.PlainText,
-			BodyHtml:           &htmlRes,
-			Priority:           int16(q.priority),
-			RecipientSub:       row.RecipientSub,
-			SuppressedButSent:  isSuppressed,
-			ListUnsubscribeUrl: nonEmpty(row.UnsubscribeURL),
+			TaskID:              row.TaskID,
+			RecipientFullName:   row.RecipientFullName,
+			RecipientEmail:      row.RecipientEmail,
+			Subject:             rendered.Subject,
+			Body:                rendered.PlainText,
+			BodyHtml:            &htmlRes,
+			Priority:            int16(q.priority),
+			RecipientSub:        row.RecipientSub,
+			SuppressedButSent:   isSuppressed,
+			ListUnsubscribeUrl:  listUnsubscribeOf(row),
+			SourceRef:           row.SourceRef,
+			PreferenceCheckedAt: checked,
 		})
 		if isSuppressed {
 			q.logger.Warn().Str("task_id", row.TaskID.String()).Str("suppression", suppression.Source+" "+suppression.ReasonCode).
 				Msg("Account mail to a suppressed address: queued and flagged")
 			flagged = append(flagged, suppression.Address)
 		}
+	}
+
+	for reason, count := range held {
+		q.logger.Info().Str("task_id", rows[0].TaskID.String()).Str("reason", reason).Int("count", count).
+			Msg("Bulk preference check: recipients core holds back, written failed, never sent; the others are queued")
 	}
 
 	tracked := false
@@ -1209,6 +1364,8 @@ func (m *mailerImpl) drainQueue(ctx context.Context, logger *zerolog.Logger) boo
 	// What the contact consents of this turn's rows needed and core has not
 	// said yet is fetched in the background, outside the transaction.
 	m.fetchConsents(ctx, logger)
+	// So is what the bulk preference check needed (preference_gate.go).
+	m.fetchPreferences(ctx, logger)
 	return true
 }
 
@@ -1437,6 +1594,15 @@ func (m *mailerImpl) recordSendFailure(ctx context.Context, logger *zerolog.Logg
 }
 
 // nonEmpty is s, or nil when it is empty.
+// listUnsubscribeOf is the link a row keeps for List-Unsubscribe: the
+// recipient's, unless it goes in the body only.
+func listUnsubscribeOf(row commonMailRow) *string {
+	if row.UnsubscribeInBodyOnly {
+		return nil
+	}
+	return nonEmpty(row.UnsubscribeURL)
+}
+
 func nonEmpty(s string) *string {
 	if s == "" {
 		return nil

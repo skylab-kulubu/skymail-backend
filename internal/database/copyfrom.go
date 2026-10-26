@@ -41,6 +41,8 @@ func (r iteratorForCreateMailQueueItems) Values() ([]interface{}, error) {
 		r.rows[0].TrackingSkipReason,
 		r.rows[0].SuppressedButSent,
 		r.rows[0].ListUnsubscribeUrl,
+		r.rows[0].SourceRef,
+		r.rows[0].PreferenceCheckedAt,
 	}, nil
 }
 
@@ -56,7 +58,7 @@ func (r iteratorForCreateMailQueueItems) Err() error {
 // list_unsubscribe_url is the recipient's one-click unsubscribe link when
 // core gave one (List-Unsubscribe, bounce ticket 11).
 func (q *Queries) CreateMailQueueItems(ctx context.Context, arg []CreateMailQueueItemsParams) (int64, error) {
-	return q.db.CopyFrom(ctx, []string{"mail_queue"}, []string{"task_id", "recipient_full_name", "recipient_email", "subject", "body", "body_html", "priority", "recipient_sub", "tracking_token", "tracking_skip_reason", "suppressed_but_sent", "list_unsubscribe_url"}, &iteratorForCreateMailQueueItems{rows: arg})
+	return q.db.CopyFrom(ctx, []string{"mail_queue"}, []string{"task_id", "recipient_full_name", "recipient_email", "subject", "body", "body_html", "priority", "recipient_sub", "tracking_token", "tracking_skip_reason", "suppressed_but_sent", "list_unsubscribe_url", "source_ref", "preference_checked_at"}, &iteratorForCreateMailQueueItems{rows: arg})
 }
 
 // iteratorForCreateMailTaskLinks implements pgx.CopyFromSource.
