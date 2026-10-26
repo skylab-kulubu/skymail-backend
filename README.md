@@ -500,8 +500,8 @@ reddidir (aşağıda).
   token `aud`'unda `skymail`, kişi token'ı, erişim kapısı): kişi kendi
   adreslerinden hangisine posta ulaşmadığını kendi token'ıyla okur. Yalnız
   `recipient_sub` = token `sub`'ı olan satırlar ve adresi token'ın kişiye ait
-  adreslerinden biri olan satırlar döner: userinfo `email` (`email_verified`
-  `false` ise kullanılmaz) ve `school_email` (userinfo'da yoksa token'dan);
+  adreslerinden biri olan satırlar döner: userinfo `email` (yalnız `email_verified`
+  `true` ise; claim yoksa kullanılmaz, `/v1` gibi) ve `school_email` (userinfo'da yoksa token'dan);
   küçük harf + kırpma ile karşılaştırılır, her adres bir kez. Parametre
   almaz; başka adres ya da kişi sorgulanamaz. Yanıt
   `{"undeliverable":[{"address","since"}]}` (`since` = ilk bastırılma, UTC),

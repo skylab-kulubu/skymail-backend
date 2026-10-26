@@ -167,8 +167,9 @@ const personAddressesKey = "person_addresses"
 
 // PersonAddresses is what AuthenticatePerson found the caller's own
 // addresses to be (GET /v1/me/email-delivery; hub ticket rabbitmq-olaylar
-// 10): userinfo's email, unless userinfo says Keycloak has not verified it
-// (email_verified false), and the school address, school_email, from
+// 10): userinfo's email, only when userinfo says Keycloak has verified it
+// (email_verified true; unsaid is not verified, as on /v1), and the school
+// address, school_email, from
 // userinfo or else from the token Keycloak accepted. Trimmed, lower-cased as
 // the suppression list keys an address, each once. Nil when there is none,
 // or on a route AuthenticatePerson did not run for.
@@ -185,7 +186,7 @@ func (info userInfo) ownAddresses(tokenStr string) []string {
 			addresses = append(addresses, address)
 		}
 	}
-	if info.EmailVerified == nil || *info.EmailVerified {
+	if info.EmailVerified != nil && *info.EmailVerified {
 		add(info.Email)
 	}
 	school := info.SchoolEmail

@@ -46,7 +46,7 @@ func NewEmailDeliveryHandler(db *database.Store) EmailDeliveryHandler {
 // Get godoc
 //
 //	@Summary		Which of my addresses mail does not reach
-//	@Description	The caller's own addresses on the suppression list: the rows suppressed with their sub, and the rows of the addresses their token says are theirs — Keycloak's email (unless email_verified is false) and school_email — compared lower-cased and trimmed, each once, oldest first. since is when the address was first suppressed. No source, code or id; no parameter: someone else's address cannot be asked about. Only a person's own token issued for SkyMail (aud skymail) may call it; no role is needed. Served with Cache-Control: no-store.
+//	@Description	The caller's own addresses on the suppression list: the rows suppressed with their sub, and the rows of the addresses their token says are theirs — Keycloak's email (only when email_verified is true) and school_email — compared lower-cased and trimmed, each once, oldest first. since is when the address was first suppressed. No source, code or id; no parameter: someone else's address cannot be asked about. Only a person's own token issued for SkyMail (aud skymail) may call it; no role is needed. Served with Cache-Control: no-store.
 //	@Tags			Inbox
 //	@Produce		json
 //	@Success		200	{object}	handlers.EmailDelivery

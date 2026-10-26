@@ -10,7 +10,7 @@ import (
 
 // A person's own routes know the person's own addresses (GET
 // /v1/me/email-delivery; hub ticket rabbitmq-olaylar 10): the address
-// userinfo gives as email, unless userinfo says Keycloak has not verified it,
+// userinfo gives as email, only when userinfo says Keycloak has verified it,
 // and the school address (school_email) userinfo or, failing that, the
 // accepted token carries. Trimmed and lower-cased, each once; nothing else.
 func TestAuthenticatePersonKeepsThePersonsOwnAddresses(t *testing.T) {
@@ -22,7 +22,7 @@ func TestAuthenticatePersonKeepsThePersonsOwnAddresses(t *testing.T) {
 		want        []string
 	}{
 		"verified email":         {`"email":" Ada@YildizSkyLab.com ","email_verified":true`, nil, []string{"ada@yildizskylab.com"}},
-		"email, verified unsaid": {`"email":"ada@yildizskylab.com"`, nil, []string{"ada@yildizskylab.com"}},
+		"email, verified unsaid": {`"email":"ada@yildizskylab.com"`, nil, nil},
 		"unverified email":       {`"email":"ada@yildizskylab.com","email_verified":false`, nil, nil},
 		"blank email":            {`"email":"  ","email_verified":true`, nil, nil},
 		"no address":             {``, nil, nil},
@@ -36,7 +36,7 @@ func TestAuthenticatePersonKeepsThePersonsOwnAddresses(t *testing.T) {
 			[]string{"ada.yilmaz@std.yildiz.edu.tr"}},
 		"the same address once": {`"email":"ada.yilmaz@std.yildiz.edu.tr","email_verified":true,"school_email":"ADA.YILMAZ@std.yildiz.edu.tr"`, nil,
 			[]string{"ada.yilmaz@std.yildiz.edu.tr"}},
-		"a school claim that is not a string": {`"email":"ada@example.com"`, map[string]any{"school_email": []string{"x@std.yildiz.edu.tr"}},
+		"a school claim that is not a string": {`"email":"ada@example.com","email_verified":true`, map[string]any{"school_email": []string{"x@std.yildiz.edu.tr"}},
 			[]string{"ada@example.com"}},
 	} {
 		t.Run(name, func(t *testing.T) {
