@@ -28,6 +28,9 @@ type Querier interface {
 	// The instant until which the bulk lane takes nothing: a throttling reply of
 	// the relay held it (HoldBulkLane). No row: never held.
 	BulkLaneHeldUntil(ctx context.Context) (BulkLaneHeldUntilRow, error)
+	// Writes rows this process took failed with 'cancelled' (their send was
+	// cancelled), nothing tried.
+	CancelClaimedRows(ctx context.Context, arg CancelClaimedRowsParams) (int64, error)
 	// Cancels a send: no more of its rows are taken, and its pending rows are
 	// written failed with 'cancelled' (CancelPendingRows). Rows being sent finish.
 	CancelMailTask(ctx context.Context, arg CancelMailTaskParams) (int64, error)
@@ -238,6 +241,10 @@ type Querier interface {
 	// Days are calendar days in time_zone; the series ends on as_of's day and has
 	// one row per day, zero-filled.
 	GetDailySentCounts(ctx context.Context, arg GetDailySentCountsParams) ([]GetDailySentCountsRow, error)
+	// Which of the sends of rows just taken are paused or cancelled: their rows
+	// go back parked, or are written cancelled, instead of being sent (a retry
+	// or an expired lease put one back after the pause or the cancel).
+	GetHeldTasks(ctx context.Context, ids []uuid.UUID) ([]GetHeldTasksRow, error)
 	// A request as every screen shows it: with its template's name and key, the
 	// version the template publishes now, its list's name when the list is an
 	// internal one (a Keycloak group's is Keycloak's to give), the people it goes
@@ -498,13 +505,21 @@ type Querier interface {
 	// just its last click. Only this classifier version's contemporaneous events
 	// change; newer rules never reinterpret historical events.
 	MarkTrackingScannerBurst(ctx context.Context, arg MarkTrackingScannerBurstParams) error
-	// Pauses a send by an operator; a paused send stays paused, as it was.
+	// Puts rows this process took back, parked (their send is paused), nothing
+	// tried and nothing counted.
+	ParkClaimedRows(ctx context.Context, arg ParkClaimedRowsParams) (int64, error)
+	// Parks a paused send's pending rows: never due until it is resumed
+	// (ResumeMailTask). For a send its failure rate paused.
+	ParkPendingRows(ctx context.Context, taskID uuid.UUID) (int64, error)
+	// Pauses a send by an operator; a paused send stays paused, as it was. Its
+	// pending rows are parked: never due until it is resumed.
 	PauseMailTask(ctx context.Context, arg PauseMailTaskParams) (int64, error)
 	// The same for the bulk lane (lists, groups, approved sends), which reads
 	// idx_mail_queue_pending_bulk. The process asks for no more rows than the
 	// send budget leaves room for (SendWindowCounts), under LockSendBudget. A
-	// paused or cancelled send's rows are not taken (duyuru-haber 05 G4): they
-	// stay pending until it is resumed, or the cancel sweep fails them.
+	// paused send's pending rows are parked (ParkPendingRows) and never due; a
+	// row of a paused or cancelled send taken all the same is handed to
+	// GetHeldTasks (mailer, bulk_guard.go).
 	ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueueItemsParams) ([]MailQueue, error)
 	// Takes up to max_rows due rows of the system lane (priority above 0: single
 	// mail a person is waiting for) for one process, leased to it: claimed_by
@@ -607,8 +622,8 @@ type Querier interface {
 	// people are written beside it (ClearMailApprovalRecipients, then
 	// AddMailApprovalRecipients).
 	ResubmitMailApproval(ctx context.Context, arg ResubmitMailApprovalParams) (MailApproval, error)
-	// Resumes a paused send: its failures so far are accepted, the failure rate
-	// counts afresh.
+	// Resumes a paused send: its parked rows are due now, its failures so far
+	// are accepted, the failure rate counts afresh.
 	ResumeMailTask(ctx context.Context, id uuid.UUID) (int64, error)
 	// The send windows a budget reads at one instant: the minutes starting at or
 	// after minute_since (the current minute and the one before it) and the

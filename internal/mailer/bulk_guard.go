@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
@@ -200,6 +201,9 @@ func (m *mailerImpl) countSendFailure(ctx context.Context, logger *zerolog.Logge
 		return
 	}
 	if counted.Paused {
+		if _, err := m.db.ParkPendingRows(ctx, job.TaskID); err != nil {
+			logger.Err(err).Str("task_id", job.TaskID.String()).Msg("Failed to park a paused send's pending rows; the take hands them back one by one")
+		}
 		logger.Warn().Str("task_id", job.TaskID.String()).Int("send_failures", counted.SendFailures).
 			Int("failure_pause_count", m.guard.FailureCount).Int("failure_pause_percent", m.guard.FailurePercent).
 			Str("event", "send_paused_failure_rate").
@@ -218,4 +222,61 @@ func (m *mailerImpl) sweepCancelled(ctx context.Context) {
 	if n > 0 {
 		m.logger.Info().Int64("count", n).Msg("Cancelled sends' rows put back since written cancelled")
 	}
+}
+
+// skipHeldTasks hands back, of rows this process just took, those of a
+// paused or a cancelled send: a paused send's go back parked (never due until
+// it is resumed), a cancelled send's are written 'cancelled'. Such a row is
+// one a retry or an expired lease put back to pending after the pause or the
+// cancel; the take itself never reads them (parked rows are not due).
+func (m *mailerImpl) skipHeldTasks(ctx context.Context, q *database.Queries, logger *zerolog.Logger, rows []database.MailQueue) ([]database.MailQueue, error) {
+	if len(rows) == 0 {
+		return rows, nil
+	}
+	seen := map[uuid.UUID]bool{}
+	var tasks []uuid.UUID
+	for _, row := range rows {
+		if !seen[row.TaskID] {
+			seen[row.TaskID] = true
+			tasks = append(tasks, row.TaskID)
+		}
+	}
+	held, err := q.GetHeldTasks(ctx, tasks)
+	if err != nil || len(held) == 0 {
+		return rows, err
+	}
+	cancelled := map[uuid.UUID]bool{}
+	paused := map[uuid.UUID]bool{}
+	for _, task := range held {
+		if task.Cancelled {
+			cancelled[task.ID] = true
+		} else {
+			paused[task.ID] = true
+		}
+	}
+	var keep []database.MailQueue
+	var park, cancel []uuid.UUID
+	for _, row := range rows {
+		switch {
+		case cancelled[row.TaskID]:
+			cancel = append(cancel, row.ID)
+		case paused[row.TaskID]:
+			park = append(park, row.ID)
+		default:
+			keep = append(keep, row)
+		}
+	}
+	if len(park) > 0 {
+		if _, err := q.ParkClaimedRows(ctx, database.ParkClaimedRowsParams{Ids: park, ClaimedBy: m.claimant}); err != nil {
+			return nil, err
+		}
+	}
+	if len(cancel) > 0 {
+		if _, err := q.CancelClaimedRows(ctx, database.CancelClaimedRowsParams{Ids: cancel, ClaimedBy: m.claimant}); err != nil {
+			return nil, err
+		}
+	}
+	logger.Info().Int("parked", len(park)).Int("cancelled", len(cancel)).
+		Msg("Rows of paused or cancelled sends taken: parked or written cancelled, not sent")
+	return keep, nil
 }

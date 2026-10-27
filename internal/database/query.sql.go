@@ -303,6 +303,32 @@ func (q *Queries) BulkLaneHeldUntil(ctx context.Context) (BulkLaneHeldUntilRow, 
 	return i, err
 }
 
+const cancelClaimedRows = `-- name: CancelClaimedRows :execrows
+UPDATE mail_queue
+SET status     = 'failed',
+    error      = 'cancelled',
+    claimed_at = NULL,
+    claimed_by = NULL
+WHERE id = ANY ($1::uuid[])
+  AND status = 'processing'
+  AND claimed_by = $2::text
+`
+
+type CancelClaimedRowsParams struct {
+	Ids       []uuid.UUID `json:"ids"`
+	ClaimedBy string      `json:"claimed_by"`
+}
+
+// Writes rows this process took failed with 'cancelled' (their send was
+// cancelled), nothing tried.
+func (q *Queries) CancelClaimedRows(ctx context.Context, arg CancelClaimedRowsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelClaimedRows, arg.Ids, arg.ClaimedBy)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const cancelMailTask = `-- name: CancelMailTask :execrows
 UPDATE mail_tasks
 SET cancelled_at  = now(),
@@ -2416,6 +2442,41 @@ func (q *Queries) GetDailySentCounts(ctx context.Context, arg GetDailySentCounts
 	for rows.Next() {
 		var i GetDailySentCountsRow
 		if err := rows.Scan(&i.Day, &i.Sent); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getHeldTasks = `-- name: GetHeldTasks :many
+SELECT id, (cancelled_at IS NOT NULL)::boolean AS cancelled
+FROM mail_tasks
+WHERE id = ANY ($1::uuid[])
+  AND (paused_at IS NOT NULL OR cancelled_at IS NOT NULL)
+`
+
+type GetHeldTasksRow struct {
+	ID        uuid.UUID `json:"id"`
+	Cancelled bool      `json:"cancelled"`
+}
+
+// Which of the sends of rows just taken are paused or cancelled: their rows
+// go back parked, or are written cancelled, instead of being sent (a retry
+// or an expired lease put one back after the pause or the cancel).
+func (q *Queries) GetHeldTasks(ctx context.Context, ids []uuid.UUID) ([]GetHeldTasksRow, error) {
+	rows, err := q.db.Query(ctx, getHeldTasks, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetHeldTasksRow
+	for rows.Next() {
+		var i GetHeldTasksRow
+		if err := rows.Scan(&i.ID, &i.Cancelled); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -5927,14 +5988,67 @@ func (q *Queries) MarkTrackingScannerBurst(ctx context.Context, arg MarkTracking
 	return err
 }
 
+const parkClaimedRows = `-- name: ParkClaimedRows :execrows
+UPDATE mail_queue
+SET status          = 'pending',
+    claimed_at      = NULL,
+    claimed_by      = NULL,
+    next_attempt_at = TIMESTAMPTZ '2999-01-01 00:00:00+00'
+WHERE id = ANY ($1::uuid[])
+  AND status = 'processing'
+  AND claimed_by = $2::text
+`
+
+type ParkClaimedRowsParams struct {
+	Ids       []uuid.UUID `json:"ids"`
+	ClaimedBy string      `json:"claimed_by"`
+}
+
+// Puts rows this process took back, parked (their send is paused), nothing
+// tried and nothing counted.
+func (q *Queries) ParkClaimedRows(ctx context.Context, arg ParkClaimedRowsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, parkClaimedRows, arg.Ids, arg.ClaimedBy)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const parkPendingRows = `-- name: ParkPendingRows :execrows
+UPDATE mail_queue
+SET next_attempt_at = TIMESTAMPTZ '2999-01-01 00:00:00+00'
+WHERE task_id = $1
+  AND status = 'pending'
+`
+
+// Parks a paused send's pending rows: never due until it is resumed
+// (ResumeMailTask). For a send its failure rate paused.
+func (q *Queries) ParkPendingRows(ctx context.Context, taskID uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, parkPendingRows, taskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const pauseMailTask = `-- name: PauseMailTask :execrows
-UPDATE mail_tasks
+WITH parked AS (
+    UPDATE mail_queue
+        SET next_attempt_at = TIMESTAMPTZ '2999-01-01 00:00:00+00'
+        WHERE task_id = $2
+            AND status = 'pending'
+            AND EXISTS (SELECT 1
+                        FROM mail_tasks pt
+                        WHERE pt.id = $2
+                          AND pt.paused_at IS NULL
+                          AND pt.cancelled_at IS NULL))
+UPDATE mail_tasks mt
 SET paused_at     = now(),
     paused_reason = 'operator',
     paused_by     = $1::text
-WHERE id = $2
-  AND paused_at IS NULL
-  AND cancelled_at IS NULL
+WHERE mt.id = $2
+  AND mt.paused_at IS NULL
+  AND mt.cancelled_at IS NULL
 `
 
 type PauseMailTaskParams struct {
@@ -5942,7 +6056,8 @@ type PauseMailTaskParams struct {
 	ID       uuid.UUID `json:"id"`
 }
 
-// Pauses a send by an operator; a paused send stays paused, as it was.
+// Pauses a send by an operator; a paused send stays paused, as it was. Its
+// pending rows are parked: never due until it is resumed.
 func (q *Queries) PauseMailTask(ctx context.Context, arg PauseMailTaskParams) (int64, error) {
 	result, err := q.db.Exec(ctx, pauseMailTask, arg.PausedBy, arg.ID)
 	if err != nil {
@@ -5956,17 +6071,13 @@ UPDATE mail_queue
 SET status     = 'processing',
     claimed_at = NOW(),
     claimed_by = $1::text
-WHERE id IN (SELECT q.id
-             FROM mail_queue q
-             WHERE q.status = 'pending'
-               AND q.priority <= 0
-               AND q.next_attempt_at <= NOW()
-               AND NOT EXISTS (SELECT 1
-                               FROM mail_tasks mt
-                               WHERE mt.id = q.task_id
-                                 AND (mt.paused_at IS NOT NULL OR mt.cancelled_at IS NOT NULL))
-             ORDER BY q.next_attempt_at, q.created_at
-             LIMIT $2::int FOR UPDATE OF q SKIP LOCKED)
+WHERE id IN (SELECT id
+             FROM mail_queue
+             WHERE status = 'pending'
+               AND priority <= 0
+               AND next_attempt_at <= NOW()
+             ORDER BY next_attempt_at, created_at
+             LIMIT $2::int FOR UPDATE SKIP LOCKED)
 RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref, preference_checked_at
 `
 
@@ -5978,8 +6089,9 @@ type ProcessBulkQueueItemsParams struct {
 // The same for the bulk lane (lists, groups, approved sends), which reads
 // idx_mail_queue_pending_bulk. The process asks for no more rows than the
 // send budget leaves room for (SendWindowCounts), under LockSendBudget. A
-// paused or cancelled send's rows are not taken (duyuru-haber 05 G4): they
-// stay pending until it is resumed, or the cancel sweep fails them.
+// paused send's pending rows are parked (ParkPendingRows) and never due; a
+// row of a paused or cancelled send taken all the same is handed to
+// GetHeldTasks (mailer, bulk_guard.go).
 func (q *Queries) ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueueItemsParams) ([]MailQueue, error) {
 	rows, err := q.db.Query(ctx, processBulkQueueItems, arg.ClaimedBy, arg.MaxRows)
 	if err != nil {
@@ -6917,18 +7029,29 @@ func (q *Queries) ResubmitMailApproval(ctx context.Context, arg ResubmitMailAppr
 }
 
 const resumeMailTask = `-- name: ResumeMailTask :execrows
-UPDATE mail_tasks
+WITH unparked AS (
+    UPDATE mail_queue
+        SET next_attempt_at = NOW()
+        WHERE task_id = $1
+            AND status = 'pending'
+            AND next_attempt_at >= TIMESTAMPTZ '2999-01-01 00:00:00+00'
+            AND EXISTS (SELECT 1
+                        FROM mail_tasks rt
+                        WHERE rt.id = $1
+                          AND rt.paused_at IS NOT NULL
+                          AND rt.cancelled_at IS NULL))
+UPDATE mail_tasks mt
 SET paused_at     = NULL,
     paused_reason = NULL,
     paused_by     = NULL,
     send_failures = 0
-WHERE id = $1
-  AND paused_at IS NOT NULL
-  AND cancelled_at IS NULL
+WHERE mt.id = $1
+  AND mt.paused_at IS NOT NULL
+  AND mt.cancelled_at IS NULL
 `
 
-// Resumes a paused send: its failures so far are accepted, the failure rate
-// counts afresh.
+// Resumes a paused send: its parked rows are due now, its failures so far
+// are accepted, the failure rate counts afresh.
 func (q *Queries) ResumeMailTask(ctx context.Context, id uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, resumeMailTask, id)
 	if err != nil {

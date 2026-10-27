@@ -1158,8 +1158,14 @@ Atlananlar (tercih, bastırma, rıza, ayrılmış alan adı, iptal) sayılmaz.
 - İptal edilen satır atlanmış sayılır: gönderimi `failed` okutmaz
   (`mail_task_status()`). Bir alıcısı gitmiş, kalanı iptal edilmiş gönderim
   `sent` okunur, `cancelled_at` ile gösterilir.
-- Eski imaj (yayın sırasında start-first) duraklatılmış gönderimin satırlarını
-  almaya devam edebilir; yeni imaj açılınca durur.
+- Duraklatılan gönderimin bekleyen satırları "park edilir": `next_attempt_at`
+  `2999-01-01` olur, şeridin alma sorgusu ve indeksi değişmeden onları hiç
+  okumaz. Sürdürünce `now()`'a döner (bekleme süreleri sıfırlanır). Duraklama
+  ya da iptalden sonra bir yeniden deneme ya da dolan kira bir satırı yeniden
+  vadesine getirirse alma turu onu işçiye vermez: duraklatılmışsa yeniden park
+  eder, iptal edilmişse `cancelled` yazar.
+- Eski imaj (yayın sırasında start-first) duraklatılmış gönderimin park
+  edilmemiş satırlarını almaya devam edebilir; yeni imaj açılınca durur.
 
 ## Gönderilen içerik (`MAIL_CONTENT_RETENTION_DAYS`)
 

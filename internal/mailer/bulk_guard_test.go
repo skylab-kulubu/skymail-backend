@@ -376,6 +376,16 @@ func TestPauseAndCancelTouchTheRightRows(t *testing.T) {
 	if n, err := db.PauseMailTask(ctx, database.PauseMailTaskParams{ID: a, PausedBy: laneSender}); err != nil || n != 1 {
 		t.Fatalf("PauseMailTask = %d, %v", n, err)
 	}
+	var parked int
+	if err := db.Conn.QueryRow(ctx, `SELECT count(*) FROM mail_queue WHERE task_id = $1 AND status = 'pending' AND next_attempt_at >= '2999-01-01'`, a).Scan(&parked); err != nil || parked != 3 {
+		t.Fatalf("the pause parked %d of A's 3 pending rows, %v", parked, err)
+	}
+	// A row put back due after the pause (a retry, an expired lease) is
+	// taken by the query, and handed back parked rather than sent.
+	if _, err := db.Conn.Exec(ctx, `UPDATE mail_queue SET next_attempt_at = now() - interval '1 minute'
+		WHERE id = (SELECT id FROM mail_queue WHERE task_id = $1 AND status = 'pending' LIMIT 1)`, a); err != nil {
+		t.Fatal(err)
+	}
 	b := enqueueList(t, m)
 	for range 3 {
 		for _, job := range bulkOf(mailer.Turn(ctx, m)) {
@@ -383,6 +393,9 @@ func TestPauseAndCancelTouchTheRightRows(t *testing.T) {
 				t.Fatal("a turn took a row of the paused send")
 			}
 		}
+	}
+	if err := db.Conn.QueryRow(ctx, `SELECT count(*) FROM mail_queue WHERE task_id = $1 AND status = 'pending' AND next_attempt_at >= '2999-01-01'`, a).Scan(&parked); err != nil || parked != 3 {
+		t.Fatalf("after the turns %d of A's 3 pending rows are parked, %v", parked, err)
 	}
 
 	if n, err := db.CancelMailTask(ctx, database.CancelMailTaskParams{ID: a, CancelledBy: laneSender}); err != nil || n != 1 {
@@ -399,18 +412,33 @@ func TestPauseAndCancelTouchTheRightRows(t *testing.T) {
 		t.Fatalf("the cancel touched the other send: %d of its 5 rows left, %v", bPending, err)
 	}
 
-	// The row being sent fails for a moment and is put back to pending: the
-	// reaper's sweep writes it cancelled too.
+	// The row being sent fails for a moment and is put back to pending: a
+	// take hands it back written cancelled, never sending it.
 	transient = inFlight[0].ID
 	if err := mailer.SendRow(ctx, m, inFlight[0]); err != nil {
 		t.Fatal(err)
 	}
 	if row := guardRowOf(t, db, transient); row.Status != "pending" {
-		t.Fatalf("the retried row is %+v, want pending before the sweep", row)
+		t.Fatalf("the retried row is %+v, want pending", row)
+	}
+	if _, err := db.Conn.Exec(ctx, `UPDATE mail_queue SET next_attempt_at = now() - interval '1 minute' WHERE id = $1`, transient); err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range mailer.Turn(ctx, m) {
+		if job.ID == transient {
+			t.Fatal("a take handed the cancelled send's retried row to a worker")
+		}
+	}
+	if row := guardRowOf(t, db, transient); row.Status != "failed" || row.Error != "cancelled" {
+		t.Fatalf("after the take the retried row is %+v, want failed with 'cancelled'", row)
+	}
+	// One not yet due is swept by the reaper.
+	if _, err := db.Conn.Exec(ctx, `UPDATE mail_queue SET status = 'pending', error = NULL, next_attempt_at = now() + interval '1 hour' WHERE id = $1`, transient); err != nil {
+		t.Fatal(err)
 	}
 	mailer.SweepCancelled(ctx, m)
 	if row := guardRowOf(t, db, transient); row.Status != "failed" || row.Error != "cancelled" {
-		t.Fatalf("after the sweep the retried row is %+v, want failed with 'cancelled'", row)
+		t.Fatalf("after the sweep the row is %+v, want failed with 'cancelled'", row)
 	}
 	var status string
 	if err := db.Conn.QueryRow(ctx, `SELECT mail_task_status($1)`, a).Scan(&status); err != nil {

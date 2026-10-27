@@ -104,8 +104,22 @@ func TestASendersOwnSendCanBePausedResumedAndCancelled(t *testing.T) {
 	if again := control(t, app, controlList, "pause"); again.Status != fiber.StatusOK || *again.PausedAt != *paused.PausedAt {
 		t.Fatalf("pausing a paused send answered %+v, want 200 with the same paused_at", again)
 	}
+	parked := func() int {
+		var n int
+		if err := store.Conn.QueryRow(context.Background(),
+			`SELECT count(*) FROM mail_queue WHERE task_id = $1 AND status = 'pending' AND next_attempt_at >= '2999-01-01'`, controlList).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := parked(); n != 2 {
+		t.Fatalf("the pause parked %d of the 2 pending rows", n)
+	}
 	if resumed := control(t, app, controlList, "resume"); resumed.Status != fiber.StatusOK || resumed.PausedAt != nil || resumed.PausedReason != nil {
 		t.Fatalf("resume answered %+v, want 200 with no pause", resumed)
+	}
+	if n := parked(); n != 0 {
+		t.Fatalf("after the resume %d rows are still parked", n)
 	}
 
 	cancelled := control(t, app, controlList, "cancel")

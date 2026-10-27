@@ -684,24 +684,21 @@ RETURNING *;
 -- The same for the bulk lane (lists, groups, approved sends), which reads
 -- idx_mail_queue_pending_bulk. The process asks for no more rows than the
 -- send budget leaves room for (SendWindowCounts), under LockSendBudget. A
--- paused or cancelled send's rows are not taken (duyuru-haber 05 G4): they
--- stay pending until it is resumed, or the cancel sweep fails them.
+-- paused send's pending rows are parked (ParkPendingRows) and never due; a
+-- row of a paused or cancelled send taken all the same is handed to
+-- GetHeldTasks (mailer, bulk_guard.go).
 -- name: ProcessBulkQueueItems :many
 UPDATE mail_queue
 SET status     = 'processing',
     claimed_at = NOW(),
     claimed_by = sqlc.arg(claimed_by)::text
-WHERE id IN (SELECT q.id
-             FROM mail_queue q
-             WHERE q.status = 'pending'
-               AND q.priority <= 0
-               AND q.next_attempt_at <= NOW()
-               AND NOT EXISTS (SELECT 1
-                               FROM mail_tasks mt
-                               WHERE mt.id = q.task_id
-                                 AND (mt.paused_at IS NOT NULL OR mt.cancelled_at IS NOT NULL))
-             ORDER BY q.next_attempt_at, q.created_at
-             LIMIT sqlc.arg(max_rows)::int FOR UPDATE OF q SKIP LOCKED)
+WHERE id IN (SELECT id
+             FROM mail_queue
+             WHERE status = 'pending'
+               AND priority <= 0
+               AND next_attempt_at <= NOW()
+             ORDER BY next_attempt_at, created_at
+             LIMIT sqlc.arg(max_rows)::int FOR UPDATE SKIP LOCKED)
 RETURNING *;
 
 -- The instant until which the bulk lane takes nothing: a throttling reply of
@@ -783,27 +780,49 @@ FROM mail_tasks mt
 WHERE mt.id = sqlc.arg(id)
     FOR UPDATE OF mt;
 
--- Pauses a send by an operator; a paused send stays paused, as it was.
+-- Pauses a send by an operator; a paused send stays paused, as it was. Its
+-- pending rows are parked: never due until it is resumed.
 -- name: PauseMailTask :execrows
-UPDATE mail_tasks
+WITH parked AS (
+    UPDATE mail_queue
+        SET next_attempt_at = TIMESTAMPTZ '2999-01-01 00:00:00+00'
+        WHERE task_id = sqlc.arg(id)
+            AND status = 'pending'
+            AND EXISTS (SELECT 1
+                        FROM mail_tasks pt
+                        WHERE pt.id = sqlc.arg(id)
+                          AND pt.paused_at IS NULL
+                          AND pt.cancelled_at IS NULL))
+UPDATE mail_tasks mt
 SET paused_at     = now(),
     paused_reason = 'operator',
     paused_by     = sqlc.arg(paused_by)::text
-WHERE id = sqlc.arg(id)
-  AND paused_at IS NULL
-  AND cancelled_at IS NULL;
+WHERE mt.id = sqlc.arg(id)
+  AND mt.paused_at IS NULL
+  AND mt.cancelled_at IS NULL;
 
--- Resumes a paused send: its failures so far are accepted, the failure rate
--- counts afresh.
+-- Resumes a paused send: its parked rows are due now, its failures so far
+-- are accepted, the failure rate counts afresh.
 -- name: ResumeMailTask :execrows
-UPDATE mail_tasks
+WITH unparked AS (
+    UPDATE mail_queue
+        SET next_attempt_at = NOW()
+        WHERE task_id = sqlc.arg(id)
+            AND status = 'pending'
+            AND next_attempt_at >= TIMESTAMPTZ '2999-01-01 00:00:00+00'
+            AND EXISTS (SELECT 1
+                        FROM mail_tasks rt
+                        WHERE rt.id = sqlc.arg(id)
+                          AND rt.paused_at IS NOT NULL
+                          AND rt.cancelled_at IS NULL))
+UPDATE mail_tasks mt
 SET paused_at     = NULL,
     paused_reason = NULL,
     paused_by     = NULL,
     send_failures = 0
-WHERE id = sqlc.arg(id)
-  AND paused_at IS NOT NULL
-  AND cancelled_at IS NULL;
+WHERE mt.id = sqlc.arg(id)
+  AND mt.paused_at IS NOT NULL
+  AND mt.cancelled_at IS NULL;
 
 -- Cancels a send: no more of its rows are taken, and its pending rows are
 -- written failed with 'cancelled' (CancelPendingRows). Rows being sent finish.
@@ -816,6 +835,47 @@ SET cancelled_at  = now(),
     paused_by     = NULL
 WHERE id = sqlc.arg(id)
   AND cancelled_at IS NULL;
+
+-- Parks a paused send's pending rows: never due until it is resumed
+-- (ResumeMailTask). For a send its failure rate paused.
+-- name: ParkPendingRows :execrows
+UPDATE mail_queue
+SET next_attempt_at = TIMESTAMPTZ '2999-01-01 00:00:00+00'
+WHERE task_id = sqlc.arg(task_id)
+  AND status = 'pending';
+
+-- Which of the sends of rows just taken are paused or cancelled: their rows
+-- go back parked, or are written cancelled, instead of being sent (a retry
+-- or an expired lease put one back after the pause or the cancel).
+-- name: GetHeldTasks :many
+SELECT id, (cancelled_at IS NOT NULL)::boolean AS cancelled
+FROM mail_tasks
+WHERE id = ANY (sqlc.arg(ids)::uuid[])
+  AND (paused_at IS NOT NULL OR cancelled_at IS NOT NULL);
+
+-- Puts rows this process took back, parked (their send is paused), nothing
+-- tried and nothing counted.
+-- name: ParkClaimedRows :execrows
+UPDATE mail_queue
+SET status          = 'pending',
+    claimed_at      = NULL,
+    claimed_by      = NULL,
+    next_attempt_at = TIMESTAMPTZ '2999-01-01 00:00:00+00'
+WHERE id = ANY (sqlc.arg(ids)::uuid[])
+  AND status = 'processing'
+  AND claimed_by = sqlc.arg(claimed_by)::text;
+
+-- Writes rows this process took failed with 'cancelled' (their send was
+-- cancelled), nothing tried.
+-- name: CancelClaimedRows :execrows
+UPDATE mail_queue
+SET status     = 'failed',
+    error      = 'cancelled',
+    claimed_at = NULL,
+    claimed_by = NULL
+WHERE id = ANY (sqlc.arg(ids)::uuid[])
+  AND status = 'processing'
+  AND claimed_by = sqlc.arg(claimed_by)::text;
 
 -- Writes the pending rows of cancelled sends failed with 'cancelled', nothing
 -- tried: at the cancel, and on the reaper's turn for a row a retry or an

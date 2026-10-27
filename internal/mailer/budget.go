@@ -214,6 +214,9 @@ func (m *mailerImpl) claimBulk(ctx context.Context, logger *zerolog.Logger, maxR
 			if err != nil {
 				return err
 			}
+			if rows, err = m.skipHeldTasks(ctx, q, logger, rows); err != nil {
+				return err
+			}
 			if taken, err = m.skipUnsubscribed(ctx, q, logger, rows); err != nil {
 				return err
 			}
@@ -271,6 +274,10 @@ func (m *mailerImpl) claimBulk(ctx context.Context, logger *zerolog.Logger, maxR
 			MaxRows:   room,
 		})
 		if err != nil || len(rows) == 0 {
+			return err
+		}
+		// A row of a paused or cancelled send goes back, before the count.
+		if rows, err = m.skipHeldTasks(ctx, q, logger, rows); err != nil || len(rows) == 0 {
 			return err
 		}
 		// An address that left the duyuru stream since its mail was queued
