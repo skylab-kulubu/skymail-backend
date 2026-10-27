@@ -271,10 +271,12 @@ func (m *mailerImpl) gateConsents(ctx context.Context, q *database.Queries, logg
 			promotional = append(promotional, gated)
 		case AccountMail(row.Key, row.System):
 		// A duyuru mail, or a list's queued before purposes, to an address
-		// the row knows no account for. A mail stated to be about the
-		// list's own event or work goes without the consent (s6 row 15,
-		// 5/2-c), in the duyuru stream still; a test mail goes to its own
-		// sender alone.
+		// the row knows no account for. A list's or a group's mail stated
+		// to be about the list's own event or work goes without the consent
+		// (s6 row 15, 5/2-c; the query counts the statement on no other
+		// send), in the duyuru stream still; a test mail goes to its own
+		// sender alone. A send without a purpose to no list (queued before
+		// purposes) is not read at all.
 		case m.consents.ListConsent && (row.ToList || isDuyuruPurpose(row.Purpose)) && row.RecipientSub == nil &&
 			!row.OwnEvent && !row.SelfTest &&
 			LaneOf(m.lanes.purposeOf(row.Purpose), row.Key, row.System, Priority(row.Priority)) == LaneDuyuru:

@@ -202,8 +202,10 @@ type Querier interface {
 	// commercial_content_absent false, and any other to an address without an
 	// account), or a send to an internal list (one queued before purposes too).
 	// With the send's template (account mail is never held), purpose, category,
-	// whether it is a test mail to its own sender, and the recipient's account,
-	// when the row knows it.
+	// whether it is a test mail to its own sender, the own event statement (only
+	// a list's or a Keycloak group's send, mail_list_id, may make it), and the
+	// recipient's account, when the row knows it. A send without a purpose that
+	// goes to no list (queued before purposes) is not read.
 	GetConsentGateClaimedRows(ctx context.Context, arg GetConsentGateClaimedRowsParams) ([]GetConsentGateClaimedRowsRow, error)
 	// A queue row has no sent time of its own. created_at — when that recipient's
 	// mail was queued — stands in for it: the dispatcher is woken on enqueue, so a

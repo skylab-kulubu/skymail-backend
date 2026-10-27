@@ -557,6 +557,63 @@ func TestEveryAnnouncementToAnAddressWithoutAnAccountNeedsTheConsent(t *testing.
 	}
 }
 
+// A send without a purpose (queued before purposes: an old Forms source
+// send, an old tracked mail to one person) is not a duyuru the gate knows
+// of, and goes to a guest without consent; core is not asked about it. An
+// old list send without a purpose is a list's, and still needs the consent.
+func TestASendWithoutAPurposeIsNotHeld(t *testing.T) {
+	captureMailerLogs(t)
+	db := suppressionQueue(t)
+	core := announcementCore()
+	m := gatedMailer(t, db, mailer.ConsentGate{ListConsent: true, Core: core}, purposesOn())
+	toPeople := enqueuePurposed(t, m, mailer.SendPurpose{}, mailer.RecipientInfo{FullName: "Misafir", Email: "misafir@example.com"})
+	toOne := queueToOne(t, m, initialTemplate, mailer.SendPurpose{}, true, "Misafir", "misafir@example.com")
+	if taken := gatedTurn(t, m); len(taken) != 2 {
+		t.Errorf("taken %d, want both", len(taken))
+	}
+	for name, task := range map[string]uuid.UUID{"to people": toPeople, "to one": toOne} {
+		if got := rowTo(t, db, task, "misafir@example.com"); got.error != "" || got.status == "failed" {
+			t.Errorf("%s: %+v, want it sent", name, got)
+		}
+	}
+	if asked := core.calls(); len(asked) != 0 {
+		t.Errorf("core asked %v", asked)
+	}
+
+	listID := consentList(t, db)
+	list, err := m.Enqueue(context.Background(), database.CreateMailTaskParams{
+		SentBy: laneSender, TemplateID: &initialTemplate, MailListID: &listID, BodyVariables: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatedTurn(t, m)
+	if got := rowTo(t, db, list, "misafir@example.com"); got.status != "failed" || got.error != "suppressed: no_announcement_consent" {
+		t.Errorf("an old list send's guest: %+v, want failed with suppressed: no_announcement_consent", got)
+	}
+}
+
+// The own event statement counts on a list's or a group's send alone (s6
+// row 15 is about the list's own event): a duyuru to people that carries
+// one still needs the guest's consent.
+func TestTheOwnEventStatementCountsOnAListAlone(t *testing.T) {
+	captureMailerLogs(t)
+	db := suppressionQueue(t)
+	m := gatedMailer(t, db, mailer.ConsentGate{ListConsent: true, Core: announcementCore()}, purposesOn())
+	stated := duyuruSend(true)
+	own := true
+	stated.OwnEventStatement = &own
+	task := enqueuePurposed(t, m, stated,
+		mailer.RecipientInfo{FullName: "Misafir", Email: "misafir@example.com"},
+		mailer.RecipientInfo{FullName: "Rizali", Email: "rizali@example.com"})
+	if taken := gatedTurn(t, m); len(taken) != 1 {
+		t.Errorf("taken %d, want the consented guest's", len(taken))
+	}
+	if got := rowTo(t, db, task, "misafir@example.com"); got.status != "failed" || got.error != "suppressed: no_announcement_consent" {
+		t.Errorf("the guest without consent: %+v, want failed with suppressed: no_announcement_consent", got)
+	}
+}
+
 // Core not answering holds no duyuru to one address back for good: it
 // waits, as a list's does, and is written "consent: unavailable" (never
 // sent) once it has waited 48 hours while core fails.
