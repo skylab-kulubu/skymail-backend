@@ -609,8 +609,8 @@ const viewSweepBatch = 500
 // content). It runs while the sender is paused too: it touches no row still
 // to go out. Then it deletes the records of who opened a masked mail older
 // than viewRetentionDays, the bounces older than a year
-// (bounce.RetentionDays) and the records of reversed unsubscribes older than
-// three years. It logs counts only.
+// (bounce.RetentionDays) and the records of reversed unsubscribes and of
+// removed suppressions older than three years. It logs counts only.
 func clearMailContent(ctx context.Context, db *database.Store, retentionDays, viewRetentionDays int, interval time.Duration) {
 	log.Info().Int("retention_days", retentionDays).Int("view_retention_days", viewRetentionDays).
 		Msg("mail content sweep (MAIL_CONTENT_RETENTION_DAYS, SENT_CONTENT_VIEWS_RETENTION_DAYS)")
@@ -655,6 +655,13 @@ func clearMailContent(ctx context.Context, db *database.Store, retentionDays, vi
 		}
 		if reactivations > 0 {
 			log.Info().Int64("reactivations", reactivations).Msg("deleted the records of reversed unsubscribes past three years")
+		}
+		removals, err := db.DeleteSuppressionRemovals(ctx, viewSweepBatch)
+		if err != nil && ctx.Err() == nil {
+			log.Error().Err(err).Msg("suppression removal sweep failed")
+		}
+		if removals > 0 {
+			log.Info().Int64("removals", removals).Msg("deleted the records of removed suppressions past three years")
 		}
 		select {
 		case <-ctx.Done():

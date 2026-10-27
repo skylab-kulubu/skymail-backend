@@ -261,7 +261,7 @@ bastırma listesi"; hub spec skymail-bounce-isleme §5):
 | the report itself (addresses, the returned headers) | never in SkyMail: read in memory and dropped; in the sender mailbox, 30 days (Exchange retention, not SkyMail's) | — |
 | `mail_bounces` (queue row, `source`, `kind`, `action`, enhanced code, SMTP code, Exchange's `AS(…)` token, `recipient_matched`, the SHA-256 of the report's id, `received_at`) — no address, no text | **one year** from `received_at` | deleted by the content sweep (every 5 minutes); with its queue row (`ON DELETE CASCADE`) |
 | `mail_suppressions` (lower-cased address, `recipient_sub`, `source`, `reason_code` — codes only —, first and last seen, count, last queue row, `exempt_flagged_at`) | until an operator removes it (`DELETE /v1/suppressions/{id}`) or the person is erased: nothing removes it by itself (Yusuf, 2026-10-20) | Account erasure deletes the person's |
-| `mail_suppression_removals` (who, when, the removed row's source, code, count and first seen) — no address | without end: the record of who removed what | Account erasure replaces the actor with Silinmiş kullanıcı |
+| `mail_suppression_removals` (who, when, the removed row's source, code, count and first seen) — no address | **three years** from `removed_at`, as the record of a reversed unsubscribe (Yusuf, 2026-10-27), then deleted by the content sweep (every 5 minutes) | Account erasure replaces the actor with Silinmiş kullanıcı |
 | `mail_queue.suppressed_but_sent` | with the row | — |
 | `mail_bounce_reader_state` (a sender mailbox — the club's, not a person's —, the reader's mode, Graph's delta link, last poll, its error as Graph's status and code, counts) — no personal data | while the reader reads the mailbox | — |
 

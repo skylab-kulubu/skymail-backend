@@ -1695,6 +1695,27 @@ func (q *Queries) DeleteOldSentContentViews(ctx context.Context, arg DeleteOldSe
 	return result.RowsAffected(), nil
 }
 
+const deleteOldSuppressionRemovals = `-- name: DeleteOldSuppressionRemovals :execrows
+DELETE
+FROM mail_suppression_removals
+WHERE id IN (SELECT r.id
+             FROM mail_suppression_removals r
+             WHERE r.removed_at < now() - interval '3 years'
+             ORDER BY r.removed_at
+             LIMIT $1::int FOR UPDATE SKIP LOCKED)
+`
+
+// Deletes up to batch_size of the oldest records of a removed suppression
+// three years after they were written, as the records of a reversed
+// unsubscribe are (Yusuf, 2026-10-27): the content sweep's step.
+func (q *Queries) DeleteOldSuppressionRemovals(ctx context.Context, batchSize int) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOldSuppressionRemovals, batchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteOldUnsubscribeReactivations = `-- name: DeleteOldUnsubscribeReactivations :execrows
 DELETE
 FROM mail_unsubscribe_reactivations

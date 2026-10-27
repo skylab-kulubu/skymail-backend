@@ -170,6 +170,10 @@ type Querier interface {
 	// Deletes up to batch_size of the oldest records of who opened a masked mail
 	// that are older than retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
 	DeleteOldSentContentViews(ctx context.Context, arg DeleteOldSentContentViewsParams) (int64, error)
+	// Deletes up to batch_size of the oldest records of a removed suppression
+	// three years after they were written, as the records of a reversed
+	// unsubscribe are (Yusuf, 2026-10-27): the content sweep's step.
+	DeleteOldSuppressionRemovals(ctx context.Context, batchSize int) (int64, error)
 	// Deletes up to batch_size of the oldest records of a reversed unsubscribe
 	// three years after they were written (KVKK notice s6; hub ticket
 	// kvkk-s6-yayin-oncesi 14): the content sweep's step.
