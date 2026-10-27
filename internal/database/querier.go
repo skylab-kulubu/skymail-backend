@@ -25,6 +25,17 @@ type Querier interface {
 	// failed), how many a report later said did not reach their address (hard),
 	// failed otherwise (soft) or were delayed. A row counts once in each.
 	BounceRate(ctx context.Context, days int) (BounceRateRow, error)
+	// The instant until which the bulk lane takes nothing: a throttling reply of
+	// the relay held it (HoldBulkLane). No row: never held.
+	BulkLaneHeldUntil(ctx context.Context) (BulkLaneHeldUntilRow, error)
+	// Cancels a send: no more of its rows are taken, and its pending rows are
+	// written failed with 'cancelled' (CancelPendingRows). Rows being sent finish.
+	CancelMailTask(ctx context.Context, arg CancelMailTaskParams) (int64, error)
+	// Writes the pending rows of cancelled sends failed with 'cancelled', nothing
+	// tried: at the cancel, and on the reaper's turn for a row a retry or an
+	// expired lease put back to pending since. task_id NULL sweeps every
+	// cancelled send.
+	CancelPendingRows(ctx context.Context, taskID *uuid.UUID) (int64, error)
 	// Empties the content of up to batch_size sends none of whose rows is still to
 	// go out (pending or processing) once they are older than retention_days,
 	// sensitive or not: a sensitive send's content is kept as long as any other's
@@ -102,6 +113,13 @@ type Querier interface {
 	// the hour starting at hour_start.
 	CountSends(ctx context.Context, arg CountSendsParams) error
 	CountSuppressionEntries(ctx context.Context, arg CountSuppressionEntriesParams) (int64, error)
+	// Counts one recipient of a send that failed for good at the relay, and
+	// pauses the send ('failure_rate') once at least min_failures of its
+	// recipients failed so and they are at least min_percent of those the relay
+	// answered for good (sent or failed so) since it was queued or last resumed.
+	// min_failures 0 counts without ever pausing. A cancelled or already paused
+	// send is counted and left as it is.
+	CountTaskSendFailure(ctx context.Context, arg CountTaskSendFailureParams) (CountTaskSendFailureRow, error)
 	CountTemplateContentSensitiveEvents(ctx context.Context, templateID uuid.UUID) (int64, error)
 	CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error)
 	CountTemplates(ctx context.Context) (int64, error)
@@ -160,6 +178,10 @@ type Querier interface {
 	// base_seconds doubled for each failure it has had (a day at most). The first
 	// failure since the send was last masked starts its deadline.
 	DeferMaskFailure(ctx context.Context, arg DeferMaskFailureParams) error
+	// Puts a row the relay throttled back to pending, delay_seconds from now,
+	// with its reply as the error and no attempt counted: the reply is about the
+	// account's pace, not the recipient (duyuru-haber 05 G3).
+	DeferThrottledMailQueueItem(ctx context.Context, arg DeferThrottledMailQueueItemParams) (int64, error)
 	// The inbox sweep: at most batch_size items past their expiry.
 	DeleteExpiredInboxItems(ctx context.Context, arg DeleteExpiredInboxItemsParams) (int64, error)
 	DeleteExpiredMailFormSources(ctx context.Context, arg DeleteExpiredMailFormSourcesParams) (int64, error)
@@ -234,6 +256,10 @@ type Querier interface {
 	// the row's own address) after the relay took the mail.
 	GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueueItemsByTaskIdParams) ([]GetMailQueueItemsByTaskIdRow, error)
 	GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTaskByIdRow, error)
+	// What the task controls (pause, resume, cancel) need to know about a send:
+	// whether it is one (bulk: its rows are in the bulk lane), who sent it, and
+	// whether any of its rows are still to be sent.
+	GetMailTaskControl(ctx context.Context, id uuid.UUID) (GetMailTaskControlRow, error)
 	// The key of a send's template and whether it is a system template, which
 	// together say whether it is account mail (mailer.AccountMail), and the
 	// send's purpose, which says its stream (mailer.LaneOf).
@@ -298,6 +324,9 @@ type Querier interface {
 	// duyuru stream, with their send's template's key and whether it is a system
 	// template (mailer.LaneOf: account mail is never in the duyuru stream).
 	GetUnsubscribedClaimedRows(ctx context.Context, arg GetUnsubscribedClaimedRowsParams) ([]GetUnsubscribedClaimedRowsRow, error)
+	// Holds the bulk lane until held_until, or keeps the later hold already
+	// written: every process's bulk lane reads it (duyuru-haber 05 G3).
+	HoldBulkLane(ctx context.Context, arg HoldBulkLaneParams) (time.Time, error)
 	// One notification's inbox item for each person, its text rendered once:
 	// gone in 90 days, or at expires_at when that is sooner. A person already
 	// holding the notification's item is left as they are.
@@ -469,9 +498,13 @@ type Querier interface {
 	// just its last click. Only this classifier version's contemporaneous events
 	// change; newer rules never reinterpret historical events.
 	MarkTrackingScannerBurst(ctx context.Context, arg MarkTrackingScannerBurstParams) error
+	// Pauses a send by an operator; a paused send stays paused, as it was.
+	PauseMailTask(ctx context.Context, arg PauseMailTaskParams) (int64, error)
 	// The same for the bulk lane (lists, groups, approved sends), which reads
 	// idx_mail_queue_pending_bulk. The process asks for no more rows than the
-	// send budget leaves room for (SendWindowCounts), under LockSendBudget.
+	// send budget leaves room for (SendWindowCounts), under LockSendBudget. A
+	// paused or cancelled send's rows are not taken (duyuru-haber 05 G4): they
+	// stay pending until it is resumed, or the cancel sweep fails them.
 	ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueueItemsParams) ([]MailQueue, error)
 	// Takes up to max_rows due rows of the system lane (priority above 0: single
 	// mail a person is waiting for) for one process, leased to it: claimed_by
@@ -574,6 +607,9 @@ type Querier interface {
 	// people are written beside it (ClearMailApprovalRecipients, then
 	// AddMailApprovalRecipients).
 	ResubmitMailApproval(ctx context.Context, arg ResubmitMailApprovalParams) (MailApproval, error)
+	// Resumes a paused send: its failures so far are accepted, the failure rate
+	// counts afresh.
+	ResumeMailTask(ctx context.Context, id uuid.UUID) (int64, error)
 	// The send windows a budget reads at one instant: the minutes starting at or
 	// after minute_since (the current minute and the one before it) and the
 	// hours starting at or after hour_since (every hour of the last 24).

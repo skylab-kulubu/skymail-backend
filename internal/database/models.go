@@ -349,6 +349,14 @@ type MailBounceReaderState struct {
 	CreatedAt      time.Time  `json:"created_at"`
 }
 
+// One row: the bulk lane takes nothing before held_until (a throttling reply of the relay).
+type MailBulkHold struct {
+	ID        bool      `json:"id"`
+	HeldUntil time.Time `json:"held_until"`
+	Reason    string    `json:"reason"`
+	HeldAt    time.Time `json:"held_at"`
+}
+
 type MailFormSource struct {
 	ID                 uuid.UUID  `json:"id"`
 	OwnerSub           string     `json:"owner_sub"`
@@ -494,6 +502,14 @@ type MailTask struct {
 	SourceCounts   []byte  `json:"source_counts"`
 	// A send to its own sender's verified address alone (a test mail): the bulk preference check leaves it be.
 	SelfTest bool `json:"self_test"`
+	// While set, the bulk lane takes none of the send's rows (paused by an operator or by its failure rate).
+	PausedAt     *time.Time `json:"paused_at"`
+	PausedReason *string    `json:"paused_reason"`
+	PausedBy     *string    `json:"paused_by"`
+	SendFailures int        `json:"send_failures"`
+	// A cancelled send: its pending rows were written failed with 'cancelled'.
+	CancelledAt *time.Time `json:"cancelled_at"`
+	CancelledBy *string    `json:"cancelled_by"`
 }
 
 // A send's links that are the same for every recipient, each with its random token: the only addresses /t/c redirects to.

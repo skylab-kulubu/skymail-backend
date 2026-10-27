@@ -112,6 +112,12 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid mail send budget configuration")
 	}
+	// The bulk lane's guards: a throttling reply holds it, a send failing
+	// past the threshold pauses itself (README, throttling and task controls).
+	bulkGuard, err := mailer.BulkGuardFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid bulk lane guard configuration")
+	}
 	// Which mailbox each kind of mail goes out from and how: every lane off
 	// (SMTP_FROM over SMTP AUTH, as always) unless SKYMAIL_SEND_<LANE> says
 	// graph or xoauth2 (README, sender lanes).
@@ -266,6 +272,7 @@ func main() {
 		FQDN:      cfg.SMTPFQDN,
 		Plain:     cfg.SMTPPlain,
 	}, mailSender, mailer.WithQueueLease(queueLease), mailer.WithRateBudget(rateBudget),
+		mailer.WithBulkGuard(bulkGuard),
 		mailer.WithReservedDomainsRefused(),
 		mailer.WithSendLanes(sendLanes),
 		// With the reader, a relay that offers DSN is asked for failure
@@ -582,6 +589,12 @@ func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, m
 	tasks.Get("/:id/tracking", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTracking)
 	tasks.Get("/:id/tracking/recipients", mail.GetTrackingRecipients)
 	tasks.Get("/:id/queue", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTaskQueueItems)
+	// A send's controls (duyuru-haber 05 G4): the handler lets a
+	// skymail:mails:write caller control only their own sends.
+	control := auth.RequireAnyPermission("skymail:mails:write", handlers.AnnouncementsSendRole)
+	tasks.Post("/:id/pause", control, mail.PauseTask)
+	tasks.Post("/:id/resume", control, mail.ResumeTask)
+	tasks.Post("/:id/cancel", control, mail.CancelTask)
 	// Who may see the content itself the handler decides from the send and
 	// the caller's roles (handlers.SystemMailsReadRole).
 	tasks.Get("/:id/queue/:itemId/content", auth.RequireAnyPermission("skymail:mails:read"), mail.GetQueueItemContent)

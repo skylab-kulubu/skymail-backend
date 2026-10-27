@@ -683,20 +683,155 @@ RETURNING *;
 
 -- The same for the bulk lane (lists, groups, approved sends), which reads
 -- idx_mail_queue_pending_bulk. The process asks for no more rows than the
--- send budget leaves room for (SendWindowCounts), under LockSendBudget.
+-- send budget leaves room for (SendWindowCounts), under LockSendBudget. A
+-- paused or cancelled send's rows are not taken (duyuru-haber 05 G4): they
+-- stay pending until it is resumed, or the cancel sweep fails them.
 -- name: ProcessBulkQueueItems :many
 UPDATE mail_queue
 SET status     = 'processing',
     claimed_at = NOW(),
     claimed_by = sqlc.arg(claimed_by)::text
-WHERE id IN (SELECT id
-             FROM mail_queue
-             WHERE status = 'pending'
-               AND priority <= 0
-               AND next_attempt_at <= NOW()
-             ORDER BY next_attempt_at, created_at
-             LIMIT sqlc.arg(max_rows)::int FOR UPDATE SKIP LOCKED)
+WHERE id IN (SELECT q.id
+             FROM mail_queue q
+             WHERE q.status = 'pending'
+               AND q.priority <= 0
+               AND q.next_attempt_at <= NOW()
+               AND NOT EXISTS (SELECT 1
+                               FROM mail_tasks mt
+                               WHERE mt.id = q.task_id
+                                 AND (mt.paused_at IS NOT NULL OR mt.cancelled_at IS NOT NULL))
+             ORDER BY q.next_attempt_at, q.created_at
+             LIMIT sqlc.arg(max_rows)::int FOR UPDATE OF q SKIP LOCKED)
 RETURNING *;
+
+-- The instant until which the bulk lane takes nothing: a throttling reply of
+-- the relay held it (HoldBulkLane). No row: never held.
+-- name: BulkLaneHeldUntil :one
+SELECT held_until, reason
+FROM mail_bulk_holds
+WHERE id;
+
+-- Holds the bulk lane until held_until, or keeps the later hold already
+-- written: every process's bulk lane reads it (duyuru-haber 05 G3).
+-- name: HoldBulkLane :one
+INSERT INTO mail_bulk_holds (id, held_until, reason, held_at)
+VALUES (TRUE, sqlc.arg(held_until)::timestamptz, sqlc.arg(reason)::text, now())
+ON CONFLICT (id) DO UPDATE
+    SET held_until = GREATEST(mail_bulk_holds.held_until, EXCLUDED.held_until),
+        reason     = CASE
+                         WHEN EXCLUDED.held_until >= mail_bulk_holds.held_until THEN EXCLUDED.reason
+                         ELSE mail_bulk_holds.reason END,
+        held_at    = now()
+RETURNING held_until;
+
+-- Puts a row the relay throttled back to pending, delay_seconds from now,
+-- with its reply as the error and no attempt counted: the reply is about the
+-- account's pace, not the recipient (duyuru-haber 05 G3).
+-- name: DeferThrottledMailQueueItem :execrows
+UPDATE mail_queue
+SET status          = 'pending',
+    error           = sqlc.narg(error)::text,
+    next_attempt_at = NOW() + (sqlc.arg(delay_seconds)::int * INTERVAL '1 second'),
+    claimed_at      = NULL,
+    claimed_by      = NULL
+WHERE id = sqlc.arg(id)
+  AND status = 'processing'
+  AND claimed_by = sqlc.arg(claimed_by)::text
+  AND claimed_at = sqlc.arg(claimed_at)::timestamptz;
+
+-- Counts one recipient of a send that failed for good at the relay, and
+-- pauses the send ('failure_rate') once at least min_failures of its
+-- recipients failed so and they are at least min_percent of those the relay
+-- answered for good (sent or failed so) since it was queued or last resumed.
+-- min_failures 0 counts without ever pausing. A cancelled or already paused
+-- send is counted and left as it is.
+-- name: CountTaskSendFailure :one
+UPDATE mail_tasks mt
+SET send_failures = mt.send_failures + 1,
+    paused_at     = CASE WHEN pause.now THEN now() ELSE mt.paused_at END,
+    paused_reason = CASE WHEN pause.now THEN 'failure_rate' ELSE mt.paused_reason END,
+    paused_by     = CASE WHEN pause.now THEN NULL ELSE mt.paused_by END
+FROM (SELECT t.id,
+             (t.paused_at IS NULL
+                 AND t.cancelled_at IS NULL
+                 AND sqlc.arg(min_failures)::int > 0
+                 AND t.send_failures + 1 >= sqlc.arg(min_failures)::int
+                 AND (t.send_failures + 1) * 100 >= sqlc.arg(min_percent)::int * (t.send_failures + 1 +
+                                                                                 (SELECT count(*)
+                                                                                  FROM mail_queue q
+                                                                                  WHERE q.task_id = t.id
+                                                                                    AND q.status = 'sent')))::boolean AS now
+      FROM mail_tasks t
+      WHERE t.id = sqlc.arg(task_id)) pause
+WHERE mt.id = pause.id
+RETURNING mt.send_failures, pause.now AS paused;
+
+-- What the task controls (pause, resume, cancel) need to know about a send:
+-- whether it is one (bulk: its rows are in the bulk lane), who sent it, and
+-- whether any of its rows are still to be sent.
+-- name: GetMailTaskControl :one
+SELECT mt.id,
+       mt.sent_by,
+       mt.paused_at,
+       mt.cancelled_at,
+       EXISTS (SELECT 1 FROM mail_queue q WHERE q.task_id = mt.id AND q.priority <= 0)::boolean AS bulk,
+       EXISTS (SELECT 1
+               FROM mail_queue q
+               WHERE q.task_id = mt.id
+                 AND q.status IN ('pending', 'processing'))::boolean AS unfinished
+FROM mail_tasks mt
+WHERE mt.id = sqlc.arg(id)
+    FOR UPDATE OF mt;
+
+-- Pauses a send by an operator; a paused send stays paused, as it was.
+-- name: PauseMailTask :execrows
+UPDATE mail_tasks
+SET paused_at     = now(),
+    paused_reason = 'operator',
+    paused_by     = sqlc.arg(paused_by)::text
+WHERE id = sqlc.arg(id)
+  AND paused_at IS NULL
+  AND cancelled_at IS NULL;
+
+-- Resumes a paused send: its failures so far are accepted, the failure rate
+-- counts afresh.
+-- name: ResumeMailTask :execrows
+UPDATE mail_tasks
+SET paused_at     = NULL,
+    paused_reason = NULL,
+    paused_by     = NULL,
+    send_failures = 0
+WHERE id = sqlc.arg(id)
+  AND paused_at IS NOT NULL
+  AND cancelled_at IS NULL;
+
+-- Cancels a send: no more of its rows are taken, and its pending rows are
+-- written failed with 'cancelled' (CancelPendingRows). Rows being sent finish.
+-- name: CancelMailTask :execrows
+UPDATE mail_tasks
+SET cancelled_at  = now(),
+    cancelled_by  = sqlc.arg(cancelled_by)::text,
+    paused_at     = NULL,
+    paused_reason = NULL,
+    paused_by     = NULL
+WHERE id = sqlc.arg(id)
+  AND cancelled_at IS NULL;
+
+-- Writes the pending rows of cancelled sends failed with 'cancelled', nothing
+-- tried: at the cancel, and on the reaper's turn for a row a retry or an
+-- expired lease put back to pending since. task_id NULL sweeps every
+-- cancelled send.
+-- name: CancelPendingRows :execrows
+UPDATE mail_queue q
+SET status     = 'failed',
+    error      = 'cancelled',
+    claimed_at = NULL,
+    claimed_by = NULL
+FROM mail_tasks mt
+WHERE mt.id = q.task_id
+  AND mt.cancelled_at IS NOT NULL
+  AND (sqlc.narg(task_id)::uuid IS NULL OR mt.id = sqlc.narg(task_id)::uuid)
+  AND q.status = 'pending';
 
 -- The database's clock: the one clock every process's send budget reads, so
 -- replicas whose clocks differ still count in the same windows. The
@@ -1420,7 +1555,11 @@ SELECT mt.id,
        mt.category,
        mt.transactional_statement,
        mt.commercial_content_absent,
-       mt.own_event_statement
+       mt.own_event_statement,
+       mt.paused_at,
+       mt.paused_reason,
+       mt.cancelled_at,
+       rc.cancelled
 FROM page
          JOIN mail_tasks mt ON mt.id = page.id
          LEFT JOIN templates t ON mt.template_id = t.id
@@ -1435,6 +1574,7 @@ FROM page
                                     count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'suppressed: unsubscribed') AS unsubscribed,
                                     count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: inactive') AS inactive,
                                     count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: ambiguous') AS ambiguous,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'cancelled') AS cancelled,
                                     count(*) FILTER (WHERE q.suppressed_but_sent) AS suppressed_but_sent,
                                     count(*) FILTER (WHERE EXISTS (SELECT 1
                                                                    FROM mail_bounces b

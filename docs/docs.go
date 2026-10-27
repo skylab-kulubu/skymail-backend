@@ -937,6 +937,10 @@ const docTemplate = `{
                         "type": "array",
                         "uniqueItems": false
                     },
+                    "cancelled_at": {
+                        "description": "When the send was cancelled (POST /mail_tasks/{id}/cancel): its pending recipients were skipped; null otherwise.",
+                        "type": "string"
+                    },
                     "category": {
                         "description": "core's category of a duyuru send (club:duyuru, club:haber, team:\u003cgroup id\u003e:duyuru|haber); null for any other.",
                         "type": "string"
@@ -967,6 +971,18 @@ const docTemplate = `{
                     "own_event_statement": {
                         "description": "On a duyuru send to a list or a group, the sender's statement that the mail is about the list's own event or work (KVKK notice s6 row 15), kept with the send's sender and time; null otherwise.",
                         "type": "boolean"
+                    },
+                    "paused_at": {
+                        "description": "While set, the bulk lane takes none of the send's rows (POST /mail_tasks/{id}/pause, or its failure rate); null otherwise.",
+                        "type": "string"
+                    },
+                    "paused_reason": {
+                        "description": "operator (paused by hand) or failure_rate (its recipients failed past SKYMAIL_FAILURE_PAUSE_COUNT and SKYMAIL_FAILURE_PAUSE_PERCENT); null when not paused.",
+                        "enum": [
+                            "operator",
+                            "failure_rate"
+                        ],
+                        "type": "string"
                     },
                     "purpose": {
                         "description": "islem or duyuru. Null for a send queued while SkyMail's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).",
@@ -1263,6 +1279,10 @@ const docTemplate = `{
                 "properties": {
                     "ambiguous": {
                         "description": "Skipped, never sent: two or more accounts hold the address, so no one preference stands for it (in failed too).",
+                        "type": "integer"
+                    },
+                    "cancelled": {
+                        "description": "Skipped, never sent: the send was cancelled while the recipient was still pending (in failed too).",
                         "type": "integer"
                     },
                     "failed": {
@@ -1586,6 +1606,10 @@ const docTemplate = `{
             },
             "handlers.SendSummary": {
                 "properties": {
+                    "bulk_held_until": {
+                        "description": "Until when the bulk lane takes nothing because the relay throttled the account (SMTP 421, 432, 4.7.x; Graph 429, 503; SKYMAIL_THROTTLE_PAUSE): lists, groups and News sends wait, single mail goes. Null when not held.",
+                        "type": "string"
+                    },
                     "daily_sent": {
                         "items": {
                             "$ref": "#/components/schemas/handlers.DailySent"
@@ -4661,6 +4685,130 @@ const docTemplate = `{
                 ]
             }
         },
+        "/mail_tasks/{id}/cancel": {
+            "post": {
+                "description": "The send's pending recipients are written failed with 'cancelled', nothing tried (counted in recipient_counts.cancelled, never making the send read failed); rows being sent finish. A cancelled send stays cancelled (200). Who may pause it may cancel it.",
+                "parameters": [
+                    {
+                        "description": "Task ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailTaskItem"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_task.not_bulk or mail_task.finished"
+                    }
+                },
+                "summary": "Cancel a send",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
+        "/mail_tasks/{id}/pause": {
+            "post": {
+                "description": "The bulk lane takes none of the send's rows until it is resumed; rows being sent finish. A paused send stays paused (200). The send's own sender with skymail:mails:write, or anyone with skymail:announcements:send. A send may also pause itself when its recipients fail past SKYMAIL_FAILURE_PAUSE_COUNT and SKYMAIL_FAILURE_PAUSE_PERCENT (paused_reason failure_rate).",
+                "parameters": [
+                    {
+                        "description": "Task ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailTaskItem"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden: neither skymail:announcements:send nor the send's sender"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_task.not_bulk, mail_task.cancelled or mail_task.finished"
+                    }
+                },
+                "summary": "Pause a send",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
         "/mail_tasks/{id}/queue": {
             "get": {
                 "description": "Get a send's recipients, one queue row each, newest first with the row id breaking ties so pages neither repeat nor skip a recipient. The status filter keeps only recipients in that queue status; X-Total-Count counts the filtered recipients.",
@@ -4840,6 +4988,68 @@ const docTemplate = `{
                     }
                 },
                 "summary": "Get one recipient's mail as kept",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
+        "/mail_tasks/{id}/resume": {
+            "post": {
+                "description": "The bulk lane takes the send's rows again; its failures so far are accepted and its failure rate counts afresh. A send that is not paused is left as it is (200). Who may pause it may resume it.",
+                "parameters": [
+                    {
+                        "description": "Task ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailTaskItem"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_task.not_bulk or mail_task.cancelled"
+                    }
+                },
+                "summary": "Resume a paused send",
                 "tags": [
                     "Mail"
                 ]

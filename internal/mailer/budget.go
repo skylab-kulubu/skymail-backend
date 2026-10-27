@@ -198,6 +198,15 @@ func (m *mailerImpl) claimBulk(ctx context.Context, logger *zerolog.Logger, maxR
 	var taken []database.MailQueue
 	if m.budget.Off() {
 		err := m.db.InTx(ctx, func(q *database.Queries) error {
+			if m.guard.ThrottlePause > 0 {
+				at, err := m.budgetNow(ctx, q)
+				if err != nil {
+					return err
+				}
+				if held, err := m.bulkLaneHeld(ctx, q, at); err != nil || held {
+					return err
+				}
+			}
 			rows, err := q.ProcessBulkQueueItems(ctx, database.ProcessBulkQueueItemsParams{
 				ClaimedBy: m.claimant,
 				MaxRows:   maxRows,
@@ -234,6 +243,14 @@ func (m *mailerImpl) claimBulk(ctx context.Context, logger *zerolog.Logger, maxR
 		}
 		at, err := m.budgetNow(ctx, q)
 		if err != nil {
+			return err
+		}
+		// The relay throttled the account a moment ago: no process takes
+		// a bulk row until the hold runs out (bulk_guard.go).
+		if held, err := m.bulkLaneHeld(ctx, q, at); err != nil || held {
+			if held {
+				logger.Debug().Msg("Bulk lane held after a throttling reply: its rows wait")
+			}
 			return err
 		}
 		counted, err := q.SendWindowCounts(ctx, database.SendWindowCountsParams{

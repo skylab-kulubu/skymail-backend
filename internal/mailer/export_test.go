@@ -183,3 +183,37 @@ func SetPreferenceTiming(m Transactional, ttl, round, breaker, fetchDelay time.D
 
 // WaitPreferenceFetches waits for the bulk preference fetches under way.
 func WaitPreferenceFetches(m Transactional) { m.(*mailerImpl).preferenceFetches.Wait() }
+
+// SMTPReply is the error a relay's reply to stage makes, as a worker's send
+// returns it.
+func SMTPReply(stage string, code int, enhanced string) error {
+	reply := smtpReply{stage: stage, code: code, enhanced: enhanced}
+	if reply.permanent() {
+		return permanentError{reply}
+	}
+	return reply
+}
+
+// GraphReply is the error Graph's answer status makes, with its Retry-After.
+func GraphReply(status int, retryAfter time.Duration) error {
+	return graphReply{status: status, retryAfter: retryAfter}
+}
+
+// Throttled says err is the relay asking the account to slow down.
+var Throttled = throttled
+
+// SendRow sends job, which m took, the way a worker does, and records the
+// outcome.
+func SendRow(ctx context.Context, m Transactional, job database.MailQueue) error {
+	impl := m.(*mailerImpl)
+	senders, err := impl.newSenders()
+	if err != nil {
+		return err
+	}
+	impl.send(ctx, senders, impl.logger, job)
+	return nil
+}
+
+// SweepCancelled fails the pending rows of cancelled sends, as the reaper
+// does.
+func SweepCancelled(ctx context.Context, m Transactional) { m.(*mailerImpl).sweepCancelled(ctx) }
