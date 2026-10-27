@@ -634,16 +634,23 @@ izni olan kişiye gider:
   ("Tanıtım içerikli e-postaları almak istemiyorsan: İzni geri al"): tek tık
   tanıtım iznini kapatır. Şablon `{{.UnsubscribeUrl}}` yazıyorsa orada duyuru
   bağlantısı (bilet 09'dan sonra) kalır.
-- **Hesapsız liste alıcısı** (`SKYMAIL_LIST_CONSENT=on`). İç listeye giden
-  postada, core'un `recipients:resolve`'ünün hiçbir hesaba eşlemediği adres
-  yalnız core'un `event_invitations` kitlesindeyse alır; kayıt `davet-v1`
-  metniyle verilmişse (yalnız davet) ya da yenileme sorusu bekliyorsa
-  (`renewalDue`) sayılmaz. Keycloak grubu üyeleri hesaptır, satırında hesap
-  (`recipient_sub`) olan alıcı ve kişiye tek posta bu kurala girmez.
-  Gönderen postanın listenin kendi etkinliği ya da çalışmasıyla ilgili
-  olduğunu beyan ettiyse (`own_event_statement: true`; s6 satır 15, 5/2-c)
-  rıza aranmaz: posta bütün liste alıcılarına, yine duyuru akışında ve çıkış
-  bağlantısıyla gider; beyan gönderim kaydında kalır.
+- **Hesapsız alıcıya duyuru** (`SKYMAIL_LIST_CONSENT=on`; bayrağın adı ilk
+  kapsamı olan listeden kalır). Her `duyuru` postasında (iç liste, Forms
+  kaynağının yanıtlayanları, kişiye tek posta, onaylı gönderim; s6 §5.14,
+  hub bileti kvkk-s6-yayin-oncesi 23), core'un `recipients:resolve`'ünün
+  hiçbir hesaba eşlemediği adres yalnız core'un `event_invitations`
+  kitlesindeyse alır; kayıt `davet-v1` metniyle verilmişse (yalnız davet) ya
+  da yenileme sorusu bekliyorsa (`renewalDue`) sayılmaz. Hesaplı alıcı
+  tercih kuralıyla ("Toplu postada tercih") gider. Keycloak grubu üyeleri ve
+  haber gönderiminin alıcıları hesaptır; satırında hesap (`recipient_sub`)
+  olan alıcı bu kurala girmez. `islem` postası (servis hesabının
+  `/v1/mail_tasks/single` postası, örneğin Forms'un `forms.*` onayları; Forms
+  kaynağına ya da kişiye `islem`) ve gönderenin kendine deneme postası
+  (`self_test`) de girmez. Gönderen liste ya da grup postasının listenin
+  kendi etkinliği ya da çalışmasıyla ilgili olduğunu beyan ettiyse
+  (`own_event_statement: true`; s6 satır 15, 5/2-c) rıza aranmaz: posta
+  bütün liste alıcılarına, yine duyuru akışında ve çıkış bağlantısıyla
+  gider; beyan gönderim kaydında kalır.
 
 **Ne zaman.** Dağıtıcı toplu satırları alırken, aynı işlemde, çıkış kaydından
 sonra ve gönderim bütçesi saymadan önce, her turda karar verir. core'a ne
@@ -673,7 +680,7 @@ hesap şablonuyla (`keycloak.*`, `account.*`) gönderilen tanıtım da izin arar
 | Değişken | |
 |---|---|
 | `SKYMAIL_PROMOTIONAL` | `off` (ya da boş, varsayılan): `commercial_content_absent: false` reddedilir. `on`: `duyuru`'da kabul edilir; `GET /v1/mail_tasks/tracking-mode` `promotional_available: true` döner |
-| `SKYMAIL_LIST_CONSENT` | `off` (ya da boş, varsayılan): liste postası bugünkü gibi, `own_event_statement` yok sayılır. `on`: hesapsız liste alıcısına duyuru rızası aranır, beyanlı posta hariç; `tracking-mode` `list_consent_available: true` döner |
+| `SKYMAIL_LIST_CONSENT` | `off` (ya da boş, varsayılan): duyuru postası bugünkü gibi, `own_event_statement` yok sayılır. `on`: hesapsız alıcıya her `duyuru`da (liste, Forms kaynağı, kişiye tek posta, onaylı gönderim) duyuru rızası aranır, beyanlı liste ya da grup postası hariç; `islem` etkilenmez; `tracking-mode` `list_consent_available: true` döner |
 
 Başka değer açılışı durdurur; ikisinden biri `on` iken `CORE_URL` gerekir.
 `SKYMAIL_PROMOTIONAL=on` ayrıca `SKYMAIL_MAIL_PURPOSE=on`,

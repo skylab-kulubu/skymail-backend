@@ -2139,7 +2139,8 @@ SELECT q.id,
        mt.category,
        (mt.purpose IS NOT DISTINCT FROM 'duyuru' AND mt.commercial_content_absent IS FALSE)::boolean AS promotional,
        (ml.id IS NOT NULL)::boolean AS to_list,
-       (mt.own_event_statement IS TRUE)::boolean AS own_event
+       (mt.own_event_statement IS TRUE AND mt.mail_list_id IS NOT NULL)::boolean AS own_event,
+       mt.self_test
 FROM mail_queue q
          JOIN mail_tasks mt ON mt.id = q.task_id
          LEFT JOIN templates t ON t.id = mt.template_id
@@ -2148,7 +2149,7 @@ WHERE q.id = ANY ($1::uuid[])
   AND q.channel = 'email'
   AND q.status = 'processing'
   AND q.claimed_by = $2::text
-  AND ((mt.purpose IS NOT DISTINCT FROM 'duyuru' AND mt.commercial_content_absent IS FALSE) OR ml.id IS NOT NULL)
+  AND (mt.purpose IS NOT DISTINCT FROM 'duyuru' OR ml.id IS NOT NULL)
 `
 
 type GetConsentGateClaimedRowsParams struct {
@@ -2169,13 +2170,18 @@ type GetConsentGateClaimedRowsRow struct {
 	Promotional    bool       `json:"promotional"`
 	ToList         bool       `json:"to_list"`
 	OwnEvent       bool       `json:"own_event"`
+	SelfTest       bool       `json:"self_test"`
 }
 
 // The claimed e-mail rows among ids whose send a contact consent may hold
-// back (internal/mailer/consent_gate.go): a promotional duyuru send
-// (commercial_content_absent false), or a send to an internal list. With the
-// send's template (account mail is never held), purpose, category and the
-// recipient's account, when the row knows it.
+// back (internal/mailer/consent_gate.go): a duyuru send (a promotional one,
+// commercial_content_absent false, and any other to an address without an
+// account), or a send to an internal list (one queued before purposes too).
+// With the send's template (account mail is never held), purpose, category,
+// whether it is a test mail to its own sender, the own event statement (only
+// a list's or a Keycloak group's send, mail_list_id, may make it), and the
+// recipient's account, when the row knows it. A send without a purpose that
+// goes to no list (queued before purposes) is not read.
 func (q *Queries) GetConsentGateClaimedRows(ctx context.Context, arg GetConsentGateClaimedRowsParams) ([]GetConsentGateClaimedRowsRow, error) {
 	rows, err := q.db.Query(ctx, getConsentGateClaimedRows, arg.Ids, arg.ClaimedBy)
 	if err != nil {
@@ -2198,6 +2204,7 @@ func (q *Queries) GetConsentGateClaimedRows(ctx context.Context, arg GetConsentG
 			&i.Promotional,
 			&i.ToList,
 			&i.OwnEvent,
+			&i.SelfTest,
 		); err != nil {
 			return nil, err
 		}
