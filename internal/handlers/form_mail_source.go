@@ -44,8 +44,8 @@ type FormMailSource struct {
 	SkippedCount   int `json:"skipped_count"`
 	DuplicateCount int `json:"duplicate_count"`
 	// Of RecipientCount, those whose name is empty: a mail that greets its
-	// recipient by name ({{.FullName}}) prints the tag's fallback, or
-	// nothing, for them. The send page says how many.
+	// recipient by name (the recipient name tag) prints the tag's fallback,
+	// or nothing, for them. The send page says how many.
 	UnnamedCount int `json:"unnamed_count"`
 	// Snapshot preparation time, not the time the owner later sends or submits it.
 	PreparedAt time.Time `json:"prepared_at"`

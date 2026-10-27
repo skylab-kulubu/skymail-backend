@@ -436,7 +436,7 @@
                         "type": "integer"
                     },
                     "unnamed_count": {
-                        "description": "Of RecipientCount, those whose name is empty: a mail that greets its\nrecipient by name ({{.FullName}}) prints the tag's fallback, or\nnothing, for them. The send page says how many.",
+                        "description": "Of RecipientCount, those whose name is empty: a mail that greets its\nrecipient by name (the recipient name tag) prints the tag's fallback,\nor nothing, for them. The send page says how many.",
                         "type": "integer"
                     }
                 },

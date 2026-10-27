@@ -341,8 +341,8 @@ components:
         unnamed_count:
           description: |-
             Of RecipientCount, those whose name is empty: a mail that greets its
-            recipient by name ({{.FullName}}) prints the tag's fallback, or
-            nothing, for them. The send page says how many.
+            recipient by name (the recipient name tag) prints the tag's fallback,
+            or nothing, for them. The send page says how many.
           type: integer
       type: object
     handlers.InboxCounts:
