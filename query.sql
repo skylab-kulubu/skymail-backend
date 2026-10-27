@@ -1871,6 +1871,11 @@ SELECT * FROM mail_form_sources WHERE id=$1 AND owner_sub=$2 FOR UPDATE NOWAIT;
 -- name: LockMailFormSource :one
 SELECT * FROM mail_form_sources WHERE id=$1 FOR UPDATE NOWAIT;
 
+-- name: CountUnnamedMailFormSourceRecipients :one
+-- The respondents a send greets without a name (a recipient name tag prints
+-- its fallback, or nothing, for them).
+SELECT count(*)::int FROM mail_form_source_recipients WHERE source_id=$1 AND btrim(full_name)='';
+
 -- name: ListMailFormSourceRecipients :many
 SELECT * FROM mail_form_source_recipients WHERE source_id=$1 ORDER BY position;
 

@@ -105,6 +105,9 @@ type Querier interface {
 	CountTemplateContentSensitiveEvents(ctx context.Context, templateID uuid.UUID) (int64, error)
 	CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error)
 	CountTemplates(ctx context.Context) (int64, error)
+	// The respondents a send greets without a name (a recipient name tag prints
+	// its fallback, or nothing, for them).
+	CountUnnamedMailFormSourceRecipients(ctx context.Context, sourceID uuid.UUID) (int, error)
 	CountUnsubscribeReactivations(ctx context.Context) (int64, error)
 	// A recipient whose mail did not render, say a template that slices an empty
 	// full name, is written failed, with the render error the send's page shows:

@@ -441,6 +441,10 @@ const docTemplate = `{
                     },
                     "skipped_count": {
                         "type": "integer"
+                    },
+                    "unnamed_count": {
+                        "description": "Of RecipientCount, those whose name is empty: a mail that greets its\nrecipient by name ({{.FullName}}) prints the tag's fallback, or\nnothing, for them. The send page says how many.",
+                        "type": "integer"
                     }
                 },
                 "type": "object"

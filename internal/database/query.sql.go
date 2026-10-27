@@ -1042,6 +1042,19 @@ func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countUnnamedMailFormSourceRecipients = `-- name: CountUnnamedMailFormSourceRecipients :one
+SELECT count(*)::int FROM mail_form_source_recipients WHERE source_id=$1 AND btrim(full_name)=''
+`
+
+// The respondents a send greets without a name (a recipient name tag prints
+// its fallback, or nothing, for them).
+func (q *Queries) CountUnnamedMailFormSourceRecipients(ctx context.Context, sourceID uuid.UUID) (int, error) {
+	row := q.db.QueryRow(ctx, countUnnamedMailFormSourceRecipients, sourceID)
+	var column_1 int
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countUnsubscribeReactivations = `-- name: CountUnsubscribeReactivations :one
 SELECT count(*)
 FROM mail_unsubscribe_reactivations

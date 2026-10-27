@@ -1465,7 +1465,8 @@ kalabilir, ayrı ayrı geri alınır.
   türevden yapılan bağlantı da iki uydurma postada ayrışır, kaydedilmez. Uydurma posta işlenemezse yalnız
   şablonda düz yazılmış bağlantılar sayılır. Gövde değişkeni şablon olarak
   yorumlanmaz: gövdeye yazılan `{{.Email}}` metindir, alıcının adresine
-  dönüşmez. `data-skymail-notrack` öteki kurallarla her zaman geçerlidir;
+  dönüşmez. Tek istisna alıcının adı etiketidir ("Serbest duyuruda alıcının
+  adı"): yalnız metne girer, hiçbir bağlantının adresine girmez. `data-skymail-notrack` öteki kurallarla her zaman geçerlidir;
   serbest gövdede de: temizleyici `<a>` üzerinde boş ya da `true` değerli
   `data-skymail-notrack`'i geçirir (başka öznitelik geçmez), panel
   düzenleyicisindeki "Bu bağlantıyı sayma" anahtarı bunu yazar. Kişiye
@@ -1726,6 +1727,44 @@ Content-Type: application/json
   ve `core` istemcisinin `communication-preferences:read` rolünü
   (`resource_access.core.roles`) arar (bilet 17, core #256).
 
+## Serbest duyuruda alıcının adı
+
+Gönderimin kendi değişkenleri veridir, şablon değildir: serbest duyurunun
+gövdesine yazılan `{{.Email}}` metin olarak gider. Bunun tek istisnası
+alıcının adıdır (sektörün "merge tag"i: Mailchimp `*|FNAME|*`, SendGrid
+`{{first_name}}`; hub bileti `skymail-serbest-duyuru-alici-adi` 01). Tam
+olarak iki etiket, yazıldığı gibi tanınır (`internal/mailer/recipient_name.go`):
+
+- `{{.FullName}}`: alıcının adı;
+- `{{or .FullName "katılımcı"}}`: ad, ya da adı boş alıcıda tırnak içindeki
+  yedek (1–60 karakter; `"` `\` `{` `}` `<` `>` `&` ve denetim karakteri
+  yok). Yedeksiz etiket adı boş alıcıda hiçbir şey basmaz. Mailchimp,
+  HubSpot, Braze ve Klaviyo'nun "varsayılan değer"i budur.
+
+Başka her `{{…}}` (başka değişken, `range`/`if`/işlev, boşluklu ya da
+kırpma işaretli etiket) bugünkü gibi metin kalır; hiçbir şablon motoru
+çalışmaz, etiket metin olarak bulunup değiştirilir. Etiketlerin anlamı Go'nun
+aynı ifadeye verdiği anlamla aynıdır.
+
+- **Nerede:** şablonun konusunun bastığı gönderim değişkenlerinde (free.basic:
+  `Subject`; ön başlık da onu basar) ve `safeHTML` ile basılanlarda
+  (free.basic: `BodyHtml`). Gövdede yalnız metinde, ad HTML kaçışlı;
+  öznitelikte, dolayısıyla bağlantı adresinde asla. Alıcının kendi
+  değişkenleri (Haber gönderiminin `AudienceReason`'ı gibi), şablonun kendi
+  metni ve öteki değişkenler değişmez.
+- **Ad:** satırın `recipient_full_name`'i; boşluk ve denetim karakteri
+  dizileri tek boşluk, baş ve sonu kırpılmış. İlk ad türetilmez: satırda
+  yalnız tam ad var; iki göbek adlı Türkçe adın hangisinin ilk ad olduğu
+  tahmin edilmez.
+- **Takip:** bağlantılar herkese aynı kalır (`linksSendLevel`'in iki uydurma
+  alıcısı da farklı ad alır, bağlantı ortak kalır); ad yalnız metindedir.
+- **Maskeleme ve saklama:** ad, gönderilen içerikte postanın kendisi gibi
+  durur (`recipient_full_name` zaten satırdadır); maskeleme postayı aynı
+  adla yeniden işler; Account erasure içeriği her zamanki gibi boşaltır.
+- **Önizleme:** skymail-frontend aynı iki etiketi aynı kuralla doldurur;
+  iki repo aynı vaka dosyasını tutar (`internal/mailer/testdata/recipient-name.json`,
+  SHA-256 iki testte sabit).
+
 ## Veritabanı migration'ları
 
 Uygulama bekleyen migration'ları servis trafiğe açılmadan önce çalıştırabilir.
@@ -1788,6 +1827,10 @@ alıcı başına mevcut queue satırıyla gönderilir. Yeni kaynak, ilk sürümd
 adres bilgisini kullanır; kişi izleme kapsamını genişletmez. Gönderim/onay
 readback'inde `audience.kind=form`, `source=forms`, form/source kimliği, ad,
 hazırlanma zamanı ve alıcı sayısı yer alır; eski audience alanları korunur.
+
+Kaynak bilgisi (`POST` yanıtı ve `GET`) `unnamed_count` ile adı boş
+yanıtlayan sayısını da verir: alıcının adını kullanan duyuruda ("Serbest
+duyuruda alıcının adı") gönderim sayfası bunu uyarı olarak gösterir.
 
 Hesap silme kaynak sahibini ve eşleşen alıcı/başlık bilgisini de temizler.
 Etkilenmiş snapshot geçersizleşir; bekleyen kaynakla gönderim/onay 409 verir.

@@ -455,3 +455,38 @@ func TestFormSourceIntegrationLegacyManualConstraintAndExpiry(t *testing.T) {
 		t.Fatal("source request carries browser addresses")
 	}
 }
+
+// A free announcement to a Forms audience greets each respondent by name,
+// the fallback standing in for a respondent without one, and the descriptor
+// says how many have none (hub ticket skymail-serbest-duyuru-alici-adi 01).
+func TestFormSourceIntegrationGreetsEachRespondentByName(t *testing.T) {
+	w := newFormSourceWorld(t)
+	prepared := sourceRequest("source-sender", 3)
+	prepared.Recipients[1].FullName = "  "
+	var source handlers.FormMailSource
+	if status, _ := w.call("yusuf", http.MethodPost, "/v1/form_mail_sources", prepared, &source); status != 201 || source.UnnamedCount != 1 {
+		t.Fatalf("prepare status=%d unnamed=%d", status, source.UnnamedCount)
+	}
+	var read handlers.FormMailSource
+	if status, _ := w.call("source-sender", http.MethodGet, "/v1/form_mail_sources/"+source.ID.String(), nil, &read); status != 200 || read.UnnamedCount != 1 {
+		t.Fatalf("read status=%d unnamed=%d", status, read.UnnamedCount)
+	}
+
+	send := map[string]any{"form_source_id": source.ID, "template_id": w.freeBasic.ID, "body_variables": map[string]any{
+		"Subject": `Sayın {{or .FullName "katılımcı"}}`, "BodyHtml": "<p>Merhaba {{.FullName}}, {{.Email}}</p>"}}
+	var created handlers.CreatedMailTask
+	if status, _ := w.call("source-sender", http.MethodPost, "/v1/mail_tasks/form-source", send, &created); status != 201 {
+		t.Fatalf("send status=%d", status)
+	}
+	rows := w.queuedRows(created.ID)
+	named, unnamed := rows["source-0@example.invalid"], rows["source-1@example.invalid"]
+	if named.Subject != "Sayın Source Recipient 0" || unnamed.Subject != "Sayın katılımcı" {
+		t.Fatalf("subjects %q and %q", named.Subject, unnamed.Subject)
+	}
+	if named.BodyHtml == nil || !strings.Contains(*named.BodyHtml, "<p>Merhaba Source Recipient 0, {{.Email}}</p>") {
+		t.Fatal("the body does not greet the respondent by name, or read another tag")
+	}
+	if unnamed.BodyHtml == nil || !strings.Contains(*unnamed.BodyHtml, "<p>Merhaba , {{.Email}}</p>") {
+		t.Fatal("an empty name does not print nothing")
+	}
+}
