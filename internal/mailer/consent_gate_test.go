@@ -421,7 +421,7 @@ func enqueueToList(t *testing.T, m mailer.Transactional, list uuid.UUID) uuid.UU
 // covers announcements; any other is written failed, "duyuru rızası yok".
 // Core is asked for the accounts with club:duyuru, whatever the send's
 // category (a team removed since cannot fail the question). A Keycloak
-// group's members and a mail to one person are not held.
+// group's members are accounts, and are not held.
 func TestAListAnnouncementToAnAddressWithoutAnAccountNeedsTheConsent(t *testing.T) {
 	captureMailerLogs(t)
 	db := suppressionQueue(t)
@@ -449,21 +449,136 @@ func TestAListAnnouncementToAnAddressWithoutAnAccountNeedsTheConsent(t *testing.
 
 	sub := uuid.New()
 	group := enqueuePurposed(t, m, duyuruSend(true), mailer.RecipientInfo{FullName: "Grup üyesi", Email: "misafir@example.com", Sub: &sub})
-	single, err := m.EnqueueSingle(context.Background(), database.CreateSingleMailTaskParams{
-		SentBy: laneSender, TemplateID: &initialTemplate, BodyVariables: []byte(`{}`),
-		RecipientFullName: "Misafir", RecipientEmail: "misafir@example.com", Purpose: duyuruSend(true).Purpose, Category: duyuruSend(true).Category,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if taken := mailer.Turn(context.Background(), m); len(taken) != 2 {
-		t.Errorf("taken %d, want the group member's and the single mail", len(taken))
+	if taken := mailer.Turn(context.Background(), m); len(taken) != 1 {
+		t.Errorf("taken %d, want the group member's", len(taken))
 	}
 	if got := rowTo(t, db, group, "misafir@example.com"); got.error != "" {
 		t.Errorf("the group member: %+v", got)
 	}
-	if got := rowTo(t, db, single, "misafir@example.com"); got.error != "" {
-		t.Errorf("the single mail: %+v", got)
+}
+
+// purposesOn is SKYMAIL_MAIL_PURPOSE on, every lane off: what
+// SKYMAIL_LIST_CONSENT=on needs, as production runs it.
+func purposesOn() mailer.Option { return mailer.WithSendLanes(mailer.SendLanes{Purpose: true}) }
+
+// queueToOne queues a mail to one person as POST /v1/mail_tasks/single does:
+// a person's duyuru, and a person's tracked islem, in the bulk lane
+// (EnqueueTrackedSingle); a service's mail (a Forms confirmation), always
+// islem, in the system lane (EnqueueSingle).
+func queueToOne(t *testing.T, m mailer.Transactional, template uuid.UUID, purpose mailer.SendPurpose, bulk bool, name, email string) uuid.UUID {
+	t.Helper()
+	arg := database.CreateSingleMailTaskParams{
+		SentBy: laneSender, TemplateID: &template, BodyVariables: []byte(`{}`), RecipientFullName: name, RecipientEmail: email,
+		Purpose: purpose.Purpose, Category: purpose.Category, TransactionalStatement: purpose.TransactionalStatement,
+		CommercialContentAbsent: purpose.CommercialContentAbsent, TrackingRequested: bulk && purpose.Purpose != nil && *purpose.Purpose == mailer.PurposeIslem,
+	}
+	var task uuid.UUID
+	var err error
+	if bulk {
+		task, err = m.EnqueueTrackedSingle(context.Background(), arg, nil)
+	} else {
+		task, err = m.EnqueueSingle(context.Background(), arg)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return task
+}
+
+// With SKYMAIL_LIST_CONSENT on the rule a list's duyuru follows holds for
+// every duyuru (KVKK s6 §5.14; hub ticket kvkk-s6-yayin-oncesi 23): a send
+// to a Forms source's respondents and a person's mail to one address go to
+// an address without an account only with its announcement consent;
+// "suppressed: no_announcement_consent" otherwise. An account's address
+// goes, and so does a mail to a row that knows its account. islem mail is
+// not held, whoever sends it: a Forms source's islem send, a person's
+// tracked islem mail and a service's mail (Forms' confirmation, a
+// forms.* template) go to the guest without consent, and core is not asked
+// about them. Nor is a test mail to its own sender (self_test).
+func TestEveryAnnouncementToAnAddressWithoutAnAccountNeedsTheConsent(t *testing.T) {
+	captureMailerLogs(t)
+	db := suppressionQueue(t)
+	core := announcementCore()
+	m := gatedMailer(t, db, mailer.ConsentGate{ListConsent: true, Core: core}, purposesOn())
+
+	respondents := enqueuePurposed(t, m, duyuruSend(true),
+		mailer.RecipientInfo{FullName: "Uye", Email: "uye@example.com"},
+		mailer.RecipientInfo{FullName: "Rizali", Email: "rizali@example.com"},
+		mailer.RecipientInfo{FullName: "Misafir", Email: "misafir@example.com"},
+		mailer.RecipientInfo{FullName: "Eski", Email: "eski@example.com"})
+	toGuest := queueToOne(t, m, initialTemplate, duyuruSend(true), true, "Misafir", "misafir@example.com")
+	toConsented := queueToOne(t, m, initialTemplate, duyuruSend(true), true, "Rizali", "rizali@example.com")
+	sub := uuid.New()
+	known := enqueuePurposed(t, m, duyuruSend(true), mailer.RecipientInfo{FullName: "Hesapli", Email: "misafir@example.com", Sub: &sub})
+
+	taken := gatedTurn(t, m)
+	if len(taken) != 4 {
+		t.Errorf("taken %d, want the member's, the consented guest's two and the row that knows its account", len(taken))
+	}
+	for _, sent := range []struct {
+		task  uuid.UUID
+		email string
+	}{{respondents, "uye@example.com"}, {respondents, "rizali@example.com"}, {toConsented, "rizali@example.com"}, {known, "misafir@example.com"}} {
+		if got := rowTo(t, db, sent.task, sent.email); got.error != "" || got.status == "failed" {
+			t.Errorf("%s: %+v, want it sent", sent.email, got)
+		}
+	}
+	for _, held := range []struct {
+		task  uuid.UUID
+		email string
+	}{{respondents, "misafir@example.com"}, {respondents, "eski@example.com"}, {toGuest, "misafir@example.com"}} {
+		if got := rowTo(t, db, held.task, held.email); got.status != "failed" || got.error != "suppressed: no_announcement_consent" || got.attempts != 0 {
+			t.Errorf("%s: %+v, want failed with suppressed: no_announcement_consent", held.email, got)
+		}
+	}
+
+	asked := len(core.calls())
+	formIslem := enqueuePurposed(t, m, islemSend(), mailer.RecipientInfo{FullName: "Misafir", Email: "misafir@example.com"})
+	personIslem := queueToOne(t, m, initialTemplate, islemSend(), true, "Misafir", "misafir@example.com")
+	formsConfirmation := queueToOne(t, m, formsTemplate, islemSend(), false, "Misafir", "misafir@example.com")
+	selfTest, err := m.EnqueueWithRecipients(context.Background(), mailer.EnqueueWithRecipientsParams{
+		SentBy: laneSender, TemplateID: initialTemplate, BodyVariables: []byte(`{}`), SelfTest: true, Purpose: duyuruSend(true),
+		Recipients: []mailer.RecipientInfo{{FullName: "Misafir", Email: "misafir@example.com"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if taken := gatedTurn(t, m); len(taken) != 4 {
+		t.Errorf("taken %d, want the three islem mails and the test mail", len(taken))
+	}
+	for name, task := range map[string]uuid.UUID{"a Forms source's islem send": formIslem, "a person's islem mail": personIslem,
+		"Forms' confirmation": formsConfirmation, "a test mail": selfTest} {
+		if got := rowTo(t, db, task, "misafir@example.com"); got.error != "" || got.status == "failed" {
+			t.Errorf("%s: %+v, want it sent", name, got)
+		}
+	}
+	if calls := core.calls(); len(calls) != asked {
+		t.Errorf("core asked %v about islem mail and a test mail", calls[asked:])
+	}
+}
+
+// Core not answering holds no duyuru to one address back for good: it
+// waits, as a list's does, and is written "consent: unavailable" (never
+// sent) once it has waited 48 hours while core fails.
+func TestAnAnnouncementToOneAddressWaitsForCore(t *testing.T) {
+	captureMailerLogs(t)
+	db := suppressionQueue(t)
+	m := gatedMailer(t, db, mailer.ConsentGate{ListConsent: true, Core: &fakeConsents{down: true}}, purposesOn())
+	task := queueToOne(t, m, initialTemplate, duyuruSend(true), true, "Misafir", "misafir@example.com")
+	if taken := gatedTurn(t, m); len(taken) != 0 {
+		t.Errorf("taken %d, want none", len(taken))
+	}
+	waitingRow(t, db, task, "misafir@example.com", 0)
+
+	if _, err := db.Conn.Exec(context.Background(),
+		`UPDATE mail_queue SET created_at = NOW() - INTERVAL '49 hours', next_attempt_at = NOW() WHERE task_id = $1`, task); err != nil {
+		t.Fatal(err)
+	}
+	if taken := gatedTurn(t, m); len(taken) != 0 {
+		t.Errorf("taken %d, want none", len(taken))
+	}
+	if got := rowTo(t, db, task, "misafir@example.com"); got.status != "failed" || got.error != "consent: unavailable" || got.attempts != 0 {
+		t.Errorf("%+v, want failed, consent: unavailable, nothing tried", got)
 	}
 }
 

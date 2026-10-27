@@ -2042,7 +2042,7 @@ const docTemplate = `{
             "handlers.TrackingMode": {
                 "properties": {
                     "list_consent_available": {
-                        "description": "True while SKYMAIL_LIST_CONSENT=on: a list's address without an account gets a duyuru only with its announcement consent, unless the send states own_event_statement (the mail is about the list's own event or work). The list send form shows that box only then.",
+                        "description": "True while SKYMAIL_LIST_CONSENT=on: an address without an account gets a duyuru only with its announcement consent, whatever the send (a list, a Forms source's respondents, one person, an approved send); islem mail is not held. A list or group send that states own_event_statement (the mail is about the list's own event or work) needs none. The list send form shows that box only then.",
                         "type": "boolean"
                     },
                     "promotional_available": {

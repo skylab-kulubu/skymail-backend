@@ -304,9 +304,11 @@ func TestAnIslemSendIsTrackedLikeAnyOperatorSend(t *testing.T) {
 
 // A service's single mail (account mail, a Forms confirmation) is islem,
 // whatever its body says, in the system lane; a person's through the same
-// chain may be duyuru.
+// chain may be duyuru. SKYMAIL_LIST_CONSENT on, as in production, changes
+// neither: the announcement consent holds only duyuru mail
+// (internal/mailer, TestEveryAnnouncementToAnAddressWithoutAnAccountNeedsTheConsent).
 func TestAServicesSingleMailIsAlwaysIslem(t *testing.T) {
-	w := newApprovalWorldWithPool(t, 0, purposesOn())
+	w := newApprovalWorldWithPool(t, 0, purposesOn(), mailer.WithConsentGate(mailer.ConsentGate{ListConsent: true}))
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
 	auth := middlewares.NewAuthMiddleware("skymail", claimsUserinfo(t), middlewares.AudienceOff)
 	registerMailTaskRoutes(protectedAPI(app, auth, nil), auth, handlers.NewMailHandler(w.store, w.mail, w.directory))
