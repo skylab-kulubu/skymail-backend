@@ -494,8 +494,10 @@ reddidir (aşağıda).
   `DELETE` yalnız bounce satırını kaldırır; çıkış satırında
   `409 suppression.use_reactivate` döner. Kaldırma
   `mail_suppression_removals`'a kim, ne zaman, kaynak, kod, sayı ve ilk
-  görülme olarak yazılır; adres yazılmaz. Kaldırılan adrese yeniden
-  gönderilir. Kendiliğinden düşme yoktur.
+  görülme olarak yazılır; adres yazılmaz. Bu kaldırma kaydı, geri alma kaydı
+  gibi, yazılmasından 3 yıl sonra içerik süpürücüsünce silinir (Yusuf,
+  2026-10-27; süre sabit, env yok). Kaldırılan adrese yeniden gönderilir.
+  Kendiliğinden düşme yoktur.
 - **Kişi ucu** (`GET /v1/me/email-delivery`, rol yok; kutu ile aynı zincir:
   token `aud`'unda `skymail`, kişi token'ı, erişim kapısı): kişi kendi
   adreslerinden hangisine posta ulaşmadığını kendi token'ıyla okur. Yalnız
