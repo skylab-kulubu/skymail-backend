@@ -4573,6 +4573,33 @@ func (q *Queries) ListMailApprovals(ctx context.Context, arg ListMailApprovalsPa
 	return items, nil
 }
 
+const listMailFormSourceRecipientNames = `-- name: ListMailFormSourceRecipientNames :many
+SELECT full_name FROM mail_form_source_recipients WHERE source_id=$1
+`
+
+// The respondents' names, to count those a send greets without one (a
+// recipient name tag prints its fallback, or nothing, for them) by the
+// mailer's own rule (mailer.HasRecipientName), not SQL's idea of white space.
+func (q *Queries) ListMailFormSourceRecipientNames(ctx context.Context, sourceID uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, listMailFormSourceRecipientNames, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var full_name string
+		if err := rows.Scan(&full_name); err != nil {
+			return nil, err
+		}
+		items = append(items, full_name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMailFormSourceRecipients = `-- name: ListMailFormSourceRecipients :many
 SELECT source_id, position, email, full_name FROM mail_form_source_recipients WHERE source_id=$1 ORDER BY position
 `

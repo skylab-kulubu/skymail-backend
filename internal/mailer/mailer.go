@@ -991,6 +991,9 @@ type mailTemplates struct {
 	subject *textt.Template
 	text    *textt.Template
 	html    *htmlt.Template
+	// names are the send variables the recipient's name tags are filled in
+	// (recipient_name.go).
+	names nameFields
 }
 
 // MailPart is one of the three parts of a Mail template a send parses.
@@ -1040,7 +1043,7 @@ func parseMailTemplates(subject, plainText, html string) (mailTemplates, error) 
 	if err != nil {
 		return mailTemplates{}, &ParseError{Part: PartHTML, Err: err}
 	}
-	return mailTemplates{subject: subjectTemplate, text: textTemplate, html: htmlTemplate}, nil
+	return mailTemplates{subject: subjectTemplate, text: textTemplate, html: htmlTemplate, names: nameFieldsOf(subject, html)}, nil
 }
 
 // Rendered is one recipient's mail as a send queues it.
@@ -1054,8 +1057,9 @@ type Rendered struct {
 // recipient exactly as a send renders what it queues: the send's variables —
 // a JSON object, as a mail task keeps them — with the recipient's Email and
 // FullName over them, and UnsubscribeUrl as the recipient's link (empty
-// when they have none, whatever the send's variables say). A part that does
-// not parse is a *ParseError.
+// when they have none, whatever the send's variables say), the recipient's
+// name filled in the name tags of the variables the subject and safeHTML
+// print (recipient_name.go). A part that does not parse is a *ParseError.
 func Render(subject, plainText, html string, variables []byte, recipient RecipientInfo) (Rendered, error) {
 	parsed, err := parseMailTemplates(subject, plainText, html)
 	if err != nil {
@@ -1078,10 +1082,13 @@ func (t mailTemplates) render(vars map[string]interface{}, recipient RecipientIn
 // HTML with htmlVars: a masked mail (mask.go) marks what it hid in the HTML
 // only. A send passes the same variables to both.
 func (t mailTemplates) renderWith(textVars, htmlVars map[string]interface{}, recipient RecipientInfo) (Rendered, error) {
+	name := recipientName(recipient.FullName)
 	withRecipient := func(vars map[string]interface{}) map[string]interface{} {
 		data := make(map[string]interface{}, len(vars)+len(recipient.Variables)+3)
 		for k, v := range vars {
-			data[k] = v
+			// The recipient's name tags in the subject's and the markup's
+			// variables (recipient_name.go); every other value as it is.
+			data[k] = t.names.withName(k, v, name)
 		}
 		for k, v := range recipient.Variables {
 			data[k] = v

@@ -2104,6 +2104,12 @@ SELECT * FROM mail_form_sources WHERE id=$1 AND owner_sub=$2 FOR UPDATE NOWAIT;
 -- name: LockMailFormSource :one
 SELECT * FROM mail_form_sources WHERE id=$1 FOR UPDATE NOWAIT;
 
+-- name: ListMailFormSourceRecipientNames :many
+-- The respondents' names, to count those a send greets without one (a
+-- recipient name tag prints its fallback, or nothing, for them) by the
+-- mailer's own rule (mailer.HasRecipientName), not SQL's idea of white space.
+SELECT full_name FROM mail_form_source_recipients WHERE source_id=$1;
+
 -- name: ListMailFormSourceRecipients :many
 SELECT * FROM mail_form_source_recipients WHERE source_id=$1 ORDER BY position;
 
