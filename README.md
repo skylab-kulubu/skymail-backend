@@ -1054,7 +1054,7 @@ kodu boş kalan işçiyle, kuyruğa girdiği andaki uyandırmada gider; hiçbir 
 gönderimin bitmesini beklemez. Şerit belirtmeden yazılan satır (göçten önceki
 satırlar, eski imajın yazdıkları) sistem şeridindedir: bugünkü sıradan daha
 geride kalamaz. Çoklu replikada her süreç kendi işçilerini ayrı ayırır.
-Kısma ve duraklatma henüz yok (duyuru-haber bilet 05, sonraki adımlar).
+Kısma ve görev düzeyinde duraklatma: aşağıda "Kısma ve görev düzeyinde işlemler".
 
 Her şeridin bekleyen satırlarının kendi kısmi indeksi var
 (`idx_mail_queue_pending_system`, `idx_mail_queue_pending_bulk`): bir tur
@@ -1102,6 +1102,85 @@ günde 10.000 alıcı. Varsayılanlar bunların altında kalır.
   geri verilen satırın sayısı düşülmez. İki günden eski pencereler silinir.
   Ayrılmış alan adlı alıcı hiç alınmadığı için sayılmaz; kalıcı olarak
   reddedilen alıcı yalnız tek denemesiyle sayılır (Kanallar).
+
+## Kısma ve görev düzeyinde işlemler (`SKYMAIL_THROTTLE_PAUSE`, `SKYMAIL_FAILURE_PAUSE_COUNT`, `SKYMAIL_FAILURE_PAUSE_PERCENT`)
+
+Toplu şeridin iki koruması ve bir gönderimin üç düğmesi (duyuru-haber bilet 05,
+G3 ve G4).
+
+| Değişken | Varsayılan | Anlamı |
+|---|---|---|
+| `SKYMAIL_THROTTLE_PAUSE` | `5m` | Kısma yanıtından sonra toplu şeridin en az bekleyeceği süre. `0` kapatır, en çok `1h` |
+| `SKYMAIL_FAILURE_PAUSE_COUNT` | `10` | Bir gönderimde röle bu kadar alıcıyı kalıcı olarak reddedince gönderim kendiliğinden duraklar. `0` hiç duraklatmaz |
+| `SKYMAIL_FAILURE_PAUSE_PERCENT` | `10` | ... ve bu reddedilenler, rölenin kesin yanıt verdiklerinin (gönderilen + reddedilen) en az bu yüzdesiyse. 1–100 |
+
+Yanlış değer açılışı durdurur. Açılış logu üç değeri de yazar.
+
+**Kısma (G3).** Röle hesabın yavaşlamasını isterse (SMTP `421`, `432` ya da
+herhangi bir `4.7.x`; Graph `429` ya da `503`):
+
+- Bütün süreçlerin toplu şeridi `SKYMAIL_THROTTLE_PAUSE` kadar, yanıtın
+  `Retry-After`'ı daha uzunsa o kadar hiçbir satır almaz. Bekleme Postgres'te
+  tek satırdır (`mail_bulk_holds`); daha uzun bir bekleme kısaltılmaz. Saat
+  veritabanının saatidir.
+- Yanıtı alan toplu satır `pending`'e döner, bekleme bitince yeniden denenir.
+  **Deneme sayılmaz**: yanıt alıcıyla değil hesabın hızıyla ilgilidir. Hata
+  sütununda yanıt kodu durur.
+- Bir satır en çok 5 kısma yanıtını deneme saymadan geçirir
+  (`mail_queue.throttles`). Sonrakinde olağan hata yoluna düşer: denemesi
+  sayılır, şerit bekletilmez. Röle tek bir alıcıya kalıcı olarak `4.7.x`
+  dönerse o satır sonunda başarısız olur, toplu şeridi her 5 dakikada bir
+  sonsuza dek tutmaz.
+- Sistem şeridi beklemeyi okumaz: giriş kodu gitmeye devam eder. Kısma yanıtı
+  alan sistem satırı bugünkü gibi denemesini sayarak yeniden denenir, ama toplu
+  şeridi o da bekletir.
+- Log: `event=bulk_lane_throttled`, `held_until`. `GET /v1/mail_tasks/summary`
+  `bulk_held_until` ile gösterir (bekleme yoksa `null`).
+
+**Hata oranında kendiliğinden duraklama (G3, listmonk deseni).** Bir toplu
+gönderimin alıcısı rölede kalıcı olarak başarısız olunca (5 deneme bitti ya da
+alıcının adresi reddedildi) gönderimin sayacı (`mail_tasks.send_failures`) artar.
+Sayaç `SKYMAIL_FAILURE_PAUSE_COUNT`'a ulaşır ve reddedilenler gönderilenlerle
+birlikte sayılanların en az `SKYMAIL_FAILURE_PAUSE_PERCENT`'i olursa gönderim
+`paused_reason = failure_rate` ile duraklar. Log: `event=send_paused_failure_rate`.
+Atlananlar (tercih, bastırma, rıza, ayrılmış alan adı, iptal) sayılmaz.
+
+**Görev düzeyinde işlemler (G4).**
+
+| Uç | Ne yapar |
+|---|---|
+| `POST /v1/mail_tasks/{id}/pause` | Toplu şerit gönderimin satırlarını almaz. Gönderilmekte olan satırlar biter. Duraklamış gönderimde bir şey değişmez (200) |
+| `POST /v1/mail_tasks/{id}/resume` | Satırlar yeniden alınır. O ana dek olan hatalar kabul edilmiş sayılır, hata sayacı sıfırlanır |
+| `POST /v1/mail_tasks/{id}/cancel` | Bekleyen alıcılar `failed` + `error = 'cancelled'` yazılır, hiçbir şey denenmez. Gönderilmekte olan satırlar biter. Sonradan bir yeniden deneme ya da dolan kira bir satırı `pending`'e döndürürse temizleyici (reaper) onu da iptal yazar |
+
+- Yanıt gönderimin kendisidir (`MailTaskItem`): `paused_at`, `paused_reason`
+  (`operator` ya da `failure_rate`), `cancelled_at` ve
+  `recipient_counts.cancelled`.
+- Yalnız toplu gönderim (liste, grup, kişiler, Forms kaynağı, haber) için:
+  tekil posta `409 mail_task.not_bulk`. İptal edilmiş gönderim duraklatılamaz ya
+  da sürdürülemez (`409 mail_task.cancelled`). Bütün alıcıları bitmiş gönderim
+  duraklatılamaz ya da iptal edilemez (`409 mail_task.finished`).
+- Kim: `skymail:announcements:send` her gönderimi; `skymail:mails:write` yalnız
+  kendi gönderdiğini (`sent_by`). Ötekine 403.
+- İptal edilen satır atlanmış sayılır: gönderimi `failed` okutmaz
+  (`mail_task_status()`). Bir alıcısı gitmiş, kalanı iptal edilmiş gönderim
+  `sent` okunur, `cancelled_at` ile gösterilir.
+- Duraklatılan gönderimin bekleyen satırları "park edilir": `next_attempt_at`
+  `2999-01-01` olur, şeridin alma sorgusu ve indeksi değişmeden onları hiç
+  okumaz. Sürdürünce `now()`'a döner (bekleme süreleri sıfırlanır). Duraklama
+  ya da iptalden sonra bir yeniden deneme ya da dolan kira bir satırı yeniden
+  vadesine getirirse alma turu onu işçiye vermez: duraklatılmışsa yeniden park
+  eder, iptal edilmişse `cancelled` yazar.
+- Park yalnız gönderim hâlâ duraklatılmışken yapılır. Sürdürme, satırı
+  duraklatılmış okuyan bir alma turuyla aynı anda olursa satır park edilmiş
+  kalabilir (sürdürme o an satırı göremez). Temizleyici (reaper) her turda
+  duraklatılmamış ve iptal edilmemiş gönderimin park edilmiş satırlarını
+  `now()`'a döndürür.
+- Geri dönüş: göçün down'ı park edilmiş satırları `now()`'a döndürür. Yalnız
+  imaj geri alınacaksa önce duraklatılmış gönderimleri sürdürün: eski imajda
+  sürdürme ucu yok.
+- Eski imaj (yayın sırasında start-first) duraklatılmış gönderimin park
+  edilmemiş satırlarını almaya devam edebilir; yeni imaj açılınca durur.
 
 ## Gönderilen içerik (`MAIL_CONTENT_RETENTION_DAYS`)
 

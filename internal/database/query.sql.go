@@ -283,6 +283,103 @@ func (q *Queries) BounceRate(ctx context.Context, days int) (BounceRateRow, erro
 	return i, err
 }
 
+const bulkLaneHeldUntil = `-- name: BulkLaneHeldUntil :one
+SELECT held_until, reason
+FROM mail_bulk_holds
+WHERE id
+`
+
+type BulkLaneHeldUntilRow struct {
+	HeldUntil time.Time `json:"held_until"`
+	Reason    string    `json:"reason"`
+}
+
+// The instant until which the bulk lane takes nothing: a throttling reply of
+// the relay held it (HoldBulkLane). No row: never held.
+func (q *Queries) BulkLaneHeldUntil(ctx context.Context) (BulkLaneHeldUntilRow, error) {
+	row := q.db.QueryRow(ctx, bulkLaneHeldUntil)
+	var i BulkLaneHeldUntilRow
+	err := row.Scan(&i.HeldUntil, &i.Reason)
+	return i, err
+}
+
+const cancelClaimedRows = `-- name: CancelClaimedRows :execrows
+UPDATE mail_queue
+SET status     = 'failed',
+    error      = 'cancelled',
+    claimed_at = NULL,
+    claimed_by = NULL
+WHERE id = ANY ($1::uuid[])
+  AND status = 'processing'
+  AND claimed_by = $2::text
+`
+
+type CancelClaimedRowsParams struct {
+	Ids       []uuid.UUID `json:"ids"`
+	ClaimedBy string      `json:"claimed_by"`
+}
+
+// Writes rows this process took failed with 'cancelled' (their send was
+// cancelled), nothing tried.
+func (q *Queries) CancelClaimedRows(ctx context.Context, arg CancelClaimedRowsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelClaimedRows, arg.Ids, arg.ClaimedBy)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const cancelMailTask = `-- name: CancelMailTask :execrows
+UPDATE mail_tasks
+SET cancelled_at  = now(),
+    cancelled_by  = $1::text,
+    paused_at     = NULL,
+    paused_reason = NULL,
+    paused_by     = NULL
+WHERE id = $2
+  AND cancelled_at IS NULL
+`
+
+type CancelMailTaskParams struct {
+	CancelledBy string    `json:"cancelled_by"`
+	ID          uuid.UUID `json:"id"`
+}
+
+// Cancels a send: no more of its rows are taken, and its pending rows are
+// written failed with 'cancelled' (CancelPendingRows). Rows being sent finish.
+func (q *Queries) CancelMailTask(ctx context.Context, arg CancelMailTaskParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelMailTask, arg.CancelledBy, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const cancelPendingRows = `-- name: CancelPendingRows :execrows
+UPDATE mail_queue q
+SET status     = 'failed',
+    error      = 'cancelled',
+    claimed_at = NULL,
+    claimed_by = NULL
+FROM mail_tasks mt
+WHERE mt.id = q.task_id
+  AND mt.cancelled_at IS NOT NULL
+  AND ($1::uuid IS NULL OR mt.id = $1::uuid)
+  AND q.status = 'pending'
+`
+
+// Writes the pending rows of cancelled sends failed with 'cancelled', nothing
+// tried: at the cancel, and on the reaper's turn for a row a retry or an
+// expired lease put back to pending since. task_id NULL sweeps every
+// cancelled send.
+func (q *Queries) CancelPendingRows(ctx context.Context, taskID *uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelPendingRows, taskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const clearDueMailContent = `-- name: ClearDueMailContent :many
 WITH due AS (SELECT mt.id
              FROM mail_tasks mt
@@ -997,6 +1094,53 @@ func (q *Queries) CountSuppressionEntries(ctx context.Context, arg CountSuppress
 	return total, err
 }
 
+const countTaskSendFailure = `-- name: CountTaskSendFailure :one
+UPDATE mail_tasks mt
+SET send_failures = mt.send_failures + 1,
+    paused_at     = CASE WHEN pause.now THEN now() ELSE mt.paused_at END,
+    paused_reason = CASE WHEN pause.now THEN 'failure_rate' ELSE mt.paused_reason END,
+    paused_by     = CASE WHEN pause.now THEN NULL ELSE mt.paused_by END
+FROM (SELECT t.id,
+             (t.paused_at IS NULL
+                 AND t.cancelled_at IS NULL
+                 AND $1::int > 0
+                 AND t.send_failures + 1 >= $1::int
+                 AND (t.send_failures + 1) * 100 >= $2::int * (t.send_failures + 1 +
+                                                                                 (SELECT count(*)
+                                                                                  FROM mail_queue q
+                                                                                  WHERE q.task_id = t.id
+                                                                                    AND q.status = 'sent')))::boolean AS now
+      FROM mail_tasks t
+      WHERE t.id = $3) pause
+WHERE mt.id = pause.id
+RETURNING mt.send_failures, pause.now AS paused
+`
+
+type CountTaskSendFailureParams struct {
+	MinFailures int       `json:"min_failures"`
+	MinPercent  int       `json:"min_percent"`
+	TaskID      uuid.UUID `json:"task_id"`
+}
+
+type CountTaskSendFailureRow struct {
+	SendFailures int  `json:"send_failures"`
+	Paused       bool `json:"paused"`
+}
+
+// Counts one recipient of a send that failed for good at the relay, and
+// pauses the send ('failure_rate') once at least min_failures of its
+// recipients failed so since it was queued or last resumed, and they are at
+// least min_percent of those the relay answered for good: those failures
+// plus every recipient sent since it was queued (a resume clears the
+// failures, not the sent). min_failures 0 counts without ever pausing. A
+// cancelled or already paused send is counted and left as it is.
+func (q *Queries) CountTaskSendFailure(ctx context.Context, arg CountTaskSendFailureParams) (CountTaskSendFailureRow, error) {
+	row := q.db.QueryRow(ctx, countTaskSendFailure, arg.MinFailures, arg.MinPercent, arg.TaskID)
+	var i CountTaskSendFailureRow
+	err := row.Scan(&i.SendFailures, &i.Paused)
+	return i, err
+}
+
 const countTemplateContentSensitiveEvents = `-- name: CountTemplateContentSensitiveEvents :one
 SELECT count(*)
 FROM template_content_sensitive_events
@@ -1272,7 +1416,7 @@ WITH active_source AS (
                $8::boolean, $9::boolean,
                $10::boolean
         FROM active_source
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, source_kind, source_ref, source_version, source_snapshot, source_audience, source_counts, self_test
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, source_kind, source_ref, source_version, source_snapshot, source_audience, source_counts, self_test, paused_at, paused_reason, paused_by, send_failures, cancelled_at, cancelled_by
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1399,7 +1543,7 @@ WITH active_template AS (
                $7::text, $8::text,
                $9::boolean, $10::boolean
         FROM active_template
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, source_kind, source_ref, source_version, source_snapshot, source_audience, source_counts, self_test
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, source_kind, source_ref, source_version, source_snapshot, source_audience, source_counts, self_test, paused_at, paused_reason, paused_by, send_failures, cancelled_at, cancelled_by
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1584,6 +1728,46 @@ type DeferMaskFailureParams struct {
 func (q *Queries) DeferMaskFailure(ctx context.Context, arg DeferMaskFailureParams) error {
 	_, err := q.db.Exec(ctx, deferMaskFailure, arg.BaseSeconds, arg.ID)
 	return err
+}
+
+const deferThrottledMailQueueItem = `-- name: DeferThrottledMailQueueItem :execrows
+UPDATE mail_queue
+SET status          = 'pending',
+    throttles       = throttles + 1,
+    error           = $1::text,
+    next_attempt_at = NOW() + ($2::int * INTERVAL '1 second'),
+    claimed_at      = NULL,
+    claimed_by      = NULL
+WHERE id = $3
+  AND status = 'processing'
+  AND claimed_by = $4::text
+  AND claimed_at = $5::timestamptz
+`
+
+type DeferThrottledMailQueueItemParams struct {
+	Error        *string   `json:"error"`
+	DelaySeconds int       `json:"delay_seconds"`
+	ID           uuid.UUID `json:"id"`
+	ClaimedBy    string    `json:"claimed_by"`
+	ClaimedAt    time.Time `json:"claimed_at"`
+}
+
+// Puts a row the relay throttled back to pending, delay_seconds from now,
+// with its reply as the error and no attempt counted: the reply is about the
+// account's pace, not the recipient (duyuru-haber 05 G3). throttles counts
+// such replies: past maxRowThrottles the row's attempts count (bulk_guard.go).
+func (q *Queries) DeferThrottledMailQueueItem(ctx context.Context, arg DeferThrottledMailQueueItemParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deferThrottledMailQueueItem,
+		arg.Error,
+		arg.DelaySeconds,
+		arg.ID,
+		arg.ClaimedBy,
+		arg.ClaimedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteExpiredInboxItems = `-- name: DeleteExpiredInboxItems :execrows
@@ -2292,6 +2476,41 @@ func (q *Queries) GetDailySentCounts(ctx context.Context, arg GetDailySentCounts
 	return items, nil
 }
 
+const getHeldTasks = `-- name: GetHeldTasks :many
+SELECT id, (cancelled_at IS NOT NULL)::boolean AS cancelled
+FROM mail_tasks
+WHERE id = ANY ($1::uuid[])
+  AND (paused_at IS NOT NULL OR cancelled_at IS NOT NULL)
+`
+
+type GetHeldTasksRow struct {
+	ID        uuid.UUID `json:"id"`
+	Cancelled bool      `json:"cancelled"`
+}
+
+// Which of the sends of rows just taken are paused or cancelled: their rows
+// go back parked, or are written cancelled, instead of being sent (a retry
+// or an expired lease put one back after the pause or the cancel).
+func (q *Queries) GetHeldTasks(ctx context.Context, ids []uuid.UUID) ([]GetHeldTasksRow, error) {
+	rows, err := q.db.Query(ctx, getHeldTasks, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetHeldTasksRow
+	for rows.Next() {
+		var i GetHeldTasksRow
+		if err := rows.Scan(&i.ID, &i.Cancelled); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getMailApproval = `-- name: GetMailApproval :one
 SELECT a.id, a.submitter_sub, a.submitter_name, a.submitter_email, a.submitter_email_unverified, a.state, a.template_id, a.template_version_id, a.mail_list_id, a.body_variables, a.created_at, a.submitted_at, a.deadline_at, a.updated_at, a.tracking_requested, a.form_source_id, a.purpose, a.category, a.transactional_statement, a.commercial_content_absent, a.own_event_statement,
        t.name                             AS template_name,
@@ -2541,7 +2760,7 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 }
 
 const getMailTaskById = `-- name: GetMailTaskById :one
-SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id, mt.notification_id, mt.purpose, mt.category, mt.transactional_statement, mt.commercial_content_absent, mt.own_event_statement, mt.source_kind, mt.source_ref, mt.source_version, mt.source_snapshot, mt.source_audience, mt.source_counts, mt.self_test,
+SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id, mt.notification_id, mt.purpose, mt.category, mt.transactional_statement, mt.commercial_content_absent, mt.own_event_statement, mt.source_kind, mt.source_ref, mt.source_version, mt.source_snapshot, mt.source_audience, mt.source_counts, mt.self_test, mt.paused_at, mt.paused_reason, mt.paused_by, mt.send_failures, mt.cancelled_at, mt.cancelled_by,
        t.name  AS template_name,
        ml.name AS mail_list_name
 FROM mail_tasks mt
@@ -2583,6 +2802,12 @@ type GetMailTaskByIdRow struct {
 	SourceAudience          *string    `json:"source_audience"`
 	SourceCounts            []byte     `json:"source_counts"`
 	SelfTest                bool       `json:"self_test"`
+	PausedAt                *time.Time `json:"paused_at"`
+	PausedReason            *string    `json:"paused_reason"`
+	PausedBy                *string    `json:"paused_by"`
+	SendFailures            int        `json:"send_failures"`
+	CancelledAt             *time.Time `json:"cancelled_at"`
+	CancelledBy             *string    `json:"cancelled_by"`
 	TemplateName            *string    `json:"template_name"`
 	MailListName            *string    `json:"mail_list_name"`
 }
@@ -2623,8 +2848,55 @@ func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTas
 		&i.SourceAudience,
 		&i.SourceCounts,
 		&i.SelfTest,
+		&i.PausedAt,
+		&i.PausedReason,
+		&i.PausedBy,
+		&i.SendFailures,
+		&i.CancelledAt,
+		&i.CancelledBy,
 		&i.TemplateName,
 		&i.MailListName,
+	)
+	return i, err
+}
+
+const getMailTaskControl = `-- name: GetMailTaskControl :one
+SELECT mt.id,
+       mt.sent_by,
+       mt.paused_at,
+       mt.cancelled_at,
+       EXISTS (SELECT 1 FROM mail_queue q WHERE q.task_id = mt.id AND q.priority <= 0)::boolean AS bulk,
+       EXISTS (SELECT 1
+               FROM mail_queue q
+               WHERE q.task_id = mt.id
+                 AND q.status IN ('pending', 'processing'))::boolean AS unfinished
+FROM mail_tasks mt
+WHERE mt.id = $1
+    FOR UPDATE OF mt
+`
+
+type GetMailTaskControlRow struct {
+	ID          uuid.UUID  `json:"id"`
+	SentBy      string     `json:"sent_by"`
+	PausedAt    *time.Time `json:"paused_at"`
+	CancelledAt *time.Time `json:"cancelled_at"`
+	Bulk        bool       `json:"bulk"`
+	Unfinished  bool       `json:"unfinished"`
+}
+
+// What the task controls (pause, resume, cancel) need to know about a send:
+// whether it is one (bulk: its rows are in the bulk lane), who sent it, and
+// whether any of its rows are still to be sent.
+func (q *Queries) GetMailTaskControl(ctx context.Context, id uuid.UUID) (GetMailTaskControlRow, error) {
+	row := q.db.QueryRow(ctx, getMailTaskControl, id)
+	var i GetMailTaskControlRow
+	err := row.Scan(
+		&i.ID,
+		&i.SentBy,
+		&i.PausedAt,
+		&i.CancelledAt,
+		&i.Bulk,
+		&i.Unfinished,
 	)
 	return i, err
 }
@@ -3528,6 +3800,32 @@ func (q *Queries) GetUnsubscribedClaimedRows(ctx context.Context, arg GetUnsubsc
 	return items, nil
 }
 
+const holdBulkLane = `-- name: HoldBulkLane :one
+INSERT INTO mail_bulk_holds (id, held_until, reason, held_at)
+VALUES (TRUE, $1::timestamptz, $2::text, now())
+ON CONFLICT (id) DO UPDATE
+    SET held_until = GREATEST(mail_bulk_holds.held_until, EXCLUDED.held_until),
+        reason     = CASE
+                         WHEN EXCLUDED.held_until >= mail_bulk_holds.held_until THEN EXCLUDED.reason
+                         ELSE mail_bulk_holds.reason END,
+        held_at    = now()
+RETURNING held_until
+`
+
+type HoldBulkLaneParams struct {
+	HeldUntil time.Time `json:"held_until"`
+	Reason    string    `json:"reason"`
+}
+
+// Holds the bulk lane until held_until, or keeps the later hold already
+// written: every process's bulk lane reads it (duyuru-haber 05 G3).
+func (q *Queries) HoldBulkLane(ctx context.Context, arg HoldBulkLaneParams) (time.Time, error) {
+	row := q.db.QueryRow(ctx, holdBulkLane, arg.HeldUntil, arg.Reason)
+	var held_until time.Time
+	err := row.Scan(&held_until)
+	return held_until, err
+}
+
 const insertInboxItems = `-- name: InsertInboxItems :execrows
 INSERT INTO inbox_items (user_id, notification_id, notification_type, title, summary, link, expires_at)
 SELECT person, $1::uuid, $2::text, $3::text,
@@ -4380,7 +4678,11 @@ SELECT mt.id,
        mt.category,
        mt.transactional_statement,
        mt.commercial_content_absent,
-       mt.own_event_statement
+       mt.own_event_statement,
+       mt.paused_at,
+       mt.paused_reason,
+       mt.cancelled_at,
+       rc.cancelled
 FROM page
          JOIN mail_tasks mt ON mt.id = page.id
          LEFT JOIN templates t ON mt.template_id = t.id
@@ -4395,6 +4697,7 @@ FROM page
                                     count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'suppressed: unsubscribed') AS unsubscribed,
                                     count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: inactive') AS inactive,
                                     count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: ambiguous') AS ambiguous,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'cancelled') AS cancelled,
                                     count(*) FILTER (WHERE q.suppressed_but_sent) AS suppressed_but_sent,
                                     count(*) FILTER (WHERE EXISTS (SELECT 1
                                                                    FROM mail_bounces b
@@ -4460,6 +4763,10 @@ type ListMailTaskSendsRow struct {
 	TransactionalStatement  *bool      `json:"transactional_statement"`
 	CommercialContentAbsent *bool      `json:"commercial_content_absent"`
 	OwnEventStatement       *bool      `json:"own_event_statement"`
+	PausedAt                *time.Time `json:"paused_at"`
+	PausedReason            *string    `json:"paused_reason"`
+	CancelledAt             *time.Time `json:"cancelled_at"`
+	Cancelled               int64      `json:"cancelled"`
 }
 
 // A send as every screen shows it — the home screen, the send list and a
@@ -4521,6 +4828,10 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 			&i.TransactionalStatement,
 			&i.CommercialContentAbsent,
 			&i.OwnEventStatement,
+			&i.PausedAt,
+			&i.PausedReason,
+			&i.CancelledAt,
+			&i.Cancelled,
 		); err != nil {
 			return nil, err
 		}
@@ -5701,6 +6012,100 @@ func (q *Queries) MarkTrackingScannerBurst(ctx context.Context, arg MarkTracking
 	return err
 }
 
+const parkClaimedRows = `-- name: ParkClaimedRows :execrows
+UPDATE mail_queue q
+SET status          = 'pending',
+    claimed_at      = NULL,
+    claimed_by      = NULL,
+    next_attempt_at = CASE
+                          WHEN EXISTS (SELECT 1
+                                       FROM mail_tasks mt
+                                       WHERE mt.id = q.task_id
+                                         AND mt.paused_at IS NOT NULL
+                                         AND mt.cancelled_at IS NULL)
+                              THEN TIMESTAMPTZ '2999-01-01 00:00:00+00'
+                          ELSE NOW() END
+WHERE q.id = ANY ($1::uuid[])
+  AND q.status = 'processing'
+  AND q.claimed_by = $2::text
+`
+
+type ParkClaimedRowsParams struct {
+	Ids       []uuid.UUID `json:"ids"`
+	ClaimedBy string      `json:"claimed_by"`
+}
+
+// Puts rows this process took back, parked (their send is paused), nothing
+// tried and nothing counted. A row whose send was resumed since GetHeldTasks
+// read it goes back due at once instead. A resume committed while the take
+// is still open never sees these rows (they are 'processing' to it);
+// UnparkResumedRows finds them on the reaper's turn.
+func (q *Queries) ParkClaimedRows(ctx context.Context, arg ParkClaimedRowsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, parkClaimedRows, arg.Ids, arg.ClaimedBy)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const parkPendingRows = `-- name: ParkPendingRows :execrows
+UPDATE mail_queue
+SET next_attempt_at = TIMESTAMPTZ '2999-01-01 00:00:00+00'
+WHERE task_id = $1
+  AND status = 'pending'
+  AND EXISTS (SELECT 1
+              FROM mail_tasks mt
+              WHERE mt.id = $1
+                AND mt.paused_at IS NOT NULL
+                AND mt.cancelled_at IS NULL)
+`
+
+// Parks a paused send's pending rows: never due until it is resumed
+// (ResumeMailTask). For a send its failure rate paused. Runs after the pause
+// is committed: a send an operator resumed since is left as it is.
+func (q *Queries) ParkPendingRows(ctx context.Context, taskID uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, parkPendingRows, taskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const pauseMailTask = `-- name: PauseMailTask :execrows
+WITH parked AS (
+    UPDATE mail_queue
+        SET next_attempt_at = TIMESTAMPTZ '2999-01-01 00:00:00+00'
+        WHERE task_id = $2
+            AND status = 'pending'
+            AND EXISTS (SELECT 1
+                        FROM mail_tasks pt
+                        WHERE pt.id = $2
+                          AND pt.paused_at IS NULL
+                          AND pt.cancelled_at IS NULL))
+UPDATE mail_tasks mt
+SET paused_at     = now(),
+    paused_reason = 'operator',
+    paused_by     = $1::text
+WHERE mt.id = $2
+  AND mt.paused_at IS NULL
+  AND mt.cancelled_at IS NULL
+`
+
+type PauseMailTaskParams struct {
+	PausedBy string    `json:"paused_by"`
+	ID       uuid.UUID `json:"id"`
+}
+
+// Pauses a send by an operator; a paused send stays paused, as it was. Its
+// pending rows are parked: never due until it is resumed.
+func (q *Queries) PauseMailTask(ctx context.Context, arg PauseMailTaskParams) (int64, error) {
+	result, err := q.db.Exec(ctx, pauseMailTask, arg.PausedBy, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const processBulkQueueItems = `-- name: ProcessBulkQueueItems :many
 UPDATE mail_queue
 SET status     = 'processing',
@@ -5713,7 +6118,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref, preference_checked_at
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref, preference_checked_at, throttles
 `
 
 type ProcessBulkQueueItemsParams struct {
@@ -5723,7 +6128,10 @@ type ProcessBulkQueueItemsParams struct {
 
 // The same for the bulk lane (lists, groups, approved sends), which reads
 // idx_mail_queue_pending_bulk. The process asks for no more rows than the
-// send budget leaves room for (SendWindowCounts), under LockSendBudget.
+// send budget leaves room for (SendWindowCounts), under LockSendBudget. A
+// paused send's pending rows are parked (ParkPendingRows) and never due; a
+// row of a paused or cancelled send taken all the same is handed to
+// GetHeldTasks (mailer, bulk_guard.go).
 func (q *Queries) ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueueItemsParams) ([]MailQueue, error) {
 	rows, err := q.db.Query(ctx, processBulkQueueItems, arg.ClaimedBy, arg.MaxRows)
 	if err != nil {
@@ -5759,6 +6167,7 @@ func (q *Queries) ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueu
 			&i.ListUnsubscribeUrl,
 			&i.SourceRef,
 			&i.PreferenceCheckedAt,
+			&i.Throttles,
 		); err != nil {
 			return nil, err
 		}
@@ -5782,7 +6191,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref, preference_checked_at
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref, preference_checked_at, throttles
 `
 
 type ProcessSystemQueueItemsParams struct {
@@ -5832,6 +6241,7 @@ func (q *Queries) ProcessSystemQueueItems(ctx context.Context, arg ProcessSystem
 			&i.ListUnsubscribeUrl,
 			&i.SourceRef,
 			&i.PreferenceCheckedAt,
+			&i.Throttles,
 		); err != nil {
 			return nil, err
 		}
@@ -6660,6 +7070,38 @@ func (q *Queries) ResubmitMailApproval(ctx context.Context, arg ResubmitMailAppr
 	return i, err
 }
 
+const resumeMailTask = `-- name: ResumeMailTask :execrows
+WITH unparked AS (
+    UPDATE mail_queue
+        SET next_attempt_at = NOW()
+        WHERE task_id = $1
+            AND status = 'pending'
+            AND next_attempt_at >= TIMESTAMPTZ '2999-01-01 00:00:00+00'
+            AND EXISTS (SELECT 1
+                        FROM mail_tasks rt
+                        WHERE rt.id = $1
+                          AND rt.paused_at IS NOT NULL
+                          AND rt.cancelled_at IS NULL))
+UPDATE mail_tasks mt
+SET paused_at     = NULL,
+    paused_reason = NULL,
+    paused_by     = NULL,
+    send_failures = 0
+WHERE mt.id = $1
+  AND mt.paused_at IS NOT NULL
+  AND mt.cancelled_at IS NULL
+`
+
+// Resumes a paused send: its parked rows are due now, its failures so far
+// are accepted, the failure rate counts afresh.
+func (q *Queries) ResumeMailTask(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, resumeMailTask, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const sendWindowCounts = `-- name: SendWindowCounts :many
 SELECT span_seconds, starts_at, lane, taken
 FROM mail_send_windows
@@ -7320,6 +7762,29 @@ func (q *Queries) TrackingTaskAccess(ctx context.Context, id uuid.UUID) (Trackin
 		&i.SystemLane,
 	)
 	return i, err
+}
+
+const unparkResumedRows = `-- name: UnparkResumedRows :execrows
+UPDATE mail_queue q
+SET next_attempt_at = NOW()
+FROM mail_tasks mt
+WHERE mt.id = q.task_id
+  AND mt.paused_at IS NULL
+  AND mt.cancelled_at IS NULL
+  AND q.status = 'pending'
+  AND q.next_attempt_at >= TIMESTAMPTZ '2999-01-01 00:00:00+00'
+`
+
+// Puts back due the parked rows of sends that are neither paused nor
+// cancelled: rows a take parked while an operator resumed the send
+// (ParkClaimedRows), or a failure rate pause parked after the resume. The
+// reaper runs it each turn (duyuru-haber 05 G4).
+func (q *Queries) UnparkResumedRows(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, unparkResumedRows)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const unsubscribeExists = `-- name: UnsubscribeExists :one

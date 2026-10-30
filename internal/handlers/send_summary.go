@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
@@ -143,6 +145,8 @@ type QueueTotals struct {
 	SuppressedButSent int64 `json:"suppressed_but_sent"`
 	// Sent, then a delivery status notification said the address does not exist (in sent too).
 	Undelivered int64 `json:"undelivered"`
+	// Skipped, never sent: the send was cancelled while the recipient was still pending (in failed too).
+	Cancelled int64 `json:"cancelled"`
 }
 
 // SendCounts counts sends by their derived status. Each number equals the
@@ -202,10 +206,12 @@ type SendSummary struct {
 	// True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru) and a duyuru send its category, and the purpose picks the mailbox it goes out from. The send form shows its purpose, category and statements only then; while it is false they are ignored.
 	PurposeAvailable bool `json:"purpose_available"`
 	// True while SKYMAIL_LIST_CONSENT=on, as tracking-mode says it: the list send form shows the own event statement box.
-	ListConsentAvailable bool           `json:"list_consent_available"`
-	SendCounts           SendCounts     `json:"send_counts"`
-	DailySent            []DailySent    `json:"daily_sent"`
-	RecentSends          []MailTaskItem `json:"recent_sends"`
+	ListConsentAvailable bool `json:"list_consent_available"`
+	// Until when the bulk lane takes nothing because the relay throttled the account (SMTP 421, 432, 4.7.x; Graph 429, 503; SKYMAIL_THROTTLE_PAUSE): lists, groups and News sends wait, single mail goes. Null when not held.
+	BulkHeldUntil *time.Time     `json:"bulk_held_until"`
+	SendCounts    SendCounts     `json:"send_counts"`
+	DailySent     []DailySent    `json:"daily_sent"`
+	RecentSends   []MailTaskItem `json:"recent_sends"`
 }
 
 // TrackingMode is how SkyMail tracks a person's send: what the send form needs
@@ -290,6 +296,15 @@ func (h *mailHandlerImpl) GetSummary(c fiber.Ctx) error {
 		return err
 	}
 
+	var heldUntil *time.Time
+	hold, err := h.db.BulkLaneHeldUntil(c.Context())
+	switch {
+	case err == nil && hold.HeldUntil.After(h.now()):
+		heldUntil = &hold.HeldUntil
+	case err != nil && !errors.Is(err, pgx.ErrNoRows):
+		return err
+	}
+
 	return c.JSON(SendSummary{
 		TimeZone: summaryTimeZone,
 		QueueCounts: QueueCounts{
@@ -303,6 +318,7 @@ func (h *mailHandlerImpl) GetSummary(c fiber.Ctx) error {
 		TrackingAlways:       h.mailer.OperatorTrackingAlways(),
 		PurposeAvailable:     h.mailer.PurposeAvailable(),
 		ListConsentAvailable: h.mailer.ListConsentAvailable(),
+		BulkHeldUntil:        heldUntil,
 		SendCounts: SendCounts{
 			Failed:  sendCounts.Failed,
 			Sending: sendCounts.Sending,
@@ -357,6 +373,9 @@ func (h *mailHandlerImpl) mailTaskItems(ctx context.Context, caller contentCalle
 				CommercialContentAbsent: send.CommercialContentAbsent,
 				OwnEventStatement:       send.OwnEventStatement,
 			},
+			PausedAt:     send.PausedAt,
+			PausedReason: send.PausedReason,
+			CancelledAt:  send.CancelledAt,
 		}
 	}
 	return items
@@ -377,6 +396,7 @@ func recipientCounts(send database.ListMailTaskSendsRow) QueueTotals {
 		Ambiguous:         send.Ambiguous,
 		SuppressedButSent: send.SuppressedButSent,
 		Undelivered:       send.Undelivered,
+		Cancelled:         send.Cancelled,
 	}
 }
 
