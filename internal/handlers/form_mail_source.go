@@ -327,7 +327,7 @@ func (h *mailHandlerImpl) CreateFormSource(c fiber.Ctx) error {
 		unnamed = 0
 		for i, r := range to {
 			emails[i], names[i] = r.Email, r.FullName
-			if strings.TrimSpace(r.FullName) == "" {
+			if !mailer.HasRecipientName(r.FullName) {
 				unnamed++
 			}
 		}
@@ -371,11 +371,17 @@ func (h *mailHandlerImpl) GetFormSource(c fiber.Ctx) error {
 	if !h.now().Before(source.ExpiresAt) {
 		return errFormSourceExpired
 	}
-	unnamed, err := h.db.CountUnnamedMailFormSourceRecipients(c.Context(), source.ID)
+	names, err := h.db.ListMailFormSourceRecipientNames(c.Context(), source.ID)
 	if err != nil {
 		return err
 	}
-	return c.JSON(formSourceDescriptor(source, int(unnamed)))
+	unnamed := 0
+	for _, name := range names {
+		if !mailer.HasRecipientName(name) {
+			unnamed++
+		}
+	}
+	return c.JSON(formSourceDescriptor(source, unnamed))
 }
 
 // SendFormSource godoc

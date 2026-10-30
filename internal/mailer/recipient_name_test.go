@@ -207,6 +207,24 @@ func TestOnlyTheSubjectsAndTheMarkupsVariablesAreFilled(t *testing.T) {
 	}
 }
 
+// A service mail prints no markup: its subject's variables (a form's title,
+// what a respondent wrote) are as before, a tag in them text. The tags are a
+// free announcement's (and a news send's), whose body is markup.
+func TestATemplateWithoutMarkupFillsNothing(t *testing.T) {
+	fields := nameFieldsOf(`{{.FormTitle}} yanıtın`, `<p>{{.FormTitle}}</p><p>{{.Answer}}</p>`)
+	if len(fields.markup) != 0 || len(fields.plain) != 0 {
+		t.Errorf("fields = %+v, want none", fields)
+	}
+	out, err := Render(`{{.FormTitle}} yanıtın`, `{{.FormTitle}}`, `<p>{{.FormTitle}}</p>`,
+		[]byte(`{"FormTitle":"{{.FullName}} anketi"}`), RecipientInfo{FullName: "Ali", Email: "ali@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Subject != "{{.FullName}} anketi yanıtın" {
+		t.Errorf("subject = %q", out.Subject)
+	}
+}
+
 // Masking renders a sent mail again and trusts it only when it gives back
 // exactly the mail that went: the name filled at sending is filled again.
 func TestAMaskedFreeAnnouncementRendersAgainWithTheName(t *testing.T) {

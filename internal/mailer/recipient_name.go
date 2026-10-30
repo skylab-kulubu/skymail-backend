@@ -36,8 +36,10 @@ import (
 // which its preheader prints too) and those printed as markup through
 // safeHTML (free.basic's BodyHtml). In markup only in text — the name is
 // escaped, and never reaches a link's address, so the links every recipient
-// gets alike stay alike (linksSendLevel's probes). A recipient's own
-// variables, the template's own text and every other variable are as before.
+// gets alike stay alike (linksSendLevel's probes). Only in a template that
+// prints markup: a service mail's subject variables are as before. A
+// recipient's own variables, the template's own text and every other
+// variable are as before.
 //
 // The name is the one the row already carries (mail_queue.recipient_full_name),
 // its runs of white space and control characters made one space. No first
@@ -54,6 +56,11 @@ const recipientNameMarker = ".FullName"
 func recipientName(fullName string) string {
 	return strings.Join(strings.FieldsFunc(fullName, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }), " ")
 }
+
+// HasRecipientName is whether a recipient's full name prints as a name: one
+// of only white space and control characters is none, and a tag prints its
+// fallback for it. A Forms audience counts its unnamed respondents with it.
+func HasRecipientName(fullName string) bool { return recipientName(fullName) != "" }
 
 // fillRecipientName fills the tags in text with name (recipientName), or
 // each tag's fallback when name is empty.
@@ -115,11 +122,16 @@ type nameFields struct {
 }
 
 // nameFieldsOf reads them from a template's subject and HTML, both of which
-// have parsed already.
+// have parsed already. A template that prints no markup — a service mail,
+// whose subject may print a form's title or what a respondent wrote — has
+// none: the tags are a free announcement's (and a news send's).
 func nameFieldsOf(subject, html string) nameFields {
 	fields := nameFields{markup: map[string]bool{}, plain: map[string]bool{}}
 	if tmpl, err := textt.New("html").Funcs(htmlFuncs).Parse(html); err == nil && tmpl.Tree != nil {
 		markupFields(tmpl.Tree.Root, fields.markup)
+	}
+	if len(fields.markup) == 0 {
+		return fields
 	}
 	if names, err := ReferencedVariables(subject); err == nil {
 		for _, name := range names {

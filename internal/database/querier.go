@@ -105,9 +105,6 @@ type Querier interface {
 	CountTemplateContentSensitiveEvents(ctx context.Context, templateID uuid.UUID) (int64, error)
 	CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error)
 	CountTemplates(ctx context.Context) (int64, error)
-	// The respondents a send greets without a name (a recipient name tag prints
-	// its fallback, or nothing, for them).
-	CountUnnamedMailFormSourceRecipients(ctx context.Context, sourceID uuid.UUID) (int, error)
 	CountUnsubscribeReactivations(ctx context.Context) (int64, error)
 	// A recipient whose mail did not render, say a template that slices an empty
 	// full name, is written failed, with the render error the send's page shows:
@@ -354,6 +351,10 @@ type Querier interface {
 	// state it is in as of as_of: one undecided past its deadline is expired,
 	// whether or not the sweep has written it yet.
 	ListMailApprovals(ctx context.Context, arg ListMailApprovalsParams) ([]ListMailApprovalsRow, error)
+	// The respondents' names, to count those a send greets without one (a
+	// recipient name tag prints its fallback, or nothing, for them) by the
+	// mailer's own rule (mailer.HasRecipientName), not SQL's idea of white space.
+	ListMailFormSourceRecipientNames(ctx context.Context, sourceID uuid.UUID) ([]string, error)
 	ListMailFormSourceRecipients(ctx context.Context, sourceID uuid.UUID) ([]MailFormSourceRecipient, error)
 	// The links a tracked row's mail gets its click addresses for when it goes
 	// out: the send's links whose address is still kept.

@@ -1042,19 +1042,6 @@ func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
 	return count, err
 }
 
-const countUnnamedMailFormSourceRecipients = `-- name: CountUnnamedMailFormSourceRecipients :one
-SELECT count(*)::int FROM mail_form_source_recipients WHERE source_id=$1 AND btrim(full_name)=''
-`
-
-// The respondents a send greets without a name (a recipient name tag prints
-// its fallback, or nothing, for them).
-func (q *Queries) CountUnnamedMailFormSourceRecipients(ctx context.Context, sourceID uuid.UUID) (int, error) {
-	row := q.db.QueryRow(ctx, countUnnamedMailFormSourceRecipients, sourceID)
-	var column_1 int
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const countUnsubscribeReactivations = `-- name: CountUnsubscribeReactivations :one
 SELECT count(*)
 FROM mail_unsubscribe_reactivations
@@ -4281,6 +4268,33 @@ func (q *Queries) ListMailApprovals(ctx context.Context, arg ListMailApprovalsPa
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMailFormSourceRecipientNames = `-- name: ListMailFormSourceRecipientNames :many
+SELECT full_name FROM mail_form_source_recipients WHERE source_id=$1
+`
+
+// The respondents' names, to count those a send greets without one (a
+// recipient name tag prints its fallback, or nothing, for them) by the
+// mailer's own rule (mailer.HasRecipientName), not SQL's idea of white space.
+func (q *Queries) ListMailFormSourceRecipientNames(ctx context.Context, sourceID uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, listMailFormSourceRecipientNames, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var full_name string
+		if err := rows.Scan(&full_name); err != nil {
+			return nil, err
+		}
+		items = append(items, full_name)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

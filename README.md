@@ -1749,9 +1749,12 @@ aynı ifadeye verdiği anlamla aynıdır.
 - **Nerede:** şablonun konusunun bastığı gönderim değişkenlerinde (free.basic:
   `Subject`; ön başlık da onu basar) ve `safeHTML` ile basılanlarda
   (free.basic: `BodyHtml`). Gövdede yalnız metinde, ad HTML kaçışlı;
-  öznitelikte, dolayısıyla bağlantı adresinde asla. Alıcının kendi
-  değişkenleri (Haber gönderiminin `AudienceReason`'ı gibi), şablonun kendi
-  metni ve öteki değişkenler değişmez.
+  öznitelikte, dolayısıyla bağlantı adresinde asla. Yalnız `safeHTML` ile
+  markup basan şablonlarda (free.basic, Haber); markup basmayan şablonda
+  (servis postaları: konuları form başlığı ya da yanıtlayanın yazdığını
+  basabilir) hiçbir değişken dolmaz. Alıcının kendi değişkenleri (Haber
+  gönderiminin `AudienceReason`'ı gibi), şablonun kendi metni ve öteki
+  değişkenler değişmez.
 - **Ad:** satırın `recipient_full_name`'i; boşluk ve denetim karakteri
   dizileri tek boşluk, baş ve sonu kırpılmış. İlk ad türetilmez: satırda
   yalnız tam ad var; iki göbek adlı Türkçe adın hangisinin ilk ad olduğu

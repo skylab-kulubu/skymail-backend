@@ -459,16 +459,19 @@ func TestFormSourceIntegrationLegacyManualConstraintAndExpiry(t *testing.T) {
 // A free announcement to a Forms audience greets each respondent by name,
 // the fallback standing in for a respondent without one, and the descriptor
 // says how many have none (hub ticket skymail-serbest-duyuru-alici-adi 01).
+// A name of only white space or control characters is none, as the mailer
+// reads it, when the source is prepared and when it is read.
 func TestFormSourceIntegrationGreetsEachRespondentByName(t *testing.T) {
 	w := newFormSourceWorld(t)
-	prepared := sourceRequest("source-sender", 3)
+	prepared := sourceRequest("source-sender", 4)
 	prepared.Recipients[1].FullName = "  "
+	prepared.Recipients[3].FullName = "\t\u2003\u00a0\u0007"
 	var source handlers.FormMailSource
-	if status, _ := w.call("yusuf", http.MethodPost, "/v1/form_mail_sources", prepared, &source); status != 201 || source.UnnamedCount != 1 {
+	if status, _ := w.call("yusuf", http.MethodPost, "/v1/form_mail_sources", prepared, &source); status != 201 || source.UnnamedCount != 2 {
 		t.Fatalf("prepare status=%d unnamed=%d", status, source.UnnamedCount)
 	}
 	var read handlers.FormMailSource
-	if status, _ := w.call("source-sender", http.MethodGet, "/v1/form_mail_sources/"+source.ID.String(), nil, &read); status != 200 || read.UnnamedCount != 1 {
+	if status, _ := w.call("source-sender", http.MethodGet, "/v1/form_mail_sources/"+source.ID.String(), nil, &read); status != 200 || read.UnnamedCount != 2 {
 		t.Fatalf("read status=%d unnamed=%d", status, read.UnnamedCount)
 	}
 
@@ -488,5 +491,8 @@ func TestFormSourceIntegrationGreetsEachRespondentByName(t *testing.T) {
 	}
 	if unnamed.BodyHtml == nil || !strings.Contains(*unnamed.BodyHtml, "<p>Merhaba , {{.Email}}</p>") {
 		t.Fatal("an empty name does not print nothing")
+	}
+	if blank := rows["source-3@example.invalid"]; blank.Subject != "Sayın katılımcı" {
+		t.Fatalf("a name of white space and control characters is not none: %q", blank.Subject)
 	}
 }
