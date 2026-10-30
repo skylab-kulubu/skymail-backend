@@ -619,6 +619,7 @@ func (m *mailerImpl) startReaper(ctx context.Context) {
 			m.reclaimExpired(ctx)
 			m.pruneSendWindows(ctx)
 			m.sweepCancelled(ctx)
+			m.unparkResumed(ctx)
 		}
 	}
 }

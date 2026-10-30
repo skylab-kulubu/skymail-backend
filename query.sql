@@ -723,10 +723,12 @@ RETURNING held_until;
 
 -- Puts a row the relay throttled back to pending, delay_seconds from now,
 -- with its reply as the error and no attempt counted: the reply is about the
--- account's pace, not the recipient (duyuru-haber 05 G3).
+-- account's pace, not the recipient (duyuru-haber 05 G3). throttles counts
+-- such replies: past maxRowThrottles the row's attempts count (bulk_guard.go).
 -- name: DeferThrottledMailQueueItem :execrows
 UPDATE mail_queue
 SET status          = 'pending',
+    throttles       = throttles + 1,
     error           = sqlc.narg(error)::text,
     next_attempt_at = NOW() + (sqlc.arg(delay_seconds)::int * INTERVAL '1 second'),
     claimed_at      = NULL,
@@ -738,10 +740,11 @@ WHERE id = sqlc.arg(id)
 
 -- Counts one recipient of a send that failed for good at the relay, and
 -- pauses the send ('failure_rate') once at least min_failures of its
--- recipients failed so and they are at least min_percent of those the relay
--- answered for good (sent or failed so) since it was queued or last resumed.
--- min_failures 0 counts without ever pausing. A cancelled or already paused
--- send is counted and left as it is.
+-- recipients failed so since it was queued or last resumed, and they are at
+-- least min_percent of those the relay answered for good: those failures
+-- plus every recipient sent since it was queued (a resume clears the
+-- failures, not the sent). min_failures 0 counts without ever pausing. A
+-- cancelled or already paused send is counted and left as it is.
 -- name: CountTaskSendFailure :one
 UPDATE mail_tasks mt
 SET send_failures = mt.send_failures + 1,
@@ -837,12 +840,18 @@ WHERE id = sqlc.arg(id)
   AND cancelled_at IS NULL;
 
 -- Parks a paused send's pending rows: never due until it is resumed
--- (ResumeMailTask). For a send its failure rate paused.
+-- (ResumeMailTask). For a send its failure rate paused. Runs after the pause
+-- is committed: a send an operator resumed since is left as it is.
 -- name: ParkPendingRows :execrows
 UPDATE mail_queue
 SET next_attempt_at = TIMESTAMPTZ '2999-01-01 00:00:00+00'
 WHERE task_id = sqlc.arg(task_id)
-  AND status = 'pending';
+  AND status = 'pending'
+  AND EXISTS (SELECT 1
+              FROM mail_tasks mt
+              WHERE mt.id = sqlc.arg(task_id)
+                AND mt.paused_at IS NOT NULL
+                AND mt.cancelled_at IS NULL);
 
 -- Which of the sends of rows just taken are paused or cancelled: their rows
 -- go back parked, or are written cancelled, instead of being sent (a retry
@@ -854,16 +863,40 @@ WHERE id = ANY (sqlc.arg(ids)::uuid[])
   AND (paused_at IS NOT NULL OR cancelled_at IS NOT NULL);
 
 -- Puts rows this process took back, parked (their send is paused), nothing
--- tried and nothing counted.
+-- tried and nothing counted. A row whose send was resumed since GetHeldTasks
+-- read it goes back due at once instead. A resume committed while the take
+-- is still open never sees these rows (they are 'processing' to it);
+-- UnparkResumedRows finds them on the reaper's turn.
 -- name: ParkClaimedRows :execrows
-UPDATE mail_queue
+UPDATE mail_queue q
 SET status          = 'pending',
     claimed_at      = NULL,
     claimed_by      = NULL,
-    next_attempt_at = TIMESTAMPTZ '2999-01-01 00:00:00+00'
-WHERE id = ANY (sqlc.arg(ids)::uuid[])
-  AND status = 'processing'
-  AND claimed_by = sqlc.arg(claimed_by)::text;
+    next_attempt_at = CASE
+                          WHEN EXISTS (SELECT 1
+                                       FROM mail_tasks mt
+                                       WHERE mt.id = q.task_id
+                                         AND mt.paused_at IS NOT NULL
+                                         AND mt.cancelled_at IS NULL)
+                              THEN TIMESTAMPTZ '2999-01-01 00:00:00+00'
+                          ELSE NOW() END
+WHERE q.id = ANY (sqlc.arg(ids)::uuid[])
+  AND q.status = 'processing'
+  AND q.claimed_by = sqlc.arg(claimed_by)::text;
+
+-- Puts back due the parked rows of sends that are neither paused nor
+-- cancelled: rows a take parked while an operator resumed the send
+-- (ParkClaimedRows), or a failure rate pause parked after the resume. The
+-- reaper runs it each turn (duyuru-haber 05 G4).
+-- name: UnparkResumedRows :execrows
+UPDATE mail_queue q
+SET next_attempt_at = NOW()
+FROM mail_tasks mt
+WHERE mt.id = q.task_id
+  AND mt.paused_at IS NULL
+  AND mt.cancelled_at IS NULL
+  AND q.status = 'pending'
+  AND q.next_attempt_at >= TIMESTAMPTZ '2999-01-01 00:00:00+00';
 
 -- Writes rows this process took failed with 'cancelled' (their send was
 -- cancelled), nothing tried.

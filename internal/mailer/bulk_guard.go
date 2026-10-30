@@ -40,6 +40,13 @@ const (
 	// maxThrottlePause bounds SKYMAIL_THROTTLE_PAUSE: past an hour a throttled
 	// account is a matter for an operator, not for waiting.
 	maxThrottlePause = time.Hour
+
+	// maxRowThrottles is how many throttling replies a bulk row may have with
+	// no attempt counted (mail_queue.throttles). Its next one is retried as
+	// any other failure and holds nothing: a relay answering one recipient
+	// 4.7.x for good fails that row in the end, and never holds the bulk lane
+	// every few minutes for ever.
+	maxRowThrottles = 5
 )
 
 // BulkGuard is the bulk lane's guards. The zero value guards nothing: a
@@ -151,9 +158,16 @@ func (m *mailerImpl) bulkLaneHeld(ctx context.Context, q *database.Queries, at t
 // deferThrottled handles a throttling reply to job: it holds the bulk lane
 // and, for a bulk row, puts it back to pending until the hold runs out, with
 // no attempt counted, and says it did. A system row is left to the usual
-// retry (false).
+// retry (false), and so is a bulk row throttled maxRowThrottles times already,
+// which holds nothing.
 func (m *mailerImpl) deferThrottled(ctx context.Context, logger *zerolog.Logger, job database.MailQueue, sendErr error) bool {
 	if m.guard.ThrottlePause <= 0 || !throttled(sendErr) {
+		return false
+	}
+	bulk := Priority(job.Priority) <= PriorityBulk
+	if bulk && job.Throttles >= maxRowThrottles {
+		logger.Warn().Str("job_id", job.ID.String()).Int("throttles", job.Throttles).
+			Msg("Row throttled too many times: retried as any other failure, the bulk lane not held")
 		return false
 	}
 	delay := m.guard.ThrottlePause
@@ -163,7 +177,7 @@ func (m *mailerImpl) deferThrottled(ctx context.Context, logger *zerolog.Logger,
 	}
 	reason := sendErr.Error()
 	m.holdBulkLane(ctx, logger, delay, reason)
-	if Priority(job.Priority) > PriorityBulk {
+	if !bulk {
 		return false
 	}
 	n, err := m.db.DeferThrottledMailQueueItem(ctx, database.DeferThrottledMailQueueItemParams{
@@ -221,6 +235,21 @@ func (m *mailerImpl) sweepCancelled(ctx context.Context) {
 	}
 	if n > 0 {
 		m.logger.Info().Int64("count", n).Msg("Cancelled sends' rows put back since written cancelled")
+	}
+}
+
+// unparkResumed puts back due the parked rows of sends neither paused nor
+// cancelled: a take that read a send paused can park its rows after an
+// operator resumed it, and a failure rate pause can park them after the
+// resume. Nothing else would ever take them.
+func (m *mailerImpl) unparkResumed(ctx context.Context) {
+	n, err := m.db.UnparkResumedRows(ctx)
+	if err != nil {
+		m.logger.Err(err).Msg("Failed to put back the parked rows of resumed sends")
+		return
+	}
+	if n > 0 {
+		m.logger.Info().Int64("count", n).Msg("Parked rows of sends no longer paused put back due")
 	}
 }
 

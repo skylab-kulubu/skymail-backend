@@ -451,3 +451,239 @@ func TestPauseAndCancelTouchTheRightRows(t *testing.T) {
 		t.Fatalf("ResumeMailTask on a cancelled send = %d, %v; want 0", n, err)
 	}
 }
+
+func throttlesOf(t *testing.T, db *database.Store, id uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := db.Conn.QueryRow(context.Background(), `SELECT throttles FROM mail_queue WHERE id = $1`, id).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// takeAgain makes row due and runs turns until one takes it.
+func takeAgain(t *testing.T, ctx context.Context, db *database.Store, m mailer.Transactional, id uuid.UUID) database.MailQueue {
+	t.Helper()
+	if _, err := db.Conn.Exec(ctx, `UPDATE mail_queue SET next_attempt_at = now() - interval '1 minute' WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		for _, job := range bulkOf(mailer.Turn(ctx, m)) {
+			if job.ID == id {
+				return job
+			}
+		}
+	}
+	t.Fatal("no turn took the row again")
+	return database.MailQueue{}
+}
+
+// A relay answering one list recipient 4.7.1 every time (a policy reply about
+// that recipient, not the account's pace): the row goes back with no attempt
+// counted MaxRowThrottles times, each holding the bulk lane. The next reply
+// counts its attempt, as any other failure would, and holds nothing.
+func TestARowThrottledPastItsLimitCountsItsAttempt(t *testing.T) {
+	captureMailerLogs(t)
+	db := laneQueue(t, 30)
+	clock := newTestClock()
+	ctx := context.Background()
+	var stuck uuid.UUID
+	deliver := func(_ context.Context, job database.MailQueue) error {
+		if job.ID == stuck {
+			return mailer.SMTPReply("RCPT TO", 450, "4.7.1")
+		}
+		return nil
+	}
+	m := guarded(t, db, mailer.BulkGuard{ThrottlePause: 5 * time.Minute}, mailer.RateBudget{}, clock, 3, deliver)
+	enqueueList(t, m)
+	taken := bulkOf(mailer.Turn(ctx, m))
+	if len(taken) == 0 {
+		t.Fatal("the first turn took no bulk row")
+	}
+	job := taken[0]
+	stuck = job.ID
+	for i := 1; i <= mailer.MaxRowThrottles; i++ {
+		if err := mailer.SendRow(ctx, m, job); err != nil {
+			t.Fatal(err)
+		}
+		if row := guardRowOf(t, db, stuck); row.Status != "pending" || row.Attempts != 0 {
+			t.Fatalf("after throttling reply %d the row is %+v, want pending with no attempt counted", i, row)
+		}
+		if n := throttlesOf(t, db, stuck); n != i {
+			t.Fatalf("after throttling reply %d the row counts %d", i, n)
+		}
+		if _, bulk := byLane(mailer.Turn(ctx, m)); bulk != 0 {
+			t.Fatalf("after throttling reply %d the bulk lane took %d rows, want none (held)", i, bulk)
+		}
+		clock.advance(6 * time.Minute)
+		job = takeAgain(t, ctx, db, m, stuck)
+	}
+
+	if err := mailer.SendRow(ctx, m, job); err != nil {
+		t.Fatal(err)
+	}
+	if row := guardRowOf(t, db, stuck); row.Status != "pending" || row.Attempts != 1 {
+		t.Fatalf("past the limit the throttled row is %+v, want pending with its attempt counted", row)
+	}
+	if n := throttlesOf(t, db, stuck); n != mailer.MaxRowThrottles {
+		t.Fatalf("past the limit the row counts %d throttling replies, want %d", n, mailer.MaxRowThrottles)
+	}
+	if _, bulk := byLane(mailer.Turn(ctx, m)); bulk == 0 {
+		t.Fatal("past the limit the reply held the bulk lane all the same")
+	}
+}
+
+func parkedRows(t *testing.T, db *database.Store, task uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := db.Conn.QueryRow(context.Background(),
+		`SELECT count(*) FROM mail_queue WHERE task_id = $1 AND status = 'pending' AND next_attempt_at >= '2999-01-01'`, task,
+	).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// The failure rate pauses a send and an operator resumes it before the
+// pause's park runs (it runs after the count is committed): the park leaves
+// the resumed send's rows due. Paused again, the park parks them.
+func TestAFailureRateParkAfterTheResumeParksNothing(t *testing.T) {
+	captureMailerLogs(t)
+	db := laneQueue(t, 5)
+	ctx := context.Background()
+	m := guarded(t, db, mailer.BulkGuard{FailureCount: 1, FailurePercent: 1}, mailer.RateBudget{}, newTestClock(), 3, nil)
+	task := enqueueList(t, m)
+	pause := database.CountTaskSendFailureParams{TaskID: task, MinFailures: 1, MinPercent: 1}
+
+	if counted, err := db.CountTaskSendFailure(ctx, pause); err != nil || !counted.Paused {
+		t.Fatalf("CountTaskSendFailure = %+v, %v; want paused", counted, err)
+	}
+	if n, err := db.ResumeMailTask(ctx, task); err != nil || n != 1 {
+		t.Fatalf("ResumeMailTask = %d, %v", n, err)
+	}
+	if n, err := db.ParkPendingRows(ctx, task); err != nil || n != 0 {
+		t.Fatalf("ParkPendingRows after the resume = %d, %v; want 0", n, err)
+	}
+	if n := parkedRows(t, db, task); n != 0 {
+		t.Fatalf("%d rows of the resumed send are parked, want none", n)
+	}
+
+	if counted, err := db.CountTaskSendFailure(ctx, pause); err != nil || !counted.Paused {
+		t.Fatalf("CountTaskSendFailure again = %+v, %v; want paused", counted, err)
+	}
+	if n, err := db.ParkPendingRows(ctx, task); err != nil || n != 5 {
+		t.Fatalf("ParkPendingRows while paused = %d, %v; want 5", n, err)
+	}
+}
+
+// A take reads a send paused and parks the row a retry put back due; an
+// operator resumes the send before the take commits. The resume cannot see
+// that row (to it the row is still being taken), so the take's commit leaves
+// it parked under a send no longer paused. The reaper's turn puts it back due
+// and the next turn takes it.
+func TestARowParkedAsItsSendIsResumedIsPutBackByTheReaper(t *testing.T) {
+	captureMailerLogs(t)
+	db := laneQueue(t, 5)
+	ctx := context.Background()
+	m := guarded(t, db, mailer.BulkGuard{ThrottlePause: 5 * time.Minute, FailureCount: 10, FailurePercent: 10}, mailer.RateBudget{}, newTestClock(), 3, nil)
+	task := enqueueList(t, m)
+	if n, err := db.PauseMailTask(ctx, database.PauseMailTaskParams{ID: task, PausedBy: laneSender}); err != nil || n != 1 {
+		t.Fatalf("PauseMailTask = %d, %v", n, err)
+	}
+	var retried uuid.UUID
+	if err := db.Conn.QueryRow(ctx, `UPDATE mail_queue SET next_attempt_at = now() - interval '1 minute'
+		WHERE id = (SELECT id FROM mail_queue WHERE task_id = $1 LIMIT 1) RETURNING id`, task).Scan(&retried); err != nil {
+		t.Fatal(err)
+	}
+
+	err := db.InTx(ctx, func(q *database.Queries) error {
+		rows, err := q.ProcessBulkQueueItems(ctx, database.ProcessBulkQueueItemsParams{ClaimedBy: mailer.Claimant(m), MaxRows: 5})
+		if err != nil {
+			return err
+		}
+		if len(rows) != 1 || rows[0].ID != retried {
+			t.Fatalf("the take took %d rows, want the retried one", len(rows))
+		}
+		kept, err := mailer.SkipHeldTasks(ctx, m, q, rows)
+		if err != nil {
+			return err
+		}
+		if len(kept) != 0 {
+			t.Fatal("the take kept a row of the paused send")
+		}
+		// The operator resumes the send now, on another connection.
+		if n, err := db.ResumeMailTask(ctx, task); err != nil || n != 1 {
+			t.Fatalf("ResumeMailTask during the take = %d, %v", n, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := parkedRows(t, db, task); n != 1 {
+		t.Fatalf("after the take %d rows of the resumed send are parked, want the retried one", n)
+	}
+
+	mailer.UnparkResumed(ctx, m)
+	if n := parkedRows(t, db, task); n != 0 {
+		t.Fatalf("after the reaper's turn %d rows of the resumed send are parked, want none", n)
+	}
+	found := false
+	for range 3 {
+		for _, job := range bulkOf(mailer.Turn(ctx, m)) {
+			if job.ID == retried {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the row put back due is not taken")
+	}
+}
+
+// A take hands back a row of a send that is no longer paused (resumed after
+// the take read it paused): the row goes back due at once, not parked. The
+// reaper leaves a paused send's parked rows parked.
+func TestParkClaimedRowsParksOnlyWhileTheSendIsPaused(t *testing.T) {
+	captureMailerLogs(t)
+	db := laneQueue(t, 5)
+	ctx := context.Background()
+	m := guarded(t, db, mailer.BulkGuard{}, mailer.RateBudget{}, newTestClock(), 3, nil)
+	paused := enqueueList(t, m)
+	running := enqueueList(t, m)
+	if n, err := db.PauseMailTask(ctx, database.PauseMailTaskParams{ID: paused, PausedBy: laneSender}); err != nil || n != 1 {
+		t.Fatalf("PauseMailTask = %d, %v", n, err)
+	}
+	var ids []uuid.UUID
+	rows, err := db.Conn.Query(ctx, `
+		UPDATE mail_queue SET status = 'processing', claimed_by = $3, claimed_at = now()
+		WHERE id IN ((SELECT id FROM mail_queue WHERE task_id = $1 AND status = 'pending' LIMIT 1),
+		             (SELECT id FROM mail_queue WHERE task_id = $2 AND status = 'pending' LIMIT 1))
+		RETURNING id`, paused, running, mailer.Claimant(m))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if rows.Err() != nil || len(ids) != 2 {
+		t.Fatalf("claimed %d rows, %v", len(ids), rows.Err())
+	}
+	if n, err := db.ParkClaimedRows(ctx, database.ParkClaimedRowsParams{Ids: ids, ClaimedBy: mailer.Claimant(m)}); err != nil || n != 2 {
+		t.Fatalf("ParkClaimedRows = %d, %v", n, err)
+	}
+	if n := parkedRows(t, db, paused); n != 5 {
+		t.Fatalf("%d of the paused send's 5 rows are parked", n)
+	}
+	if n := parkedRows(t, db, running); n != 0 {
+		t.Fatalf("%d rows of the send not paused are parked, want none", n)
+	}
+	mailer.UnparkResumed(ctx, m)
+	if n := parkedRows(t, db, paused); n != 5 {
+		t.Fatalf("after the reaper's turn %d of the paused send's 5 rows are parked", n)
+	}
+}

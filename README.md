@@ -1124,6 +1124,11 @@ herhangi bir `4.7.x`; Graph `429` ya da `503`):
 - Yanıtı alan toplu satır `pending`'e döner, bekleme bitince yeniden denenir.
   **Deneme sayılmaz**: yanıt alıcıyla değil hesabın hızıyla ilgilidir. Hata
   sütununda yanıt kodu durur.
+- Bir satır en çok 5 kısma yanıtını deneme saymadan geçirir
+  (`mail_queue.throttles`). Sonrakinde olağan hata yoluna düşer: denemesi
+  sayılır, şerit bekletilmez. Röle tek bir alıcıya kalıcı olarak `4.7.x`
+  dönerse o satır sonunda başarısız olur, toplu şeridi her 5 dakikada bir
+  sonsuza dek tutmaz.
 - Sistem şeridi beklemeyi okumaz: giriş kodu gitmeye devam eder. Kısma yanıtı
   alan sistem satırı bugünkü gibi denemesini sayarak yeniden denenir, ama toplu
   şeridi o da bekletir.
@@ -1164,6 +1169,14 @@ Atlananlar (tercih, bastırma, rıza, ayrılmış alan adı, iptal) sayılmaz.
   ya da iptalden sonra bir yeniden deneme ya da dolan kira bir satırı yeniden
   vadesine getirirse alma turu onu işçiye vermez: duraklatılmışsa yeniden park
   eder, iptal edilmişse `cancelled` yazar.
+- Park yalnız gönderim hâlâ duraklatılmışken yapılır. Sürdürme, satırı
+  duraklatılmış okuyan bir alma turuyla aynı anda olursa satır park edilmiş
+  kalabilir (sürdürme o an satırı göremez). Temizleyici (reaper) her turda
+  duraklatılmamış ve iptal edilmemiş gönderimin park edilmiş satırlarını
+  `now()`'a döndürür.
+- Geri dönüş: göçün down'ı park edilmiş satırları `now()`'a döndürür. Yalnız
+  imaj geri alınacaksa önce duraklatılmış gönderimleri sürdürün: eski imajda
+  sürdürme ucu yok.
 - Eski imaj (yayın sırasında start-first) duraklatılmış gönderimin park
   edilmemiş satırlarını almaya devam edebilir; yeni imaj açılınca durur.
 

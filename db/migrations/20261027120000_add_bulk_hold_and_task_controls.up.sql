@@ -15,6 +15,10 @@
 --   mail_tasks.send_failures: how many of the send's recipients failed for
 --     good at the relay since it was queued or last resumed; what the
 --     failure rate reads.
+--   mail_queue.throttles: how many throttling replies a row had, none of
+--     them counted as an attempt. Past a few (the mailer's maxRowThrottles)
+--     the row's next one is retried as any other failure: a relay answering
+--     one recipient 4.7.x for good never holds the bulk lane for ever.
 --   mail_tasks.cancelled_at, cancelled_by: a cancelled send. Its pending
 --     rows are written failed with 'cancelled', nothing tried: skipped, so
 --     they never make the send read failed (mail_task_status() below). Rows
@@ -44,6 +48,12 @@ ALTER TABLE mail_tasks
     ADD COLUMN send_failures INTEGER NOT NULL DEFAULT 0,
     ADD COLUMN cancelled_at  TIMESTAMPTZ,
     ADD COLUMN cancelled_by  TEXT;
+
+ALTER TABLE mail_queue
+    ADD COLUMN throttles INTEGER NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN mail_queue.throttles IS
+    'Throttling replies the row had with no attempt counted; past a few its attempts count.';
 
 ALTER TABLE mail_tasks
     ADD CONSTRAINT mail_tasks_paused_reason_check

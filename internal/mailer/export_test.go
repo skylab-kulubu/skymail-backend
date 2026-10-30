@@ -217,3 +217,18 @@ func SendRow(ctx context.Context, m Transactional, job database.MailQueue) error
 // SweepCancelled fails the pending rows of cancelled sends, as the reaper
 // does.
 func SweepCancelled(ctx context.Context, m Transactional) { m.(*mailerImpl).sweepCancelled(ctx) }
+
+// UnparkResumed puts back due the parked rows of sends no longer paused, as
+// the reaper does.
+func UnparkResumed(ctx context.Context, m Transactional) { m.(*mailerImpl).unparkResumed(ctx) }
+
+// SkipHeldTasks hands back, of rows m took in q's transaction, those of a
+// paused or a cancelled send, as a take does.
+func SkipHeldTasks(ctx context.Context, m Transactional, q *database.Queries, rows []database.MailQueue) ([]database.MailQueue, error) {
+	impl := m.(*mailerImpl)
+	return impl.skipHeldTasks(ctx, q, impl.logger, rows)
+}
+
+// MaxRowThrottles is how many throttling replies a bulk row may have with no
+// attempt counted.
+const MaxRowThrottles = maxRowThrottles

@@ -1129,10 +1129,11 @@ type CountTaskSendFailureRow struct {
 
 // Counts one recipient of a send that failed for good at the relay, and
 // pauses the send ('failure_rate') once at least min_failures of its
-// recipients failed so and they are at least min_percent of those the relay
-// answered for good (sent or failed so) since it was queued or last resumed.
-// min_failures 0 counts without ever pausing. A cancelled or already paused
-// send is counted and left as it is.
+// recipients failed so since it was queued or last resumed, and they are at
+// least min_percent of those the relay answered for good: those failures
+// plus every recipient sent since it was queued (a resume clears the
+// failures, not the sent). min_failures 0 counts without ever pausing. A
+// cancelled or already paused send is counted and left as it is.
 func (q *Queries) CountTaskSendFailure(ctx context.Context, arg CountTaskSendFailureParams) (CountTaskSendFailureRow, error) {
 	row := q.db.QueryRow(ctx, countTaskSendFailure, arg.MinFailures, arg.MinPercent, arg.TaskID)
 	var i CountTaskSendFailureRow
@@ -1732,6 +1733,7 @@ func (q *Queries) DeferMaskFailure(ctx context.Context, arg DeferMaskFailurePara
 const deferThrottledMailQueueItem = `-- name: DeferThrottledMailQueueItem :execrows
 UPDATE mail_queue
 SET status          = 'pending',
+    throttles       = throttles + 1,
     error           = $1::text,
     next_attempt_at = NOW() + ($2::int * INTERVAL '1 second'),
     claimed_at      = NULL,
@@ -1752,7 +1754,8 @@ type DeferThrottledMailQueueItemParams struct {
 
 // Puts a row the relay throttled back to pending, delay_seconds from now,
 // with its reply as the error and no attempt counted: the reply is about the
-// account's pace, not the recipient (duyuru-haber 05 G3).
+// account's pace, not the recipient (duyuru-haber 05 G3). throttles counts
+// such replies: past maxRowThrottles the row's attempts count (bulk_guard.go).
 func (q *Queries) DeferThrottledMailQueueItem(ctx context.Context, arg DeferThrottledMailQueueItemParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deferThrottledMailQueueItem,
 		arg.Error,
@@ -5989,14 +5992,21 @@ func (q *Queries) MarkTrackingScannerBurst(ctx context.Context, arg MarkTracking
 }
 
 const parkClaimedRows = `-- name: ParkClaimedRows :execrows
-UPDATE mail_queue
+UPDATE mail_queue q
 SET status          = 'pending',
     claimed_at      = NULL,
     claimed_by      = NULL,
-    next_attempt_at = TIMESTAMPTZ '2999-01-01 00:00:00+00'
-WHERE id = ANY ($1::uuid[])
-  AND status = 'processing'
-  AND claimed_by = $2::text
+    next_attempt_at = CASE
+                          WHEN EXISTS (SELECT 1
+                                       FROM mail_tasks mt
+                                       WHERE mt.id = q.task_id
+                                         AND mt.paused_at IS NOT NULL
+                                         AND mt.cancelled_at IS NULL)
+                              THEN TIMESTAMPTZ '2999-01-01 00:00:00+00'
+                          ELSE NOW() END
+WHERE q.id = ANY ($1::uuid[])
+  AND q.status = 'processing'
+  AND q.claimed_by = $2::text
 `
 
 type ParkClaimedRowsParams struct {
@@ -6005,7 +6015,10 @@ type ParkClaimedRowsParams struct {
 }
 
 // Puts rows this process took back, parked (their send is paused), nothing
-// tried and nothing counted.
+// tried and nothing counted. A row whose send was resumed since GetHeldTasks
+// read it goes back due at once instead. A resume committed while the take
+// is still open never sees these rows (they are 'processing' to it);
+// UnparkResumedRows finds them on the reaper's turn.
 func (q *Queries) ParkClaimedRows(ctx context.Context, arg ParkClaimedRowsParams) (int64, error) {
 	result, err := q.db.Exec(ctx, parkClaimedRows, arg.Ids, arg.ClaimedBy)
 	if err != nil {
@@ -6019,10 +6032,16 @@ UPDATE mail_queue
 SET next_attempt_at = TIMESTAMPTZ '2999-01-01 00:00:00+00'
 WHERE task_id = $1
   AND status = 'pending'
+  AND EXISTS (SELECT 1
+              FROM mail_tasks mt
+              WHERE mt.id = $1
+                AND mt.paused_at IS NOT NULL
+                AND mt.cancelled_at IS NULL)
 `
 
 // Parks a paused send's pending rows: never due until it is resumed
-// (ResumeMailTask). For a send its failure rate paused.
+// (ResumeMailTask). For a send its failure rate paused. Runs after the pause
+// is committed: a send an operator resumed since is left as it is.
 func (q *Queries) ParkPendingRows(ctx context.Context, taskID uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, parkPendingRows, taskID)
 	if err != nil {
@@ -6078,7 +6097,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref, preference_checked_at
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref, preference_checked_at, throttles
 `
 
 type ProcessBulkQueueItemsParams struct {
@@ -6127,6 +6146,7 @@ func (q *Queries) ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueu
 			&i.ListUnsubscribeUrl,
 			&i.SourceRef,
 			&i.PreferenceCheckedAt,
+			&i.Throttles,
 		); err != nil {
 			return nil, err
 		}
@@ -6150,7 +6170,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref, preference_checked_at
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref, preference_checked_at, throttles
 `
 
 type ProcessSystemQueueItemsParams struct {
@@ -6200,6 +6220,7 @@ func (q *Queries) ProcessSystemQueueItems(ctx context.Context, arg ProcessSystem
 			&i.ListUnsubscribeUrl,
 			&i.SourceRef,
 			&i.PreferenceCheckedAt,
+			&i.Throttles,
 		); err != nil {
 			return nil, err
 		}
@@ -7720,6 +7741,29 @@ func (q *Queries) TrackingTaskAccess(ctx context.Context, id uuid.UUID) (Trackin
 		&i.SystemLane,
 	)
 	return i, err
+}
+
+const unparkResumedRows = `-- name: UnparkResumedRows :execrows
+UPDATE mail_queue q
+SET next_attempt_at = NOW()
+FROM mail_tasks mt
+WHERE mt.id = q.task_id
+  AND mt.paused_at IS NULL
+  AND mt.cancelled_at IS NULL
+  AND q.status = 'pending'
+  AND q.next_attempt_at >= TIMESTAMPTZ '2999-01-01 00:00:00+00'
+`
+
+// Puts back due the parked rows of sends that are neither paused nor
+// cancelled: rows a take parked while an operator resumed the send
+// (ParkClaimedRows), or a failure rate pause parked after the resume. The
+// reaper runs it each turn (duyuru-haber 05 G4).
+func (q *Queries) UnparkResumedRows(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, unparkResumedRows)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const unsubscribeExists = `-- name: UnsubscribeExists :one

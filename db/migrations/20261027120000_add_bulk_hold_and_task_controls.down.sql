@@ -1,5 +1,13 @@
 SET lock_timeout = '5s';
 
+-- A paused send's pending rows are parked far ahead (2999-01-01). Without
+-- the columns nothing would ever resume them: they go back due now, and the
+-- image from before sends them.
+UPDATE mail_queue
+SET next_attempt_at = now()
+WHERE status = 'pending'
+  AND next_attempt_at >= TIMESTAMPTZ '2999-01-01 00:00:00+00';
+
 CREATE OR REPLACE FUNCTION mail_task_status(for_task UUID) RETURNS TEXT
     LANGUAGE sql
     STABLE
@@ -35,6 +43,9 @@ ALTER TABLE mail_tasks
     DROP COLUMN IF EXISTS send_failures,
     DROP COLUMN IF EXISTS cancelled_at,
     DROP COLUMN IF EXISTS cancelled_by;
+
+ALTER TABLE mail_queue
+    DROP COLUMN IF EXISTS throttles;
 
 DROP TABLE IF EXISTS mail_bulk_holds;
 

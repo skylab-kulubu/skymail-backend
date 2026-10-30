@@ -118,10 +118,11 @@ type Querier interface {
 	CountSuppressionEntries(ctx context.Context, arg CountSuppressionEntriesParams) (int64, error)
 	// Counts one recipient of a send that failed for good at the relay, and
 	// pauses the send ('failure_rate') once at least min_failures of its
-	// recipients failed so and they are at least min_percent of those the relay
-	// answered for good (sent or failed so) since it was queued or last resumed.
-	// min_failures 0 counts without ever pausing. A cancelled or already paused
-	// send is counted and left as it is.
+	// recipients failed so since it was queued or last resumed, and they are at
+	// least min_percent of those the relay answered for good: those failures
+	// plus every recipient sent since it was queued (a resume clears the
+	// failures, not the sent). min_failures 0 counts without ever pausing. A
+	// cancelled or already paused send is counted and left as it is.
 	CountTaskSendFailure(ctx context.Context, arg CountTaskSendFailureParams) (CountTaskSendFailureRow, error)
 	CountTemplateContentSensitiveEvents(ctx context.Context, templateID uuid.UUID) (int64, error)
 	CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error)
@@ -183,7 +184,8 @@ type Querier interface {
 	DeferMaskFailure(ctx context.Context, arg DeferMaskFailureParams) error
 	// Puts a row the relay throttled back to pending, delay_seconds from now,
 	// with its reply as the error and no attempt counted: the reply is about the
-	// account's pace, not the recipient (duyuru-haber 05 G3).
+	// account's pace, not the recipient (duyuru-haber 05 G3). throttles counts
+	// such replies: past maxRowThrottles the row's attempts count (bulk_guard.go).
 	DeferThrottledMailQueueItem(ctx context.Context, arg DeferThrottledMailQueueItemParams) (int64, error)
 	// The inbox sweep: at most batch_size items past their expiry.
 	DeleteExpiredInboxItems(ctx context.Context, arg DeleteExpiredInboxItemsParams) (int64, error)
@@ -506,10 +508,14 @@ type Querier interface {
 	// change; newer rules never reinterpret historical events.
 	MarkTrackingScannerBurst(ctx context.Context, arg MarkTrackingScannerBurstParams) error
 	// Puts rows this process took back, parked (their send is paused), nothing
-	// tried and nothing counted.
+	// tried and nothing counted. A row whose send was resumed since GetHeldTasks
+	// read it goes back due at once instead. A resume committed while the take
+	// is still open never sees these rows (they are 'processing' to it);
+	// UnparkResumedRows finds them on the reaper's turn.
 	ParkClaimedRows(ctx context.Context, arg ParkClaimedRowsParams) (int64, error)
 	// Parks a paused send's pending rows: never due until it is resumed
-	// (ResumeMailTask). For a send its failure rate paused.
+	// (ResumeMailTask). For a send its failure rate paused. Runs after the pause
+	// is committed: a send an operator resumed since is left as it is.
 	ParkPendingRows(ctx context.Context, taskID uuid.UUID) (int64, error)
 	// Pauses a send by an operator; a paused send stays paused, as it was. Its
 	// pending rows are parked: never due until it is resumed.
@@ -700,6 +706,11 @@ type Querier interface {
 	// person's tracked send is in the bulk lane, and the system lane is never
 	// tracked as a person asks. Its people are read with the role only.
 	TrackingTaskAccess(ctx context.Context, id uuid.UUID) (TrackingTaskAccessRow, error)
+	// Puts back due the parked rows of sends that are neither paused nor
+	// cancelled: rows a take parked while an operator resumed the send
+	// (ParkClaimedRows), or a failure rate pause parked after the resume. The
+	// reaper runs it each turn (duyuru-haber 05 G4).
+	UnparkResumedRows(ctx context.Context) (int64, error)
 	UnsubscribeExists(ctx context.Context, id uuid.UUID) (bool, error)
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
 	UpdateRecipient(ctx context.Context, arg UpdateRecipientParams) (Recipient, error)

@@ -419,6 +419,8 @@ type MailQueue struct {
 	SourceRef *string `json:"source_ref"`
 	// When core last allowed this recipient a duyuru mail (recipients:resolve); NULL when core gave no verdict about the row.
 	PreferenceCheckedAt *time.Time `json:"preference_checked_at"`
+	// Throttling replies the row had with no attempt counted; past a few its attempts count.
+	Throttles int `json:"throttles"`
 }
 
 type MailSendWindow struct {
