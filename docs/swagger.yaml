@@ -273,6 +273,12 @@ components:
         category:
           description: core's category of a duyuru send; null for any other.
           type: string
+        erase_after_send:
+          description: 'true on a send that keeps no record of its recipient (POST
+            /mail_tasks/single erase_after_send): its row is erased when its outcome
+            is written. Left out on every other send, and by an image from before
+            it.'
+          type: boolean
         id:
           type: string
         purpose:
@@ -914,6 +920,12 @@ components:
           type: string
         counts:
           $ref: '#/components/schemas/handlers.NewsSendCounts'
+        erase_after_send:
+          description: 'true on a send that keeps no record of its recipient (POST
+            /mail_tasks/single erase_after_send): its row is erased when its outcome
+            is written. Left out on every other send, and by an image from before
+            it.'
+          type: boolean
         failed:
           type: integer
         id:
@@ -2433,6 +2445,16 @@ components:
             the link that withdraws that consent. Otherwise, and always with islem,
             false is refused (400 mail_task.commercial_content_not_allowed). With
             duyuru, true is kept; a later version requires it. Ignored with islem.'
+          type: boolean
+        erase_after_send:
+          description: 'A service''s mail that keeps no record of its recipient (core''s
+            account deletion notices, sent after the person''s Erasure command): never
+            tracked, in the system lane, and its queue row is erased the moment its
+            outcome is written, as Account erasure leaves mail to an erased person
+            (recipient Silinmiş kullanıcı, no address, no content, no variables; the
+            row, its status and its dates stay). A person''s token is refused (400
+            mail_task.erase_after_send_not_allowed). The answer says erase_after_send
+            true when the send was queued so.'
           type: boolean
         own_event_statement:
           description: 'With duyuru to a list or a Keycloak group, while SkyMail holds
@@ -4054,7 +4076,10 @@ paths:
         true; bilgi@; tracked as any person''s send, in the bulk lane then, else the
         system lane) or duyuru with a category (the bulk lane, duyuru@); without a
         purpose, duyuru, club:duyuru, tracked or not. A service''s token is always
-        islem; its fields are ignored.'
+        islem; its fields are ignored. A service''s mail with erase_after_send keeps
+        no record of its recipient: never tracked, in the system lane, its row erased
+        when its outcome is written (recipient Silinmiş kullanıcı, no address, no
+        content, no variables); the answer says erase_after_send true.'
       requestBody:
         content:
           application/json:
@@ -4084,7 +4109,8 @@ paths:
             mail_task.transactional_statement_required (islem); mail_task.category_required,
             mail_task.category_invalid, mail_task.commercial_statement_required (duyuru,
             SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team
-            category no team'
+            category no team; mail_task.erase_after_send_not_allowed: a person''s
+            token asked for erase_after_send'
         "500":
           content:
             application/json:

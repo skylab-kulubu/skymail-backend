@@ -1421,7 +1421,7 @@ WITH active_source AS (
                $8::boolean, $9::boolean,
                $10::boolean
         FROM active_source
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, source_kind, source_ref, source_version, source_snapshot, source_audience, source_counts, self_test, paused_at, paused_reason, paused_by, send_failures, cancelled_at, cancelled_by
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, source_kind, source_ref, source_version, source_snapshot, source_audience, source_counts, self_test, paused_at, paused_reason, paused_by, send_failures, cancelled_at, cancelled_by, erase_after_send
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1543,12 +1543,14 @@ WITH active_template AS (
       AND archived_at IS NULL
 ), inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, body_variables, content_sensitive_at_send, tracking_requested,
-                            purpose, category, transactional_statement, commercial_content_absent)
+                            purpose, category, transactional_statement, commercial_content_absent,
+                            erase_after_send)
         SELECT $4, id, $5, content_sensitive, $6::boolean,
                $7::text, $8::text,
-               $9::boolean, $10::boolean
+               $9::boolean, $10::boolean,
+               $11::boolean
         FROM active_template
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, source_kind, source_ref, source_version, source_snapshot, source_audience, source_counts, self_test, paused_at, paused_reason, paused_by, send_failures, cancelled_at, cancelled_by
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, source_kind, source_ref, source_version, source_snapshot, source_audience, source_counts, self_test, paused_at, paused_reason, paused_by, send_failures, cancelled_at, cancelled_by, erase_after_send
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1573,6 +1575,7 @@ type CreateSingleMailTaskParams struct {
 	Category                *string    `json:"category"`
 	TransactionalStatement  *bool      `json:"transactional_statement"`
 	CommercialContentAbsent *bool      `json:"commercial_content_absent"`
+	EraseAfterSend          bool       `json:"erase_after_send"`
 }
 
 type CreateSingleMailTaskRow struct {
@@ -1591,6 +1594,8 @@ type CreateSingleMailTaskRow struct {
 // (template_key_content_locked) whatever the template says, else the
 // template's content_sensitive ('unset' for NULL). It never changes after:
 // mail_task_content_sensitive() reads it first (20261020120000).
+// erase_after_send: a service's send that keeps no record of its recipient;
+// its row is erased when its outcome is written (20261031230000).
 func (q *Queries) CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error) {
 	row := q.db.QueryRow(ctx, createSingleMailTask,
 		arg.RecipientFullName,
@@ -1603,6 +1608,7 @@ func (q *Queries) CreateSingleMailTask(ctx context.Context, arg CreateSingleMail
 		arg.Category,
 		arg.TransactionalStatement,
 		arg.CommercialContentAbsent,
+		arg.EraseAfterSend,
 	)
 	var i CreateSingleMailTaskRow
 	err := row.Scan(
@@ -2765,7 +2771,7 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 }
 
 const getMailTaskById = `-- name: GetMailTaskById :one
-SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id, mt.notification_id, mt.purpose, mt.category, mt.transactional_statement, mt.commercial_content_absent, mt.own_event_statement, mt.source_kind, mt.source_ref, mt.source_version, mt.source_snapshot, mt.source_audience, mt.source_counts, mt.self_test, mt.paused_at, mt.paused_reason, mt.paused_by, mt.send_failures, mt.cancelled_at, mt.cancelled_by,
+SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id, mt.notification_id, mt.purpose, mt.category, mt.transactional_statement, mt.commercial_content_absent, mt.own_event_statement, mt.source_kind, mt.source_ref, mt.source_version, mt.source_snapshot, mt.source_audience, mt.source_counts, mt.self_test, mt.paused_at, mt.paused_reason, mt.paused_by, mt.send_failures, mt.cancelled_at, mt.cancelled_by, mt.erase_after_send,
        t.name  AS template_name,
        ml.name AS mail_list_name
 FROM mail_tasks mt
@@ -2813,6 +2819,7 @@ type GetMailTaskByIdRow struct {
 	SendFailures            int        `json:"send_failures"`
 	CancelledAt             *time.Time `json:"cancelled_at"`
 	CancelledBy             *string    `json:"cancelled_by"`
+	EraseAfterSend          bool       `json:"erase_after_send"`
 	TemplateName            *string    `json:"template_name"`
 	MailListName            *string    `json:"mail_list_name"`
 }
@@ -2859,6 +2866,7 @@ func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTas
 		&i.SendFailures,
 		&i.CancelledAt,
 		&i.CancelledBy,
+		&i.EraseAfterSend,
 		&i.TemplateName,
 		&i.MailListName,
 	)
