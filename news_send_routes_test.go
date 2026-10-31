@@ -607,3 +607,88 @@ func TestNewsSendSuppressedAddressAndLongSlug(t *testing.T) {
 		t.Fatalf("a slug past 200: %d %s", s.status, s.raw)
 	}
 }
+
+// A send cancelled half way (review duyuru-haber B3): its cancelled rows are
+// nobody's "zaten aldı"; the record to the same audience again waits for the
+// rows being sent to finish (409 news_send.cancel_finishing), then goes only
+// to who never got it, once; after that the audience's send is the new one.
+func TestACancelledNewsSendGoesAgainOnlyToWhoDidNotGetIt(t *testing.T) {
+	w := newNewsWorld(t, true)
+	w.seedTemplate()
+	ctx := context.Background()
+	token := bearer(t, yk, false, announcerRoles...)
+	preparer := personBearer(t, yk, "hazirlayan@example.org", "", "skymail:access", "skymail:mails:write")
+	count := func() handlers.NewsSendCount {
+		t.Helper()
+		s := w.postTo("/v1/news_sends/count", preparer, map[string]any{"slug": "kayitlar", "audience": map[string]any{"type": "members"}})
+		if s.status != fiber.StatusOK {
+			t.Fatalf("count: %d %s", s.status, s.raw)
+		}
+		var answer handlers.NewsSendCount
+		if err := json.Unmarshal(s.raw, &answer); err != nil {
+			t.Fatalf("decode %d %q: %v", s.status, s.raw, err)
+		}
+		return answer
+	}
+
+	first := w.post(token, newsSend("kayitlar", "members"))
+	if first.status != fiber.StatusCreated || first.result.Queued != 3 {
+		t.Fatalf("first send: %d %s", first.status, first.raw)
+	}
+	// Ayşe's mail went, Mehmet's is being sent as the send is cancelled,
+	// Zeynep's is still queued.
+	if _, err := w.store.Conn.Exec(ctx, `
+		UPDATE mail_queue SET status = CASE recipient_email WHEN 'ayse@example.org' THEN 'sent' ELSE 'processing' END::mail_queue_status,
+		                      claimed_at = now(), claimed_by = 'replika-1'
+		WHERE task_id = $1 AND recipient_email IN ('ayse@example.org', 'mehmet@example.org')`, first.result.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.store.CancelMailTask(ctx, database.CancelMailTaskParams{ID: first.result.ID, CancelledBy: yk}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.store.CancelPendingRows(ctx, &first.result.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM mail_queue WHERE task_id = $1 AND status = 'failed' AND error = 'cancelled' AND source_ref IS NULL`, first.result.ID); n != 1 {
+		t.Fatalf("cancelled rows without a source = %d, want Zeynep's", n)
+	}
+
+	if c := count(); c.AlreadySentTaskID != nil || c.Counts.AlreadyReceived != 2 {
+		t.Fatalf("count while Mehmet's mail is being sent = %+v", c)
+	}
+	finishing := w.post(token, newsSend("kayitlar", "members"))
+	if finishing.status != fiber.StatusConflict || finishing.error.Code != "news_send.cancel_finishing" || finishing.error.Params["task_id"] != first.result.ID.String() {
+		t.Fatalf("again while Mehmet's mail is being sent: %d %s", finishing.status, finishing.raw)
+	}
+
+	// The take hands Mehmet's row back cancelled, nothing tried.
+	var mehmet uuid.UUID
+	if err := w.store.Conn.QueryRow(ctx, `SELECT id FROM mail_queue WHERE task_id = $1 AND recipient_email = 'mehmet@example.org'`, first.result.ID).Scan(&mehmet); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := w.store.CancelClaimedRows(ctx, database.CancelClaimedRowsParams{Ids: []uuid.UUID{mehmet}, ClaimedBy: "replika-1"}); err != nil || n != 1 {
+		t.Fatalf("cancel Mehmet's row: %d, %v", n, err)
+	}
+	if c := count(); c.AlreadySentTaskID != nil || c.Counts.AlreadyReceived != 1 {
+		t.Fatalf("count after the cancel finished = %+v", c)
+	}
+
+	again := w.post(token, newsSend("kayitlar", "members"))
+	if again.status != fiber.StatusCreated || again.result.Queued != 2 || again.result.Counts.AlreadyReceived != 1 {
+		t.Fatalf("again after the cancel: %d %s", again.status, again.raw)
+	}
+	if n := w.count(`SELECT count(*) FROM mail_queue WHERE task_id = $1 AND recipient_email IN ('mehmet@example.org', 'zeynep@example.org')`, again.result.ID); n != 2 {
+		t.Fatalf("the send again reached %d of Mehmet and Zeynep, want both", n)
+	}
+	if n := w.count(`SELECT count(*) FROM mail_queue WHERE source_ref = 'news:kayitlar' AND lower(recipient_email) = 'ayse@example.org'`); n != 1 {
+		t.Fatalf("Ayşe's rows of the record = %d, want the one that went", n)
+	}
+
+	third := w.post(token, newsSend("kayitlar", "members"))
+	if third.status != fiber.StatusConflict || third.error.Code != "news_send.already_sent" || third.error.Params["task_id"] != again.result.ID.String() {
+		t.Fatalf("a third time: %d %s", third.status, third.raw)
+	}
+	if c := count(); c.AlreadySentTaskID == nil || *c.AlreadySentTaskID != again.result.ID || c.Counts.AlreadyReceived != 3 {
+		t.Fatalf("count after the send again = %+v", c)
+	}
+}

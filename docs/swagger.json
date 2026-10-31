@@ -1067,7 +1067,7 @@
             "handlers.NewsSendCount": {
                 "properties": {
                     "already_sent_task_id": {
-                        "description": "The send of this record to this audience, when there is one: a send now would be 409 news_send.already_sent.",
+                        "description": "The send of this record to this audience, when there is one: a send now would be 409 news_send.already_sent. A cancelled send is none.",
                         "type": "string"
                     },
                     "counts": {
@@ -6270,7 +6270,7 @@
         },
         "/news_sends": {
             "post": {
-                "description": "Reads the record of slug from the CMS (inscribed, anonymously: only public records in Faz 1), asks core who it goes to (every Member, or some teams with their sub-teams and followers; core leaves out who turned the category off, a disabled, unverified or address-less account, and answers each person's own unsubscribe link and why they get it), and queues the club.news template to each in the bulk lane, as a duyuru of core's category with List-Unsubscribe from that link. The send keeps the record as it was (source.version; a later edit changes the web, never the mail). A record's mail goes to a mailbox once: an address a row of this record already went to (an earlier send to another audience) is left out and counted already_received; the same record to the same audience again is 409 news_send.already_sent with that send's id. Only a person with skymail:announcements:send sends directly; Mail onayı for the others comes with a later version. Off unless SKYMAIL_NEWS_SEND=on (503 news_send.not_enabled).",
+                "description": "Reads the record of slug from the CMS (inscribed, anonymously: only public records in Faz 1), asks core who it goes to (every Member, or some teams with their sub-teams and followers; core leaves out who turned the category off, a disabled, unverified or address-less account, and answers each person's own unsubscribe link and why they get it), and queues the club.news template to each in the bulk lane, as a duyuru of core's category with List-Unsubscribe from that link. The send keeps the record as it was (source.version; a later edit changes the web, never the mail). A record's mail goes to a mailbox once: an address a row of this record already went to (an earlier send to another audience) is left out and counted already_received; the same record to the same audience again is 409 news_send.already_sent with that send's id. A cancelled send holds nothing back: its recipients who never got the mail get it when the record is sent again (409 news_send.cancel_finishing while its rows being sent finish). Only a person with skymail:announcements:send sends directly; Mail onayı for the others comes with a later version. Off unless SKYMAIL_NEWS_SEND=on (503 news_send.not_enabled).",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -6340,7 +6340,7 @@
                                 }
                             }
                         },
-                        "description": "news_send.already_sent (params.task_id); news_send.private_record; news_send.template_missing"
+                        "description": "news_send.already_sent (params.task_id); news_send.cancel_finishing (params.task_id); news_send.private_record; news_send.template_missing"
                     },
                     "422": {
                         "content": {

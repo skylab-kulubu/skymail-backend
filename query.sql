@@ -899,13 +899,16 @@ WHERE mt.id = q.task_id
   AND q.next_attempt_at >= TIMESTAMPTZ '2999-01-01 00:00:00+00';
 
 -- Writes rows this process took failed with 'cancelled' (their send was
--- cancelled), nothing tried.
+-- cancelled), nothing tried. A cancelled row of a News send gives up its
+-- source_ref: its recipient never got the record's mail, so a later send of
+-- the record goes to them (ListNewsSourceAddresses, idx_mail_queue_news_once).
 -- name: CancelClaimedRows :execrows
 UPDATE mail_queue
 SET status     = 'failed',
     error      = 'cancelled',
     claimed_at = NULL,
-    claimed_by = NULL
+    claimed_by = NULL,
+    source_ref = NULL
 WHERE id = ANY (sqlc.arg(ids)::uuid[])
   AND status = 'processing'
   AND claimed_by = sqlc.arg(claimed_by)::text;
@@ -913,13 +916,15 @@ WHERE id = ANY (sqlc.arg(ids)::uuid[])
 -- Writes the pending rows of cancelled sends failed with 'cancelled', nothing
 -- tried: at the cancel, and on the reaper's turn for a row a retry or an
 -- expired lease put back to pending since. task_id NULL sweeps every
--- cancelled send.
+-- cancelled send. As CancelClaimedRows, a cancelled row gives up its
+-- source_ref.
 -- name: CancelPendingRows :execrows
 UPDATE mail_queue q
 SET status     = 'failed',
     error      = 'cancelled',
     claimed_at = NULL,
-    claimed_by = NULL
+    claimed_by = NULL,
+    source_ref = NULL
 FROM mail_tasks mt
 WHERE mt.id = q.task_id
   AND mt.cancelled_at IS NOT NULL
@@ -2731,13 +2736,29 @@ WHERE id = sqlc.arg(id);
 -- name: LockNewsSource :exec
 SELECT pg_advisory_xact_lock(hashtextextended('skymail news ' || sqlc.arg(source_ref)::text, 0));
 
--- The send of a News record to an audience, if there is one (open or done).
+-- The send of a News record to an audience that holds a new one back, if
+-- there is one: a send not cancelled (open or done), else a cancelled one
+-- whose rows are still queued or being sent (a cancel leaves the rows being
+-- sent to finish; a retry or an expired lease puts one back for the reaper
+-- to cancel). A cancelled send whose rows are all done holds nothing back:
+-- its cancelled rows carry no source_ref, so the record goes again to who
+-- never got it, and only to them.
 -- name: GetNewsSendByAudience :one
-SELECT id FROM mail_tasks
-WHERE source_ref = sqlc.arg(source_ref)::text AND source_audience = sqlc.arg(source_audience)::text;
+SELECT mt.id, (mt.cancelled_at IS NOT NULL)::boolean AS cancelled
+FROM mail_tasks mt
+WHERE mt.source_ref = sqlc.arg(source_ref)::text
+  AND mt.source_audience = sqlc.arg(source_audience)::text
+  AND (mt.cancelled_at IS NULL
+    OR EXISTS (SELECT 1
+               FROM mail_queue q
+               WHERE q.task_id = mt.id
+                 AND q.status IN ('pending', 'processing')))
+ORDER BY (mt.cancelled_at IS NULL) DESC, mt.created_at DESC
+LIMIT 1;
 
 -- The mailboxes a row of a News record was queued to go to, lower-cased:
--- every send of the record leaves them out ("zaten aldı").
+-- every send of the record leaves them out ("zaten aldı"). A row written
+-- failed at queueing, or cancelled, has no source_ref: not among them.
 -- name: ListNewsSourceAddresses :many
 SELECT DISTINCT lower(recipient_email)::text AS address
 FROM mail_queue

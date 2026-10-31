@@ -29,7 +29,9 @@ type Querier interface {
 	// the relay held it (HoldBulkLane). No row: never held.
 	BulkLaneHeldUntil(ctx context.Context) (BulkLaneHeldUntilRow, error)
 	// Writes rows this process took failed with 'cancelled' (their send was
-	// cancelled), nothing tried.
+	// cancelled), nothing tried. A cancelled row of a News send gives up its
+	// source_ref: its recipient never got the record's mail, so a later send of
+	// the record goes to them (ListNewsSourceAddresses, idx_mail_queue_news_once).
 	CancelClaimedRows(ctx context.Context, arg CancelClaimedRowsParams) (int64, error)
 	// Cancels a send: no more of its rows are taken, and its pending rows are
 	// written failed with 'cancelled' (CancelPendingRows). Rows being sent finish.
@@ -37,7 +39,8 @@ type Querier interface {
 	// Writes the pending rows of cancelled sends failed with 'cancelled', nothing
 	// tried: at the cancel, and on the reaper's turn for a row a retry or an
 	// expired lease put back to pending since. task_id NULL sweeps every
-	// cancelled send.
+	// cancelled send. As CancelClaimedRows, a cancelled row gives up its
+	// source_ref.
 	CancelPendingRows(ctx context.Context, taskID *uuid.UUID) (int64, error)
 	// Empties the content of up to batch_size sends none of whose rows is still to
 	// go out (pending or processing) once they are older than retention_days,
@@ -289,8 +292,14 @@ type Querier interface {
 	GetMailingListAddresses(ctx context.Context, mailListID uuid.UUID) ([]string, error)
 	GetMailingListById(ctx context.Context, id uuid.UUID) (MailingList, error)
 	GetMailingListByIdIncludingArchived(ctx context.Context, id uuid.UUID) (MailingList, error)
-	// The send of a News record to an audience, if there is one (open or done).
-	GetNewsSendByAudience(ctx context.Context, arg GetNewsSendByAudienceParams) (uuid.UUID, error)
+	// The send of a News record to an audience that holds a new one back, if
+	// there is one: a send not cancelled (open or done), else a cancelled one
+	// whose rows are still queued or being sent (a cancel leaves the rows being
+	// sent to finish; a retry or an expired lease puts one back for the reaper
+	// to cancel). A cancelled send whose rows are all done holds nothing back:
+	// its cancelled rows carry no source_ref, so the record goes again to who
+	// never got it, and only to them.
+	GetNewsSendByAudience(ctx context.Context, arg GetNewsSendByAudienceParams) (GetNewsSendByAudienceRow, error)
 	GetNotificationByIdempotencyKey(ctx context.Context, arg GetNotificationByIdempotencyKeyParams) (GetNotificationByIdempotencyKeyRow, error)
 	GetNotificationType(ctx context.Context, key string) (NotificationType, error)
 	GetNotificationVariant(ctx context.Context, arg GetNotificationVariantParams) (NotificationVariant, error)
@@ -404,7 +413,8 @@ type Querier interface {
 	// only its rows are counted.
 	ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error)
 	// The mailboxes a row of a News record was queued to go to, lower-cased:
-	// every send of the record leaves them out ("zaten aldı").
+	// every send of the record leaves them out ("zaten aldı"). A row written
+	// failed at queueing, or cancelled, has no source_ref: not among them.
 	ListNewsSourceAddresses(ctx context.Context, sourceRef string) ([]string, error)
 	ListNotificationTypes(ctx context.Context) ([]NotificationType, error)
 	ListNotificationVariants(ctx context.Context) ([]NotificationVariant, error)
