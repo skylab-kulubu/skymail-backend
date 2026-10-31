@@ -35,6 +35,9 @@ type MailHandler interface {
 	GetTrackingMode(c fiber.Ctx) error
 	GetTracking(c fiber.Ctx) error
 	GetTrackingRecipients(c fiber.Ctx) error
+	PauseTask(c fiber.Ctx) error
+	ResumeTask(c fiber.Ctx) error
+	CancelTask(c fiber.Ctx) error
 }
 
 type mailHandlerImpl struct {
@@ -349,6 +352,12 @@ type MailTaskItem struct {
 	// Whether the send is tracked: it asked for open and click tracking, SkyMail's tracking was on when it was queued and its template may be tracked (not System, not sensitive); or it is a person's send queued while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); or it is a service's mail queued while SkyMail tracked system mail (SKYMAIL_TRACKING_SYSTEM).
 	Tracking bool `json:"tracking"`
 	SendPurposeFields
+	// While set, the bulk lane takes none of the send's rows (POST /mail_tasks/{id}/pause, or its failure rate); null otherwise.
+	PausedAt *time.Time `json:"paused_at"`
+	// operator (paused by hand) or failure_rate (its recipients failed past SKYMAIL_FAILURE_PAUSE_COUNT and SKYMAIL_FAILURE_PAUSE_PERCENT); null when not paused.
+	PausedReason *string `json:"paused_reason" enums:"operator,failure_rate"`
+	// When the send was cancelled (POST /mail_tasks/{id}/cancel): its pending recipients were skipped; null otherwise.
+	CancelledAt *time.Time `json:"cancelled_at"`
 }
 
 // SendPurposeFields is a send's purpose as it was written (ADR 0072 decision

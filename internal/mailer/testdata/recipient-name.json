@@ -1,0 +1,196 @@
+{
+  "about": [
+    "The recipient's name tags a send's own variables may hold (skymail-backend internal/mailer/recipient_name.go): exactly",
+    "{{.FullName}} and {{or .FullName \"fallback\"}} (1-60 characters, none of \" \\ { } < > & and no control character).",
+    "Any other {{...}} stays as text. An empty name prints the fallback, or nothing. The name's white space and control",
+    "characters become single spaces, trimmed. \"text\" is a value the subject prints, filled as it is; \"markup\" a value",
+    "printed through safeHTML, filled in its text only and escaped as Go's html.EscapeString escapes. Each markup case is",
+    "already what the server's allow-list writes, so the server's fill and the panel's preview give the same markup.",
+    "The same file, byte for byte, is read by skymail-backend (internal/mailer/testdata/recipient-name.json) and",
+    "skymail-frontend (src/lib/mail-render/testdata/recipient-name.json); each repo's test pins its SHA-256."
+  ],
+  "text": [
+    {
+      "name": "fills the name",
+      "value": "Sayın {{.FullName}},",
+      "fullName": "Ayşe Yılmaz",
+      "expect": "Sayın Ayşe Yılmaz,"
+    },
+    {
+      "name": "fills every tag",
+      "value": "{{.FullName}} / {{.FullName}}",
+      "fullName": "Ali",
+      "expect": "Ali / Ali"
+    },
+    {
+      "name": "empty name prints nothing",
+      "value": "Merhaba {{.FullName}}!",
+      "fullName": "",
+      "expect": "Merhaba !"
+    },
+    {
+      "name": "white space only is empty",
+      "value": "Merhaba {{.FullName}}!",
+      "fullName": " \t ",
+      "expect": "Merhaba !"
+    },
+    {
+      "name": "fallback for an empty name",
+      "value": "Sayın {{or .FullName \"katılımcı\"}},",
+      "fullName": "",
+      "expect": "Sayın katılımcı,"
+    },
+    {
+      "name": "the name over the fallback",
+      "value": "Sayın {{or .FullName \"katılımcı\"}},",
+      "fullName": "Ayşe Yılmaz",
+      "expect": "Sayın Ayşe Yılmaz,"
+    },
+    {
+      "name": "white space and control characters become one space",
+      "value": "Konu: {{.FullName}}",
+      "fullName": "  Ayşe\r\n\tYılmaz\u0007 ",
+      "expect": "Konu: Ayşe Yılmaz"
+    },
+    {
+      "name": "a name is not escaped in text",
+      "value": "{{.FullName}}",
+      "fullName": "Ali <b> & 'Veli'",
+      "expect": "Ali <b> & 'Veli'"
+    },
+    {
+      "name": "a name holding a tag is not read again",
+      "value": "{{.FullName}}",
+      "fullName": "{{.Email}}",
+      "expect": "{{.Email}}"
+    },
+    {
+      "name": "another variable stays text",
+      "value": "{{.Email}} {{.Subject}} {{.FullName}}",
+      "fullName": "Ali",
+      "expect": "{{.Email}} {{.Subject}} Ali"
+    },
+    {
+      "name": "an action stays text",
+      "value": "{{range .X}}{{.FullName}}{{end}}",
+      "fullName": "Ali",
+      "expect": "{{range .X}}Ali{{end}}"
+    },
+    {
+      "name": "spaces inside the braces stay text",
+      "value": "{{ .FullName }}",
+      "fullName": "Ali",
+      "expect": "{{ .FullName }}"
+    },
+    {
+      "name": "a trim marker stays text",
+      "value": "{{- .FullName -}}",
+      "fullName": "Ali",
+      "expect": "{{- .FullName -}}"
+    },
+    {
+      "name": "a field of the name stays text",
+      "value": "{{.FullName.First}}",
+      "fullName": "Ali",
+      "expect": "{{.FullName.First}}"
+    },
+    {
+      "name": "a function of the name stays text",
+      "value": "{{printf \"%s\" .FullName}}",
+      "fullName": "Ali",
+      "expect": "{{printf \"%s\" .FullName}}"
+    },
+    {
+      "name": "an empty fallback stays text",
+      "value": "{{or .FullName \"\"}}",
+      "fullName": "Ali",
+      "expect": "{{or .FullName \"\"}}"
+    },
+    {
+      "name": "a fallback with a brace stays text",
+      "value": "{{or .FullName \"a}b\"}}",
+      "fullName": "Ali",
+      "expect": "{{or .FullName \"a}b\"}}"
+    },
+    {
+      "name": "a fallback with an ampersand stays text",
+      "value": "{{or .FullName \"a & b\"}}",
+      "fullName": "Ali",
+      "expect": "{{or .FullName \"a & b\"}}"
+    },
+    {
+      "name": "a fallback of 61 characters stays text",
+      "value": "{{or .FullName \"ççççççççççççççççççççççççççççççççççççççççççççççççççççççççççççç\"}}",
+      "fullName": "Ali",
+      "expect": "{{or .FullName \"ççççççççççççççççççççççççççççççççççççççççççççççççççççççççççççç\"}}"
+    },
+    {
+      "name": "a fallback of 60 characters is one",
+      "value": "{{or .FullName \"çççççççççççççççççççççççççççççççççççççççççççççççççççççççççççç\"}}",
+      "fullName": "",
+      "expect": "çççççççççççççççççççççççççççççççççççççççççççççççççççççççççççç"
+    },
+    {
+      "name": "a single brace stays text",
+      "value": "{.FullName} {{.FullName",
+      "fullName": "Ali",
+      "expect": "{.FullName} {{.FullName"
+    }
+  ],
+  "markup": [
+    {
+      "name": "fills the name in text",
+      "value": "<p>Sayın {{.FullName}},</p>",
+      "fullName": "Ayşe Yılmaz",
+      "expect": "<p>Sayın Ayşe Yılmaz,</p>"
+    },
+    {
+      "name": "escapes the name",
+      "value": "<p>{{.FullName}}</p>",
+      "fullName": "Ali <b> & 'Veli' \"V\"",
+      "expect": "<p>Ali &lt;b&gt; &amp; &#39;Veli&#39; &#34;V&#34;</p>"
+    },
+    {
+      "name": "fallback written as the allow-list writes it",
+      "value": "<p>Sayın {{or .FullName &#34;katılımcı&#34;}},</p>",
+      "fullName": "",
+      "expect": "<p>Sayın katılımcı,</p>"
+    },
+    {
+      "name": "the name over the fallback in markup",
+      "value": "<p>Sayın {{or .FullName &#34;katılımcı&#34;}},</p>",
+      "fullName": "Ayşe",
+      "expect": "<p>Sayın Ayşe,</p>"
+    },
+    {
+      "name": "inside marks and lists",
+      "value": "<ul><li><strong>{{.FullName}}</strong></li></ul><h2>{{.FullName}}</h2>",
+      "fullName": "Ali",
+      "expect": "<ul><li><strong>Ali</strong></li></ul><h2>Ali</h2>"
+    },
+    {
+      "name": "a link's text but not its address",
+      "value": "<p><a href=\"https://example.com/\" target=\"_blank\" rel=\"noopener\">{{.FullName}}</a></p>",
+      "fullName": "Ali",
+      "expect": "<p><a href=\"https://example.com/\" target=\"_blank\" rel=\"noopener\">Ali</a></p>"
+    },
+    {
+      "name": "another variable stays text in markup",
+      "value": "<p>{{.Email}} {{.FullName}}</p>",
+      "fullName": "Ali",
+      "expect": "<p>{{.Email}} Ali</p>"
+    },
+    {
+      "name": "text around stays as written",
+      "value": "<p>Tom &amp; Jerry, {{.FullName}}</p>",
+      "fullName": "Ali",
+      "expect": "<p>Tom &amp; Jerry, Ali</p>"
+    },
+    {
+      "name": "empty name in markup",
+      "value": "<p>Merhaba {{.FullName}}</p>",
+      "fullName": "",
+      "expect": "<p>Merhaba </p>"
+    }
+  ]
+}

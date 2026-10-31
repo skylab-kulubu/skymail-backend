@@ -204,7 +204,7 @@ func (h *newsSendHandlerImpl) Test(c fiber.Ctx) error {
 type NewsSendCount struct {
 	// core's numbers for the audience (countOnly: no address is read). already_received is how many mailboxes this record's mail already went to, by any send of it: a send to this audience leaves out those among its people, so at most this many. no_unsubscribe_url is known only when sending (0 here).
 	Counts NewsSendCounts `json:"counts"`
-	// The send of this record to this audience, when there is one: a send now would be 409 news_send.already_sent.
+	// The send of this record to this audience, when there is one: a send now would be 409 news_send.already_sent. A cancelled send is none.
 	AlreadySentTaskID *uuid.UUID     `json:"already_sent_task_id"`
 	Source            NewsSendSource `json:"source"`
 }
@@ -246,7 +246,9 @@ func (h *newsSendHandlerImpl) Count(c fiber.Ctx) error {
 	existing, err := h.db.GetNewsSendByAudience(ctx, database.GetNewsSendByAudienceParams{SourceRef: sourceRef, SourceAudience: news.AudienceKey(params.Audience.Type, teams)})
 	switch {
 	case err == nil:
-		answer.AlreadySentTaskID = &existing
+		if !existing.Cancelled {
+			answer.AlreadySentTaskID = &existing.ID
+		}
 	case !errors.Is(err, pgx.ErrNoRows):
 		return err
 	}

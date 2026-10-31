@@ -112,6 +112,12 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid mail send budget configuration")
 	}
+	// The bulk lane's guards: a throttling reply holds it, a send failing
+	// past the threshold pauses itself (README, throttling and task controls).
+	bulkGuard, err := mailer.BulkGuardFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid bulk lane guard configuration")
+	}
 	// Which mailbox each kind of mail goes out from and how: every lane off
 	// (SMTP_FROM over SMTP AUTH, as always) unless SKYMAIL_SEND_<LANE> says
 	// graph or xoauth2 (README, sender lanes).
@@ -266,6 +272,7 @@ func main() {
 		FQDN:      cfg.SMTPFQDN,
 		Plain:     cfg.SMTPPlain,
 	}, mailSender, mailer.WithQueueLease(queueLease), mailer.WithRateBudget(rateBudget),
+		mailer.WithBulkGuard(bulkGuard),
 		mailer.WithReservedDomainsRefused(),
 		mailer.WithSendLanes(sendLanes),
 		// With the reader, a relay that offers DSN is asked for failure
@@ -332,6 +339,7 @@ func main() {
 	// Before protectedAPI: /v1/me is a person's own, with no role, and must
 	// not go through /v1's skymail:access chain.
 	registerInboxRoutes(app, authMiddleware, accountAccessGate, handlers.NewInboxHandler(db))
+	registerEmailDeliveryRoutes(app, authMiddleware, accountAccessGate, handlers.NewEmailDeliveryHandler(db))
 
 	api := protectedAPI(app, authMiddleware, accountAccessGate)
 
@@ -581,6 +589,12 @@ func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, m
 	tasks.Get("/:id/tracking", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTracking)
 	tasks.Get("/:id/tracking/recipients", mail.GetTrackingRecipients)
 	tasks.Get("/:id/queue", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTaskQueueItems)
+	// A send's controls (duyuru-haber 05 G4): the handler lets a
+	// skymail:mails:write caller control only their own sends.
+	control := auth.RequireAnyPermission("skymail:mails:write", handlers.AnnouncementsSendRole)
+	tasks.Post("/:id/pause", control, mail.PauseTask)
+	tasks.Post("/:id/resume", control, mail.ResumeTask)
+	tasks.Post("/:id/cancel", control, mail.CancelTask)
 	// Who may see the content itself the handler decides from the send and
 	// the caller's roles (handlers.SystemMailsReadRole).
 	tasks.Get("/:id/queue/:itemId/content", auth.RequireAnyPermission("skymail:mails:read"), mail.GetQueueItemContent)
@@ -608,8 +622,8 @@ const viewSweepBatch = 500
 // content). It runs while the sender is paused too: it touches no row still
 // to go out. Then it deletes the records of who opened a masked mail older
 // than viewRetentionDays, the bounces older than a year
-// (bounce.RetentionDays) and the records of reversed unsubscribes older than
-// three years. It logs counts only.
+// (bounce.RetentionDays) and the records of reversed unsubscribes and of
+// removed suppressions older than three years. It logs counts only.
 func clearMailContent(ctx context.Context, db *database.Store, retentionDays, viewRetentionDays int, interval time.Duration) {
 	log.Info().Int("retention_days", retentionDays).Int("view_retention_days", viewRetentionDays).
 		Msg("mail content sweep (MAIL_CONTENT_RETENTION_DAYS, SENT_CONTENT_VIEWS_RETENTION_DAYS)")
@@ -654,6 +668,13 @@ func clearMailContent(ctx context.Context, db *database.Store, retentionDays, vi
 		}
 		if reactivations > 0 {
 			log.Info().Int64("reactivations", reactivations).Msg("deleted the records of reversed unsubscribes past three years")
+		}
+		removals, err := db.DeleteSuppressionRemovals(ctx, viewSweepBatch)
+		if err != nil && ctx.Err() == nil {
+			log.Error().Err(err).Msg("suppression removal sweep failed")
+		}
+		if removals > 0 {
+			log.Info().Int64("removals", removals).Msg("deleted the records of removed suppressions past three years")
 		}
 		select {
 		case <-ctx.Done():
@@ -783,6 +804,15 @@ func registerInboxRoutes(app *fiber.App, auth middlewares.AuthMiddleware, gate a
 	me.Post("/:id/read", person, gated, inbox.Read)
 	me.Post("/:id/unread", person, gated, inbox.Unread)
 	me.Post("/:id/archive", person, gated, inbox.Archive)
+}
+
+// registerEmailDeliveryRoutes serves a person's own e-mail delivery (hub
+// ticket rabbitmq-olaylar 10) at /v1/me/email-delivery: which of their own
+// addresses mail does not reach, with the inbox's chain (a person's own token
+// issued for SkyMail, no role, the account access gate), registered before
+// /v1's skymail:access chain as the inbox is.
+func registerEmailDeliveryRoutes(app *fiber.App, auth middlewares.AuthMiddleware, gate accessgate.Reader, delivery handlers.EmailDeliveryHandler) {
+	app.Get("/v1/me/email-delivery", auth.AuthenticatePerson, middlewares.AccountAccessGate(gate), delivery.Get)
 }
 
 // inboxSweepInterval is how often the inbox sweep runs: an item is gone

@@ -15,7 +15,7 @@ import (
 )
 
 // The contact consents applied (KVKK aydınlatma s6 §5.8, §5.10, §5.14, rows
-// 13–15; hub tickets kvkk-s6-yayin-oncesi 11 and 12; README, "Tanıtım
+// 13–15; hub tickets kvkk-s6-yayin-oncesi 11, 12 and 23; README, "Tanıtım
 // postası ve hesapsız liste alıcısı"). Two kinds of duyuru mail go only to
 // people core holds a consent for:
 //
@@ -27,15 +27,21 @@ import (
 //     click ends the promotional consent. Always applied, whatever the
 //     switches say now, so that a promotional mail queued while they were
 //     on never goes to everyone;
-//   - with SKYMAIL_LIST_CONSENT on, a mail of a send to an internal list,
-//     to an address that is no account's (core's recipients:resolve), goes
-//     only to an address in core's event_invitations audience on a text
-//     that covers announcements (not davet-v1, core #289 review B6), and
-//     not to one due its renewal question. A Keycloak group's members are
+//   - with SKYMAIL_LIST_CONSENT on, a duyuru mail (s6 §5.14: "other
+//     announcements only with consent"), whatever its send (an internal
+//     list, a Forms source's respondents, a person's mail to one address,
+//     an approved send; a list's queued before purposes too), to an address
+//     that is no account's (core's recipients:resolve), goes only to an
+//     address in core's event_invitations audience on a text that covers
+//     announcements (not davet-v1, core #289 review B6), and not to one due
+//     its renewal question. The switch keeps its name from its first scope,
+//     the list. A Keycloak group's members and a News send's recipients are
 //     accounts, and a row that knows its recipient's account is not held.
-//     Nor is a mail its sender stated is about the list's own event or work
-//     (own_event_statement; s6 row 15: 5/2-c, no consent): it still goes in
-//     the duyuru stream, with its way out.
+//     Nor is an islem mail (a service's, such as Forms' confirmations, or a
+//     person's stated transactional), a test mail to its own sender
+//     (self_test), or a list or group mail its sender stated is about the
+//     list's own event or work (own_event_statement; s6 row 15: 5/2-c, no
+//     consent): that still goes in the duyuru stream, with its way out.
 //
 // The check is made where the dispatcher takes the bulk rows, in the same
 // transaction and before the send budget counts them, every turn: a consent
@@ -102,8 +108,9 @@ type ConsentGate struct {
 	// Promotional is SKYMAIL_PROMOTIONAL: a duyuru send may say it is
 	// promotional (commercial_content_absent false). Off, it is refused.
 	Promotional bool
-	// ListConsent is SKYMAIL_LIST_CONSENT: a list send's addresses without
-	// an account need the announcement consent.
+	// ListConsent is SKYMAIL_LIST_CONSENT: a duyuru mail's address without
+	// an account needs the announcement consent, whatever the send (named
+	// for its first scope, the list).
 	ListConsent bool
 	// Core is nil without CORE_URL: then nothing a consent holds is sent.
 	Core ConsentReader
@@ -113,7 +120,7 @@ const (
 	// PromotionalEnv lets a duyuru send be promotional: off (the default,
 	// also when unset) or on.
 	PromotionalEnv = "SKYMAIL_PROMOTIONAL"
-	// ListConsentEnv holds a list send's addresses without an account to
+	// ListConsentEnv holds a duyuru mail's address without an account to
 	// the announcement consent: off (the default, also when unset) or on.
 	ListConsentEnv = "SKYMAIL_LIST_CONSENT"
 )
@@ -174,7 +181,8 @@ func WithConsentGate(gate ConsentGate) Option {
 // promotional.
 func (m *mailerImpl) PromotionalAvailable() bool { return m.consents.Promotional }
 
-// ListConsentAvailable says SKYMAIL_LIST_CONSENT is on.
+// ListConsentAvailable says SKYMAIL_LIST_CONSENT is on: every duyuru's
+// address without an account needs the announcement consent.
 func (m *mailerImpl) ListConsentAvailable() bool { return m.consents.ListConsent }
 
 // consentCache is what core said, shared by the dispatcher and the fetch
@@ -250,7 +258,7 @@ func (m *mailerImpl) gateConsents(ctx context.Context, q *database.Queries, logg
 	if err != nil {
 		return nil, fmt.Errorf("read the sends contact consents apply to: %w", err)
 	}
-	var promotional, list []gatedRow
+	var promotional, announcements []gatedRow
 	for _, row := range found {
 		gated := gatedRow{id: row.ID, address: consent.NormalizeAddress(row.RecipientEmail), queued: m.consentCache.now()}
 		if row.CreatedAt != nil {
@@ -262,18 +270,24 @@ func (m *mailerImpl) gateConsents(ctx context.Context, q *database.Queries, logg
 		case row.Promotional:
 			promotional = append(promotional, gated)
 		case AccountMail(row.Key, row.System):
-		// A mail stated to be about the list's own event or work goes
-		// without the consent (s6 row 15, 5/2-c), in the duyuru stream still.
-		case m.consents.ListConsent && row.ToList && row.RecipientSub == nil && !row.OwnEvent &&
+		// A duyuru mail, or a list's queued before purposes, to an address
+		// the row knows no account for. A list's or a group's mail stated
+		// to be about the list's own event or work goes without the consent
+		// (s6 row 15, 5/2-c; the query counts the statement on no other
+		// send), in the duyuru stream still; a test mail goes to its own
+		// sender alone. A send without a purpose to no list (queued before
+		// purposes) is not read at all.
+		case m.consents.ListConsent && (row.ToList || isDuyuruPurpose(row.Purpose)) && row.RecipientSub == nil &&
+			!row.OwnEvent && !row.SelfTest &&
 			LaneOf(m.lanes.purposeOf(row.Purpose), row.Key, row.System, Priority(row.Priority)) == LaneDuyuru:
-			list = append(list, gated)
+			announcements = append(announcements, gated)
 		}
 	}
-	if len(promotional) == 0 && len(list) == 0 {
+	if len(promotional) == 0 && len(announcements) == 0 {
 		return rows, nil
 	}
 
-	v := m.consentCache.decide(promotional, list)
+	v := m.consentCache.decide(promotional, announcements)
 	if err := m.writeHeld(ctx, q, logger, v.held); err != nil {
 		return nil, err
 	}
@@ -310,8 +324,11 @@ func (m *mailerImpl) gateConsents(ctx context.Context, q *database.Queries, logg
 	return kept, nil
 }
 
+// isDuyuruPurpose says a send's purpose is duyuru.
+func isDuyuruPurpose(purpose *string) bool { return purpose != nil && *purpose == PurposeDuyuru }
+
 // decide sorts the rows by what the cache knows, and notes what it does not.
-func (c *consentCache) decide(promotional, list []gatedRow) verdict {
+func (c *consentCache) decide(promotional, announcements []gatedRow) verdict {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	v := verdict{held: map[uuid.UUID]string{}, links: map[uuid.UUID]string{}}
@@ -328,7 +345,7 @@ func (c *consentCache) decide(promotional, list []gatedRow) verdict {
 		}
 	}
 	invitedKnown := c.fresh(c.invitedAt)
-	for _, row := range list {
+	for _, row := range announcements {
 		account, accountKnown := c.accounts[row.address]
 		accountKnown = accountKnown && c.fresh(account.at)
 		switch {

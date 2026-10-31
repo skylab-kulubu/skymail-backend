@@ -198,11 +198,23 @@ func (m *mailerImpl) claimBulk(ctx context.Context, logger *zerolog.Logger, maxR
 	var taken []database.MailQueue
 	if m.budget.Off() {
 		err := m.db.InTx(ctx, func(q *database.Queries) error {
+			if m.guard.ThrottlePause > 0 {
+				at, err := m.budgetNow(ctx, q)
+				if err != nil {
+					return err
+				}
+				if held, err := m.bulkLaneHeld(ctx, q, at); err != nil || held {
+					return err
+				}
+			}
 			rows, err := q.ProcessBulkQueueItems(ctx, database.ProcessBulkQueueItemsParams{
 				ClaimedBy: m.claimant,
 				MaxRows:   maxRows,
 			})
 			if err != nil {
+				return err
+			}
+			if rows, err = m.skipHeldTasks(ctx, q, logger, rows); err != nil {
 				return err
 			}
 			if taken, err = m.skipUnsubscribed(ctx, q, logger, rows); err != nil {
@@ -236,6 +248,14 @@ func (m *mailerImpl) claimBulk(ctx context.Context, logger *zerolog.Logger, maxR
 		if err != nil {
 			return err
 		}
+		// The relay throttled the account a moment ago: no process takes
+		// a bulk row until the hold runs out (bulk_guard.go).
+		if held, err := m.bulkLaneHeld(ctx, q, at); err != nil || held {
+			if held {
+				logger.Debug().Msg("Bulk lane held after a throttling reply: its rows wait")
+			}
+			return err
+		}
 		counted, err := q.SendWindowCounts(ctx, database.SendWindowCountsParams{
 			MinuteSince: windowStart(at, minuteSpan).Add(-minuteSpan),
 			HourSince:   dayFrom(at),
@@ -254,6 +274,10 @@ func (m *mailerImpl) claimBulk(ctx context.Context, logger *zerolog.Logger, maxR
 			MaxRows:   room,
 		})
 		if err != nil || len(rows) == 0 {
+			return err
+		}
+		// A row of a paused or cancelled send goes back, before the count.
+		if rows, err = m.skipHeldTasks(ctx, q, logger, rows); err != nil || len(rows) == 0 {
 			return err
 		}
 		// An address that left the duyuru stream since its mail was queued
