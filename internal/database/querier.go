@@ -25,6 +25,23 @@ type Querier interface {
 	// failed), how many a report later said did not reach their address (hard),
 	// failed otherwise (soft) or were delayed. A row counts once in each.
 	BounceRate(ctx context.Context, days int) (BounceRateRow, error)
+	// The instant until which the bulk lane takes nothing: a throttling reply of
+	// the relay held it (HoldBulkLane). No row: never held.
+	BulkLaneHeldUntil(ctx context.Context) (BulkLaneHeldUntilRow, error)
+	// Writes rows this process took failed with 'cancelled' (their send was
+	// cancelled), nothing tried. A cancelled row of a News send gives up its
+	// source_ref: its recipient never got the record's mail, so a later send of
+	// the record goes to them (ListNewsSourceAddresses, idx_mail_queue_news_once).
+	CancelClaimedRows(ctx context.Context, arg CancelClaimedRowsParams) (int64, error)
+	// Cancels a send: no more of its rows are taken, and its pending rows are
+	// written failed with 'cancelled' (CancelPendingRows). Rows being sent finish.
+	CancelMailTask(ctx context.Context, arg CancelMailTaskParams) (int64, error)
+	// Writes the pending rows of cancelled sends failed with 'cancelled', nothing
+	// tried: at the cancel, and on the reaper's turn for a row a retry or an
+	// expired lease put back to pending since. task_id NULL sweeps every
+	// cancelled send. As CancelClaimedRows, a cancelled row gives up its
+	// source_ref.
+	CancelPendingRows(ctx context.Context, taskID *uuid.UUID) (int64, error)
 	// Empties the content of up to batch_size sends none of whose rows is still to
 	// go out (pending or processing) once they are older than retention_days,
 	// sensitive or not: a sensitive send's content is kept as long as any other's
@@ -102,6 +119,14 @@ type Querier interface {
 	// the hour starting at hour_start.
 	CountSends(ctx context.Context, arg CountSendsParams) error
 	CountSuppressionEntries(ctx context.Context, arg CountSuppressionEntriesParams) (int64, error)
+	// Counts one recipient of a send that failed for good at the relay, and
+	// pauses the send ('failure_rate') once at least min_failures of its
+	// recipients failed so since it was queued or last resumed, and they are at
+	// least min_percent of those the relay answered for good: those failures
+	// plus every recipient sent since it was queued (a resume clears the
+	// failures, not the sent). min_failures 0 counts without ever pausing. A
+	// cancelled or already paused send is counted and left as it is.
+	CountTaskSendFailure(ctx context.Context, arg CountTaskSendFailureParams) (CountTaskSendFailureRow, error)
 	CountTemplateContentSensitiveEvents(ctx context.Context, templateID uuid.UUID) (int64, error)
 	CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error)
 	CountTemplates(ctx context.Context) (int64, error)
@@ -160,6 +185,11 @@ type Querier interface {
 	// base_seconds doubled for each failure it has had (a day at most). The first
 	// failure since the send was last masked starts its deadline.
 	DeferMaskFailure(ctx context.Context, arg DeferMaskFailureParams) error
+	// Puts a row the relay throttled back to pending, delay_seconds from now,
+	// with its reply as the error and no attempt counted: the reply is about the
+	// account's pace, not the recipient (duyuru-haber 05 G3). throttles counts
+	// such replies: past maxRowThrottles the row's attempts count (bulk_guard.go).
+	DeferThrottledMailQueueItem(ctx context.Context, arg DeferThrottledMailQueueItemParams) (int64, error)
 	// The inbox sweep: at most batch_size items past their expiry.
 	DeleteExpiredInboxItems(ctx context.Context, arg DeleteExpiredInboxItemsParams) (int64, error)
 	DeleteExpiredMailFormSources(ctx context.Context, arg DeleteExpiredMailFormSourcesParams) (int64, error)
@@ -170,6 +200,10 @@ type Querier interface {
 	// Deletes up to batch_size of the oldest records of who opened a masked mail
 	// that are older than retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
 	DeleteOldSentContentViews(ctx context.Context, arg DeleteOldSentContentViewsParams) (int64, error)
+	// Deletes up to batch_size of the oldest records of a removed suppression
+	// three years after they were written, as the records of a reversed
+	// unsubscribe are (Yusuf, 2026-10-27): the content sweep's step.
+	DeleteOldSuppressionRemovals(ctx context.Context, batchSize int) (int64, error)
 	// Deletes up to batch_size of the oldest records of a reversed unsubscribe
 	// three years after they were written (KVKK notice s6; hub ticket
 	// kvkk-s6-yayin-oncesi 14): the content sweep's step.
@@ -198,10 +232,14 @@ type Querier interface {
 	// mode; no row (or a NULL link) reads the inbox from the start.
 	GetBounceReaderDeltaLink(ctx context.Context, arg GetBounceReaderDeltaLinkParams) (*string, error)
 	// The claimed e-mail rows among ids whose send a contact consent may hold
-	// back (internal/mailer/consent_gate.go): a promotional duyuru send
-	// (commercial_content_absent false), or a send to an internal list. With the
-	// send's template (account mail is never held), purpose, category and the
-	// recipient's account, when the row knows it.
+	// back (internal/mailer/consent_gate.go): a duyuru send (a promotional one,
+	// commercial_content_absent false, and any other to an address without an
+	// account), or a send to an internal list (one queued before purposes too).
+	// With the send's template (account mail is never held), purpose, category,
+	// whether it is a test mail to its own sender, the own event statement (only
+	// a list's or a Keycloak group's send, mail_list_id, may make it), and the
+	// recipient's account, when the row knows it. A send without a purpose that
+	// goes to no list (queued before purposes) is not read.
 	GetConsentGateClaimedRows(ctx context.Context, arg GetConsentGateClaimedRowsParams) ([]GetConsentGateClaimedRowsRow, error)
 	// A queue row has no sent time of its own. created_at — when that recipient's
 	// mail was queued — stands in for it: the dispatcher is woken on enqueue, so a
@@ -212,6 +250,10 @@ type Querier interface {
 	// Days are calendar days in time_zone; the series ends on as_of's day and has
 	// one row per day, zero-filled.
 	GetDailySentCounts(ctx context.Context, arg GetDailySentCountsParams) ([]GetDailySentCountsRow, error)
+	// Which of the sends of rows just taken are paused or cancelled: their rows
+	// go back parked, or are written cancelled, instead of being sent (a retry
+	// or an expired lease put one back after the pause or the cancel).
+	GetHeldTasks(ctx context.Context, ids []uuid.UUID) ([]GetHeldTasksRow, error)
 	// A request as every screen shows it: with its template's name and key, the
 	// version the template publishes now, its list's name when the list is an
 	// internal one (a Keycloak group's is Keycloak's to give), the people it goes
@@ -230,6 +272,10 @@ type Querier interface {
 	// the row's own address) after the relay took the mail.
 	GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueueItemsByTaskIdParams) ([]GetMailQueueItemsByTaskIdRow, error)
 	GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTaskByIdRow, error)
+	// What the task controls (pause, resume, cancel) need to know about a send:
+	// whether it is one (bulk: its rows are in the bulk lane), who sent it, and
+	// whether any of its rows are still to be sent.
+	GetMailTaskControl(ctx context.Context, id uuid.UUID) (GetMailTaskControlRow, error)
 	// The key of a send's template and whether it is a system template, which
 	// together say whether it is account mail (mailer.AccountMail), and the
 	// send's purpose, which says its stream (mailer.LaneOf).
@@ -246,8 +292,14 @@ type Querier interface {
 	GetMailingListAddresses(ctx context.Context, mailListID uuid.UUID) ([]string, error)
 	GetMailingListById(ctx context.Context, id uuid.UUID) (MailingList, error)
 	GetMailingListByIdIncludingArchived(ctx context.Context, id uuid.UUID) (MailingList, error)
-	// The send of a News record to an audience, if there is one (open or done).
-	GetNewsSendByAudience(ctx context.Context, arg GetNewsSendByAudienceParams) (uuid.UUID, error)
+	// The send of a News record to an audience that holds a new one back, if
+	// there is one: a send not cancelled (open or done), else a cancelled one
+	// whose rows are still queued or being sent (a cancel leaves the rows being
+	// sent to finish; a retry or an expired lease puts one back for the reaper
+	// to cancel). A cancelled send whose rows are all done holds nothing back:
+	// its cancelled rows carry no source_ref, so the record goes again to who
+	// never got it, and only to them.
+	GetNewsSendByAudience(ctx context.Context, arg GetNewsSendByAudienceParams) (GetNewsSendByAudienceRow, error)
 	GetNotificationByIdempotencyKey(ctx context.Context, arg GetNotificationByIdempotencyKeyParams) (GetNotificationByIdempotencyKeyRow, error)
 	GetNotificationType(ctx context.Context, key string) (NotificationType, error)
 	GetNotificationVariant(ctx context.Context, arg GetNotificationVariantParams) (NotificationVariant, error)
@@ -294,6 +346,9 @@ type Querier interface {
 	// duyuru stream, with their send's template's key and whether it is a system
 	// template (mailer.LaneOf: account mail is never in the duyuru stream).
 	GetUnsubscribedClaimedRows(ctx context.Context, arg GetUnsubscribedClaimedRowsParams) ([]GetUnsubscribedClaimedRowsRow, error)
+	// Holds the bulk lane until held_until, or keeps the later hold already
+	// written: every process's bulk lane reads it (duyuru-haber 05 G3).
+	HoldBulkLane(ctx context.Context, arg HoldBulkLaneParams) (time.Time, error)
 	// One notification's inbox item for each person, its text rendered once:
 	// gone in 90 days, or at expires_at when that is sooner. A person already
 	// holding the notification's item is left as they are.
@@ -343,6 +398,10 @@ type Querier interface {
 	// state it is in as of as_of: one undecided past its deadline is expired,
 	// whether or not the sweep has written it yet.
 	ListMailApprovals(ctx context.Context, arg ListMailApprovalsParams) ([]ListMailApprovalsRow, error)
+	// The respondents' names, to count those a send greets without one (a
+	// recipient name tag prints its fallback, or nothing, for them) by the
+	// mailer's own rule (mailer.HasRecipientName), not SQL's idea of white space.
+	ListMailFormSourceRecipientNames(ctx context.Context, sourceID uuid.UUID) ([]string, error)
 	ListMailFormSourceRecipients(ctx context.Context, sourceID uuid.UUID) ([]MailFormSourceRecipient, error)
 	// The links a tracked row's mail gets its click addresses for when it goes
 	// out: the send's links whose address is still kept.
@@ -354,7 +413,8 @@ type Querier interface {
 	// only its rows are counted.
 	ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error)
 	// The mailboxes a row of a News record was queued to go to, lower-cased:
-	// every send of the record leaves them out ("zaten aldı").
+	// every send of the record leaves them out ("zaten aldı"). A row written
+	// failed at queueing, or cancelled, has no source_ref: not among them.
 	ListNewsSourceAddresses(ctx context.Context, sourceRef string) ([]string, error)
 	ListNotificationTypes(ctx context.Context) ([]NotificationType, error)
 	ListNotificationVariants(ctx context.Context) ([]NotificationVariant, error)
@@ -362,6 +422,11 @@ type Querier interface {
 	// first, drafts included and discarded drafts left out: operator work a seed
 	// written after them would pass over.
 	ListOperatorVersionsAfter(ctx context.Context, arg ListOperatorVersionsAfterParams) ([]TemplateVersionSummary, error)
+	// A person's own suppressions (GET /v1/me/email-delivery; hub ticket
+	// rabbitmq-olaylar 10): the rows suppressed with their sub, and the rows of
+	// the addresses their token says are theirs (lower-cased). Each address once
+	// (it is the key), oldest first.
+	ListPersonSuppressions(ctx context.Context, arg ListPersonSuppressionsParams) ([]ListPersonSuppressionsRow, error)
 	// The Authoring mode of each template's Main source as it is sent: its
 	// published version's.
 	ListPublishedMainModes(ctx context.Context, templateIds []uuid.UUID) ([]ListPublishedMainModesRow, error)
@@ -460,9 +525,25 @@ type Querier interface {
 	// just its last click. Only this classifier version's contemporaneous events
 	// change; newer rules never reinterpret historical events.
 	MarkTrackingScannerBurst(ctx context.Context, arg MarkTrackingScannerBurstParams) error
+	// Puts rows this process took back, parked (their send is paused), nothing
+	// tried and nothing counted. A row whose send was resumed since GetHeldTasks
+	// read it goes back due at once instead. A resume committed while the take
+	// is still open never sees these rows (they are 'processing' to it);
+	// UnparkResumedRows finds them on the reaper's turn.
+	ParkClaimedRows(ctx context.Context, arg ParkClaimedRowsParams) (int64, error)
+	// Parks a paused send's pending rows: never due until it is resumed
+	// (ResumeMailTask). For a send its failure rate paused. Runs after the pause
+	// is committed: a send an operator resumed since is left as it is.
+	ParkPendingRows(ctx context.Context, taskID uuid.UUID) (int64, error)
+	// Pauses a send by an operator; a paused send stays paused, as it was. Its
+	// pending rows are parked: never due until it is resumed.
+	PauseMailTask(ctx context.Context, arg PauseMailTaskParams) (int64, error)
 	// The same for the bulk lane (lists, groups, approved sends), which reads
 	// idx_mail_queue_pending_bulk. The process asks for no more rows than the
-	// send budget leaves room for (SendWindowCounts), under LockSendBudget.
+	// send budget leaves room for (SendWindowCounts), under LockSendBudget. A
+	// paused send's pending rows are parked (ParkPendingRows) and never due; a
+	// row of a paused or cancelled send taken all the same is handed to
+	// GetHeldTasks (mailer, bulk_guard.go).
 	ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueueItemsParams) ([]MailQueue, error)
 	// Takes up to max_rows due rows of the system lane (priority above 0: single
 	// mail a person is waiting for) for one process, leased to it: claimed_by
@@ -565,6 +646,9 @@ type Querier interface {
 	// people are written beside it (ClearMailApprovalRecipients, then
 	// AddMailApprovalRecipients).
 	ResubmitMailApproval(ctx context.Context, arg ResubmitMailApprovalParams) (MailApproval, error)
+	// Resumes a paused send: its parked rows are due now, its failures so far
+	// are accepted, the failure rate counts afresh.
+	ResumeMailTask(ctx context.Context, id uuid.UUID) (int64, error)
 	// The send windows a budget reads at one instant: the minutes starting at or
 	// after minute_since (the current minute and the one before it) and the
 	// hours starting at or after hour_since (every hour of the last 24).
@@ -640,6 +724,11 @@ type Querier interface {
 	// person's tracked send is in the bulk lane, and the system lane is never
 	// tracked as a person asks. Its people are read with the role only.
 	TrackingTaskAccess(ctx context.Context, id uuid.UUID) (TrackingTaskAccessRow, error)
+	// Puts back due the parked rows of sends that are neither paused nor
+	// cancelled: rows a take parked while an operator resumed the send
+	// (ParkClaimedRows), or a failure rate pause parked after the resume. The
+	// reaper runs it each turn (duyuru-haber 05 G4).
+	UnparkResumedRows(ctx context.Context) (int64, error)
 	UnsubscribeExists(ctx context.Context, id uuid.UUID) (bool, error)
 	UpdateMailingList(ctx context.Context, arg UpdateMailingListParams) (MailingList, error)
 	UpdateRecipient(ctx context.Context, arg UpdateRecipientParams) (Recipient, error)

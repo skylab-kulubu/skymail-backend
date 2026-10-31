@@ -494,8 +494,23 @@ reddidir (aşağıda).
   `DELETE` yalnız bounce satırını kaldırır; çıkış satırında
   `409 suppression.use_reactivate` döner. Kaldırma
   `mail_suppression_removals`'a kim, ne zaman, kaynak, kod, sayı ve ilk
-  görülme olarak yazılır; adres yazılmaz. Kaldırılan adrese yeniden
-  gönderilir. Kendiliğinden düşme yoktur.
+  görülme olarak yazılır; adres yazılmaz. Bu kaldırma kaydı, geri alma kaydı
+  gibi, yazılmasından 3 yıl sonra içerik süpürücüsünce silinir (Yusuf,
+  2026-10-27; süre sabit, env yok). Kaldırılan adrese yeniden gönderilir.
+  Kendiliğinden düşme yoktur.
+- **Kişi ucu** (`GET /v1/me/email-delivery`, rol yok; kutu ile aynı zincir:
+  token `aud`'unda `skymail`, kişi token'ı, erişim kapısı): kişi kendi
+  adreslerinden hangisine posta ulaşmadığını kendi token'ıyla okur. Yalnız
+  `recipient_sub` = token `sub`'ı olan satırlar ve adresi token'ın kişiye ait
+  adreslerinden biri olan satırlar döner: userinfo `email` (yalnız `email_verified`
+  `true` ise; claim yoksa kullanılmaz, `/v1` gibi) ve `school_email` (userinfo'da yoksa token'dan);
+  küçük harf + kırpma ile karşılaştırılır, her adres bir kez. Parametre
+  almaz; başka adres ya da kişi sorgulanamaz. Yanıt
+  `{"undeliverable":[{"address","since"}]}` (`since` = ilk bastırılma, UTC),
+  `Cache-Control: no-store`; kaynak, kod ve kimlik dönmez. Log yalnız istek
+  kimliğini ve sayıyı yazar. Hesap Merkezi e-posta sayfasındaki "Bu adrese
+  posta ulaşmıyor." uyarısı buradan okunur. Kişi bastırmayı kaldıramaz
+  (yalnız operatör).
 - **Loglar**: adres ve rapor metni yazılmaz; kuyruk id'si, kaynak ve kod
   yazılır.
 
@@ -621,16 +636,23 @@ izni olan kişiye gider:
   ("Tanıtım içerikli e-postaları almak istemiyorsan: İzni geri al"): tek tık
   tanıtım iznini kapatır. Şablon `{{.UnsubscribeUrl}}` yazıyorsa orada duyuru
   bağlantısı (bilet 09'dan sonra) kalır.
-- **Hesapsız liste alıcısı** (`SKYMAIL_LIST_CONSENT=on`). İç listeye giden
-  postada, core'un `recipients:resolve`'ünün hiçbir hesaba eşlemediği adres
-  yalnız core'un `event_invitations` kitlesindeyse alır; kayıt `davet-v1`
-  metniyle verilmişse (yalnız davet) ya da yenileme sorusu bekliyorsa
-  (`renewalDue`) sayılmaz. Keycloak grubu üyeleri hesaptır, satırında hesap
-  (`recipient_sub`) olan alıcı ve kişiye tek posta bu kurala girmez.
-  Gönderen postanın listenin kendi etkinliği ya da çalışmasıyla ilgili
-  olduğunu beyan ettiyse (`own_event_statement: true`; s6 satır 15, 5/2-c)
-  rıza aranmaz: posta bütün liste alıcılarına, yine duyuru akışında ve çıkış
-  bağlantısıyla gider; beyan gönderim kaydında kalır.
+- **Hesapsız alıcıya duyuru** (`SKYMAIL_LIST_CONSENT=on`; bayrağın adı ilk
+  kapsamı olan listeden kalır). Her `duyuru` postasında (iç liste, Forms
+  kaynağının yanıtlayanları, kişiye tek posta, onaylı gönderim; s6 §5.14,
+  hub bileti kvkk-s6-yayin-oncesi 23), core'un `recipients:resolve`'ünün
+  hiçbir hesaba eşlemediği adres yalnız core'un `event_invitations`
+  kitlesindeyse alır; kayıt `davet-v1` metniyle verilmişse (yalnız davet) ya
+  da yenileme sorusu bekliyorsa (`renewalDue`) sayılmaz. Hesaplı alıcı
+  tercih kuralıyla ("Toplu postada tercih") gider. Keycloak grubu üyeleri ve
+  haber gönderiminin alıcıları hesaptır; satırında hesap (`recipient_sub`)
+  olan alıcı bu kurala girmez. `islem` postası (servis hesabının
+  `/v1/mail_tasks/single` postası, örneğin Forms'un `forms.*` onayları; Forms
+  kaynağına ya da kişiye `islem`) ve gönderenin kendine deneme postası
+  (`self_test`) de girmez. Gönderen liste ya da grup postasının listenin
+  kendi etkinliği ya da çalışmasıyla ilgili olduğunu beyan ettiyse
+  (`own_event_statement: true`; s6 satır 15, 5/2-c) rıza aranmaz: posta
+  bütün liste alıcılarına, yine duyuru akışında ve çıkış bağlantısıyla
+  gider; beyan gönderim kaydında kalır.
 
 **Ne zaman.** Dağıtıcı toplu satırları alırken, aynı işlemde, çıkış kaydından
 sonra ve gönderim bütçesi saymadan önce, her turda karar verir. core'a ne
@@ -660,7 +682,7 @@ hesap şablonuyla (`keycloak.*`, `account.*`) gönderilen tanıtım da izin arar
 | Değişken | |
 |---|---|
 | `SKYMAIL_PROMOTIONAL` | `off` (ya da boş, varsayılan): `commercial_content_absent: false` reddedilir. `on`: `duyuru`'da kabul edilir; `GET /v1/mail_tasks/tracking-mode` `promotional_available: true` döner |
-| `SKYMAIL_LIST_CONSENT` | `off` (ya da boş, varsayılan): liste postası bugünkü gibi, `own_event_statement` yok sayılır. `on`: hesapsız liste alıcısına duyuru rızası aranır, beyanlı posta hariç; `tracking-mode` `list_consent_available: true` döner |
+| `SKYMAIL_LIST_CONSENT` | `off` (ya da boş, varsayılan): duyuru postası bugünkü gibi, `own_event_statement` yok sayılır. `on`: hesapsız alıcıya her `duyuru`da (liste, Forms kaynağı, kişiye tek posta, onaylı gönderim) duyuru rızası aranır, beyanlı liste ya da grup postası hariç; `islem` etkilenmez; `tracking-mode` `list_consent_available: true` döner |
 
 Başka değer açılışı durdurur; ikisinden biri `on` iken `CORE_URL` gerekir.
 `SKYMAIL_PROMOTIONAL=on` ayrıca `SKYMAIL_MAIL_PURPOSE=on`,
@@ -945,7 +967,9 @@ bileti duyuru-haber 06; ADR 0067). Varsayılan kapalı; kapalıyken uç
   `mail_queue.source_ref = news:<slug>` ve `(source_ref, lower(recipient_email))`
   kısmi tekil indeksi. Önce ekibe sonra bütün üyelere gönderilirse ekiptekiler
   `already_received` sayılır. Aynı kayıt aynı kitleye ikinci kez
-  `409 news_send.already_sent` (`params.task_id`) döner. Kuyruğa alırken
+  `409 news_send.already_sent` (`params.task_id`) döner; iptal edilmiş
+  gönderim sayılmaz (iptal edilen alıcıya yeniden gönderilir, bkz.
+  "Kısma ve görev düzeyinde işlemler"). Kuyruğa alırken
   başarısız yazılan satır (bastırılmış ya da çıkmış adres, render hatası)
   `source_ref` taşımaz.
 - **Posta.** System template `club.news` (skymail-frontend, Template seed);
@@ -990,7 +1014,8 @@ girmez). Kişi kendi öğelerini kendi token'ıyla okur ve işaretler:
 `POST /v1/me/inbox/{id}/seen|read|unread|archive`, `POST /v1/me/inbox/read-all`,
 `POST /v1/me/inbox/seen-all`. Token `aud`'unda `skymail` olmalı
 (`V1_TOKEN_AUDIENCE_MODE`'dan bağımsız) ve kişi token'ı olmalı; rol, ve
-`skymail:access`, istenmez. Başkasının öğesi `404`. Öğe en çok 90 gün kalır
+`skymail:access`, istenmez. Başkasının öğesi `404`. Aynı zincirdeki öteki
+kişi ucu: `GET /v1/me/email-delivery` (bkz. [bastırma listesi](#geri-dönen-posta-ve-bastırma-listesi-mail_bounces-mail_suppressions)). Öğe en çok 90 gün kalır
 (bildirimin `expires_at`'i daha erken silebilir); kutu süpürmesi saatte bir
 siler, hesap silme kişinin bütün öğelerini siler. Bu sürümden önceki imaja
 dönmeden önce `inbox`'ı türlerden çıkarın. Sözleşme:
@@ -1031,7 +1056,7 @@ kodu boş kalan işçiyle, kuyruğa girdiği andaki uyandırmada gider; hiçbir 
 gönderimin bitmesini beklemez. Şerit belirtmeden yazılan satır (göçten önceki
 satırlar, eski imajın yazdıkları) sistem şeridindedir: bugünkü sıradan daha
 geride kalamaz. Çoklu replikada her süreç kendi işçilerini ayrı ayırır.
-Kısma ve duraklatma henüz yok (duyuru-haber bilet 05, sonraki adımlar).
+Kısma ve görev düzeyinde duraklatma: aşağıda "Kısma ve görev düzeyinde işlemler".
 
 Her şeridin bekleyen satırlarının kendi kısmi indeksi var
 (`idx_mail_queue_pending_system`, `idx_mail_queue_pending_bulk`): bir tur
@@ -1079,6 +1104,93 @@ günde 10.000 alıcı. Varsayılanlar bunların altında kalır.
   geri verilen satırın sayısı düşülmez. İki günden eski pencereler silinir.
   Ayrılmış alan adlı alıcı hiç alınmadığı için sayılmaz; kalıcı olarak
   reddedilen alıcı yalnız tek denemesiyle sayılır (Kanallar).
+
+## Kısma ve görev düzeyinde işlemler (`SKYMAIL_THROTTLE_PAUSE`, `SKYMAIL_FAILURE_PAUSE_COUNT`, `SKYMAIL_FAILURE_PAUSE_PERCENT`)
+
+Toplu şeridin iki koruması ve bir gönderimin üç düğmesi (duyuru-haber bilet 05,
+G3 ve G4).
+
+| Değişken | Varsayılan | Anlamı |
+|---|---|---|
+| `SKYMAIL_THROTTLE_PAUSE` | `5m` | Kısma yanıtından sonra toplu şeridin en az bekleyeceği süre. `0` kapatır, en çok `1h` |
+| `SKYMAIL_FAILURE_PAUSE_COUNT` | `10` | Bir gönderimde röle bu kadar alıcıyı kalıcı olarak reddedince gönderim kendiliğinden duraklar. `0` hiç duraklatmaz |
+| `SKYMAIL_FAILURE_PAUSE_PERCENT` | `10` | ... ve bu reddedilenler, rölenin kesin yanıt verdiklerinin (gönderilen + reddedilen) en az bu yüzdesiyse. 1–100 |
+
+Yanlış değer açılışı durdurur. Açılış logu üç değeri de yazar.
+
+**Kısma (G3).** Röle hesabın yavaşlamasını isterse (SMTP `421`, `432` ya da
+herhangi bir `4.7.x`; Graph `429` ya da `503`):
+
+- Bütün süreçlerin toplu şeridi `SKYMAIL_THROTTLE_PAUSE` kadar, yanıtın
+  `Retry-After`'ı daha uzunsa o kadar hiçbir satır almaz. Bekleme Postgres'te
+  tek satırdır (`mail_bulk_holds`); daha uzun bir bekleme kısaltılmaz. Saat
+  veritabanının saatidir.
+- Yanıtı alan toplu satır `pending`'e döner, bekleme bitince yeniden denenir.
+  **Deneme sayılmaz**: yanıt alıcıyla değil hesabın hızıyla ilgilidir. Hata
+  sütununda yanıt kodu durur.
+- Bir satır en çok 5 kısma yanıtını deneme saymadan geçirir
+  (`mail_queue.throttles`). Sonrakinde olağan hata yoluna düşer: denemesi
+  sayılır, şerit bekletilmez. Röle tek bir alıcıya kalıcı olarak `4.7.x`
+  dönerse o satır sonunda başarısız olur, toplu şeridi her 5 dakikada bir
+  sonsuza dek tutmaz.
+- Sistem şeridi beklemeyi okumaz: giriş kodu gitmeye devam eder. Kısma yanıtı
+  alan sistem satırı bugünkü gibi denemesini sayarak yeniden denenir, ama toplu
+  şeridi o da bekletir.
+- Log: `event=bulk_lane_throttled`, `held_until`. `GET /v1/mail_tasks/summary`
+  `bulk_held_until` ile gösterir (bekleme yoksa `null`).
+
+**Hata oranında kendiliğinden duraklama (G3, listmonk deseni).** Bir toplu
+gönderimin alıcısı rölede kalıcı olarak başarısız olunca (5 deneme bitti ya da
+alıcının adresi reddedildi) gönderimin sayacı (`mail_tasks.send_failures`) artar.
+Sayaç `SKYMAIL_FAILURE_PAUSE_COUNT`'a ulaşır ve reddedilenler gönderilenlerle
+birlikte sayılanların en az `SKYMAIL_FAILURE_PAUSE_PERCENT`'i olursa gönderim
+`paused_reason = failure_rate` ile duraklar. Log: `event=send_paused_failure_rate`.
+Atlananlar (tercih, bastırma, rıza, ayrılmış alan adı, iptal) sayılmaz.
+
+**Görev düzeyinde işlemler (G4).**
+
+| Uç | Ne yapar |
+|---|---|
+| `POST /v1/mail_tasks/{id}/pause` | Toplu şerit gönderimin satırlarını almaz. Gönderilmekte olan satırlar biter. Duraklamış gönderimde bir şey değişmez (200) |
+| `POST /v1/mail_tasks/{id}/resume` | Satırlar yeniden alınır. O ana dek olan hatalar kabul edilmiş sayılır, hata sayacı sıfırlanır |
+| `POST /v1/mail_tasks/{id}/cancel` | Bekleyen alıcılar `failed` + `error = 'cancelled'` yazılır, hiçbir şey denenmez. Gönderilmekte olan satırlar biter. Sonradan bir yeniden deneme ya da dolan kira bir satırı `pending`'e döndürürse temizleyici (reaper) onu da iptal yazar |
+
+- Yanıt gönderimin kendisidir (`MailTaskItem`): `paused_at`, `paused_reason`
+  (`operator` ya da `failure_rate`), `cancelled_at` ve
+  `recipient_counts.cancelled`.
+- Yalnız toplu gönderim (liste, grup, kişiler, Forms kaynağı, haber) için:
+  tekil posta `409 mail_task.not_bulk`. İptal edilmiş gönderim duraklatılamaz ya
+  da sürdürülemez (`409 mail_task.cancelled`). Bütün alıcıları bitmiş gönderim
+  duraklatılamaz ya da iptal edilemez (`409 mail_task.finished`).
+- Kim: `skymail:announcements:send` her gönderimi; `skymail:mails:write` yalnız
+  kendi gönderdiğini (`sent_by`). Ötekine 403.
+- İptal edilen satır atlanmış sayılır: gönderimi `failed` okutmaz
+  (`mail_task_status()`). Bir alıcısı gitmiş, kalanı iptal edilmiş gönderim
+  `sent` okunur, `cancelled_at` ile gösterilir.
+- Haber gönderiminde iptal edilen satır `source_ref`'ini bırakır: o alıcı
+  "zaten aldı" sayılmaz. Aynı haber aynı kitleye yeniden gönderilince yalnız
+  almamış olanlara gider (gitmiş ya da gönderilmekte olan satırlar dışlanır).
+  İptal edilen gönderimin satırları hâlâ gönderiliyorsa ya da kuyruktaysa
+  yeniden gönderim `409 news_send.cancel_finishing` (`params.task_id`) alır;
+  iptal bitince açılır. Göç `20261031120000` eski iptal satırlarını temizler,
+  `20261031120100`/`120200` kitle başına tekil indeksi iptal edilmemiş
+  gönderimlerle sınırlar.
+- Duraklatılan gönderimin bekleyen satırları "park edilir": `next_attempt_at`
+  `2999-01-01` olur, şeridin alma sorgusu ve indeksi değişmeden onları hiç
+  okumaz. Sürdürünce `now()`'a döner (bekleme süreleri sıfırlanır). Duraklama
+  ya da iptalden sonra bir yeniden deneme ya da dolan kira bir satırı yeniden
+  vadesine getirirse alma turu onu işçiye vermez: duraklatılmışsa yeniden park
+  eder, iptal edilmişse `cancelled` yazar.
+- Park yalnız gönderim hâlâ duraklatılmışken yapılır. Sürdürme, satırı
+  duraklatılmış okuyan bir alma turuyla aynı anda olursa satır park edilmiş
+  kalabilir (sürdürme o an satırı göremez). Temizleyici (reaper) her turda
+  duraklatılmamış ve iptal edilmemiş gönderimin park edilmiş satırlarını
+  `now()`'a döndürür.
+- Geri dönüş: göçün down'ı park edilmiş satırları `now()`'a döndürür. Yalnız
+  imaj geri alınacaksa önce duraklatılmış gönderimleri sürdürün: eski imajda
+  sürdürme ucu yok.
+- Eski imaj (yayın sırasında start-first) duraklatılmış gönderimin park
+  edilmemiş satırlarını almaya devam edebilir; yeni imaj açılınca durur.
 
 ## Gönderilen içerik (`MAIL_CONTENT_RETENTION_DAYS`)
 
@@ -1442,7 +1554,8 @@ kalabilir, ayrı ayrı geri alınır.
   türevden yapılan bağlantı da iki uydurma postada ayrışır, kaydedilmez. Uydurma posta işlenemezse yalnız
   şablonda düz yazılmış bağlantılar sayılır. Gövde değişkeni şablon olarak
   yorumlanmaz: gövdeye yazılan `{{.Email}}` metindir, alıcının adresine
-  dönüşmez. `data-skymail-notrack` öteki kurallarla her zaman geçerlidir;
+  dönüşmez. Tek istisna alıcının adı etiketidir ("Serbest duyuruda alıcının
+  adı"): yalnız metne girer, hiçbir bağlantının adresine girmez. `data-skymail-notrack` öteki kurallarla her zaman geçerlidir;
   serbest gövdede de: temizleyici `<a>` üzerinde boş ya da `true` değerli
   `data-skymail-notrack`'i geçirir (başka öznitelik geçmez), panel
   düzenleyicisindeki "Bu bağlantıyı sayma" anahtarı bunu yazar. Kişiye
@@ -1703,6 +1816,47 @@ Content-Type: application/json
   ve `core` istemcisinin `communication-preferences:read` rolünü
   (`resource_access.core.roles`) arar (bilet 17, core #256).
 
+## Serbest duyuruda alıcının adı
+
+Gönderimin kendi değişkenleri veridir, şablon değildir: serbest duyurunun
+gövdesine yazılan `{{.Email}}` metin olarak gider. Bunun tek istisnası
+alıcının adıdır (sektörün "merge tag"i: Mailchimp `*|FNAME|*`, SendGrid
+`{{first_name}}`; hub bileti `skymail-serbest-duyuru-alici-adi` 01). Tam
+olarak iki etiket, yazıldığı gibi tanınır (`internal/mailer/recipient_name.go`):
+
+- `{{.FullName}}`: alıcının adı;
+- `{{or .FullName "katılımcı"}}`: ad, ya da adı boş alıcıda tırnak içindeki
+  yedek (1–60 karakter; `"` `\` `{` `}` `<` `>` `&` ve denetim karakteri
+  yok). Yedeksiz etiket adı boş alıcıda hiçbir şey basmaz. Mailchimp,
+  HubSpot, Braze ve Klaviyo'nun "varsayılan değer"i budur.
+
+Başka her `{{…}}` (başka değişken, `range`/`if`/işlev, boşluklu ya da
+kırpma işaretli etiket) bugünkü gibi metin kalır; hiçbir şablon motoru
+çalışmaz, etiket metin olarak bulunup değiştirilir. Etiketlerin anlamı Go'nun
+aynı ifadeye verdiği anlamla aynıdır.
+
+- **Nerede:** şablonun konusunun bastığı gönderim değişkenlerinde (free.basic:
+  `Subject`; ön başlık da onu basar) ve `safeHTML` ile basılanlarda
+  (free.basic: `BodyHtml`). Gövdede yalnız metinde, ad HTML kaçışlı;
+  öznitelikte, dolayısıyla bağlantı adresinde asla. Yalnız `safeHTML` ile
+  markup basan şablonlarda (free.basic, Haber); markup basmayan şablonda
+  (servis postaları: konuları form başlığı ya da yanıtlayanın yazdığını
+  basabilir) hiçbir değişken dolmaz. Alıcının kendi değişkenleri (Haber
+  gönderiminin `AudienceReason`'ı gibi), şablonun kendi metni ve öteki
+  değişkenler değişmez.
+- **Ad:** satırın `recipient_full_name`'i; boşluk ve denetim karakteri
+  dizileri tek boşluk, baş ve sonu kırpılmış. İlk ad türetilmez: satırda
+  yalnız tam ad var; iki göbek adlı Türkçe adın hangisinin ilk ad olduğu
+  tahmin edilmez.
+- **Takip:** bağlantılar herkese aynı kalır (`linksSendLevel`'in iki uydurma
+  alıcısı da farklı ad alır, bağlantı ortak kalır); ad yalnız metindedir.
+- **Maskeleme ve saklama:** ad, gönderilen içerikte postanın kendisi gibi
+  durur (`recipient_full_name` zaten satırdadır); maskeleme postayı aynı
+  adla yeniden işler; Account erasure içeriği her zamanki gibi boşaltır.
+- **Önizleme:** skymail-frontend aynı iki etiketi aynı kuralla doldurur;
+  iki repo aynı vaka dosyasını tutar (`internal/mailer/testdata/recipient-name.json`,
+  SHA-256 iki testte sabit).
+
 ## Veritabanı migration'ları
 
 Uygulama bekleyen migration'ları servis trafiğe açılmadan önce çalıştırabilir.
@@ -1765,6 +1919,10 @@ alıcı başına mevcut queue satırıyla gönderilir. Yeni kaynak, ilk sürümd
 adres bilgisini kullanır; kişi izleme kapsamını genişletmez. Gönderim/onay
 readback'inde `audience.kind=form`, `source=forms`, form/source kimliği, ad,
 hazırlanma zamanı ve alıcı sayısı yer alır; eski audience alanları korunur.
+
+Kaynak bilgisi (`POST` yanıtı ve `GET`) `unnamed_count` ile adı boş
+yanıtlayan sayısını da verir: alıcının adını kullanan duyuruda ("Serbest
+duyuruda alıcının adı") gönderim sayfası bunu uyarı olarak gösterir.
 
 Hesap silme kaynak sahibini ve eşleşen alıcı/başlık bilgisini de temizler.
 Etkilenmiş snapshot geçersizleşir; bekleyen kaynakla gönderim/onay 409 verir.

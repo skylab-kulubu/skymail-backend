@@ -43,14 +43,19 @@ type FormMailSource struct {
 	ResponseCount  int `json:"response_count"`
 	SkippedCount   int `json:"skipped_count"`
 	DuplicateCount int `json:"duplicate_count"`
+	// Of RecipientCount, those whose name is empty: a mail that greets its
+	// recipient by name (the recipient name tag) prints the tag's fallback,
+	// or nothing, for them. The send page says how many.
+	UnnamedCount int `json:"unnamed_count"`
 	// Snapshot preparation time, not the time the owner later sends or submits it.
 	PreparedAt time.Time `json:"prepared_at"`
 	ExpiresAt  time.Time `json:"expires_at"`
 }
 
-func formSourceDescriptor(s database.MailFormSource) FormMailSource {
+func formSourceDescriptor(s database.MailFormSource, unnamed int) FormMailSource {
 	return FormMailSource{ID: s.ID, FormID: s.FormID, OwnerSub: s.OwnerSub, FormTitle: s.FormTitle, RecipientCount: s.RecipientCount,
-		ResponseCount: s.ResponseCount, SkippedCount: s.SkippedCount, DuplicateCount: s.DuplicateCount, PreparedAt: s.PreparedAt, ExpiresAt: s.ExpiresAt}
+		ResponseCount: s.ResponseCount, SkippedCount: s.SkippedCount, DuplicateCount: s.DuplicateCount, UnnamedCount: unnamed,
+		PreparedAt: s.PreparedAt, ExpiresAt: s.ExpiresAt}
 }
 
 func WithFormSourceLimit(limit int) MailHandlerOption {
@@ -307,6 +312,7 @@ func (h *mailHandlerImpl) CreateFormSource(c fiber.Ctx) error {
 	}
 	now := h.now().UTC()
 	var source database.MailFormSource
+	unnamed := 0
 	err = h.db.InTx(c.Context(), func(q *database.Queries) error {
 		var err error
 		source, err = q.CreateMailFormSource(c.Context(), database.CreateMailFormSourceParams{
@@ -318,15 +324,19 @@ func (h *mailHandlerImpl) CreateFormSource(c fiber.Ctx) error {
 			return err
 		}
 		emails, names := make([]string, len(to)), make([]string, len(to))
+		unnamed = 0
 		for i, r := range to {
 			emails[i], names[i] = r.Email, r.FullName
+			if !mailer.HasRecipientName(r.FullName) {
+				unnamed++
+			}
 		}
 		return duplicateRecipientsError(q.AddMailFormSourceRecipients(c.Context(), database.AddMailFormSourceRecipientsParams{SourceID: source.ID, Emails: emails, FullNames: names}))
 	})
 	if err != nil {
 		return err
 	}
-	return c.Status(fiber.StatusCreated).JSON(formSourceDescriptor(source))
+	return c.Status(fiber.StatusCreated).JSON(formSourceDescriptor(source, unnamed))
 }
 
 // GetFormSource godoc
@@ -361,7 +371,17 @@ func (h *mailHandlerImpl) GetFormSource(c fiber.Ctx) error {
 	if !h.now().Before(source.ExpiresAt) {
 		return errFormSourceExpired
 	}
-	return c.JSON(formSourceDescriptor(source))
+	names, err := h.db.ListMailFormSourceRecipientNames(c.Context(), source.ID)
+	if err != nil {
+		return err
+	}
+	unnamed := 0
+	for _, name := range names {
+		if !mailer.HasRecipientName(name) {
+			unnamed++
+		}
+	}
+	return c.JSON(formSourceDescriptor(source, unnamed))
 }
 
 // SendFormSource godoc

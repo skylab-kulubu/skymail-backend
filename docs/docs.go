@@ -395,6 +395,18 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
+            "handlers.EmailDelivery": {
+                "properties": {
+                    "undeliverable": {
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.UndeliverableAddress"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    }
+                },
+                "type": "object"
+            },
             "handlers.FormMailSource": {
                 "properties": {
                     "duplicate_count": {
@@ -428,6 +440,10 @@ const docTemplate = `{
                         "type": "integer"
                     },
                     "skipped_count": {
+                        "type": "integer"
+                    },
+                    "unnamed_count": {
+                        "description": "Of RecipientCount, those whose name is empty: a mail that greets its\nrecipient by name (the recipient name tag) prints the tag's fallback,\nor nothing, for them. The send page says how many.",
                         "type": "integer"
                     }
                 },
@@ -925,6 +941,10 @@ const docTemplate = `{
                         "type": "array",
                         "uniqueItems": false
                     },
+                    "cancelled_at": {
+                        "description": "When the send was cancelled (POST /mail_tasks/{id}/cancel): its pending recipients were skipped; null otherwise.",
+                        "type": "string"
+                    },
                     "category": {
                         "description": "core's category of a duyuru send (club:duyuru, club:haber, team:\u003cgroup id\u003e:duyuru|haber); null for any other.",
                         "type": "string"
@@ -955,6 +975,18 @@ const docTemplate = `{
                     "own_event_statement": {
                         "description": "On a duyuru send to a list or a group, the sender's statement that the mail is about the list's own event or work (KVKK notice s6 row 15), kept with the send's sender and time; null otherwise.",
                         "type": "boolean"
+                    },
+                    "paused_at": {
+                        "description": "While set, the bulk lane takes none of the send's rows (POST /mail_tasks/{id}/pause, or its failure rate); null otherwise.",
+                        "type": "string"
+                    },
+                    "paused_reason": {
+                        "description": "operator (paused by hand) or failure_rate (its recipients failed past SKYMAIL_FAILURE_PAUSE_COUNT and SKYMAIL_FAILURE_PAUSE_PERCENT); null when not paused.",
+                        "enum": [
+                            "operator",
+                            "failure_rate"
+                        ],
+                        "type": "string"
                     },
                     "purpose": {
                         "description": "islem or duyuru. Null for a send queued while SkyMail's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).",
@@ -1042,7 +1074,7 @@ const docTemplate = `{
             "handlers.NewsSendCount": {
                 "properties": {
                     "already_sent_task_id": {
-                        "description": "The send of this record to this audience, when there is one: a send now would be 409 news_send.already_sent.",
+                        "description": "The send of this record to this audience, when there is one: a send now would be 409 news_send.already_sent. A cancelled send is none.",
                         "type": "string"
                     },
                     "counts": {
@@ -1251,6 +1283,10 @@ const docTemplate = `{
                 "properties": {
                     "ambiguous": {
                         "description": "Skipped, never sent: two or more accounts hold the address, so no one preference stands for it (in failed too).",
+                        "type": "integer"
+                    },
+                    "cancelled": {
+                        "description": "Skipped, never sent: the send was cancelled while the recipient was still pending (in failed too).",
                         "type": "integer"
                     },
                     "failed": {
@@ -1574,6 +1610,10 @@ const docTemplate = `{
             },
             "handlers.SendSummary": {
                 "properties": {
+                    "bulk_held_until": {
+                        "description": "Until when the bulk lane takes nothing because the relay throttled the account (SMTP 421, 432, 4.7.x; Graph 429, 503; SKYMAIL_THROTTLE_PAUSE): lists, groups and News sends wait, single mail goes. Null when not held.",
+                        "type": "string"
+                    },
                     "daily_sent": {
                         "items": {
                             "$ref": "#/components/schemas/handlers.DailySent"
@@ -2030,7 +2070,7 @@ const docTemplate = `{
             "handlers.TrackingMode": {
                 "properties": {
                     "list_consent_available": {
-                        "description": "True while SKYMAIL_LIST_CONSENT=on: a list's address without an account gets a duyuru only with its announcement consent, unless the send states own_event_statement (the mail is about the list's own event or work). The list send form shows that box only then.",
+                        "description": "True while SKYMAIL_LIST_CONSENT=on: an address without an account gets a duyuru only with its announcement consent, whatever the send (a list, a Forms source's respondents, one person, an approved send); islem mail is not held. A list or group send that states own_event_statement (the mail is about the list's own event or work) needs none. The list send form shows that box only then.",
                         "type": "boolean"
                     },
                     "promotional_available": {
@@ -2184,6 +2224,20 @@ const docTemplate = `{
                     },
                     "withheld": {
                         "type": "boolean"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.UndeliverableAddress": {
+                "properties": {
+                    "address": {
+                        "example": "ayse@example.com",
+                        "type": "string"
+                    },
+                    "since": {
+                        "description": "When the address was first suppressed (UTC).",
+                        "example": "2026-10-21T09:00:00Z",
+                        "type": "string"
                     }
                 },
                 "type": "object"
@@ -4635,6 +4689,130 @@ const docTemplate = `{
                 ]
             }
         },
+        "/mail_tasks/{id}/cancel": {
+            "post": {
+                "description": "The send's pending recipients are written failed with 'cancelled', nothing tried (counted in recipient_counts.cancelled, never making the send read failed); rows being sent finish. A cancelled send stays cancelled (200). Who may pause it may cancel it.",
+                "parameters": [
+                    {
+                        "description": "Task ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailTaskItem"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_task.not_bulk or mail_task.finished"
+                    }
+                },
+                "summary": "Cancel a send",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
+        "/mail_tasks/{id}/pause": {
+            "post": {
+                "description": "The bulk lane takes none of the send's rows until it is resumed; rows being sent finish. A paused send stays paused (200). The send's own sender with skymail:mails:write, or anyone with skymail:announcements:send. A send may also pause itself when its recipients fail past SKYMAIL_FAILURE_PAUSE_COUNT and SKYMAIL_FAILURE_PAUSE_PERCENT (paused_reason failure_rate).",
+                "parameters": [
+                    {
+                        "description": "Task ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailTaskItem"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden: neither skymail:announcements:send nor the send's sender"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_task.not_bulk, mail_task.cancelled or mail_task.finished"
+                    }
+                },
+                "summary": "Pause a send",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
         "/mail_tasks/{id}/queue": {
             "get": {
                 "description": "Get a send's recipients, one queue row each, newest first with the row id breaking ties so pages neither repeat nor skip a recipient. The status filter keeps only recipients in that queue status; X-Total-Count counts the filtered recipients.",
@@ -4814,6 +4992,68 @@ const docTemplate = `{
                     }
                 },
                 "summary": "Get one recipient's mail as kept",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
+        "/mail_tasks/{id}/resume": {
+            "post": {
+                "description": "The bulk lane takes the send's rows again; its failures so far are accepted and its failure rate counts afresh. A send that is not paused is left as it is (200). Who may pause it may resume it.",
+                "parameters": [
+                    {
+                        "description": "Task ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.MailTaskItem"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "mail_task.not_bulk or mail_task.cancelled"
+                    }
+                },
+                "summary": "Resume a paused send",
                 "tags": [
                     "Mail"
                 ]
@@ -5544,6 +5784,47 @@ const docTemplate = `{
                 ]
             }
         },
+        "/me/email-delivery": {
+            "get": {
+                "description": "The caller's own addresses on the suppression list: the rows suppressed with their sub, and the rows of the addresses their token says are theirs — Keycloak's email (only when email_verified is true) and school_email — compared lower-cased and trimmed, each once, oldest first. since is when the address was first suppressed. No source, code or id; no parameter: someone else's address cannot be asked about. Only a person's own token issued for SkyMail (aud skymail) may call it; no role is needed. Served with Cache-Control: no-store.",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.EmailDelivery"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "server.unauthorized: no live token, or one not issued for SkyMail"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "auth.person_required: a service's token"
+                    }
+                },
+                "summary": "Which of my addresses mail does not reach",
+                "tags": [
+                    "Inbox"
+                ]
+            }
+        },
         "/me/inbox": {
             "get": {
                 "description": "The caller's own inbox items, newest first, a page at a time: next_cursor goes into cursor for the next page, null on the last. Archived items are left out unless archived says include or only; an item past its expiry (90 days, or sooner) is never served. Only a person's own token issued for SkyMail (aud skymail) may call it; no role is needed.",
@@ -5996,7 +6277,7 @@ const docTemplate = `{
         },
         "/news_sends": {
             "post": {
-                "description": "Reads the record of slug from the CMS (inscribed, anonymously: only public records in Faz 1), asks core who it goes to (every Member, or some teams with their sub-teams and followers; core leaves out who turned the category off, a disabled, unverified or address-less account, and answers each person's own unsubscribe link and why they get it), and queues the club.news template to each in the bulk lane, as a duyuru of core's category with List-Unsubscribe from that link. The send keeps the record as it was (source.version; a later edit changes the web, never the mail). A record's mail goes to a mailbox once: an address a row of this record already went to (an earlier send to another audience) is left out and counted already_received; the same record to the same audience again is 409 news_send.already_sent with that send's id. Only a person with skymail:announcements:send sends directly; Mail onayı for the others comes with a later version. Off unless SKYMAIL_NEWS_SEND=on (503 news_send.not_enabled).",
+                "description": "Reads the record of slug from the CMS (inscribed, anonymously: only public records in Faz 1), asks core who it goes to (every Member, or some teams with their sub-teams and followers; core leaves out who turned the category off, a disabled, unverified or address-less account, and answers each person's own unsubscribe link and why they get it), and queues the club.news template to each in the bulk lane, as a duyuru of core's category with List-Unsubscribe from that link. The send keeps the record as it was (source.version; a later edit changes the web, never the mail). A record's mail goes to a mailbox once: an address a row of this record already went to (an earlier send to another audience) is left out and counted already_received; the same record to the same audience again is 409 news_send.already_sent with that send's id. A cancelled send holds nothing back: its recipients who never got the mail get it when the record is sent again (409 news_send.cancel_finishing while its rows being sent finish). Only a person with skymail:announcements:send sends directly; Mail onayı for the others comes with a later version. Off unless SKYMAIL_NEWS_SEND=on (503 news_send.not_enabled).",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -6066,7 +6347,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "news_send.already_sent (params.task_id); news_send.private_record; news_send.template_missing"
+                        "description": "news_send.already_sent (params.task_id); news_send.cancel_finishing (params.task_id); news_send.private_record; news_send.template_missing"
                     },
                     "422": {
                         "content": {

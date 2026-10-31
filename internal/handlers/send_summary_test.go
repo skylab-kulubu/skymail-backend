@@ -598,7 +598,8 @@ func TestSendListAndDetailKeepTheFieldsTheOldPanelReads(t *testing.T) {
 	// Only additions besides them: the old panel ignores what it does not know.
 	known := map[string]bool{"created_at": true, "status": true, "recipient_counts": true, "template_key": true, "audience": true,
 		"content_access": true, "content_expires_at": true, "tracking": true,
-		"purpose": true, "category": true, "transactional_statement": true, "commercial_content_absent": true, "own_event_statement": true}
+		"purpose": true, "category": true, "transactional_statement": true, "commercial_content_absent": true, "own_event_statement": true,
+		"paused_at": true, "paused_reason": true, "cancelled_at": true}
 	for field := range want {
 		known[field] = true
 	}
