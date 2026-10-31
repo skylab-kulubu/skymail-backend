@@ -967,7 +967,9 @@ bileti duyuru-haber 06; ADR 0067). Varsayılan kapalı; kapalıyken uç
   `mail_queue.source_ref = news:<slug>` ve `(source_ref, lower(recipient_email))`
   kısmi tekil indeksi. Önce ekibe sonra bütün üyelere gönderilirse ekiptekiler
   `already_received` sayılır. Aynı kayıt aynı kitleye ikinci kez
-  `409 news_send.already_sent` (`params.task_id`) döner. Kuyruğa alırken
+  `409 news_send.already_sent` (`params.task_id`) döner; iptal edilmiş
+  gönderim sayılmaz (iptal edilen alıcıya yeniden gönderilir, bkz.
+  "Kısma ve görev düzeyinde işlemler"). Kuyruğa alırken
   başarısız yazılan satır (bastırılmış ya da çıkmış adres, render hatası)
   `source_ref` taşımaz.
 - **Posta.** System template `club.news` (skymail-frontend, Template seed);
@@ -1165,6 +1167,14 @@ Atlananlar (tercih, bastırma, rıza, ayrılmış alan adı, iptal) sayılmaz.
 - İptal edilen satır atlanmış sayılır: gönderimi `failed` okutmaz
   (`mail_task_status()`). Bir alıcısı gitmiş, kalanı iptal edilmiş gönderim
   `sent` okunur, `cancelled_at` ile gösterilir.
+- Haber gönderiminde iptal edilen satır `source_ref`'ini bırakır: o alıcı
+  "zaten aldı" sayılmaz. Aynı haber aynı kitleye yeniden gönderilince yalnız
+  almamış olanlara gider (gitmiş ya da gönderilmekte olan satırlar dışlanır).
+  İptal edilen gönderimin satırları hâlâ gönderiliyorsa ya da kuyruktaysa
+  yeniden gönderim `409 news_send.cancel_finishing` (`params.task_id`) alır;
+  iptal bitince açılır. Göç `20261031120000` eski iptal satırlarını temizler,
+  `20261031120100`/`120200` kitle başına tekil indeksi iptal edilmemiş
+  gönderimlerle sınırlar.
 - Duraklatılan gönderimin bekleyen satırları "park edilir": `next_attempt_at`
   `2999-01-01` olur, şeridin alma sorgusu ve indeksi değişmeden onları hiç
   okumaz. Sürdürünce `now()`'a döner (bekleme süreleri sıfırlanır). Duraklama

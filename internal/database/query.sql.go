@@ -308,7 +308,8 @@ UPDATE mail_queue
 SET status     = 'failed',
     error      = 'cancelled',
     claimed_at = NULL,
-    claimed_by = NULL
+    claimed_by = NULL,
+    source_ref = NULL
 WHERE id = ANY ($1::uuid[])
   AND status = 'processing'
   AND claimed_by = $2::text
@@ -320,7 +321,9 @@ type CancelClaimedRowsParams struct {
 }
 
 // Writes rows this process took failed with 'cancelled' (their send was
-// cancelled), nothing tried.
+// cancelled), nothing tried. A cancelled row of a News send gives up its
+// source_ref: its recipient never got the record's mail, so a later send of
+// the record goes to them (ListNewsSourceAddresses, idx_mail_queue_news_once).
 func (q *Queries) CancelClaimedRows(ctx context.Context, arg CancelClaimedRowsParams) (int64, error) {
 	result, err := q.db.Exec(ctx, cancelClaimedRows, arg.Ids, arg.ClaimedBy)
 	if err != nil {
@@ -360,7 +363,8 @@ UPDATE mail_queue q
 SET status     = 'failed',
     error      = 'cancelled',
     claimed_at = NULL,
-    claimed_by = NULL
+    claimed_by = NULL,
+    source_ref = NULL
 FROM mail_tasks mt
 WHERE mt.id = q.task_id
   AND mt.cancelled_at IS NOT NULL
@@ -371,7 +375,8 @@ WHERE mt.id = q.task_id
 // Writes the pending rows of cancelled sends failed with 'cancelled', nothing
 // tried: at the cancel, and on the reaper's turn for a row a retry or an
 // expired lease put back to pending since. task_id NULL sweeps every
-// cancelled send.
+// cancelled send. As CancelClaimedRows, a cancelled row gives up its
+// source_ref.
 func (q *Queries) CancelPendingRows(ctx context.Context, taskID *uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, cancelPendingRows, taskID)
 	if err != nil {
@@ -3023,8 +3028,17 @@ func (q *Queries) GetMailingListByIdIncludingArchived(ctx context.Context, id uu
 }
 
 const getNewsSendByAudience = `-- name: GetNewsSendByAudience :one
-SELECT id FROM mail_tasks
-WHERE source_ref = $1::text AND source_audience = $2::text
+SELECT mt.id, (mt.cancelled_at IS NOT NULL)::boolean AS cancelled
+FROM mail_tasks mt
+WHERE mt.source_ref = $1::text
+  AND mt.source_audience = $2::text
+  AND (mt.cancelled_at IS NULL
+    OR EXISTS (SELECT 1
+               FROM mail_queue q
+               WHERE q.task_id = mt.id
+                 AND q.status IN ('pending', 'processing')))
+ORDER BY (mt.cancelled_at IS NULL) DESC, mt.created_at DESC
+LIMIT 1
 `
 
 type GetNewsSendByAudienceParams struct {
@@ -3032,12 +3046,23 @@ type GetNewsSendByAudienceParams struct {
 	SourceAudience string `json:"source_audience"`
 }
 
-// The send of a News record to an audience, if there is one (open or done).
-func (q *Queries) GetNewsSendByAudience(ctx context.Context, arg GetNewsSendByAudienceParams) (uuid.UUID, error) {
+type GetNewsSendByAudienceRow struct {
+	ID        uuid.UUID `json:"id"`
+	Cancelled bool      `json:"cancelled"`
+}
+
+// The send of a News record to an audience that holds a new one back, if
+// there is one: a send not cancelled (open or done), else a cancelled one
+// whose rows are still queued or being sent (a cancel leaves the rows being
+// sent to finish; a retry or an expired lease puts one back for the reaper
+// to cancel). A cancelled send whose rows are all done holds nothing back:
+// its cancelled rows carry no source_ref, so the record goes again to who
+// never got it, and only to them.
+func (q *Queries) GetNewsSendByAudience(ctx context.Context, arg GetNewsSendByAudienceParams) (GetNewsSendByAudienceRow, error) {
 	row := q.db.QueryRow(ctx, getNewsSendByAudience, arg.SourceRef, arg.SourceAudience)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
+	var i GetNewsSendByAudienceRow
+	err := row.Scan(&i.ID, &i.Cancelled)
+	return i, err
 }
 
 const getNotificationByIdempotencyKey = `-- name: GetNotificationByIdempotencyKey :one
@@ -4877,7 +4902,8 @@ WHERE source_ref = $1::text
 `
 
 // The mailboxes a row of a News record was queued to go to, lower-cased:
-// every send of the record leaves them out ("zaten aldı").
+// every send of the record leaves them out ("zaten aldı"). A row written
+// failed at queueing, or cancelled, has no source_ref: not among them.
 func (q *Queries) ListNewsSourceAddresses(ctx context.Context, sourceRef string) ([]string, error) {
 	rows, err := q.db.Query(ctx, listNewsSourceAddresses, sourceRef)
 	if err != nil {

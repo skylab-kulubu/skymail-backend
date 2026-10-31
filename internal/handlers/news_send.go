@@ -55,6 +55,8 @@ var (
 		"The club.news template is not in use: the Template seed has not written it.", fiber.StatusConflict)
 	errNewsAlreadySent = apperrors.New("news_send.already_sent",
 		"This record was already sent to this audience: params.task_id is that send.", fiber.StatusConflict)
+	errNewsCancelFinishing = apperrors.New("news_send.cancel_finishing",
+		"The cancelled send of this record to this audience (params.task_id) is still finishing the mails it had begun. Retry in a few minutes: then it goes only to who did not get it.", fiber.StatusConflict)
 	errNewsTeamUnknown = apperrors.New("news_send.team_unknown",
 		"A named team is no team (core: an area, a leaders' or Privileged group, or an unknown one).", fiber.StatusBadRequest)
 	errNewsAudienceUnavailable = apperrors.New("news_send.audience_unavailable",
@@ -160,7 +162,7 @@ type NewsSendResult struct {
 // Send godoc
 //
 //	@Summary		Mail a published News record to an audience
-//	@Description	Reads the record of slug from the CMS (inscribed, anonymously: only public records in Faz 1), asks core who it goes to (every Member, or some teams with their sub-teams and followers; core leaves out who turned the category off, a disabled, unverified or address-less account, and answers each person's own unsubscribe link and why they get it), and queues the club.news template to each in the bulk lane, as a duyuru of core's category with List-Unsubscribe from that link. The send keeps the record as it was (source.version; a later edit changes the web, never the mail). A record's mail goes to a mailbox once: an address a row of this record already went to (an earlier send to another audience) is left out and counted already_received; the same record to the same audience again is 409 news_send.already_sent with that send's id. Only a person with skymail:announcements:send sends directly; Mail onayı for the others comes with a later version. Off unless SKYMAIL_NEWS_SEND=on (503 news_send.not_enabled).
+//	@Description	Reads the record of slug from the CMS (inscribed, anonymously: only public records in Faz 1), asks core who it goes to (every Member, or some teams with their sub-teams and followers; core leaves out who turned the category off, a disabled, unverified or address-less account, and answers each person's own unsubscribe link and why they get it), and queues the club.news template to each in the bulk lane, as a duyuru of core's category with List-Unsubscribe from that link. The send keeps the record as it was (source.version; a later edit changes the web, never the mail). A record's mail goes to a mailbox once: an address a row of this record already went to (an earlier send to another audience) is left out and counted already_received; the same record to the same audience again is 409 news_send.already_sent with that send's id. A cancelled send holds nothing back: its recipients who never got the mail get it when the record is sent again (409 news_send.cancel_finishing while its rows being sent finish). Only a person with skymail:announcements:send sends directly; Mail onayı for the others comes with a later version. Off unless SKYMAIL_NEWS_SEND=on (503 news_send.not_enabled).
 //	@Tags			News sends
 //	@Accept			json
 //	@Produce		json
@@ -169,7 +171,7 @@ type NewsSendResult struct {
 //	@Failure		400		{object}	apperrors.AppError	"validation.error; news_send.commercial_statement_required; news_send.teams_invalid; news_send.team_unknown; news_send.slug_too_long"
 //	@Failure		403		{object}	apperrors.AppError	"server.forbidden: no skymail:announcements:send"
 //	@Failure		404		{object}	apperrors.AppError	"news_send.not_found: unknown or archived"
-//	@Failure		409		{object}	apperrors.AppError	"news_send.already_sent (params.task_id); news_send.private_record; news_send.template_missing"
+//	@Failure		409		{object}	apperrors.AppError	"news_send.already_sent (params.task_id); news_send.cancel_finishing (params.task_id); news_send.private_record; news_send.template_missing"
 //	@Failure		422		{object}	apperrors.AppError	"news_send.no_recipients (params: the counts)"
 //	@Failure		503		{object}	apperrors.AppError	"news_send.not_enabled; news_send.cms_unavailable; news_send.audience_unavailable: nothing was queued"
 //	@Router			/news_sends [post]
@@ -201,7 +203,7 @@ func (h *newsSendHandlerImpl) Send(c fiber.Ctx) error {
 	sourceRef := "news:" + record.Slug
 	audienceKey := news.AudienceKey(params.Audience.Type, teams)
 	if existing, err := h.db.GetNewsSendByAudience(ctx, database.GetNewsSendByAudienceParams{SourceRef: sourceRef, SourceAudience: audienceKey}); err == nil {
-		return errNewsAlreadySent.WithParams(map[string]interface{}{"task_id": existing})
+		return heldBack(existing)
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
@@ -249,7 +251,7 @@ func (h *newsSendHandlerImpl) Send(c fiber.Ctx) error {
 		}
 		existing, err := q.GetNewsSendByAudience(ctx, database.GetNewsSendByAudienceParams{SourceRef: sourceRef, SourceAudience: audienceKey})
 		if err == nil {
-			return errNewsAlreadySent.WithParams(map[string]interface{}{"task_id": existing})
+			return heldBack(existing)
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return err
@@ -296,6 +298,15 @@ func (h *newsSendHandlerImpl) Send(c fiber.Ctx) error {
 	}
 	logNewsSend(result, params.Audience.Type)
 	return c.Status(fiber.StatusCreated).JSON(result)
+}
+
+// heldBack is the 409 of the send that holds the record to the audience
+// back: done or open, or cancelled with rows still being sent.
+func heldBack(existing database.GetNewsSendByAudienceRow) error {
+	if existing.Cancelled {
+		return errNewsCancelFinishing.WithParams(map[string]interface{}{"task_id": existing.ID})
+	}
+	return errNewsAlreadySent.WithParams(map[string]interface{}{"task_id": existing.ID})
 }
 
 // load reads the published record of slug and the club.news template: what
