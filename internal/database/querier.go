@@ -170,6 +170,8 @@ type Querier interface {
 	// (template_key_content_locked) whatever the template says, else the
 	// template's content_sensitive ('unset' for NULL). It never changes after:
 	// mail_task_content_sensitive() reads it first (20261020120000).
+	// erase_after_send: a service's send that keeps no record of its recipient;
+	// its row is erased when its outcome is written (20261031230000).
 	CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error)
 	CreateTemplate(ctx context.Context, arg CreateTemplateParams) (Template, error)
 	// The database's clock: the one clock every process's send budget reads, so

@@ -45,6 +45,8 @@ type SendSingleMail struct {
 	SendPurpose
 	// Open and click tracking for a mail a person sends (the compose form's people). Ignored (and answered false) while SkyMail's tracking is off, and for a System template or a sensitive one (a template that says nothing counts as sensitive for one person). A service's token (account and transaction mail) does not ask: the field is ignored, and its mail is tracked only while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM), in the system lane, with no click address on a link a variable fills and none at all in a sensitive mail. The recipient's account is looked up in Keycloak by address before the send is queued: the one enabled user whose primary e-mail equals it (case-insensitively) and is verified; none such is no_account, Keycloak not answering is preference_unavailable, and core decides for the account found.
 	Tracking bool `json:"tracking"`
+	// A service's mail that keeps no record of its recipient (core's account deletion notices, sent after the person's Erasure command): never tracked, in the system lane, and its queue row is erased the moment its outcome is written, as Account erasure leaves mail to an erased person (recipient Silinmiş kullanıcı, no address, no content, no variables; the row, its status and its dates stay). A person's token is refused (400 mail_task.erase_after_send_not_allowed). The answer says erase_after_send true when the send was queued so.
+	EraseAfterSend bool `json:"erase_after_send"`
 }
 
 // CreateFormMailSource is accepted only from the configured Forms service.

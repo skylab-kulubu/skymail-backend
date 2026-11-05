@@ -202,6 +202,11 @@ takes the person out of them:
   the recipient's subject; README "Tek tık çıkış"), goes with that content:
   emptied with it (retention, the masking deadline, a send not kept) and on
   Account erasure; the API never serves it.
+- A send with `mail_tasks.erase_after_send` (core's account deletion
+  notices, sent after the person's Erasure command; README "Kayıt bırakmayan
+  posta") keeps none of the above past its outcome: the row is erased as
+  Account erasure erases mail to the person the moment it is sent or fails
+  for good (a trigger, migration `20261031230000`), its variables with it.
 - `mail_tasks.sent_by` — who sent: the Keycloak subject of the token that
   queued the send — for an approved Mail onayı request, its submitter's — or
   `skymail` for the mail SkyMail sends of its own accord, the notice that a
