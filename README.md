@@ -150,6 +150,29 @@ taşıyan istek `404` alır. Silinecek kişinin marker'ı account-access
 Redis'te olmalıdır; kapı `off` iken uç `503` döner. Ayrıntı:
 [`docs/data-lifecycle.md`](docs/data-lifecycle.md#account-erasure).
 
+### Kayıt bırakmayan posta (`erase_after_send`)
+
+core, silinen kişiye iki posta atar: "talebin alındı" ve "hesabın silindi".
+İkisi de kişinin silme komutu SkyMail'de koştuktan sonra gelir, yani artık
+onları silecek bir komut yoktur. Bu yüzden `POST /v1/mail_tasks/single`
+gövdesinde `erase_after_send: true` taşırlar:
+
+- Yalnız servis token'ı ister; kişinin token'ı `400
+  mail_task.erase_after_send_not_allowed` alır ve hiçbir şey kuyruğa girmez.
+- Takip edilmez: `SKYMAIL_TRACKING_SYSTEM` açık olsa da piksel, tıklama
+  adresi ya da Keycloak hesap sorgusu yoktur. Sistem şeridinden gider.
+- Satır sonucu yazıldığı anda (gönderildi, kalıcı hata, kuyruğa girerken
+  atlandı, iptal) kendiliğinden silinir: alıcı `Silinmiş kullanıcı`, adres,
+  konu, gövde ve gönderimin değişkenleri boş. Satır, durumu ve tarihleri kalır,
+  sayılar bozulmaz. Bu, hesap silmenin "mail to the person" adımının
+  bıraktığıyla aynıdır. Kodlardan oluşan hata kalır; adresi anabilecek
+  başka hata gider. Kalıcı ret adresi bastırma listesine yazmaz.
+- Sonuç yazılana kadar (bekleyen, yeniden denenecek satır) posta olduğu gibi
+  durur, çünkü yeniden deneme onu gönderir.
+- İş tetikleyicidedir (migration `20261031230000`), mailer'ın kendi
+  sorgularında değil: sonucu yazan her yol ondan geçer.
+- Yanıt `erase_after_send: true` der; eski imaj alanı hiç yazmaz.
+
 ## Mail göndericisi (`MAIL_SENDER`)
 
 `MAIL_SENDER` `on` (varsayılan, yoksa da açık) ya da `paused` olur; başka bir

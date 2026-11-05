@@ -512,6 +512,8 @@ type MailTask struct {
 	// A cancelled send: its pending rows were written failed with 'cancelled'.
 	CancelledAt *time.Time `json:"cancelled_at"`
 	CancelledBy *string    `json:"cancelled_by"`
+	// A send that keeps no record of its recipient (POST /mail_tasks/single erase_after_send, a service's only): each row is erased when its outcome is written, and the send's variables with it.
+	EraseAfterSend bool `json:"erase_after_send"`
 }
 
 // A send's links that are the same for every recipient, each with its random token: the only addresses /t/c redirects to.

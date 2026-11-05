@@ -1551,6 +1551,8 @@ RETURNING mail_tasks.id, sent_by, template_id, mail_list_id, body_variables, cre
 -- (template_key_content_locked) whatever the template says, else the
 -- template's content_sensitive ('unset' for NULL). It never changes after:
 -- mail_task_content_sensitive() reads it first (20261020120000).
+-- erase_after_send: a service's send that keeps no record of its recipient;
+-- its row is erased when its outcome is written (20261031230000).
 -- name: CreateSingleMailTask :one
 WITH active_template AS (
     SELECT templates.id,
@@ -1560,10 +1562,12 @@ WITH active_template AS (
       AND archived_at IS NULL
 ), inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, body_variables, content_sensitive_at_send, tracking_requested,
-                            purpose, category, transactional_statement, commercial_content_absent)
+                            purpose, category, transactional_statement, commercial_content_absent,
+                            erase_after_send)
         SELECT sqlc.arg(sent_by), id, sqlc.arg(body_variables), content_sensitive, sqlc.arg(tracking_requested)::boolean,
                sqlc.narg(purpose)::text, sqlc.narg(category)::text,
-               sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean
+               sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean,
+               sqlc.arg(erase_after_send)::boolean
         FROM active_template
         RETURNING *
 )
