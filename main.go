@@ -579,7 +579,10 @@ func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, m
 	tasks := api.Group("/mail_tasks")
 	tasks.Post("/", auth.RequireAnyPermission("skymail:mails:write"), mail.CreateTask)
 	tasks.Post("/single", auth.RequireAnyPermission("skymail:mails:send", "skymail:mails:write"), mail.SendSingle)
-	tasks.Post("/form-source", auth.RequireAnyPermission("skymail:mails:send", "skymail:mails:write"), mail.SendFormSource)
+	// Forms respondents are a bulk audience like a list: a direct send takes
+	// skymail:mails:write. skymail:mails:send opens single mails only; its
+	// holder submits the source for approval (POST /mail_approvals).
+	tasks.Post("/form-source", auth.RequireAnyPermission("skymail:mails:write"), mail.SendFormSource)
 	tasks.Get("/", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTasks)
 	// Before /:id, which would otherwise take "summary" for a task id.
 	tasks.Get("/summary", auth.RequireAnyPermission("skymail:mails:read"), mail.GetSummary)
