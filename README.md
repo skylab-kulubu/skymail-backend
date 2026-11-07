@@ -1917,8 +1917,9 @@ bildirmez. `GET /v1/form_mail_sources/{id}` yalnız sahibine, `no-store` ile
 kaynak bilgisini verir. Hazırlanan kaynak 30 dakika içinde sahibince
 `POST /v1/mail_tasks/form-source` ile doğrudan gönderilir veya mevcut
 `POST /v1/mail_approvals` isteğindeki `form_source_id` ile onaya sunulur.
-Doğrudan gönderim mevcut `skymail:mails:send` veya `skymail:mails:write`
-yetkisini; onay mevcut şablon okuma ve onay rollerini kullanır.
+Doğrudan gönderim, liste gibi, `skymail:mails:write` ister; tekil postalar
+için olan `skymail:mails:send` yetmez (403), o rolü tutan kaynağı onaya sunar.
+Onay mevcut şablon okuma ve onay rollerini kullanır.
 
 Yeni kaynak hazırlama şu iki zorunlu değer yokken kapalıdır (503); eski yollar ve
 geçmiş gönderimler etkilenmez:

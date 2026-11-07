@@ -3957,8 +3957,8 @@ paths:
       - Mail
   /mail_tasks/form-source:
     post:
-      description: 'The source owner holding current skymail:mails:send or skymail:mails:write
-        permission queues one bulk task for the fixed source recipients. Source consumption,
+      description: 'The source owner holding current skymail:mails:write permission
+        queues one bulk task for the fixed source recipients. Source consumption,
         task and queue rows commit together. The browser supplies no recipients or
         form metadata. An exact retry of the same source, template, canonical body
         variables and requested tracking returns the same task, including after preparation
@@ -4014,7 +4014,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/apperrors.AppError'
-          description: Current send-or-write permission required
+          description: 'Current skymail:mails:write permission required: skymail:mails:send
+            opens single mails only, its holder submits the source for approval'
         "404":
           content:
             application/json:
