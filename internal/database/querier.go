@@ -101,6 +101,12 @@ type Querier interface {
 	// Sends by the status mail_task_status derives, over every send: the same
 	// numbers CountMailTaskSends gives for each status filter.
 	CountMailTasksByStatus(ctx context.Context) (CountMailTasksByStatusRow, error)
+	// How an approved request's sends went, in totals only (GET
+	// /mail_approvals/{id} result): one row per recipient. A skipped row is
+	// mail_task_status()'s (never sent, by rule: reserved_domain:, suppressed:,
+	// preference: opted_out, inactive or ambiguous, cancelled); failed is every
+	// other failed row; pending counts processing too.
+	CountMailTasksOutcomes(ctx context.Context, taskIds []uuid.UUID) (CountMailTasksOutcomesRow, error)
 	CountMailingLists(ctx context.Context) (int64, error)
 	// A person's test mails of a template in the last minute: a News send's
 	// test (POST /v1/news_sends/test) is a send of club.news to its sender

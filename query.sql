@@ -1754,6 +1754,25 @@ INSERT INTO mail_approval_tasks (approval_id, position, task_id)
 SELECT sqlc.arg(approval_id), t.position, t.task_id
 FROM unnest(sqlc.arg(task_ids)::uuid[]) WITH ORDINALITY AS t(task_id, position);
 
+-- How an approved request's sends went, in totals only (GET
+-- /mail_approvals/{id} result): one row per recipient. A skipped row is
+-- mail_task_status()'s (never sent, by rule: reserved_domain:, suppressed:,
+-- preference: opted_out, inactive or ambiguous, cancelled); failed is every
+-- other failed row; pending counts processing too.
+-- name: CountMailTasksOutcomes :one
+WITH outcomes AS (SELECT q.status,
+                     q.status = 'failed'
+                         AND (COALESCE(q.error, '') LIKE 'reserved\_domain:%'
+                         OR COALESCE(q.error, '') LIKE 'suppressed:%'
+                         OR COALESCE(q.error, '') IN ('preference: opted_out', 'preference: inactive', 'preference: ambiguous', 'cancelled')) AS skipped
+              FROM mail_queue q
+              WHERE q.task_id = ANY (sqlc.arg(task_ids)::uuid[]))
+SELECT count(*) FILTER (WHERE status = 'sent')                     AS sent,
+       count(*) FILTER (WHERE skipped)                             AS skipped,
+       count(*) FILTER (WHERE status = 'failed' AND NOT skipped)   AS failed,
+       count(*) FILTER (WHERE status IN ('pending', 'processing')) AS pending
+FROM outcomes;
+
 -- Takes a request's row lock without waiting for it: a request someone else is
 -- deciding right now is refused (55P03) rather than queued behind them — the
 -- lock is held while the send is queued, and a wait would hold a connection

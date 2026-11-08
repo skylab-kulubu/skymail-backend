@@ -142,25 +142,9 @@ func (h *mailHandlerImpl) GetTracking(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	retained := task.TrackingClosedAt != nil || !task.SentAt.Add(tracking.EventRetention).After(h.now())
-	var report []byte
-	if retained {
-		report, err = h.db.GetRetainedTrackingReport(ctx, id)
-		if errors.Is(err, pgx.ErrNoRows) {
-			err = nil
-		}
-	} else {
-		report, err = h.db.GetTrackingReport(ctx, database.GetTrackingReportParams{TaskID: id, SentAt: task.StartedAt})
-	}
+	aggregate, retained, err := trackingReportOf(ctx, h.db, task, h.now())
 	if err != nil {
 		return err
-	}
-	var aggregate *TrackingAggregate
-	if len(report) > 0 {
-		aggregate = &TrackingAggregate{}
-		if err := json.Unmarshal(report, aggregate); err != nil {
-			return err
-		}
 	}
 	people := h.mayReadTrackingPeople(c, task)
 	withheld := aggregate != nil && countsTellOfPeople(task, aggregate) && !people
@@ -168,6 +152,32 @@ func (h *mailHandlerImpl) GetTracking(c fiber.Ctx) error {
 		aggregate = nil
 	}
 	return c.JSON(TrackingSummary{TrackingAvailable: h.mailer.TrackingAvailable(), TrackingRequested: task.TrackingRequested, Retained: retained, Withheld: withheld, RecipientsReadable: people, Report: aggregate})
+}
+
+// trackingReportOf is a send's counts as GET /mail_tasks/{id}/tracking reads
+// them, before the rule of who may read them: 90 days after its last mail went
+// out (or once tracking closed) the retained totals, nil when none were kept
+// (retained true); before, the live report.
+func trackingReportOf(ctx context.Context, db *database.Store, task database.TrackingTaskAccessRow, now time.Time) (*TrackingAggregate, bool, error) {
+	retained := task.TrackingClosedAt != nil || !task.SentAt.Add(tracking.EventRetention).After(now)
+	var report []byte
+	var err error
+	if retained {
+		report, err = db.GetRetainedTrackingReport(ctx, task.ID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			err = nil
+		}
+	} else {
+		report, err = db.GetTrackingReport(ctx, database.GetTrackingReportParams{TaskID: task.ID, SentAt: task.StartedAt})
+	}
+	if err != nil || len(report) == 0 {
+		return nil, retained, err
+	}
+	aggregate := &TrackingAggregate{}
+	if err := json.Unmarshal(report, aggregate); err != nil {
+		return nil, retained, err
+	}
+	return aggregate, retained, nil
 }
 
 // countsTellOfPeople says a send's counts are as good as its people's: a

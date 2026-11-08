@@ -342,6 +342,8 @@ func main() {
 		ClientID: cfg.KeycloakClientID,
 		UIURL:    config.Value("SKYMAIL_UI_URL"),
 		Teams:    teamLeaders,
+
+		SenderSeesRecipients: senderSeesRecipients,
 	})
 	erasureHandler := handlers.NewAccountErasureHandler(db, erasuretoken.NewVerifier(erasureTokenConfig(cfg)), accountAccessGate)
 	withdrawalHandler := handlers.NewTrackingWithdrawalHandler(db, erasuretoken.NewVerifier(withdrawalTokenConfig(cfg)), accountAccessGate)

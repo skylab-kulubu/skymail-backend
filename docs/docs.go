@@ -614,6 +614,9 @@ const docTemplate = `{
                         "type": "array",
                         "uniqueItems": false
                     },
+                    "result": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalResult"
+                    },
                     "state": {
                         "description": "pending: awaiting an approver; returned: an approver's edit awaits the submitter; approved: sent; rejected: refused with a reason, the submitter may resubmit; declined: the submitter refused an approver's edit and may resubmit; expired: undecided seven days after it was submitted, never sent.",
                         "enum": [
@@ -914,6 +917,34 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
+            "handlers.MailApprovalResult": {
+                "properties": {
+                    "failed": {
+                        "description": "Recipients the mail was tried for and failed.",
+                        "type": "integer"
+                    },
+                    "pending": {
+                        "description": "Recipients still queued or being sent.",
+                        "type": "integer"
+                    },
+                    "sent": {
+                        "description": "Recipients it went out to (one a delivery report later said does not exist included).",
+                        "type": "integer"
+                    },
+                    "skipped": {
+                        "description": "Recipients never sent to, by rule: a suppressed or unsubscribed address, a category the person turned off, an account disabled or being erased, an address two accounts hold, a reserved domain, a cancelled send.",
+                        "type": "integer"
+                    },
+                    "tracking": {
+                        "$ref": "#/components/schemas/handlers.MailApprovalTracking"
+                    },
+                    "tracking_withheld": {
+                        "description": "Its sends were tracked, but their counts tell of people (fewer than 10 tracked recipients, or the system lane) and the caller may not read the sends' people: tracking is null.",
+                        "type": "boolean"
+                    }
+                },
+                "type": "object"
+            },
             "handlers.MailApprovalSubmitter": {
                 "properties": {
                     "email": {
@@ -945,6 +976,23 @@ const docTemplate = `{
                     },
                     "version_id": {
                         "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailApprovalTracking": {
+                "properties": {
+                    "clicked": {
+                        "description": "Recipients who clicked a link (unique_clickers).",
+                        "type": "integer"
+                    },
+                    "opened": {
+                        "description": "Recipients with an open or a click not marked automatic (unique_likely_human_opens).",
+                        "type": "integer"
+                    },
+                    "tracked_recipients": {
+                        "description": "Recipients tracked.",
+                        "type": "integer"
                     }
                 },
                 "type": "object"
@@ -3577,7 +3625,7 @@ const docTemplate = `{
         },
         "/mail_approvals/{id}": {
             "get": {
-                "description": "A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. preview_recipient is whose mail the preview is: the first of its people, or for a list the submitter, as if they were on it; it is given also when the preview does not render. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.",
+                "description": "A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. An approved request has result: how its sends went, in totals only (sent, skipped, failed, pending; tracking, the opens and clicks of its tracked sends summed, null and tracking_withheld true when the sum, or the sends of fewer than 10 tracked recipients among others, would tell of people and the caller may not read the sends' people, by GET /mail_tasks/{id}/tracking's rule), with no person in it and one total for a request to people, never a row per send; it needs no skymail:mails:read. Any other request has none. preview_recipient is whose mail the preview is: the first of its people, or for a list the submitter, as if they were on it; it is given also when the preview does not render. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.",
                 "parameters": [
                     {
                         "description": "Request ID",

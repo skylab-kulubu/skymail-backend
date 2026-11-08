@@ -936,6 +936,45 @@ func (q *Queries) CountMailTasksByStatus(ctx context.Context) (CountMailTasksByS
 	return i, err
 }
 
+const countMailTasksOutcomes = `-- name: CountMailTasksOutcomes :one
+WITH outcomes AS (SELECT q.status,
+                     q.status = 'failed'
+                         AND (COALESCE(q.error, '') LIKE 'reserved\_domain:%'
+                         OR COALESCE(q.error, '') LIKE 'suppressed:%'
+                         OR COALESCE(q.error, '') IN ('preference: opted_out', 'preference: inactive', 'preference: ambiguous', 'cancelled')) AS skipped
+              FROM mail_queue q
+              WHERE q.task_id = ANY ($1::uuid[]))
+SELECT count(*) FILTER (WHERE status = 'sent')                     AS sent,
+       count(*) FILTER (WHERE skipped)                             AS skipped,
+       count(*) FILTER (WHERE status = 'failed' AND NOT skipped)   AS failed,
+       count(*) FILTER (WHERE status IN ('pending', 'processing')) AS pending
+FROM outcomes
+`
+
+type CountMailTasksOutcomesRow struct {
+	Sent    int64 `json:"sent"`
+	Skipped int64 `json:"skipped"`
+	Failed  int64 `json:"failed"`
+	Pending int64 `json:"pending"`
+}
+
+// How an approved request's sends went, in totals only (GET
+// /mail_approvals/{id} result): one row per recipient. A skipped row is
+// mail_task_status()'s (never sent, by rule: reserved_domain:, suppressed:,
+// preference: opted_out, inactive or ambiguous, cancelled); failed is every
+// other failed row; pending counts processing too.
+func (q *Queries) CountMailTasksOutcomes(ctx context.Context, taskIds []uuid.UUID) (CountMailTasksOutcomesRow, error) {
+	row := q.db.QueryRow(ctx, countMailTasksOutcomes, taskIds)
+	var i CountMailTasksOutcomesRow
+	err := row.Scan(
+		&i.Sent,
+		&i.Skipped,
+		&i.Failed,
+		&i.Pending,
+	)
+	return i, err
+}
+
 const countMailingLists = `-- name: CountMailingLists :one
 SELECT count(*)
 FROM mailing_lists
