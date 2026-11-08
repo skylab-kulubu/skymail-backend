@@ -89,8 +89,8 @@ const AccessRole = "skymail:access"
 // SkyMail, as AuthenticatePerson holds it: its aud names SkyMail whatever
 // V1_TOKEN_AUDIENCE_MODE says (401), and a service account's token, or one
 // whose sub is not the one userinfo accepted, is 403 auth.person_required.
-// Such a caller goes on with the roles it has, maybe none; whether they lead
-// a Team is RequireAccessOrTeamLeader's to ask.
+// Such a caller goes on with no role at all, whatever else the token
+// carries; whether they lead a Team is RequireAccessOrTeamLeader's to ask.
 func (a *authMiddlewareImpl) AuthenticateTeamSender(c fiber.Ctx) error {
 	authHeader := c.Get("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") || len(authHeader) == len("Bearer ") {
@@ -111,7 +111,7 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string, te
 			roles = rolesFromJWT(tokenStr, a.clientID)
 		}
 		if !slices.Contains(roles, AccessRole) {
-			return a.authenticateRoleless(c, tokenStr, info, roles)
+			return a.authenticateRoleless(c, tokenStr, info)
 		}
 	}
 
@@ -144,7 +144,7 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string, te
 
 // authenticateRoleless is AuthenticateTeamSender for a token without
 // skymail:access: a person's own, issued for SkyMail.
-func (a *authMiddlewareImpl) authenticateRoleless(c fiber.Ctx, tokenStr string, info userInfo, roles []string) error {
+func (a *authMiddlewareImpl) authenticateRoleless(c fiber.Ctx, tokenStr string, info userInfo) error {
 	if forUs, azp := tokenAudience(tokenStr, a.clientID); !forUs {
 		a.logger.Warn().
 			Str("event", PersonAudienceMissingEvent).
@@ -157,10 +157,10 @@ func (a *authMiddlewareImpl) authenticateRoleless(c fiber.Ctx, tokenStr string, 
 	if identity.subject != info.ID || identity.clientID != "" {
 		return errPersonRequired
 	}
-	if roles == nil {
-		roles = []string{}
-	}
-	setCaller(c, info, identity, roles)
+	// Whatever other SkyMail role the token carries (an approver's, say)
+	// counts for nothing without skymail:access: such a caller is a Leader
+	// on Team mail's routes, and nothing more.
+	setCaller(c, info, identity, []string{})
 	return c.Next()
 }
 

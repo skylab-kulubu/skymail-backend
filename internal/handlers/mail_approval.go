@@ -360,9 +360,9 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 	}
 	// Reading the template is needed whatever the body holds, so its lack is
 	// told before the body is checked — with the list's too, when the body
-	// names one. A Leader without skymail:access needs no role: their
-	// template is the free announcement (teamSend).
-	if !caller.has(templatesReadRole) && !caller.teamSeat {
+	// names one. Team mail's free announcement needs no template read role,
+	// whoever sends it (teamSend, mayRead).
+	if !caller.has(templatesReadRole) && !teamsNamedIn(c.Body()) {
 		return caller.mayRead(listNamedIn(c.Body()))
 	}
 	var params requests.SubmitMailApproval
@@ -573,10 +573,10 @@ func (h *mailApprovalHandlerImpl) Get(c fiber.Ctx) error {
 //	@Failure		400			{object}	apperrors.AppError				"validation.error; mail_task.category_unknown: the duyuru send's team is no team (SKYMAIL_BULK_PREFERENCE)"
 //	@Failure		403			{object}	apperrors.AppError				"Not an approver"
 //	@Failure		404			{object}	apperrors.AppError				"No such request"
-//	@Failure		409			{object}	apperrors.AppError				"mail_approval.state_conflict (params.state, params.allowed), mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished (params.submitted_version_id, params.published_version_id), mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
+//	@Failure		409			{object}	apperrors.AppError				"mail_approval.state_conflict (params.state, params.allowed), mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished (params.submitted_version_id, params.published_version_id), mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty; for Team mail mail_approval.team_leadership_lost (the submitter leads none of its Teams now: the request is rejected with that reason) or mail_approval.team_mail_off. A Team led no more, or gone from Keycloak, is dropped and recorded (an edited event) and the rest go"
 //	@Failure		422			{object}	apperrors.AppError				"The edit leaves a Required variable empty (mail_approval.required_variables_missing) or does not render (mail_approval.unrenderable)"
 //	@Failure		500			{object}	apperrors.AppError				"Internal Server Error"
-//	@Failure		503			{object}	apperrors.AppError				"mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE), core did not say whom the send may go to at the approval; nothing is queued and the request stays as it was"
+//	@Failure		503			{object}	apperrors.AppError				"mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE), core did not say whom the send may go to at the approval; nothing is queued and the request stays as it was. team_mail.leadership_unavailable (Retry-After): for Team mail, core did not say which Teams the submitter leads; the request stays as it was"
 //	@Router			/mail_approvals/{id}/approve [post]
 func (h *mailApprovalHandlerImpl) Approve(c fiber.Ctx) error {
 	var params requests.ApproveMailApproval
@@ -704,9 +704,9 @@ func (h *mailApprovalHandlerImpl) Reject(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			id	path		string					true	"Request ID"
 //	@Success		200	{object}	handlers.MailApproval	"The request, approved, with its task_ids"
-//	@Failure		403	{object}	apperrors.AppError		"mail_approval.not_submitter"
+//	@Failure		403	{object}	apperrors.AppError		"mail_approval.not_submitter; server.forbidden (params.missing_roles skymail:access) for a Leader without skymail:access accepting a request that is not Team mail"
 //	@Failure		404	{object}	apperrors.AppError		"No such request, or not the caller's to see"
-//	@Failure		409	{object}	apperrors.AppError		"mail_approval.state_conflict, mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished, mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
+//	@Failure		409	{object}	apperrors.AppError		"mail_approval.state_conflict, mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished, mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty; for Team mail as Approve"
 //	@Failure		500	{object}	apperrors.AppError		"Internal Server Error"
 //	@Router			/mail_approvals/{id}/accept [post]
 func (h *mailApprovalHandlerImpl) Accept(c fiber.Ctx) error {

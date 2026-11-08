@@ -40,6 +40,7 @@ var (
 	chainStaff   = uuid.MustParse("c3c3c3c3-3333-4333-8333-333333333333")
 	chainService = uuid.MustParse("d4d4d4d4-4444-4444-8444-444444444444")
 	chainTeam    = uuid.MustParse("e5e5e5e5-5555-4555-8555-555555555555")
+	chainCaptain = uuid.MustParse("f6f6f6f6-6666-4666-8666-666666666666")
 )
 
 // chainLeaders is core's answer, or its failure.
@@ -87,7 +88,8 @@ type chainWorld struct {
 func newChainWorld(t *testing.T, teamSend bool, gate accessgate.Reader) *chainWorld {
 	t.Helper()
 	w := &chainWorld{t: t, leaders: &chainLeaders{led: map[string][]teams.Team{
-		chainLeader.String(): {{ID: chainTeam, Path: "/UYELER/ARGE/WEBLAB/FRONTEND", Code: "FRONTEND", DisplayName: teams.DisplayName{TR: "Ön Yüz"}}},
+		chainLeader.String():  {{ID: chainTeam, Path: "/UYELER/ARGE/WEBLAB/FRONTEND", Code: "FRONTEND", DisplayName: teams.DisplayName{TR: "Ön Yüz"}}},
+		chainCaptain.String(): {{ID: chainTeam, Path: "/UYELER/ARGE/WEBLAB/FRONTEND", Code: "FRONTEND"}},
 	}}, tokens: map[string]string{}}
 	person := func(sub uuid.UUID, aud ...string) jwt.MapClaims {
 		return jwt.MapClaims{"sub": sub.String(), "azp": "skymail-frontend", "aud": aud}
@@ -106,6 +108,9 @@ func newChainWorld(t *testing.T, teamSend bool, gate accessgate.Reader) *chainWo
 	add("leader-other-aud", person(chainLeader, "account"))
 	add("member", person(chainMember, "skymail"))
 	add("staff", person(chainStaff, "skymail"), "skymail:access", "skymail:templates:read", "skymail:mails:read")
+	add("access-only", person(chainMember, "skymail", "skymail-access-only"), "skymail:access")
+	add("captain", person(chainCaptain, "skymail"), "skymail:access")
+	add("approving-leader", person(chainLeader, "skymail", "approver"), "skymail:mails:approve")
 	add("service", jwt.MapClaims{"sub": chainService.String(), "azp": "core", "client_id": "core", "aud": []string{"skymail"}})
 
 	userinfo := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
@@ -365,6 +370,34 @@ func TestTeamSendNeedsCorePurposesAndPreferences(t *testing.T) {
 	} {
 		if err == nil {
 			t.Errorf("%s: started", name)
+		}
+	}
+}
+
+// The free announcement's frame is read without skymail:templates:read by a
+// Leader, with skymail:access or without; not by anyone else.
+func TestTheFreeTemplateIsReadByLeaders(t *testing.T) {
+	w := newChainWorld(t, true, nil)
+	path := "/v1/templates/by-key/" + handlers.FreeTemplateKey
+	for who, reached := range map[string]bool{"leader": true, "captain": true, "staff": true, "access-only": false} {
+		status, raw := w.call(who, fiber.MethodGet, path, "")
+		refused := status == fiber.StatusForbidden
+		if refused == reached {
+			t.Errorf("%s: %d %s, reached want %v", who, status, raw, reached)
+		}
+	}
+	if status, _ := w.call("captain", fiber.MethodGet, "/v1/templates/by-key/club.news", ""); status != fiber.StatusForbidden {
+		t.Errorf("captain, another template = %d", status)
+	}
+}
+
+// An approver's role without skymail:access counts for nothing: the Leader
+// decides no request.
+func TestAnApproverRoleWithoutAccessDecidesNothing(t *testing.T) {
+	w := newChainWorld(t, true, nil)
+	for _, action := range []string{"approve", "reject", "return"} {
+		if status, raw := w.call("approving-leader", fiber.MethodPost, "/v1/mail_approvals/"+uuid.NewString()+"/"+action, "{}"); status != fiber.StatusForbidden {
+			t.Errorf("%s = %d %s", action, status, raw)
 		}
 	}
 }

@@ -3115,7 +3115,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/apperrors.AppError'
-          description: mail_approval.not_submitter
+          description: mail_approval.not_submitter; server.forbidden (params.missing_roles
+            skymail:access) for a Leader without skymail:access accepting a request
+            that is not Team mail
         "404":
           content:
             application/json:
@@ -3129,7 +3131,8 @@ paths:
                 $ref: '#/components/schemas/apperrors.AppError'
           description: mail_approval.state_conflict, mail_approval.expired, mail_approval.busy,
             mail_approval.changed, mail_approval.template_republished, mail_approval.template_unavailable,
-            mail_approval.audience_unavailable or mail_approval.audience_empty
+            mail_approval.audience_unavailable or mail_approval.audience_empty; for
+            Team mail as Approve
         "500":
           content:
             application/json:
@@ -3193,10 +3196,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/apperrors.AppError'
-          description: mail_approval.state_conflict (params.state, params.allowed),
+          description: 'mail_approval.state_conflict (params.state, params.allowed),
             mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished
             (params.submitted_version_id, params.published_version_id), mail_approval.template_unavailable,
-            mail_approval.audience_unavailable or mail_approval.audience_empty
+            mail_approval.audience_unavailable or mail_approval.audience_empty; for
+            Team mail mail_approval.team_leadership_lost (the submitter leads none
+            of its Teams now: the request is rejected with that reason) or mail_approval.team_mail_off.
+            A Team led no more, or gone from Keycloak, is dropped and recorded (an
+            edited event) and the rest go'
         "422":
           content:
             application/json:
@@ -3218,7 +3225,9 @@ paths:
           description: 'mail_task.preference_unavailable (Retry-After): while every
             duyuru send obeys the recipients'' preferences (SKYMAIL_BULK_PREFERENCE),
             core did not say whom the send may go to at the approval; nothing is queued
-            and the request stays as it was'
+            and the request stays as it was. team_mail.leadership_unavailable (Retry-After):
+            for Team mail, core did not say which Teams the submitter leads; the request
+            stays as it was'
       summary: Approve a request and send it
       tags:
       - Mail approval

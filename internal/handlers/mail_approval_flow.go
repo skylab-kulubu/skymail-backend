@@ -82,7 +82,9 @@ func (c approvalCaller) mayRead(send approvalSend) error {
 		return nil
 	}
 	var missing []string
-	if !c.has(templatesReadRole) {
+	// Team mail's free announcement needs no template read role
+	// (teamSend found the template to be it).
+	if !c.has(templatesReadRole) && !(len(send.teamIDs) > 0 && send.freeAnnouncement) {
 		missing = append(missing, templatesReadRole)
 	}
 	if send.mailListID != nil && len(send.teamIDs) == 0 && !c.has(listsReadRole) {
@@ -160,6 +162,8 @@ type approvalSend struct {
 	// Team mail's Teams, in path order once teamSend checked them; the
 	// first is mailListID too.
 	teamIDs []uuid.UUID
+	// teamSend found the template to be the free announcement.
+	freeAnnouncement bool
 	// The people it goes to, in order; none when it goes to a list.
 	recipients []mailer.RecipientInfo
 	// A JSON object.
@@ -579,13 +583,22 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	if err := authorizeApproval(caller, view.MailApproval.SubmitterSub, action.by); err != nil {
 		return err
 	}
+	// A Leader without skymail:access sends nothing but Team mail: not even
+	// their own request from before, to a list or to people.
+	if caller.teamSeat && action.sends && len(view.MailApproval.TeamIds) == 0 {
+		return errAccessRequired()
+	}
 	// An approved send is an operator's mail: while SkyMail tracks every
 	// person's send it is tracked, whatever the request said when it was
 	// submitted (queue does the same under the lock).
 	tracked := view.MailApproval.TrackingRequested || h.mailer.OperatorTrackingAlways()
 	var prepared approvalPrepared
 	team := len(view.MailApproval.TeamIds) > 0
-	if action.sends && team {
+	// Approving an approved request again sends nothing (repeat, checked
+	// again under the lock): core is not asked about Team mail it will not
+	// send.
+	repeating := action.repeat != nil && action.repeat(view.MailApproval)
+	if action.sends && team && !repeating {
 		// Team mail: core's leadership now, then each Team's members,
 		// preferences and tracking, all before the lock.
 		if prepared.teams, err = h.planTeams(ctx, view, tracked); err != nil {
@@ -659,14 +672,18 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 		if !stateIn(a.State, action.from) {
 			return errApprovalState.WithParams(map[string]interface{}{"state": a.State, "allowed": action.from})
 		}
-		if prepared.teams != nil {
+		if team && action.sends {
+			if prepared.teams == nil {
+				// Approved when read, no longer so now.
+				return errApprovalChanged
+			}
 			if a, notice, leadershipLost, err = h.applyTeamPlan(ctx, q, a, caller, prepared.teams); err != nil || leadershipLost {
 				return err
 			}
 		}
 		notice, err = action.do(ctx, q, a, caller, prepared)
-		if err == nil && prepared.teams != nil && len(prepared.teams.lost) > 0 && notice.kind == noticeResolved {
-			notice.note = withNote(lostTeamsNote(prepared.teams), notice.note)
+		if err == nil && prepared.teams != nil && prepared.teams.dropped() && notice.kind == noticeResolved {
+			notice.note = withNote(droppedTeamsNote(prepared.teams), notice.note)
 		}
 		return err
 	})

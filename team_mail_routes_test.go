@@ -80,7 +80,14 @@ type teamWorld struct {
 	verdicts *teamVerdicts
 }
 
-var teamPeople = map[string]approvalPerson{"lider": lider, "kaptan": kaptan}
+// liderRollu is lider as they were when they held SkyMail's roles; sablonsuz
+// leads WEBLAB with skymail:access and nothing else.
+var (
+	liderRollu = approvalPerson{lider.sub, lider.name, lider.email, []string{"skymail:access", "skymail:templates:read", "skymail:lists:read"}}
+	sablonsuz  = approvalPerson{"20000000-0000-4000-8000-000000000006", "Şablonsuz Lider", "sablonsuz@yildizskylab.com", []string{"skymail:access"}}
+)
+
+var teamPeople = map[string]approvalPerson{"lider": lider, "kaptan": kaptan, "lider-rollu": liderRollu, "sablonsuz": sablonsuz}
 
 func newTeamWorld(t *testing.T) *teamWorld {
 	t.Helper()
@@ -92,8 +99,9 @@ func newTeamWorld(t *testing.T) *teamWorld {
 	gate := mailer.PreferenceGate{On: true, Core: verdicts, Links: unsubscribe.Config{On: true, BaseURL: "https://api.example.org/api/skymail", Ring: ring}}
 	w := newApprovalWorldWithPool(t, 0, purposesOn(), mailer.WithPreferenceGate(gate))
 	leaders := &chainLeaders{led: map[string][]teams.Team{
-		lider.sub:  {algolab, weblab, frontend},
-		kaptan.sub: {weblab, frontend},
+		lider.sub:     {algolab, weblab, frontend},
+		kaptan.sub:    {weblab, frontend},
+		sablonsuz.sub: {weblab},
 	}}
 	w.directory.groups[teamWeblab.String()] = []*gocloak.User{ayse.user(), mehmet.user(), lider.user()}
 	w.directory.groups[teamFrontend.String()] = []*gocloak.User{ayse.user()}
@@ -124,6 +132,7 @@ func newTeamWorld(t *testing.T) *teamWorld {
 	app.Post("/v1/mail_approvals", seat, w.handler.Submit)
 	app.Get("/v1/mail_approvals/:id", seat, w.handler.Get)
 	app.Post("/v1/mail_approvals/:id/resubmit", seat, w.handler.Resubmit)
+	app.Post("/v1/mail_approvals/:id/accept", seat, w.handler.Accept)
 	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
 	api := app.Group("/v1")
 	api.Use(auth.RequireAnyPermission("skymail:access"))
@@ -341,5 +350,84 @@ func TestTeamLeadershipIsCheckedAgainAtTheApproval(t *testing.T) {
 	w.leaders.led[lider.sub] = []teams.Team{weblab}
 	if status, raw := w.call("lider", fiber.MethodPost, "/v1/mail_approvals/"+second.ID.String()+"/resubmit", w.teamSend(teamWeblab), nil); status != fiber.StatusOK {
 		t.Fatalf("resubmit, led again = %d %s", status, raw)
+	}
+}
+
+// The free announcement needs no template read role in Team mail, whoever
+// sends it; another template still does, with skymail:access too.
+func TestTheFreeAnnouncementNeedsNoTemplateRoleInTeamMail(t *testing.T) {
+	w := newTeamWorld(t)
+	if status, _, failure := w.submitAs("sablonsuz", w.teamSend(teamWeblab)); status != fiber.StatusCreated {
+		t.Fatalf("free announcement = %d %+v", status, failure)
+	}
+	other := w.seedTemplate("club.news", "Haber", "{{.Subject}}", "<p>{{.Subject}}</p>", "{{.Subject}}", `[]`)
+	status, _, failure := w.submitAs("sablonsuz", with(w.teamSend(teamWeblab), map[string]any{"template_id": other.ID, "body_variables": map[string]any{"Subject": "x"}}))
+	if status != fiber.StatusForbidden || failure.Code != "server.forbidden" {
+		t.Fatalf("another template = %d %+v", status, failure)
+	}
+	// Not Team mail: the rule of before.
+	if status, _, failure := w.submitAs("sablonsuz", w.listSend()); status != fiber.StatusForbidden {
+		t.Fatalf("a list = %d %+v", status, failure)
+	}
+}
+
+// A Leader without skymail:access sends nothing but Team mail: their own
+// request from before, to a list, returned to them, they cannot accept.
+func TestALeaderWithoutRolesCannotSendTheirOldListRequest(t *testing.T) {
+	w := newTeamWorld(t)
+	_, old, failure := w.submitAs("lider-rollu", w.listSend())
+	if old.ID == uuid.Nil {
+		t.Fatalf("submit = %+v", failure)
+	}
+	edit := map[string]any{"Subject": "Yeni konu", "Heading": "Yeni", "BodyHtml": "<p>Yeni</p>"}
+	if status, _, failure := w.act("fatih", old.ID, "return", map[string]any{"body_variables": edit}); status != fiber.StatusOK {
+		t.Fatalf("return = %d %+v", status, failure)
+	}
+	status, _, failure := w.act("lider", old.ID, "accept", nil)
+	if status != fiber.StatusForbidden || failure.Code != "server.forbidden" {
+		t.Fatalf("accept without roles = %d %+v", status, failure)
+	}
+	if _, after := w.get("yusuf", old.ID); after.State != "returned" || len(after.TaskIDs) != 0 {
+		t.Fatalf("after: %s %v", after.State, after.TaskIDs)
+	}
+	if status, _, failure := w.act("lider-rollu", old.ID, "accept", nil); status != fiber.StatusOK {
+		t.Fatalf("accept with roles = %d %+v", status, failure)
+	}
+}
+
+// A Team gone from Keycloak before the approval is dropped and said so; the
+// rest go.
+func TestATeamGoneFromKeycloakIsDroppedAtTheApproval(t *testing.T) {
+	w := newTeamWorld(t)
+	_, request, _ := w.submitAs("lider", w.teamSend(teamWeblab, teamAlgolab))
+	delete(w.directory.groups, teamAlgolab.String())
+	status, approved, failure := w.act("yusuf", request.ID, "approve", nil)
+	if status != fiber.StatusOK || approved.State != "approved" || len(approved.TaskIDs) != 1 {
+		t.Fatalf("approve = %d %s %v %+v", status, approved.State, approved.TaskIDs, failure)
+	}
+	if approved.kinds() != "submitted,edited,approved" || approved.History[1].Note == nil {
+		t.Fatalf("history = %s", approved.kinds())
+	}
+	if got := w.teamsOf(request.ID); !slices.Equal(got.TeamIDs, []uuid.UUID{teamWeblab}) {
+		t.Fatalf("team_ids = %v", got.TeamIDs)
+	}
+}
+
+// Approving an approved request again sends nothing and does not ask core:
+// core down, it still answers 200.
+func TestApprovingApprovedTeamMailAgainAsksNothing(t *testing.T) {
+	w := newTeamWorld(t)
+	_, request, _ := w.submitAs("lider", w.teamSend(teamWeblab))
+	if status, _, failure := w.act("yusuf", request.ID, "approve", nil); status != fiber.StatusOK {
+		t.Fatalf("approve = %d %+v", status, failure)
+	}
+	w.leaders.err = errors.New("core down")
+	calls := w.leaders.calls
+	status, again, failure := w.act("yusuf", request.ID, "approve", nil)
+	if status != fiber.StatusOK || again.State != "approved" || len(again.TaskIDs) != 1 {
+		t.Fatalf("approve again = %d %s %v %+v", status, again.State, again.TaskIDs, failure)
+	}
+	if w.leaders.calls != calls {
+		t.Fatal("core was asked approving an approved request")
 	}
 }

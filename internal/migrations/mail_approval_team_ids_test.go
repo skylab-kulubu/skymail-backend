@@ -2,7 +2,10 @@ package migrations_test
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
 )
@@ -30,7 +33,7 @@ func TestMailApprovalTeamIDsMigrationGoesUpAndDown(t *testing.T) {
 		FROM template RETURNING template_id, id`).Scan(&template, &version); err != nil {
 		t.Fatal(err)
 	}
-	insert := func(list, teams string) error {
+	insert := func(list any, teams string) error {
 		_, err := database.Pool.Exec(ctx, `
 			INSERT INTO mail_approvals (submitter_sub, template_id, template_version_id, mail_list_id, body_variables,
 			                            created_at, submitted_at, deadline_at, updated_at, team_ids)
@@ -56,6 +59,12 @@ func TestMailApprovalTeamIDsMigrationGoesUpAndDown(t *testing.T) {
 		if err := insert(first, teams); err == nil {
 			t.Errorf("%s was written", name)
 		}
+	}
+	// No group at all: NULL = team_ids[1] is no answer, and a CHECK passes
+	// on no answer, so the group is required in its own right.
+	var refused *pgconn.PgError
+	if err := insert(nil, "{"+first+"}"); !errors.As(err, &refused) || refused.ConstraintName != "mail_approvals_team_ids" {
+		t.Errorf("Team mail without a group: %v, want mail_approvals_team_ids", err)
 	}
 	var withTeams int
 	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM mail_approvals WHERE team_ids IS NOT NULL`).Scan(&withTeams); err != nil || withTeams != 1 {

@@ -134,17 +134,18 @@ func (h *mailApprovalHandlerImpl) teamSend(ctx context.Context, caller approvalC
 	if h.teams == nil || !h.mailer.PurposeAvailable() {
 		return send, ErrTeamMailOff
 	}
-	if caller.teamSeat {
-		template, err := h.db.GetTemplateById(ctx, send.templateID)
-		if isNotFound(err) {
-			return send, errApprovalTemplateUnavailable
-		}
-		if err != nil {
-			return send, err
-		}
-		if template.Key == nil || *template.Key != FreeTemplateKey {
-			return send, errTeamFreeAnnouncementOnly
-		}
+	// The free announcement needs no template read role in Team mail,
+	// whoever sends it; a Leader without skymail:access sends nothing else.
+	template, err := h.db.GetTemplateById(ctx, send.templateID)
+	if isNotFound(err) {
+		return send, errApprovalTemplateUnavailable
+	}
+	if err != nil {
+		return send, err
+	}
+	send.freeAnnouncement = template.Key != nil && *template.Key == FreeTemplateKey
+	if caller.teamSeat && !send.freeAnnouncement {
+		return send, errTeamFreeAnnouncementOnly
 	}
 	led, err := h.teams.LedNow(ctx, caller.sub)
 	if err != nil {
@@ -195,6 +196,8 @@ func (h *mailApprovalHandlerImpl) teamPurpose(send approvalSend) (mailer.SendPur
 type teamPlan struct {
 	// The request's team_ids as read.
 	asked []uuid.UUID
+	// The Teams gone from Keycloak since they were picked.
+	gone []uuid.UUID
 	// The Teams whose leadership the submitter lost, and their names
 	// (Keycloak's, best effort) for the record.
 	lost      []uuid.UUID
@@ -211,6 +214,9 @@ type teamSendPlan struct {
 	verdicts   *mailer.PreferenceVerdicts
 	tracking   *mailer.TrackingPreferences
 }
+
+// dropped says the approval drops a Team: led no more, or gone.
+func (p *teamPlan) dropped() bool { return len(p.lost)+len(p.gone) > 0 }
 
 func (p *teamPlan) kept() []uuid.UUID {
 	ids := make([]uuid.UUID, len(p.sends))
@@ -250,7 +256,8 @@ func (h *mailApprovalHandlerImpl) planTeams(ctx context.Context, view database.G
 			return nil, err
 		}
 		if group.groupMembers == nil {
-			// Gone from Keycloak since core answered: nobody to send to.
+			// Gone from Keycloak since it was picked: dropped, and said so.
+			plan.gone = append(plan.gone, id)
 			continue
 		}
 		purpose := h.queuedPurpose(a)
@@ -352,15 +359,20 @@ func (h *mailApprovalHandlerImpl) applyTeamPlan(ctx context.Context, q *database
 	if !sameTeams(a.TeamIds, plan.asked) {
 		return a, approvalNotice{}, false, errApprovalChanged
 	}
-	if len(plan.sends) == 0 && len(plan.lost) == 0 {
-		return a, approvalNotice{}, false, atSend(errApprovalAudienceUnavailable)
-	}
-	if len(plan.lost) == 0 {
+	if !plan.dropped() {
 		return a, approvalNotice{}, false, nil
 	}
+	if len(plan.sends) == 0 && len(plan.lost) == 0 {
+		// Every Team gone from Keycloak: as a send to a gone group.
+		return a, approvalNotice{}, false, atSend(errApprovalAudienceUnavailable)
+	}
 	if len(plan.sends) == 0 {
-		reason := "Gönderen artık seçilen ekiplerin hiçbirinin lideri değil (core'un onay anındaki cevabı): " +
-			strings.Join(plan.lostNames, ", ") + ". İstek gönderilmeden reddedildi."
+		reason := "SkyMail: gönderen artık seçilen ekiplerin hiçbirinin lideri değil (core'un onay anındaki cevabı): " +
+			strings.Join(plan.lostNames, ", ") + "."
+		if len(plan.gone) > 0 {
+			reason += " " + goneTeamsNote(plan)
+		}
+		reason += " İstek gönderilmeden reddedildi."
 		if err := h.decide(ctx, q, a, caller, approvalStep{
 			state: database.MailApprovalStateRejected, kind: database.MailApprovalEventKindRejected, note: reason,
 		}); err != nil {
@@ -378,7 +390,7 @@ func (h *mailApprovalHandlerImpl) applyTeamPlan(ctx context.Context, q *database
 	if err != nil {
 		return a, approvalNotice{}, false, err
 	}
-	note := lostTeamsNote(plan)
+	note := droppedTeamsNote(plan)
 	_, err = q.RecordMailApprovalEvent(ctx, database.RecordMailApprovalEventParams{
 		ApprovalID: a.ID,
 		Kind:       database.MailApprovalEventKindEdited,
@@ -391,10 +403,26 @@ func (h *mailApprovalHandlerImpl) applyTeamPlan(ctx context.Context, q *database
 	return a, approvalNotice{}, false, err
 }
 
-// lostTeamsNote says which Teams an approval dropped, and why.
-func lostTeamsNote(plan *teamPlan) string {
-	return "Gönderenin liderliği bittiği için bu ekipler gönderimden çıkarıldı (core'un onay anındaki cevabı): " +
-		strings.Join(plan.lostNames, ", ") + "."
+// droppedTeamsNote says which Teams an approval dropped, and why.
+func droppedTeamsNote(plan *teamPlan) string {
+	var parts []string
+	if len(plan.lost) > 0 {
+		parts = append(parts, "SkyMail: gönderenin liderliği bittiği için bu ekipler gönderimden çıkarıldı (core'un onay anındaki cevabı): "+
+			strings.Join(plan.lostNames, ", ")+".")
+	}
+	if len(plan.gone) > 0 {
+		parts = append(parts, goneTeamsNote(plan))
+	}
+	return strings.Join(parts, " ")
+}
+
+// goneTeamsNote names the Teams gone from Keycloak since they were picked.
+func goneTeamsNote(plan *teamPlan) string {
+	ids := make([]string, len(plan.gone))
+	for i, id := range plan.gone {
+		ids[i] = id.String()
+	}
+	return "SkyMail: Keycloak'ta artık bulunmadığı için bu ekipler gönderimden çıkarıldı: " + strings.Join(ids, ", ") + "."
 }
 
 // queueToTeams queues a Team mail request, locked, as one send per Team in

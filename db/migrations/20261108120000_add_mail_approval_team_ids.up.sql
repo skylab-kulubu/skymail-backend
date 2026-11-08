@@ -22,6 +22,7 @@ ALTER TABLE mail_approvals
         team_ids IS NULL
         OR (cardinality(team_ids) BETWEEN 1 AND 50
             AND array_position(team_ids, NULL) IS NULL
+            AND mail_list_id IS NOT NULL
             AND mail_list_id = team_ids[1]
             AND form_source_id IS NULL));
 

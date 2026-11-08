@@ -1053,10 +1053,11 @@ YA DA core'da en az bir `leader` satırı):
 - `GET /v1/me/team_audiences`
 - `POST /v1/mail_approvals`, `GET /v1/mail_approvals`, `GET /v1/mail_approvals/{id}`
 - `POST /v1/mail_approvals/{id}/resubmit`, `/accept`, `/decline`
-- `GET /v1/templates/by-key/free.basic` (serbest duyuru çerçevesi; formun önizlemesi)
+- `GET /v1/templates/by-key/free.basic` (serbest duyuru çerçevesi; formun önizlemesi). `skymail:templates:read` olmadan da okunur: rolsüz Leader ya da core'un lider dediği `skymail:access` sahibi; başka anahtar bu rolü ister
 
 `skymail:access` taşıyan için bu rotalar `/v1`'dekiyle aynıdır ve core'a hiç
-sorulmaz. Rolü olmayan kişinin token'ı kişinin kendi token'ı olmalı ve `aud`'u
+sorulmaz. `skymail:access` taşımayan token'ın öteki SkyMail rolleri (örneğin
+onaycı rolü) bu zincirde yok sayılır. Rolü olmayan kişinin token'ı kişinin kendi token'ı olmalı ve `aud`'u
 SkyMail'i adlandırmalıdır (yoksa 401; servis hesabı 403
 `auth.person_required`). Rolsüz Leader yalnız ekip postası gönderir, yalnız
 serbest duyuru çerçevesiyle (`free.basic`, `403
@@ -1076,11 +1077,14 @@ grubu ve Privileged kök hiçbir zaman seçilemez. Üst ekiple alt ekibi birlikt
 seçilirse alt ekip düşer; kalanlar yol sırasında saklanır (`mail_approvals.team_ids`,
 ilki aynı zamanda `mail_list_id`). Amaç her zaman `duyuru`'dur, kategori
 ekibindir; gövde başka amaç ya da kategori söyleyemez (`400
-team_mail.purpose_fixed`), tanıtım olamaz.
+team_mail.purpose_fixed`), tanıtım olamaz. Ekip postasında serbest duyuru
+(`free.basic`) `skymail:templates:read` istemez, gönderen kim olursa olsun;
+başka şablon bu rolü ister. Rolsüz Leader eski, ekip postası olmayan
+isteğini kabul edip gönderemez.
 
 **Onay anında** liderlik yeniden sorulur. Liderliği biten ekip düşer, bir
 `edited` olayıyla (gerekçe ve `audience` değişikliği) kaydedilir, ötekiler
-gider; hiçbiri kalmazsa istek gerekçeyle reddedilir (`409
+gider; Keycloak'tan silinmiş ekip de aynı biçimde gerekçesiyle düşer; hiçbiri kalmazsa istek gerekçeyle reddedilir (`409
 mail_approval.team_leadership_lost`). core cevap vermezse istek beklemede
 kalır (`503`), onaycı sonra yeniden dener. Her ekip kendi kategorisiyle ayrı
 gönderimdir. Alıcı başına tek posta: iki seçili ekipte olan kişi postayı yol
@@ -1089,6 +1093,22 @@ ikisini de kapattıysa ilk ekibin gönderiminde atlandı yazılır. Tekilleştir
 kuyruğa alma anında yapılır; sonradan bir ekibin kategorisini kapatan kişiye
 öteki ekibin postası gitmez (bilinen boşluk). Takip ekranı bu sürümde
 değişmedi.
+
+### Ekip postasında geri dönüş
+
+Sıra önemlidir; imajı önce geri almayın.
+
+1. **Anahtarı kapatın:** `SKYMAIL_TEAM_SEND=off` ve yeniden dağıtım. Yeni ekip
+   isteği açılamaz, rolsüz liderin zinciri kalkar, bekleyen ekip isteğinin
+   onayı `409 mail_approval.team_mail_off` alır ve gönderilmez.
+2. **Bekleyen ve geri gönderilmiş ekip isteklerini kapatın:** onaycı her
+   birini gerekçeyle reddeder ya da 7 günlük süre dolana dek beklenir.
+   Hangileri olduğunu `team_ids IS NOT NULL AND state IN ('pending',
+   'returned')` söyler.
+3. **Ancak sonra imajı geri alın.** Eski imaj `team_ids`'i bilmez: açık bir
+   ekip isteğini yalnız ilk ekibe (`mail_list_id`) giden bir grup gönderimi
+   sanar ve onaylanırsa öyle gönderir. Göçü geri almak (`down`) gerekmez;
+   sütun eski imajı etkilemez.
 
 ## Uygulama içi kutu (`/v1/me/inbox`)
 

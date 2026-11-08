@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -919,22 +920,36 @@ func registerTeamMailRoutes(app *fiber.App, auth middlewares.AuthMiddleware, gat
 	app.Post("/v1/mail_approvals/:id/accept", seat[0], route(approvals.Accept)...)
 	app.Post("/v1/mail_approvals/:id/decline", seat[0], route(approvals.Decline)...)
 	// The free announcement's frame, which the form fills and previews.
-	app.Get("/v1/templates/by-key/:key", seat[0], route(freeTemplateOrTemplatesRead(auth, templates.GetTemplateByKey))...)
+	app.Get("/v1/templates/by-key/:key", seat[0], route(freeTemplateOrTemplatesRead(leaders, templates.GetTemplateByKey))...)
 }
 
 // freeTemplateOrTemplatesRead reads a template by key with
-// skymail:templates:read, as /v1 does; a Leader without skymail:access reads
-// only the free announcement's (handlers.FreeTemplateKey).
-func freeTemplateOrTemplatesRead(auth middlewares.AuthMiddleware, read fiber.Handler) fiber.Handler {
-	templatesRead := auth.RequireAnyPermission("skymail:templates:read")
+// skymail:templates:read, as /v1 does. The free announcement's frame
+// (handlers.FreeTemplateKey), which Team mail sends without that role, is
+// read without it too by a Leader: one without skymail:access (the seat
+// asked core already), or one with it whom core names (its answer kept a
+// minute; core not answering is 503 for this read only).
+func freeTemplateOrTemplatesRead(leaders teams.Reader, read fiber.Handler) fiber.Handler {
 	return func(c fiber.Ctx) error {
-		if middlewares.TeamSeat(c) {
-			if c.Params("key") != handlers.FreeTemplateKey {
-				return apperrors.ErrForbidden
-			}
+		roles, _ := c.Locals("roles").([]string)
+		switch {
+		case slices.Contains(roles, "skymail:templates:read"):
+			return read(c)
+		case c.Params("key") != handlers.FreeTemplateKey:
+			return apperrors.ErrForbidden
+		case middlewares.TeamSeat(c):
 			return read(c)
 		}
-		return templatesRead(c)
+		sub, _ := c.Locals("user_id").(string)
+		led, err := leaders.Led(c.Context(), sub)
+		if err != nil {
+			log.Warn().Err(err).Str("event", "team_mail_leadership_unavailable").Msg("Team mail: core did not say which Teams the caller leads")
+			return teams.ErrLeadershipUnavailable
+		}
+		if len(led) == 0 {
+			return apperrors.ErrForbidden
+		}
+		return read(c)
 	}
 }
 
