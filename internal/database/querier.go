@@ -736,6 +736,9 @@ type Querier interface {
 	// person's tracked send is in the bulk lane, and the system lane is never
 	// tracked as a person asks. Its people are read with the role only.
 	TrackingTaskAccess(ctx context.Context, id uuid.UUID) (TrackingTaskAccessRow, error)
+	// TrackingTaskAccess for several sends at once (an approved Mail onayı
+	// request's, GET /mail_approvals/{id} result), in no order.
+	TrackingTasksAccess(ctx context.Context, ids []uuid.UUID) ([]TrackingTasksAccessRow, error)
 	// Puts back due the parked rows of sends that are neither paused nor
 	// cancelled: rows a take parked while an operator resumed the send
 	// (ParkClaimedRows), or a failure rate pause parked after the resume. The

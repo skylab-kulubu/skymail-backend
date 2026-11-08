@@ -1779,7 +1779,10 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   ve kişi raporunu okuyamayan çağıran. Ekip postasında küçük ekiplerin
   toplamı 10'dan azken büyükleri de varsa aynı: büyüklerin sayısını okuyan
   farkı çıkarabilirdi. Bekleyen, geri gönderilmiş, reddedilmiş ve süresi
-  dolmuş istekte `result` yoktur.
+  dolmuş istekte `result` yoktur. Sonuç okunamazsa (2 sn bütçe, DB
+  hatası) istek yine `200` döner ve günlüğe yazılır: teslim toplamları
+  okunamadıysa `result` hiç yoktur, yalnız takip okunamadıysa `tracking:
+  null` ve `tracking_withheld: false`.
 - `GET /v1/mail_tasks/{id}/tracking/recipients` rolü
   `skymail:mails:tracking:read` ister; `mails:read` tek başına yetmez.
   `sent_by = token sub` (gönderimin kendi göndereni) yalnız

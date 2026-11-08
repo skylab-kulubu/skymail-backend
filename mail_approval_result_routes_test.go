@@ -137,3 +137,84 @@ func TestAnApprovedRequestTellsHowItWentInTotalsOnly(t *testing.T) {
 		t.Errorf("rejected request has result %s", raw)
 	}
 }
+
+// Reading the result never fails the read of the request (hub review of
+// ticket ekip-postasi 09): while the opens and clicks cannot be read in time
+// the request comes with its totals and tracking null, not withheld; while
+// the totals cannot, it comes without result.
+func TestAResultThatCannotBeReadLeavesTheRequestReadable(t *testing.T) {
+	w := newApprovalWorld(t)
+	ctx := context.Background()
+	send := w.listSend()
+	delete(send, "mail_list_id")
+	send["recipients"] = []approvalRecipient{
+		{Email: "ayse@yildizskylab.com", FullName: "Ayşe Kaya"},
+		{Email: "mehmet@yildizskylab.com", FullName: "Mehmet Demir"},
+	}
+	request := w.submit("elif", send)
+	if status, _, failure := w.act("fatih", request.ID, "approve", nil); status != fiber.StatusOK {
+		t.Fatalf("approve = %d %+v", status, failure)
+	}
+	_, approved := w.get("elif", request.ID)
+	if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_tasks SET tracking_requested = true WHERE id = ANY($1)`, approved.TaskIDs); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_queue SET status = 'sent', error = NULL, sent_at = now(), tracking_token = decode(md5(id::text), 'hex') WHERE task_id = ANY($1)`, approved.TaskIDs); err != nil {
+		t.Fatal(err)
+	}
+
+	// readLocked reads the request as the tracking role, which would read
+	// every count, while another session holds table locked.
+	readLocked := func(table string) (int, json.RawMessage) {
+		t.Helper()
+		tx, err := w.store.Conn.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err := tx.Exec(ctx, `LOCK TABLE `+table+` IN ACCESS EXCLUSIVE MODE`); err != nil {
+			t.Fatal(err)
+		}
+		var answer struct {
+			ID     uuid.UUID       `json:"id"`
+			Result json.RawMessage `json:"result"`
+		}
+		status, raw := w.call("takip_onayci", fiber.MethodGet, "/v1/mail_approvals/"+request.ID.String(), nil, &answer)
+		if status == fiber.StatusOK && answer.ID != request.ID {
+			t.Fatalf("read = %s", raw)
+		}
+		return status, answer.Result
+	}
+	approvalPeople["takip_onayci"] = approvalPerson{sub: uuid.NewString(), name: "Takip Onaycısı", email: "takip@yildizskylab.com",
+		roles: []string{"skymail:access", "skymail:mails:approve", handlers.TrackingReadRole}}
+	defer delete(approvalPeople, "takip_onayci")
+
+	// The reports read the send's links: locked, tracking is unread.
+	status, raw := readLocked("mail_task_links")
+	var got struct {
+		Sent             int64            `json:"sent"`
+		Tracking         *json.RawMessage `json:"tracking"`
+		TrackingWithheld bool             `json:"tracking_withheld"`
+	}
+	if status != fiber.StatusOK || raw == nil || json.Unmarshal(raw, &got) != nil || got.Sent != 2 || got.Tracking != nil || got.TrackingWithheld {
+		t.Errorf("links locked: %d, result %s; want 200 with 2 sent, tracking null, not withheld", status, raw)
+	}
+
+	// The totals read the queue: locked, no result at all.
+	if status, raw := readLocked("mail_queue"); status != fiber.StatusOK || raw != nil {
+		t.Errorf("queue locked: %d, result %s; want 200 without result", status, raw)
+	}
+
+	// Unlocked, all of it.
+	var answer struct {
+		Result *struct {
+			Tracking *struct {
+				TrackedRecipients int `json:"tracked_recipients"`
+			} `json:"tracking"`
+		} `json:"result"`
+	}
+	if status, raw := w.call("takip_onayci", fiber.MethodGet, "/v1/mail_approvals/"+request.ID.String(), nil, &answer); status != fiber.StatusOK ||
+		answer.Result == nil || answer.Result.Tracking == nil || answer.Result.Tracking.TrackedRecipients != 2 {
+		t.Errorf("unlocked: %d %s; want the tracking of 2", status, raw)
+	}
+}

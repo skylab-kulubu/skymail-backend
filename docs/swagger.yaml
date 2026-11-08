@@ -3098,12 +3098,14 @@ paths:
         recipients among others, would tell of people and the caller may not read
         the sends'' people, by GET /mail_tasks/{id}/tracking''s rule), with no person
         in it and one total for a request to people, never a row per send; it needs
-        no skymail:mails:read. Any other request has none. preview_recipient is whose
-        mail the preview is: the first of its people, or for a list the submitter,
-        as if they were on it; it is given also when the preview does not render.
-        A request undecided past its deadline reads as expired; reading writes nothing
-        and mails no one — the sweep, within a minute, records the expiry and tells
-        the submitter.'
+        no skymail:mails:read. Any other request has none. Reading the result never
+        fails the read: totals not read in time leave the answer without result, opens
+        and clicks not read in time leave tracking null with tracking_withheld false.
+        preview_recipient is whose mail the preview is: the first of its people, or
+        for a list the submitter, as if they were on it; it is given also when the
+        preview does not render. A request undecided past its deadline reads as expired;
+        reading writes nothing and mails no one — the sweep, within a minute, records
+        the expiry and tells the submitter.'
       parameters:
       - description: Request ID
         in: path

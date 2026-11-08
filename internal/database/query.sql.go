@@ -7927,6 +7927,54 @@ func (q *Queries) TrackingTaskAccess(ctx context.Context, id uuid.UUID) (Trackin
 	return i, err
 }
 
+const trackingTasksAccess = `-- name: TrackingTasksAccess :many
+SELECT t.id, t.sent_by, t.tracking_requested, t.tracking_closed_at,
+       COALESCE((SELECT max(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS sent_at,
+       COALESCE((SELECT min(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS started_at,
+       EXISTS (SELECT 1 FROM mail_queue q WHERE q.task_id = t.id AND q.priority > 0) AS system_lane
+FROM mail_tasks t WHERE t.id = ANY ($1::uuid[])
+`
+
+type TrackingTasksAccessRow struct {
+	ID                uuid.UUID  `json:"id"`
+	SentBy            string     `json:"sent_by"`
+	TrackingRequested bool       `json:"tracking_requested"`
+	TrackingClosedAt  *time.Time `json:"tracking_closed_at"`
+	SentAt            time.Time  `json:"sent_at"`
+	StartedAt         time.Time  `json:"started_at"`
+	SystemLane        bool       `json:"system_lane"`
+}
+
+// TrackingTaskAccess for several sends at once (an approved Mail onayı
+// request's, GET /mail_approvals/{id} result), in no order.
+func (q *Queries) TrackingTasksAccess(ctx context.Context, ids []uuid.UUID) ([]TrackingTasksAccessRow, error) {
+	rows, err := q.db.Query(ctx, trackingTasksAccess, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TrackingTasksAccessRow
+	for rows.Next() {
+		var i TrackingTasksAccessRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SentBy,
+			&i.TrackingRequested,
+			&i.TrackingClosedAt,
+			&i.SentAt,
+			&i.StartedAt,
+			&i.SystemLane,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const unparkResumedRows = `-- name: UnparkResumedRows :execrows
 UPDATE mail_queue q
 SET next_attempt_at = NOW()

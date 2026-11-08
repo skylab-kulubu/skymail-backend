@@ -5,6 +5,7 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 )
@@ -17,8 +18,9 @@ import (
 // GET /mail_tasks/{id}/tracking reads a send's by (ADR-0074 decision 9,
 // addendum 2026-11-08): withheld below 10 tracked recipients and in the
 // system lane from one who may not read the sends' people. tracking, those
-// opens and clicks, is null when none was tracked, when tracking_withheld, or
-// when no totals are kept (a year after a send to fewer than 10); it has no
+// opens and clicks, is null when none was tracked, when tracking_withheld,
+// when no totals are kept (a year after a send to fewer than 10), or when they
+// could not be read in time (tracking_withheld false then); it has no
 // comment of its own, which would become its type's description in the
 // OpenAPI document.
 type MailApprovalResult struct {
@@ -54,21 +56,41 @@ type trackedSend struct {
 }
 
 // result is how the approved request's sends went (MailApprovalResult), for
-// the caller of c.
-func (h *mailApprovalHandlerImpl) result(c fiber.Ctx, taskIDs []uuid.UUID) (*MailApprovalResult, error) {
+// the caller of c. It never fails the read of the request: when the delivery
+// totals cannot be read in time it is nil (no result), and when the opens and
+// clicks cannot, tracking is null with tracking_withheld false. Each part has
+// trackingReadBudget of its own; either failure is logged.
+func (h *mailApprovalHandlerImpl) result(c fiber.Ctx, approvalID uuid.UUID, taskIDs []uuid.UUID) *MailApprovalResult {
 	ctx, cancel := context.WithTimeout(c.Context(), trackingReadBudget)
-	defer cancel()
 	counts, err := h.db.CountMailTasksOutcomes(ctx, taskIDs)
+	cancel()
+	if err != nil {
+		log.Warn().Err(err).Str("approval_id", approvalID.String()).Msg("could not count an approved request's sends; read without result")
+		return nil
+	}
+	result := &MailApprovalResult{Sent: counts.Sent, Skipped: counts.Skipped, Failed: counts.Failed, Pending: counts.Pending}
+	sends, err := h.trackedSends(c.Context(), taskIDs)
+	if err != nil {
+		log.Warn().Err(err).Str("approval_id", approvalID.String()).Msg("could not read an approved request's opens and clicks; result without tracking")
+		return result
+	}
+	result.Tracking, result.TrackingWithheld = approvalTracking(contentCallerOf(c), middlewares.IsServiceAccount(c), sends, h.senderSeesRecipients)
+	return result
+}
+
+// trackedSends is the request's tracked sends and each one's counts as GET
+// /mail_tasks/{id}/tracking reads them, within trackingReadBudget: who sent
+// them and when in one query, then a report per tracked send.
+func (h *mailApprovalHandlerImpl) trackedSends(ctx context.Context, taskIDs []uuid.UUID) ([]trackedSend, error) {
+	ctx, cancel := context.WithTimeout(ctx, trackingReadBudget)
+	defer cancel()
+	tasks, err := h.db.TrackingTasksAccess(ctx, taskIDs)
 	if err != nil {
 		return nil, err
 	}
-	result := &MailApprovalResult{Sent: counts.Sent, Skipped: counts.Skipped, Failed: counts.Failed, Pending: counts.Pending}
 	var sends []trackedSend
-	for _, id := range taskIDs {
-		task, err := h.db.TrackingTaskAccess(ctx, id)
-		if err != nil {
-			return nil, err
-		}
+	for _, row := range tasks {
+		task := database.TrackingTaskAccessRow(row)
 		if !task.TrackingRequested {
 			continue
 		}
@@ -78,8 +100,7 @@ func (h *mailApprovalHandlerImpl) result(c fiber.Ctx, taskIDs []uuid.UUID) (*Mai
 		}
 		sends = append(sends, trackedSend{task: task, report: report})
 	}
-	result.Tracking, result.TrackingWithheld = approvalTracking(contentCallerOf(c), middlewares.IsServiceAccount(c), sends, h.senderSeesRecipients)
-	return result, nil
+	return sends, nil
 }
 
 // approvalTracking sums a request's tracked sends' opens and clicks, and says

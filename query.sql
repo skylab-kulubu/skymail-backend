@@ -2037,6 +2037,15 @@ SELECT t.id, t.sent_by, t.tracking_requested, t.tracking_closed_at,
        EXISTS (SELECT 1 FROM mail_queue q WHERE q.task_id = t.id AND q.priority > 0) AS system_lane
 FROM mail_tasks t WHERE t.id = $1;
 
+-- TrackingTaskAccess for several sends at once (an approved Mail onayı
+-- request's, GET /mail_approvals/{id} result), in no order.
+-- name: TrackingTasksAccess :many
+SELECT t.id, t.sent_by, t.tracking_requested, t.tracking_closed_at,
+       COALESCE((SELECT max(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS sent_at,
+       COALESCE((SELECT min(q.sent_at) FROM mail_queue q WHERE q.task_id = t.id), t.created_at)::timestamptz AS started_at,
+       EXISTS (SELECT 1 FROM mail_queue q WHERE q.task_id = t.id AND q.priority > 0) AS system_lane
+FROM mail_tasks t WHERE t.id = ANY (sqlc.arg(ids)::uuid[]);
+
 -- Aggregates remain inside PostgreSQL: a report never loads raw events or
 -- people into the HTTP process. Link URLs are omitted: one-recipient sends
 -- can have personal URLs and the summary only requires mails:read.
