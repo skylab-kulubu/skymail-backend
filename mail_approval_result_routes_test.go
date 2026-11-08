@@ -81,8 +81,8 @@ func TestAnApprovedRequestTellsHowItWentInTotalsOnly(t *testing.T) {
 	for i, outcome := range []struct{ status, err string }{
 		{"sent", ""}, {"failed", "suppressed: unsubscribed"}, {"failed", "smtp_rejected: 550 5.1.1"}, {"pending", ""},
 	} {
-		if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_queue SET status = $2, error = NULLIF($3, ''), sent_at = CASE WHEN $2 = 'sent' THEN now() END WHERE task_id = $1`,
-			approved.TaskIDs[i], outcome.status, outcome.err); err != nil {
+		if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_queue SET status = $2::mail_queue_status, error = NULLIF($3::text, ''), sent_at = CASE WHEN $4::boolean THEN now() END WHERE task_id = $1`,
+			approved.TaskIDs[i], outcome.status, outcome.err, outcome.status == "sent"); err != nil {
 			t.Fatal(err)
 		}
 	}
