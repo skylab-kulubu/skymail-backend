@@ -14,6 +14,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
+	"github.com/skylab-kulubu/skymail-backend/internal/teams"
 )
 
 // Mail onayı (ADR-0031, CONTEXT.md): a send a User without send permission
@@ -204,8 +205,10 @@ type MailApprovalItem struct {
 	// Pending or returned past this, it expires.
 	DeadlineAt time.Time `json:"deadline_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
-	// The sends, once approved, in order: a list's one, or one per person, task_ids[i] to recipients[i]. Empty until then.
+	// The sends, once approved, in order: a list's one, or one per person, task_ids[i] to recipients[i]; for Team mail one per Team that had anyone to send to, in path order. Empty until then.
 	TaskIDs []uuid.UUID `json:"task_ids"`
+	// Team mail: the Teams it goes to, in path order, each its own send with category team:<id>:duyuru; audience then names the first as a Keycloak group, and category is the first's. Empty when it is not Team mail.
+	TeamIDs []uuid.UUID `json:"team_ids"`
 	// What happened to it last.
 	LastEvent *MailApprovalEvent `json:"last_event"`
 	// The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyMail tracks every person's send, it is tracked whatever this says, islem too.
@@ -287,6 +290,9 @@ type MailApprovalOptions struct {
 	UIURL string
 	// The clock; time.Now when nil.
 	Now func() time.Time
+	// Teams says which Teams a person leads (core); nil while Team mail is
+	// off (SKYMAIL_TEAM_SEND).
+	Teams teams.Reader
 }
 
 type mailApprovalHandlerImpl struct {
@@ -296,6 +302,7 @@ type mailApprovalHandlerImpl struct {
 	clientID string
 	uiURL    string
 	now      func() time.Time
+	teams    teams.Reader
 }
 
 // NewMailApprovalHandler serves Mail onayı. An approved send is queued with
@@ -309,6 +316,7 @@ func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc ke
 		clientID: opts.ClientID,
 		uiURL:    strings.TrimRight(strings.TrimSpace(opts.UIURL), "/"),
 		now:      opts.Now,
+		teams:    opts.Teams,
 	}
 	if h.uiURL == "" {
 		h.uiURL = DefaultSkyMailUIURL
@@ -346,10 +354,15 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	// A Leader without skymail:access submits Team mail only.
+	if caller.teamSeat && !teamsNamedIn(c.Body()) {
+		return errAccessRequired()
+	}
 	// Reading the template is needed whatever the body holds, so its lack is
 	// told before the body is checked — with the list's too, when the body
-	// names one.
-	if !caller.has(templatesReadRole) {
+	// names one. A Leader without skymail:access needs no role: their
+	// template is the free announcement (teamSend).
+	if !caller.has(templatesReadRole) && !caller.teamSeat {
 		return caller.mayRead(listNamedIn(c.Body()))
 	}
 	var params requests.SubmitMailApproval
@@ -360,11 +373,18 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if len(send.teamIDs) > 0 {
+		if send, err = h.teamSend(c.Context(), caller, send); err != nil {
+			return err
+		}
+	}
 	if err := caller.mayRead(send); err != nil {
 		return err
 	}
-	if send.purpose, err = h.approvalPurpose(c.Context(), send); err != nil {
-		return err
+	if len(send.teamIDs) == 0 {
+		if send.purpose, err = h.approvalPurpose(c.Context(), send); err != nil {
+			return err
+		}
 	}
 	if send.formSourceID != nil {
 		if err := bindFormSourceBody(c, &params); err != nil {
@@ -397,6 +417,7 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 			TransactionalStatement:   send.purpose.TransactionalStatement,
 			CommercialContentAbsent:  send.purpose.CommercialContentAbsent,
 			OwnEventStatement:        send.purpose.OwnEventStatement,
+			TeamIds:                  send.teamIDs,
 		})
 		if err != nil {
 			return err
@@ -758,6 +779,13 @@ func (h *mailApprovalHandlerImpl) Decline(c fiber.Ctx) error {
 //	@Failure		500		{object}	apperrors.AppError			"Internal Server Error"
 //	@Router			/mail_approvals/{id}/resubmit [post]
 func (h *mailApprovalHandlerImpl) Resubmit(c fiber.Ctx) error {
+	caller, err := approvalCallerOf(c)
+	if err != nil {
+		return err
+	}
+	if caller.teamSeat && !teamsNamedIn(c.Body()) {
+		return errAccessRequired()
+	}
 	var params requests.SubmitMailApproval
 	if err := bindBody(c, &params); err != nil {
 		return err
@@ -766,7 +794,14 @@ func (h *mailApprovalHandlerImpl) Resubmit(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if send.purpose, err = h.approvalPurpose(c.Context(), send); err != nil {
+	if len(send.teamIDs) > 0 {
+		// Core is asked before the lock: whether the submitter leads the
+		// Teams now. Only the submitter resubmits (act checks it before
+		// anything is written).
+		if send, err = h.teamSend(c.Context(), caller, send); err != nil {
+			return err
+		}
+	} else if send.purpose, err = h.approvalPurpose(c.Context(), send); err != nil {
 		return err
 	}
 	return h.act(c, approvalAction{

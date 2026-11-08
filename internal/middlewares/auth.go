@@ -17,6 +17,10 @@ type AuthMiddleware interface {
 	// AuthenticatePerson is the person's own routes' check (/v1/me): a
 	// person's token issued for SkyMail, no role (see its doc).
 	AuthenticatePerson(c fiber.Ctx) error
+	// AuthenticateTeamSender is Team mail's routes' check: Authenticate for
+	// a token with skymail:access, a person's own token without it (see its
+	// doc). RequireAccessOrTeamLeader follows it.
+	AuthenticateTeamSender(c fiber.Ctx) error
 	RequireAnyPermission(permissions ...string) func(c fiber.Ctx) error
 }
 
@@ -72,13 +76,43 @@ func (a *authMiddlewareImpl) Authenticate(c fiber.Ctx) error {
 	}
 
 	tokenStr := authHeader[7:]
-	return a.handleKeycloakAuth(c, tokenStr)
+	return a.handleKeycloakAuth(c, tokenStr, false)
 }
 
-func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) error {
+// AccessRole is what /v1 asks of every caller: using SkyMail.
+const AccessRole = "skymail:access"
+
+// AuthenticateTeamSender authenticates Team mail's routes (ADR-0067 addendum
+// of 2026-11-08), which a Leader reaches with or without SkyMail's roles. A
+// token that carries skymail:access is checked exactly as Authenticate
+// checks it. One that does not must be a person's own token issued for
+// SkyMail, as AuthenticatePerson holds it: its aud names SkyMail whatever
+// V1_TOKEN_AUDIENCE_MODE says (401), and a service account's token, or one
+// whose sub is not the one userinfo accepted, is 403 auth.person_required.
+// Such a caller goes on with the roles it has, maybe none; whether they lead
+// a Team is RequireAccessOrTeamLeader's to ask.
+func (a *authMiddlewareImpl) AuthenticateTeamSender(c fiber.Ctx) error {
+	authHeader := c.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") || len(authHeader) == len("Bearer ") {
+		return apperrors.ErrForbidden
+	}
+	return a.handleKeycloakAuth(c, authHeader[len("Bearer "):], true)
+}
+
+func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string, teamSender bool) error {
 	info, err := a.userinfo(tokenStr)
 	if err != nil {
 		return err
+	}
+
+	if teamSender {
+		roles := info.ResourceAccess[a.clientID].Roles
+		if len(roles) == 0 {
+			roles = rolesFromJWT(tokenStr, a.clientID)
+		}
+		if !slices.Contains(roles, AccessRole) {
+			return a.authenticateRoleless(c, tokenStr, info, roles)
+		}
 	}
 
 	forUs, azp := true, ""
@@ -104,8 +138,38 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) er
 		a.logMissingAudience(azp)
 	}
 
+	setCaller(c, info, acceptedIdentity(tokenStr), roles)
+	return c.Next()
+}
+
+// authenticateRoleless is AuthenticateTeamSender for a token without
+// skymail:access: a person's own, issued for SkyMail.
+func (a *authMiddlewareImpl) authenticateRoleless(c fiber.Ctx, tokenStr string, info userInfo, roles []string) error {
+	if forUs, azp := tokenAudience(tokenStr, a.clientID); !forUs {
+		a.logger.Warn().
+			Str("event", PersonAudienceMissingEvent).
+			Str("azp", nonEmpty(azp)).
+			Msg("a Team mail route's token without skymail:access has an aud that does not name SkyMail")
+		c.Set(fiber.HeaderWWWAuthenticate, `Bearer error="invalid_token"`)
+		return apperrors.ErrUnauthorized
+	}
+	identity := acceptedIdentity(tokenStr)
+	if identity.subject != info.ID || identity.clientID != "" {
+		return errPersonRequired
+	}
+	if roles == nil {
+		roles = []string{}
+	}
+	setCaller(c, info, identity, roles)
+	return c.Next()
+}
+
+// setCaller keeps who the caller is for the handlers: "user_id", the token
+// accepted, "roles", "user_name", and "user_email" only once Keycloak has
+// verified it ("user_email_unverified" says there was another).
+func setCaller(c fiber.Ctx, info userInfo, identity acceptedTokenIdentity, roles []string) {
 	c.Locals("user_id", info.ID)
-	c.Locals(acceptedTokenIdentityKey, acceptedIdentity(tokenStr))
+	c.Locals(acceptedTokenIdentityKey, identity)
 	c.Locals("roles", roles)
 	if name := info.displayName(); name != "" {
 		c.Locals("user_name", name)
@@ -117,7 +181,6 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string) er
 			c.Locals("user_email_unverified", true)
 		}
 	}
-	return c.Next()
 }
 
 var errPersonRequired = apperrors.New(

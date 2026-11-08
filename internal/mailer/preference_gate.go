@@ -191,6 +191,17 @@ func (v *PreferenceVerdicts) of(sub *uuid.UUID, address string) (consent.Result,
 	return result, ok
 }
 
+// Allows says the recipient with sub and address may get the send as far as
+// core's answer goes: true unless core matched them to an account and said
+// no (opted out of the category, inactive, ambiguous). A recipient core was
+// not asked about, or nil verdicts (the check is off), is allowed: the
+// dispatcher still decides each row. Team mail picks with it which Team's
+// send gives a person in two picked Teams their one mail.
+func (v *PreferenceVerdicts) Allows(sub *uuid.UUID, address string) bool {
+	result, ok := v.of(sub, address)
+	return !ok || !result.Matched || result.Allowed
+}
+
 // recipientKey is how a recipient is asked about: by sub when it is known,
 // else by its normalized address.
 func recipientKey(sub *uuid.UUID, address string) string {

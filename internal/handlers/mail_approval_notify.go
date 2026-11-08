@@ -327,8 +327,13 @@ func (h *mailApprovalHandlerImpl) audienceName(ctx context.Context, view databas
 	case view.InternalMailList:
 		return deref(view.MailListName)
 	}
-	if name := h.approvalGroupNames(ctx, []database.GetMailApprovalRow{view})[*view.MailApproval.MailListID]; name != nil {
-		return *name
+	name := "Keycloak grubu " + view.MailApproval.MailListID.String()
+	if found := h.approvalGroupNames(ctx, []database.GetMailApprovalRow{view})[*view.MailApproval.MailListID]; found != nil {
+		name = *found
 	}
-	return "Keycloak grubu " + view.MailApproval.MailListID.String()
+	// Team mail: its first Team, and how many more.
+	if more := len(view.MailApproval.TeamIds) - 1; more > 0 {
+		name += " ve " + strconv.Itoa(more) + " ekip daha"
+	}
+	return name
 }

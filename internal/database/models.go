@@ -284,6 +284,8 @@ type MailApproval struct {
 	TransactionalStatement  *bool   `json:"transactional_statement"`
 	CommercialContentAbsent *bool   `json:"commercial_content_absent"`
 	OwnEventStatement       *bool   `json:"own_event_statement"`
+	// Team mail: the picked Teams (Keycloak group ids) in path order, each its own send with category team:<id>:duyuru; mail_list_id is the first. NULL: not team mail.
+	TeamIds []uuid.UUID `json:"team_ids"`
 }
 
 type MailApprovalEvent struct {
