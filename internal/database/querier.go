@@ -662,6 +662,10 @@ type Querier interface {
 	SetClaimedRowsUnsubscribeURL(ctx context.Context, arg SetClaimedRowsUnsubscribeURLParams) (int64, error)
 	// A NULL deadline leaves the request's deadline as it is.
 	SetMailApprovalState(ctx context.Context, arg SetMailApprovalStateParams) (MailApproval, error)
+	// Team mail at its approval: the Teams whose leadership the submitter still
+	// holds, in path order, the first being the request's group too. The caller
+	// holds its row lock.
+	SetMailApprovalTeams(ctx context.Context, arg SetMailApprovalTeamsParams) (MailApproval, error)
 	SetMailApprovalVariables(ctx context.Context, arg SetMailApprovalVariablesParams) (MailApproval, error)
 	SetMailQueueItemFailed(ctx context.Context, arg SetMailQueueItemFailedParams) (int64, error)
 	// The three outcomes of a send are written only by the claim that holds the

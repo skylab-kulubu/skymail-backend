@@ -1719,13 +1719,13 @@ WHERE (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(st
 INSERT INTO mail_approvals (submitter_sub, submitter_name, submitter_email, submitter_email_unverified, template_id,
                             template_version_id, mail_list_id, form_source_id, body_variables, created_at, submitted_at, deadline_at,
                             updated_at, tracking_requested, purpose, category, transactional_statement,
-                            commercial_content_absent, own_event_statement)
+                            commercial_content_absent, own_event_statement, team_ids)
 VALUES (sqlc.arg(submitter_sub), sqlc.narg(submitter_name), sqlc.narg(submitter_email),
         sqlc.arg(submitter_email_unverified), sqlc.arg(template_id),
         sqlc.arg(template_version_id), sqlc.narg(mail_list_id), sqlc.narg(form_source_id), sqlc.arg(body_variables), sqlc.arg(at), sqlc.arg(at),
         sqlc.arg(deadline_at), sqlc.arg(at), sqlc.arg(tracking_requested)::boolean, sqlc.narg(purpose)::text,
         sqlc.narg(category)::text, sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean,
-        sqlc.narg(own_event_statement)::boolean)
+        sqlc.narg(own_event_statement)::boolean, sqlc.narg(team_ids)::uuid[])
 RETURNING *;
 
 -- The people a request goes to, in the order submitted, replacing whoever it
@@ -1808,9 +1808,23 @@ SET state               = 'pending',
     transactional_statement   = sqlc.narg(transactional_statement)::boolean,
     commercial_content_absent = sqlc.narg(commercial_content_absent)::boolean,
     own_event_statement       = sqlc.narg(own_event_statement)::boolean,
+    team_ids                  = sqlc.narg(team_ids)::uuid[],
     submitted_at        = sqlc.arg(at),
     deadline_at         = sqlc.arg(deadline_at),
     updated_at          = sqlc.arg(at)
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- Team mail at its approval: the Teams whose leadership the submitter still
+-- holds, in path order, the first being the request's group too. The caller
+-- holds its row lock.
+-- name: SetMailApprovalTeams :one
+UPDATE mail_approvals
+SET team_ids     = sqlc.arg(team_ids)::uuid[],
+    mail_list_id = (sqlc.arg(team_ids)::uuid[])[1],
+    category     = CASE WHEN category IS NULL THEN NULL
+                        ELSE 'team:' || ((sqlc.arg(team_ids)::uuid[])[1])::text || ':duyuru' END,
+    updated_at   = sqlc.arg(at)
 WHERE id = sqlc.arg(id)
 RETURNING *;
 
