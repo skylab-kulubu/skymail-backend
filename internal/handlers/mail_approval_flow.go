@@ -19,6 +19,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 	"github.com/skylab-kulubu/skymail-backend/internal/requests"
 	"github.com/skylab-kulubu/skymail-backend/internal/requiredvars"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
@@ -33,6 +34,10 @@ type approvalCaller struct {
 	emailUnverified bool
 	approver        bool
 	roles           []string
+	// The caller reached a Team mail route without skymail:access, as a
+	// Leader core named (middlewares.TeamSeat): Team mail only, the free
+	// announcement only.
+	teamSeat bool
 }
 
 func approvalCallerOf(c fiber.Ctx) (approvalCaller, error) {
@@ -50,6 +55,7 @@ func approvalCallerOf(c fiber.Ctx) (approvalCaller, error) {
 	caller.emailUnverified, _ = c.Locals("user_email_unverified").(bool)
 	caller.roles, _ = c.Locals("roles").([]string)
 	caller.approver = caller.has(MailApproverRole)
+	caller.teamSeat = middlewares.TeamSeat(c)
 	return caller, nil
 }
 
@@ -64,13 +70,24 @@ func (c approvalCaller) has(role string) bool {
 
 // mayRead lets the caller submit send only if they can read what it submits
 // (Yusuf, 2026-09-24): its template, and its list when it goes to one — the
-// rule the screens show, held here too. The roles missing are named.
+// rule the screens show, held here too. The roles missing are named. Team
+// mail needs no list read role (the Teams are core's answer, checked by
+// teamSend); a Leader without skymail:access reaches nothing else, and their
+// template is the free announcement, which teamSend checks.
 func (c approvalCaller) mayRead(send approvalSend) error {
+	if c.teamSeat {
+		if len(send.teamIDs) == 0 {
+			return errAccessRequired()
+		}
+		return nil
+	}
 	var missing []string
-	if !c.has(templatesReadRole) {
+	// Team mail's free announcement needs no template read role
+	// (teamSend found the template to be it).
+	if !c.has(templatesReadRole) && !(len(send.teamIDs) > 0 && send.freeAnnouncement) {
 		missing = append(missing, templatesReadRole)
 	}
-	if send.mailListID != nil && !c.has(listsReadRole) {
+	if send.mailListID != nil && len(send.teamIDs) == 0 && !c.has(listsReadRole) {
 		missing = append(missing, listsReadRole)
 	}
 	if len(missing) > 0 {
@@ -142,6 +159,11 @@ type approvalSend struct {
 	formSnapshotHash []byte
 	templateID       uuid.UUID
 	mailListID       *uuid.UUID
+	// Team mail's Teams, in path order once teamSend checked them; the
+	// first is mailListID too.
+	teamIDs []uuid.UUID
+	// teamSend found the template to be the free announcement.
+	freeAnnouncement bool
 	// The people it goes to, in order; none when it goes to a list.
 	recipients []mailer.RecipientInfo
 	// A JSON object.
@@ -164,13 +186,20 @@ func approvalSendOf(params requests.SubmitMailApproval) (approvalSend, error) {
 	}
 	hasList := params.MailListID != nil && *params.MailListID != uuid.Nil
 	hasSource := params.FormSourceID != nil && *params.FormSourceID != uuid.Nil
+	teamIDs, err := teamIDsOf(params.TeamIDs)
+	if err != nil {
+		return approvalSend{}, err
+	}
 	choices := 0
-	for _, chosen := range []bool{hasList, hasSource, len(recipients) > 0} {
+	for _, chosen := range []bool{hasList, hasSource, len(recipients) > 0, len(teamIDs) > 0} {
 		if chosen {
 			choices++
 		}
 	}
 	if choices != 1 {
+		if len(teamIDs) > 0 {
+			return approvalSend{}, apperrors.ErrValidation.WithParams(map[string]interface{}{"errors": []validator.FieldError{{Field: "team_ids", Code: "exactly_one_of", Params: map[string]interface{}{"fields": []string{"mail_list_id", "recipients", "form_source_id", "team_ids"}}}}})
+		}
 		if hasSource {
 			return approvalSend{}, apperrors.ErrValidation.WithParams(map[string]interface{}{"errors": []validator.FieldError{{Field: "form_source_id", Code: "exactly_one_of", Params: map[string]interface{}{"fields": []string{"mail_list_id", "recipients", "form_source_id"}}}}})
 		}
@@ -184,11 +213,31 @@ func approvalSendOf(params requests.SubmitMailApproval) (approvalSend, error) {
 	if err != nil {
 		return approvalSend{}, err
 	}
-	send := approvalSend{formSourceID: params.FormSourceID, templateID: params.TemplateID, recipients: recipients, variables: raw, tracking: params.Tracking, askedPurpose: params.SendPurpose}
+	send := approvalSend{formSourceID: params.FormSourceID, templateID: params.TemplateID, recipients: recipients, variables: raw, tracking: params.Tracking, askedPurpose: params.SendPurpose, teamIDs: teamIDs}
 	if hasList {
 		send.mailListID = params.MailListID
 	}
 	return send, nil
+}
+
+// teamIDsOf is the Teams a submission names, each once, in the order named.
+// A nil id is refused.
+func teamIDsOf(ids []uuid.UUID) ([]uuid.UUID, error) {
+	var out []uuid.UUID
+	seen := map[uuid.UUID]bool{}
+	for i, id := range ids {
+		if id == uuid.Nil {
+			return nil, blankField("team_ids[" + strconv.Itoa(i) + "]")
+		}
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	if len(out) > maxTeamsPerRequest {
+		return nil, apperrors.ErrValidation.WithParams(map[string]interface{}{"errors": []validator.FieldError{{Field: "team_ids", Code: "max_length", Params: map[string]interface{}{"max": maxTeamsPerRequest}}}})
+	}
+	return out, nil
 }
 
 // approvalPurpose is the purpose a request to send is written with (ADR 0072
@@ -304,6 +353,7 @@ func sendOfView(view database.GetMailApprovalRow) approvalSend {
 		formSourceID: view.MailApproval.FormSourceID, formID: view.FormID, formTitle: view.FormTitle, formPreparedAt: view.FormPreparedAt, formSnapshotHash: view.FormSnapshotHash,
 		templateID: view.MailApproval.TemplateID,
 		mailListID: view.MailApproval.MailListID,
+		teamIDs:    view.MailApproval.TeamIds,
 		recipients: recipientsOfView(view),
 		variables:  view.MailApproval.BodyVariables,
 	}
@@ -342,7 +392,7 @@ func lockedSend(ctx context.Context, q *database.Queries, a database.MailApprova
 	for i, row := range rows {
 		recipients[i] = mailer.RecipientInfo{FullName: row.FullName, Email: row.Email}
 	}
-	return approvalSend{templateID: a.TemplateID, mailListID: a.MailListID, recipients: recipients, variables: a.BodyVariables}, nil
+	return approvalSend{templateID: a.TemplateID, mailListID: a.MailListID, teamIDs: a.TeamIds, recipients: recipients, variables: a.BodyVariables}, nil
 }
 
 // setRecipients makes recipients the people a request goes to, in q's
@@ -485,6 +535,8 @@ type approvalPrepared struct {
 	tracking *mailer.TrackingPreferences
 	// A resubmission's send, as its checks passed it.
 	checked checkedSend
+	// Team mail's approval: the Teams still led and each one's send.
+	teams *teamPlan
 	// What core said about the send's recipients, asked before the lock
 	// while the bulk preference check is on (mailer, preference_gate.go):
 	// the verdict is the approval's, not the submission's.
@@ -531,12 +583,29 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	if err := authorizeApproval(caller, view.MailApproval.SubmitterSub, action.by); err != nil {
 		return err
 	}
+	// A Leader without skymail:access sends nothing but Team mail: not even
+	// their own request from before, to a list or to people.
+	if caller.teamSeat && action.sends && len(view.MailApproval.TeamIds) == 0 {
+		return errAccessRequired()
+	}
 	// An approved send is an operator's mail: while SkyMail tracks every
 	// person's send it is tracked, whatever the request said when it was
 	// submitted (queue does the same under the lock).
 	tracked := view.MailApproval.TrackingRequested || h.mailer.OperatorTrackingAlways()
 	var prepared approvalPrepared
-	if action.sends && view.MailApproval.MailListID != nil && !view.InternalMailList {
+	team := len(view.MailApproval.TeamIds) > 0
+	// Approving an approved request again sends nothing (repeat, checked
+	// again under the lock): core is not asked about Team mail it will not
+	// send.
+	repeating := action.repeat != nil && action.repeat(view.MailApproval)
+	if action.sends && team && !repeating {
+		// Team mail: core's leadership now, then each Team's members,
+		// preferences and tracking, all before the lock.
+		if prepared.teams, err = h.planTeams(ctx, view, tracked); err != nil {
+			return err
+		}
+	}
+	if action.sends && !team && view.MailApproval.MailListID != nil && !view.InternalMailList {
 		prepared, err = h.groupRecipients(ctx, *view.MailApproval.MailListID)
 		if err != nil {
 			return err
@@ -562,14 +631,14 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	}
 	// core's preferences, at the approval: core not answering refuses the
 	// action (503), and the request stays as it was.
-	if action.sends {
+	if action.sends && !team {
 		if prepared.verdicts, err = h.approvalPreferences(ctx, view, prepared); err != nil {
 			return err
 		}
 	}
 
 	var notice approvalNotice
-	expired := false
+	expired, leadershipLost := false, false
 	err = h.db.InTx(ctx, func(q *database.Queries) error {
 		// Sources are locked before approvals, also in account erasure.
 		// Recheck the pre-read link after taking the approval's lock.
@@ -603,7 +672,19 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 		if !stateIn(a.State, action.from) {
 			return errApprovalState.WithParams(map[string]interface{}{"state": a.State, "allowed": action.from})
 		}
+		if team && action.sends {
+			if prepared.teams == nil {
+				// Approved when read, no longer so now.
+				return errApprovalChanged
+			}
+			if a, notice, leadershipLost, err = h.applyTeamPlan(ctx, q, a, caller, prepared.teams); err != nil || leadershipLost {
+				return err
+			}
+		}
 		notice, err = action.do(ctx, q, a, caller, prepared)
+		if err == nil && prepared.teams != nil && prepared.teams.dropped() && notice.kind == noticeResolved {
+			notice.note = withNote(droppedTeamsNote(prepared.teams), notice.note)
+		}
 		return err
 	})
 	if err != nil {
@@ -619,6 +700,9 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	notification := h.deliver(ctx, view, notice)
 	if expired {
 		return errApprovalExpired.WithParams(map[string]interface{}{"deadline_at": view.MailApproval.DeadlineAt})
+	}
+	if leadershipLost {
+		return errTeamLeadershipLost
 	}
 	answer, err := h.approval(ctx, view)
 	if err != nil {
@@ -839,6 +923,9 @@ func (h *mailApprovalHandlerImpl) queue(ctx context.Context, q *database.Queries
 		}
 		return []uuid.UUID{id}, nil
 	}
+	if len(a.TeamIds) > 0 {
+		return queueToTeams(ctx, h, q, a, prepared.teams)
+	}
 	if a.MailListID == nil {
 		return queueToPeople(ctx, q, sends, a, prepared.tracking)
 	}
@@ -1021,6 +1108,7 @@ func (h *mailApprovalHandlerImpl) resubmit(ctx context.Context, q *database.Quer
 		TransactionalStatement:  send.purpose.TransactionalStatement,
 		CommercialContentAbsent: send.purpose.CommercialContentAbsent,
 		OwnEventStatement:       send.purpose.OwnEventStatement,
+		TeamIds:                 send.teamIDs,
 		At:                      now,
 		DeadlineAt:              now.Add(mailApprovalDeadline),
 		ID:                      a.ID,
@@ -1055,6 +1143,8 @@ func audienceJSON(s approvalSend) json.RawMessage {
 	var raw []byte
 	if s.formSourceID != nil {
 		raw, _ = json.Marshal(map[string]interface{}{"form_source_id": s.formSourceID, "form_id": s.formID, "form_title": s.formTitle, "prepared_at": s.formPreparedAt, "snapshot_hash": s.formSnapshotHash})
+	} else if len(s.teamIDs) > 0 {
+		raw, _ = json.Marshal(map[string]interface{}{"team_ids": s.teamIDs})
 	} else if s.mailListID != nil {
 		raw, _ = json.Marshal(map[string]interface{}{"mail_list_id": s.mailListID})
 	} else {
@@ -1235,6 +1325,7 @@ func approvalItem(view database.GetMailApprovalRow, groupNames map[uuid.UUID]*st
 		DeadlineAt:    view.MailApproval.DeadlineAt,
 		UpdatedAt:     view.MailApproval.UpdatedAt,
 		TaskIDs:       view.TaskIds,
+		TeamIDs:       teamIDsOrEmpty(view.MailApproval.TeamIds),
 		LastEvent:     last,
 		Tracking:      view.MailApproval.TrackingRequested,
 		SendPurposeFields: SendPurposeFields{
@@ -1245,6 +1336,13 @@ func approvalItem(view database.GetMailApprovalRow, groupNames map[uuid.UUID]*st
 			OwnEventStatement:       view.MailApproval.OwnEventStatement,
 		},
 	}
+}
+
+func teamIDsOrEmpty(ids []uuid.UUID) []uuid.UUID {
+	if ids == nil {
+		return []uuid.UUID{}
+	}
+	return ids
 }
 
 func approvalRecipients(recipients []mailer.RecipientInfo) []MailApprovalRecipient {
@@ -1334,6 +1432,8 @@ func (h *mailApprovalHandlerImpl) approvalGroupNames(ctx context.Context, views 
 func (h *mailApprovalHandlerImpl) recipientCount(ctx context.Context, view database.GetMailApprovalRow) *int64 {
 	var count int64
 	switch {
+	case len(view.MailApproval.TeamIds) > 0:
+		return h.teamRecipientCount(ctx, view.MailApproval.TeamIds)
 	case view.MailApproval.MailListID == nil:
 		count = int64(len(view.RecipientEmails))
 	case view.InternalMailList:

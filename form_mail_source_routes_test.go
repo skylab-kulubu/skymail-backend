@@ -24,9 +24,15 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 )
 
+// source-sender sends to Forms respondents directly (skymail:mails:write, as
+// ADMIN and YK hold it); source-single-sender holds only skymail:mails:send,
+// which opens single mails, so a Forms source goes for approval.
 func formSourcePerson(key string) (approvalPerson, bool) {
-	if key == "source-sender" {
-		return approvalPerson{sub: "88888888-8888-4888-8888-888888888888", name: "Source Sender", email: "sender@example.invalid", roles: []string{"skymail:access", "skymail:mails:send", "skymail:templates:read"}}, true
+	switch key {
+	case "source-sender":
+		return approvalPerson{sub: "88888888-8888-4888-8888-888888888888", name: "Source Sender", email: "sender@example.invalid", roles: []string{"skymail:access", "skymail:mails:write", "skymail:templates:read"}}, true
+	case "source-single-sender":
+		return approvalPerson{sub: "99999999-9999-4999-8999-999999999999", name: "Single Sender", email: "single@example.invalid", roles: []string{"skymail:access", "skymail:mails:send", "skymail:templates:read"}}, true
 	}
 	p, ok := approvalPeople[key]
 	return p, ok
@@ -215,6 +221,29 @@ func TestFormSourceIntegrationApprovalPinsSnapshotAndResubmitKeepsSource(t *test
 	}
 	if len(w.queuedRows(approved.TaskIDs[0])) != 101 {
 		t.Fatal("approval used a refreshed audience")
+	}
+}
+
+// A Forms source is a bulk audience: skymail:mails:send, which opens single
+// mails, does not send it at once (403); its holder submits the source for
+// approval and an approver's decision sends it.
+func TestFormSourceIntegrationSingleSendRoleGoesForApproval(t *testing.T) {
+	w := newFormSourceWorld(t)
+	source := prepareSource(t, w, "source-single-sender", 3)
+	status, raw := w.call("source-single-sender", http.MethodPost, "/v1/mail_tasks/form-source", sourceSend(w, source.ID), nil)
+	var refused apiError
+	_ = json.Unmarshal(raw, &refused)
+	if status != 403 || refused.Code != "server.forbidden" {
+		t.Fatalf("direct send with skymail:mails:send only=%d %s", status, refused.Code)
+	}
+	var consumed bool
+	if err := w.store.Conn.QueryRow(context.Background(), `SELECT consumed_at IS NOT NULL FROM mail_form_sources WHERE id=$1`, source.ID).Scan(&consumed); err != nil || consumed {
+		t.Fatal("a refused direct send consumed the source")
+	}
+	approval := sourceApproval(t, w, "source-single-sender", source.ID)
+	status, approved, _ := w.act("fatih", approval.ID, "approve", nil)
+	if status != 200 || len(approved.TaskIDs) != 1 || len(w.queuedRows(approved.TaskIDs[0])) != 3 {
+		t.Fatalf("approve status=%d tasks=%d", status, len(approved.TaskIDs))
 	}
 }
 
