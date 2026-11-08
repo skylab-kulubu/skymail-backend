@@ -12,9 +12,19 @@ import (
 // The counts of a send to fewer than 10 tracked people, and of mail the
 // system sends, tell of people: GET /:id/tracking gives them only to one who
 // may read the send's people (hub review T6; KVKK notice s3, §4). Anyone else
-// with mails:read gets withheld and no report.
+// with mails:read gets withheld and no report: the send's own sender too,
+// unless SKYMAIL_SENDER_SEES_RECIPIENTS is on (ADR-0074 decision 9, addendum
+// 2026-11-08).
 func TestTrackingCountsOfASmallSendGoOnlyToWhoMayReadItsPeople(t *testing.T) {
-	w, _ := trackedWorld(t, true)
+	for _, on := range []bool{false, true} {
+		t.Run(map[bool]string{false: "switch off", true: "switch on"}[on], func(t *testing.T) {
+			trackingCountsOfASmallSend(t, on)
+		})
+	}
+}
+
+func trackingCountsOfASmallSend(t *testing.T, senderSees bool) {
+	w, _ := trackedWorldWith(t, true, handlers.WithSenderSeesRecipients(senderSees))
 	ctx := context.Background()
 	send := w.listSend()
 	send["mail_list_id"] = w.group
@@ -53,9 +63,10 @@ func TestTrackingCountsOfASmallSendGoOnlyToWhoMayReadItsPeople(t *testing.T) {
 		}
 	}
 
-	// A person's small send: its sender and the tracking role read the counts, another mails:read does not.
+	// A person's small send: the tracking role reads the counts, another
+	// mails:read does not; its sender only while the switch is on.
 	expect("small send", "baska", true)
-	expect("small send", "yusuf_okur", false)
+	expect("small send", "yusuf_okur", !senderSees)
 	expect("small send", "takip_okur", false)
 
 	// Mail the system sends: only the role, not the person it names as sender.
