@@ -1062,7 +1062,9 @@ SkyMail'i adlandırmalıdır (yoksa 401; servis hesabı 403
 `auth.person_required`). Rolsüz Leader yalnız ekip postası gönderir, yalnız
 serbest duyuru çerçevesiyle (`free.basic`, `403
 team_mail.free_announcement_only`), yalnız kendi isteklerini görür; başka
-hiçbir SkyMail ucuna giremez.
+hiçbir SkyMail ucuna giremez. Onaylanan isteğinin sonucunu
+`GET /v1/mail_approvals/{id}` yanıtındaki `result` toplamlarından okur
+("Piksel, tıklama ve raporlar").
 
 **Kişinin ekipleri.** `GET /v1/me/team_audiences` lider olduğu ekipleri yol
 sırasında verir: `id`, `path`, `code`, `display_name`, ağaç (`parent_id`,
@@ -1762,6 +1764,25 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   gönderimin kendi göndereni de) alır; başka bir
   `mails:read` sahibine `withheld: true` ve `report: null` döner (KVKK
   aydınlatma metni s3 §4).
+- **Onaylanan isteğin sonucu (hub bileti ekip-postasi 09):**
+  `GET /v1/mail_approvals/{id}` onaylanıp gönderilmiş istekte `result`
+  döner; isteyen `skymail:mails:read` olmadan da okur (erişim kuralı aynı:
+  onaycı ya da isteğin sahibi). Yalnız toplamlar: `sent`, `skipped`
+  (kuralla gönderilmeyen: bastırılmış ya da çıkmış adres, kapatılmış
+  kategori, etkin olmayan hesap, ortak adres, ayrılmış alan adı, iptal),
+  `failed`, `pending` (işlenen dahil); kişi kişi gönderimde bütün
+  gönderimlerin tek toplamı, gönderim başına satır yok; ad ve adres yok.
+  Takipli gönderimlerin `tracking` toplamı (`tracked_recipients`,
+  `opened` = `unique_likely_human_opens`, `clicked` = `unique_clickers`)
+  `GET /{id}/tracking` ile aynı kuralla gizlenir (`tracking_withheld:
+  true`, `tracking: null`): toplam takipli 10'dan az ya da sistem şeridi,
+  ve kişi raporunu okuyamayan çağıran. Ekip postasında küçük ekiplerin
+  toplamı 10'dan azken büyükleri de varsa aynı: büyüklerin sayısını okuyan
+  farkı çıkarabilirdi. Bekleyen, geri gönderilmiş, reddedilmiş ve süresi
+  dolmuş istekte `result` yoktur. Sonuç okunamazsa (2 sn bütçe, DB
+  hatası) istek yine `200` döner ve günlüğe yazılır: teslim toplamları
+  okunamadıysa `result` hiç yoktur, yalnız takip okunamadıysa `tracking:
+  null` ve `tracking_withheld: false`.
 - `GET /v1/mail_tasks/{id}/tracking/recipients` rolü
   `skymail:mails:tracking:read` ister; `mails:read` tek başına yetmez.
   `sent_by = token sub` (gönderimin kendi göndereni) yalnız

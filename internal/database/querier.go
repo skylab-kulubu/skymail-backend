@@ -101,6 +101,12 @@ type Querier interface {
 	// Sends by the status mail_task_status derives, over every send: the same
 	// numbers CountMailTaskSends gives for each status filter.
 	CountMailTasksByStatus(ctx context.Context) (CountMailTasksByStatusRow, error)
+	// How an approved request's sends went, in totals only (GET
+	// /mail_approvals/{id} result): one row per recipient. A skipped row is
+	// mail_task_status()'s (never sent, by rule: reserved_domain:, suppressed:,
+	// preference: opted_out, inactive or ambiguous, cancelled); failed is every
+	// other failed row; pending counts processing too.
+	CountMailTasksOutcomes(ctx context.Context, taskIds []uuid.UUID) (CountMailTasksOutcomesRow, error)
 	CountMailingLists(ctx context.Context) (int64, error)
 	// A person's test mails of a template in the last minute: a News send's
 	// test (POST /v1/news_sends/test) is a send of club.news to its sender
@@ -730,6 +736,9 @@ type Querier interface {
 	// person's tracked send is in the bulk lane, and the system lane is never
 	// tracked as a person asks. Its people are read with the role only.
 	TrackingTaskAccess(ctx context.Context, id uuid.UUID) (TrackingTaskAccessRow, error)
+	// TrackingTaskAccess for several sends at once (an approved Mail onayı
+	// request's, GET /mail_approvals/{id} result), in no order.
+	TrackingTasksAccess(ctx context.Context, ids []uuid.UUID) ([]TrackingTasksAccessRow, error)
 	// Puts back due the parked rows of sends that are neither paused nor
 	// cancelled: rows a take parked while an operator resumed the send
 	// (ParkClaimedRows), or a failure rate pause parked after the resume. The

@@ -264,6 +264,7 @@ type MailApproval struct {
 	History      []MailApprovalEvent  `json:"history"`
 	// On the answer to an action: the mail it sent about itself. Absent when it sent none.
 	Notification *MailApprovalNotification `json:"notification,omitempty"`
+	Result       *MailApprovalResult       `json:"result,omitempty"`
 }
 
 // MailApprovalHandler serves Mail onayı.
@@ -293,6 +294,9 @@ type MailApprovalOptions struct {
 	// Teams says which Teams a person leads (core); nil while Team mail is
 	// off (SKYMAIL_TEAM_SEND).
 	Teams teams.Reader
+	// SKYMAIL_SENDER_SEES_RECIPIENTS: the submitter reads the people of
+	// their approved sends, so a result's small counts too.
+	SenderSeesRecipients bool
 }
 
 type mailApprovalHandlerImpl struct {
@@ -303,6 +307,8 @@ type mailApprovalHandlerImpl struct {
 	uiURL    string
 	now      func() time.Time
 	teams    teams.Reader
+	// SKYMAIL_SENDER_SEES_RECIPIENTS (MailApprovalOptions).
+	senderSeesRecipients bool
 }
 
 // NewMailApprovalHandler serves Mail onayı. An approved send is queued with
@@ -317,6 +323,8 @@ func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc ke
 		uiURL:    strings.TrimRight(strings.TrimSpace(opts.UIURL), "/"),
 		now:      opts.Now,
 		teams:    opts.Teams,
+
+		senderSeesRecipients: opts.SenderSeesRecipients,
 	}
 	if h.uiURL == "" {
 		h.uiURL = DefaultSkyMailUIURL
@@ -526,7 +534,7 @@ func (h *mailApprovalHandlerImpl) List(c fiber.Ctx) error {
 // Get godoc
 //
 //	@Summary		Read a request for approval
-//	@Description	A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. preview_recipient is whose mail the preview is: the first of its people, or for a list the submitter, as if they were on it; it is given also when the preview does not render. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.
+//	@Description	A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. An approved request has result: how its sends went, in totals only (sent, skipped, failed, pending; tracking, the opens and clicks of its tracked sends summed, null and tracking_withheld true when the sum, or the sends of fewer than 10 tracked recipients among others, would tell of people and the caller may not read the sends' people, by GET /mail_tasks/{id}/tracking's rule), with no person in it and one total for a request to people, never a row per send; it needs no skymail:mails:read. Any other request has none. Reading the result never fails the read: totals not read in time leave the answer without result, opens and clicks not read in time leave tracking null with tracking_withheld false. preview_recipient is whose mail the preview is: the first of its people, or for a list the submitter, as if they were on it; it is given also when the preview does not render. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.
 //	@Tags			Mail approval
 //	@Produce		json
 //	@Param			id	path		string	true	"Request ID"
@@ -554,6 +562,9 @@ func (h *mailApprovalHandlerImpl) Get(c fiber.Ctx) error {
 	answer, err := h.approval(c.Context(), view)
 	if err != nil {
 		return err
+	}
+	if answer.State == string(database.MailApprovalStateApproved) && len(answer.TaskIDs) > 0 {
+		answer.Result = h.result(c, id, answer.TaskIDs)
 	}
 	return c.JSON(answer)
 }
