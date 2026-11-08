@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +37,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
 	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
 	"github.com/skylab-kulubu/skymail-backend/internal/news"
+	"github.com/skylab-kulubu/skymail-backend/internal/teams"
 	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
 	"github.com/skylab-kulubu/skymail-backend/internal/unsubscribe"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
@@ -56,6 +58,9 @@ var swaggerDocument = sync.OnceValue(docs.SwaggerInfo.ReadDoc)
 
 //	@tag.name			Mail approval
 //	@tag.description	Mail onayı: sends submitted by members without send permission, held until an approver decides them
+
+//	@tag.name			Team mail
+//	@tag.description	Ekip postası: a Leader's announcement to Teams core says they lead, through Mail onayı (SKYMAIL_TEAM_SEND)
 
 //	@contact.name	Enes Genç
 //	@contact.url	https://enesgenc.dev
@@ -207,6 +212,14 @@ func main() {
 	if preferenceGate.On && trackingConfig.CoreURL == "" {
 		log.Fatal().Msg("SKYMAIL_BULK_PREFERENCE=on needs CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
 	}
+	// Team mail (README, "Ekip postası"): SKYMAIL_TEAM_SEND, off unless on.
+	teamSend, err := teams.SwitchFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid Team mail configuration")
+	}
+	if err := checkTeamSend(teamSend, trackingConfig.CoreURL, sendLanes, preferenceGate); err != nil {
+		log.Fatal().Err(err).Msg("invalid Team mail configuration")
+	}
 	if migrationConfig.Mode == migrations.ModeApply {
 		// A stop signal ends a wait for another process's migrations, never
 		// a migration under way.
@@ -262,6 +275,12 @@ func main() {
 		Msg("contact consents (SKYMAIL_PROMOTIONAL, SKYMAIL_LIST_CONSENT)")
 	log.Info().Bool("bulk_preference", preferenceGate.On).Bool("core", preferenceGate.Core != nil).
 		Msg("bulk preference check (SKYMAIL_BULK_PREFERENCE)")
+	// Which Teams a person leads is core's to say; nil while Team mail is off.
+	var teamLeaders teams.Reader
+	if teamSend {
+		teamLeaders = teams.NewCore(trackingConfig.CoreURL, kcClient, nil)
+	}
+	log.Info().Bool("team_send", teamSend).Msg("Team mail (SKYMAIL_TEAM_SEND)")
 	db := database.NewStore(conn)
 	mailerService := mailer.NewMailer(db, mailer.SMTPConfig{
 		FromEmail: cfg.SMTPFrom,
@@ -314,6 +333,7 @@ func main() {
 	approvalHandler := handlers.NewMailApprovalHandler(db, mailerService, kcClient, handlers.MailApprovalOptions{
 		ClientID: cfg.KeycloakClientID,
 		UIURL:    config.Value("SKYMAIL_UI_URL"),
+		Teams:    teamLeaders,
 	})
 	erasureHandler := handlers.NewAccountErasureHandler(db, erasuretoken.NewVerifier(erasureTokenConfig(cfg)), accountAccessGate)
 	withdrawalHandler := handlers.NewTrackingWithdrawalHandler(db, erasuretoken.NewVerifier(withdrawalTokenConfig(cfg)), accountAccessGate)
@@ -336,33 +356,20 @@ func main() {
 	handlers.NewUnsubscribePublicHandler(db, unsubscribeConfig).Register(app)
 	registerPublicRoutes(app, accountAccessGate, readiness)
 	registerInternalRoutes(app, erasureHandler, withdrawalHandler)
-	// Before protectedAPI: /v1/me is a person's own, with no role, and must
-	// not go through /v1's skymail:access chain.
-	registerInboxRoutes(app, authMiddleware, accountAccessGate, handlers.NewInboxHandler(db))
-	registerEmailDeliveryRoutes(app, authMiddleware, accountAccessGate, handlers.NewEmailDeliveryHandler(db))
-
-	api := protectedAPI(app, authMiddleware, accountAccessGate)
-
-	registerTemplateRoutes(api, authMiddleware, templateHandler)
-
-	lists := api.Group("/mailing_lists")
-	lists.Post("/", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.CreateList)
-	lists.Get("/", authMiddleware.RequireAnyPermission("skymail:lists:read"), listHandler.GetLists)
-	lists.Get("/:id", authMiddleware.RequireAnyPermission("skymail:lists:read"), listHandler.GetList)
-	lists.Patch("/:id", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.UpdateList)
-	lists.Delete("/:id", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.DeleteList)
-	lists.Post("/:id/restore", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.RestoreList)
-	lists.Post("/:id/recipients", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.AddRecipient)
-	lists.Get("/:id/recipients", authMiddleware.RequireAnyPermission("skymail:lists:read"), listHandler.GetRecipients)
-	lists.Delete("/:id/recipients/:recipientId", authMiddleware.RequireAnyPermission("skymail:lists:write"), listHandler.RemoveRecipient)
-
-	registerFormMailSourceRoutes(api, authMiddleware, mailHandler, formsSourceConfig)
-	registerMailTaskRoutes(api, authMiddleware, mailHandler)
-	registerMailApprovalRoutes(api, authMiddleware, approvalHandler)
-	registerNotificationRoutes(api, authMiddleware, handlers.NewNotificationHandler(db, mailerService, kcClient))
-	registerSuppressionRoutes(api, authMiddleware, handlers.NewSuppressionHandler(db))
-	registerNewsSendRoutes(api, authMiddleware, handlers.NewNewsSendHandler(db, mailerService,
-		news.NewCMS(newsSends.CMSURL, nil), news.NewCore(trackingConfig.CoreURL, kcClient, nil), newsSends.Options))
+	registerPersonAndAPIRoutes(app, authMiddleware, accountAccessGate, teamLeaders, apiHandlers{
+		inbox:         handlers.NewInboxHandler(db),
+		emailDelivery: handlers.NewEmailDeliveryHandler(db),
+		team:          handlers.NewTeamMailHandler(teamLeaders, kcClient),
+		template:      templateHandler,
+		list:          listHandler,
+		mail:          mailHandler,
+		formsSource:   formsSourceConfig,
+		approval:      approvalHandler,
+		notification:  handlers.NewNotificationHandler(db, mailerService, kcClient),
+		suppression:   handlers.NewSuppressionHandler(db),
+		newsSend: handlers.NewNewsSendHandler(db, mailerService,
+			news.NewCMS(newsSends.CMSURL, nil), news.NewCore(trackingConfig.CoreURL, kcClient, nil), newsSends.Options),
+	})
 
 	// The background work's context: shutdown cancels it only after the
 	// mailer has stopped (or its time ran out), which cuts off a send still
@@ -545,6 +552,56 @@ func withdrawalTokenConfig(cfg config.Config) erasuretoken.Config {
 	tokens.CallerClientID = erasuretoken.WithdrawCallerClientID
 	tokens.Role = erasuretoken.WithdrawRole
 	return tokens
+}
+
+// apiHandlers are the handlers of a person's own routes and of /v1.
+type apiHandlers struct {
+	inbox         handlers.InboxHandler
+	emailDelivery handlers.EmailDeliveryHandler
+	team          handlers.TeamMailHandler
+	template      handlers.TemplateHandler
+	list          handlers.ListHandler
+	mail          handlers.MailHandler
+	formsSource   middlewares.FormsSourceConfig
+	approval      handlers.MailApprovalHandler
+	notification  handlers.NotificationHandler
+	suppression   handlers.SuppressionHandler
+	newsSend      handlers.NewsSendHandler
+}
+
+// registerPersonAndAPIRoutes serves a person's own routes and Team mail's,
+// each in its own chain, then /v1 behind skymail:access. Order matters:
+// a route of the earlier chains ends its chain, so /v1's never runs for it.
+func registerPersonAndAPIRoutes(app *fiber.App, auth middlewares.AuthMiddleware, gate accessgate.Reader, leaders teams.Reader, h apiHandlers) {
+	// Before protectedAPI: /v1/me is a person's own, with no role, and must
+	// not go through /v1's skymail:access chain.
+	registerInboxRoutes(app, auth, gate, h.inbox)
+	registerEmailDeliveryRoutes(app, auth, gate, h.emailDelivery)
+	// Before protectedAPI too: a Leader without skymail:access reaches
+	// these, and only these.
+	registerTeamMailRoutes(app, auth, gate, leaders, h.team, h.approval, h.template)
+
+	api := protectedAPI(app, auth, gate)
+
+	registerTemplateRoutes(api, auth, h.template)
+
+	lists := api.Group("/mailing_lists")
+	lists.Post("/", auth.RequireAnyPermission("skymail:lists:write"), h.list.CreateList)
+	lists.Get("/", auth.RequireAnyPermission("skymail:lists:read"), h.list.GetLists)
+	lists.Get("/:id", auth.RequireAnyPermission("skymail:lists:read"), h.list.GetList)
+	lists.Patch("/:id", auth.RequireAnyPermission("skymail:lists:write"), h.list.UpdateList)
+	lists.Delete("/:id", auth.RequireAnyPermission("skymail:lists:write"), h.list.DeleteList)
+	lists.Post("/:id/restore", auth.RequireAnyPermission("skymail:lists:write"), h.list.RestoreList)
+	lists.Post("/:id/recipients", auth.RequireAnyPermission("skymail:lists:write"), h.list.AddRecipient)
+	lists.Get("/:id/recipients", auth.RequireAnyPermission("skymail:lists:read"), h.list.GetRecipients)
+	lists.Delete("/:id/recipients/:recipientId", auth.RequireAnyPermission("skymail:lists:write"), h.list.RemoveRecipient)
+
+	registerFormMailSourceRoutes(api, auth, h.mail, h.formsSource)
+	registerMailTaskRoutes(api, auth, h.mail)
+	registerMailApprovalRoutes(api, auth, h.approval)
+	registerNotificationRoutes(api, auth, h.notification)
+	registerSuppressionRoutes(api, auth, h.suppression)
+	registerNewsSendRoutes(api, auth, h.newsSend)
 }
 
 func registerTemplateRoutes(api fiber.Router, auth middlewares.AuthMiddleware, template handlers.TemplateHandler) {
@@ -816,6 +873,84 @@ func registerInboxRoutes(app *fiber.App, auth middlewares.AuthMiddleware, gate a
 // /v1's skymail:access chain as the inbox is.
 func registerEmailDeliveryRoutes(app *fiber.App, auth middlewares.AuthMiddleware, gate accessgate.Reader, delivery handlers.EmailDeliveryHandler) {
 	app.Get("/v1/me/email-delivery", auth.AuthenticatePerson, middlewares.AccountAccessGate(gate), delivery.Get)
+}
+
+// checkTeamSend says whether Team mail can run: on, it needs CORE_URL (core
+// says who leads which Team), SKYMAIL_MAIL_PURPOSE=on (each Team's send is
+// written with its own category) and SKYMAIL_BULK_PREFERENCE=on (a member
+// who turned a Team's category off gets none of its mail; ADR-0072 decision
+// 3). Anything less stops startup.
+func checkTeamSend(on bool, coreURL string, lanes mailer.SendLanes, preferences mailer.PreferenceGate) error {
+	switch {
+	case !on:
+		return nil
+	case coreURL == "":
+		return errors.New("SKYMAIL_TEAM_SEND=on needs CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
+	case !lanes.Purpose:
+		return errors.New("SKYMAIL_TEAM_SEND=on needs SKYMAIL_MAIL_PURPOSE=on: each Team's send carries its own category")
+	case !preferences.On:
+		return errors.New("SKYMAIL_TEAM_SEND=on needs SKYMAIL_BULK_PREFERENCE=on: a member who turned a Team's category off gets none of its mail")
+	}
+	return nil
+}
+
+// registerTeamMailRoutes serves Team mail (ADR-0067 addendum of 2026-11-08;
+// hub tickets ekip-postasi 03 and 04) in a chain of its own, registered
+// before /v1's skymail:access chain as the inbox is: the token
+// (AuthenticateTeamSender), the account access gate, then skymail:access or a
+// Team core says the caller leads (RequireAccessOrTeamLeader, core's answer
+// kept a minute). A Leader without skymail:access reaches these routes and
+// nothing else of SkyMail; the handlers keep them to Team mail and the free
+// announcement. Anyone with skymail:access goes through as on /v1, and
+// never waits for core here. Off (leaders nil), only GET
+// /v1/me/team_audiences is served, 404 team_mail.off, and every other route
+// stays on /v1 as before.
+func registerTeamMailRoutes(app *fiber.App, auth middlewares.AuthMiddleware, gate accessgate.Reader, leaders teams.Reader, team handlers.TeamMailHandler, approvals handlers.MailApprovalHandler, templates handlers.TemplateHandler) {
+	if leaders == nil {
+		app.Get("/v1/me/team_audiences", func(fiber.Ctx) error { return handlers.ErrTeamMailOff })
+		return
+	}
+	seat := []any{auth.AuthenticateTeamSender, middlewares.AccountAccessGate(gate), middlewares.RequireAccessOrTeamLeader(leaders)}
+	route := func(handler fiber.Handler) []any { return append(append([]any{}, seat[1:]...), handler) }
+	app.Get("/v1/me/team_audiences", seat[0], route(team.Audiences)...)
+	app.Post("/v1/mail_approvals", seat[0], route(approvals.Submit)...)
+	app.Get("/v1/mail_approvals", seat[0], route(approvals.List)...)
+	app.Get("/v1/mail_approvals/:id", seat[0], route(approvals.Get)...)
+	app.Post("/v1/mail_approvals/:id/resubmit", seat[0], route(approvals.Resubmit)...)
+	app.Post("/v1/mail_approvals/:id/accept", seat[0], route(approvals.Accept)...)
+	app.Post("/v1/mail_approvals/:id/decline", seat[0], route(approvals.Decline)...)
+	// The free announcement's frame, which the form fills and previews.
+	app.Get("/v1/templates/by-key/:key", seat[0], route(freeTemplateOrTemplatesRead(leaders, templates.GetTemplateByKey))...)
+}
+
+// freeTemplateOrTemplatesRead reads a template by key with
+// skymail:templates:read, as /v1 does. The free announcement's frame
+// (handlers.FreeTemplateKey), which Team mail sends without that role, is
+// read without it too by a Leader: one without skymail:access (the seat
+// asked core already), or one with it whom core names (its answer kept a
+// minute; core not answering is 503 for this read only).
+func freeTemplateOrTemplatesRead(leaders teams.Reader, read fiber.Handler) fiber.Handler {
+	return func(c fiber.Ctx) error {
+		roles, _ := c.Locals("roles").([]string)
+		switch {
+		case slices.Contains(roles, "skymail:templates:read"):
+			return read(c)
+		case c.Params("key") != handlers.FreeTemplateKey:
+			return apperrors.ErrForbidden
+		case middlewares.TeamSeat(c):
+			return read(c)
+		}
+		sub, _ := c.Locals("user_id").(string)
+		led, err := leaders.Led(c.Context(), sub)
+		if err != nil {
+			log.Warn().Err(err).Str("event", "team_mail_leadership_unavailable").Msg("Team mail: core did not say which Teams the caller leads")
+			return teams.ErrLeadershipUnavailable
+		}
+		if len(led) == 0 {
+			return apperrors.ErrForbidden
+		}
+		return read(c)
+	}
 }
 
 // inboxSweepInterval is how often the inbox sweep runs: an item is gone

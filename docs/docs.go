@@ -634,7 +634,15 @@ const docTemplate = `{
                         "$ref": "#/components/schemas/handlers.MailApprovalSubmitter"
                     },
                     "task_ids": {
-                        "description": "The sends, once approved, in order: a list's one, or one per person, task_ids[i] to recipients[i]. Empty until then.",
+                        "description": "The sends, once approved, in order: a list's one, or one per person, task_ids[i] to recipients[i]; for Team mail one per Team that had anyone to send to, in path order. Empty until then.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "team_ids": {
+                        "description": "Team mail: the Teams it goes to, in path order, each its own send with category team:\u003cid\u003e:duyuru; audience then names the first as a Keycloak group, and category is the first's. Empty when it is not Team mail.",
                         "items": {
                             "type": "string"
                         },
@@ -801,7 +809,15 @@ const docTemplate = `{
                         "$ref": "#/components/schemas/handlers.MailApprovalSubmitter"
                     },
                     "task_ids": {
-                        "description": "The sends, once approved, in order: a list's one, or one per person, task_ids[i] to recipients[i]. Empty until then.",
+                        "description": "The sends, once approved, in order: a list's one, or one per person, task_ids[i] to recipients[i]; for Team mail one per Team that had anyone to send to, in path order. Empty until then.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "team_ids": {
+                        "description": "Team mail: the Teams it goes to, in path order, each its own send with category team:\u003cid\u003e:duyuru; audience then names the first as a Keycloak group, and category is the first's. Empty when it is not Team mail.",
                         "items": {
                             "type": "string"
                         },
@@ -1776,6 +1792,54 @@ const docTemplate = `{
                             "duyuru"
                         ],
                         "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.TeamAudience": {
+                "properties": {
+                    "category": {
+                        "description": "The category its send goes with, fixed: team:\u003cid\u003e:duyuru.",
+                        "example": "team:6d3c9f8e-2a4b-4c1d-8e7f-1a2b3c4d5e6f:duyuru",
+                        "type": "string"
+                    },
+                    "code": {
+                        "example": "WEBLAB",
+                        "type": "string"
+                    },
+                    "depth": {
+                        "description": "How many Teams above it are in this list: 0 for a top row.",
+                        "type": "integer"
+                    },
+                    "display_name": {
+                        "$ref": "#/components/schemas/teams.DisplayName"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "parent_id": {
+                        "description": "The nearest Team above it in this list; null for a top row (a Team whose Leader group the caller is in directly).",
+                        "type": "string"
+                    },
+                    "path": {
+                        "example": "/UYELER/ARGE/WEBLAB",
+                        "type": "string"
+                    },
+                    "recipient_count": {
+                        "description": "Its members and its Sub-teams' members, Leader groups included, who have an e-mail address, each once: no address, no name. Null when Keycloak did not say in time. A person who turned the Team's category off is counted here and skipped at the send.",
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.TeamAudiences": {
+                "properties": {
+                    "teams": {
+                        "items": {
+                            "$ref": "#/components/schemas/handlers.TeamAudience"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
                     }
                 },
                 "type": "object"
@@ -2996,6 +3060,15 @@ const docTemplate = `{
                         "type": "array",
                         "uniqueItems": false
                     },
+                    "team_ids": {
+                        "description": "Team mail (ADR-0067 addendum of 2026-11-08): Teams the caller leads, as GET /me/team_audiences lists them, 1..50. Choose exactly one of this, mail_list_id, recipients or form_source_id. No skymail:lists:read is needed; a picked Sub-team of a picked Team is dropped; each remaining Team is its own send once approved, always duyuru with its own category team:\u003cid\u003e:duyuru (purpose may be omitted or duyuru, category omitted or one of the picked Teams'); a person in two picked Teams gets one mail. A Leader without skymail:access sends only the free announcement (template free.basic).",
+                        "items": {
+                            "type": "string"
+                        },
+                        "maxItems": 50,
+                        "type": "array",
+                        "uniqueItems": false
+                    },
                     "template_id": {
                         "type": "string"
                     },
@@ -3110,6 +3183,17 @@ const docTemplate = `{
                     "react_email_content",
                     "subject"
                 ],
+                "type": "object"
+            },
+            "teams.DisplayName": {
+                "properties": {
+                    "en": {
+                        "type": "string"
+                    },
+                    "tr": {
+                        "type": "string"
+                    }
+                },
                 "type": "object"
             }
         }
@@ -3583,7 +3667,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "mail_approval.not_submitter"
+                        "description": "mail_approval.not_submitter; server.forbidden (params.missing_roles skymail:access) for a Leader without skymail:access accepting a request that is not Team mail"
                     },
                     "404": {
                         "content": {
@@ -3603,7 +3687,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "mail_approval.state_conflict, mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished, mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
+                        "description": "mail_approval.state_conflict, mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished, mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty; for Team mail as Approve"
                     },
                     "500": {
                         "content": {
@@ -3704,7 +3788,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "mail_approval.state_conflict (params.state, params.allowed), mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished (params.submitted_version_id, params.published_version_id), mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty"
+                        "description": "mail_approval.state_conflict (params.state, params.allowed), mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished (params.submitted_version_id, params.published_version_id), mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty; for Team mail mail_approval.team_leadership_lost (the submitter leads none of its Teams now: the request is rejected with that reason) or mail_approval.team_mail_off. A Team led no more, or gone from Keycloak, is dropped and recorded (an edited event) and the rest go"
                     },
                     "422": {
                         "content": {
@@ -3734,7 +3818,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE), core did not say whom the send may go to at the approval; nothing is queued and the request stays as it was"
+                        "description": "mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE), core did not say whom the send may go to at the approval; nothing is queued and the request stays as it was. team_mail.leadership_unavailable (Retry-After): for Team mail, core did not say which Teams the submitter leads; the request stays as it was"
                     }
                 },
                 "summary": "Approve a request and send it",
@@ -6284,6 +6368,67 @@ const docTemplate = `{
                 "summary": "Mark one of my items unread",
                 "tags": [
                     "Inbox"
+                ]
+            }
+        },
+        "/me/team_audiences": {
+            "get": {
+                "description": "Team mail (ADR-0067 addendum of 2026-11-08): the Teams core says the caller leads — each Team whose Leader group (LIDERLER or KOORDINATORLER) they are directly in, and every Sub-team below it — in path order, the tree in parent_id and depth, each with how many it would reach (its and its Sub-teams' members with an address, Leader groups included, each once; never an address or a name) and its fixed category. Core's answer may be up to a minute old; submitting asks again. A Leader without skymail:access reaches this route; anyone else without it gets 403. An empty list means the caller leads no Team.",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/handlers.TeamAudiences"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "A token without skymail:access whose aud does not name SkyMail"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Neither skymail:access nor a Team the caller leads; auth.person_required for a service account's token without skymail:access"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "team_mail.off: SKYMAIL_TEAM_SEND is off"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "team_mail.leadership_unavailable (Retry-After): core did not say which Teams the caller leads"
+                    }
+                },
+                "summary": "The Teams the caller may send Team mail to",
+                "tags": [
+                    "Team mail"
                 ]
             }
         },
@@ -8906,6 +9051,10 @@ const docTemplate = `{
         {
             "description": "Mail onayı: sends submitted by members without send permission, held until an approver decides them",
             "name": "Mail approval"
+        },
+        {
+            "description": "Ekip postası: a Leader's announcement to Teams core says they lead, through Mail onayı (SKYMAIL_TEAM_SEND)",
+            "name": "Team mail"
         }
     ],
     "servers": [
