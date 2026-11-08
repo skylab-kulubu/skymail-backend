@@ -226,10 +226,20 @@ func TestAServicesSingleMailSaysWhetherItsRecipientIsTracked(t *testing.T) {
 // Who opened a mail the system sends is read with the role only, even when
 // sent_by names a person (KVKK notice s3, §4): the requester whose request
 // sent the approvers their notice, and the approver whose decision sent the
-// requester theirs, are refused its people. The requester still reads the
-// people of her own send, approved and queued in the bulk lane.
+// requester theirs, are refused its people. The requester reads the people
+// of her own send, approved and queued in the bulk lane, only while
+// SKYMAIL_SENDER_SEES_RECIPIENTS is on (ADR-0074 decision 9, addendum
+// 2026-11-08); off, the default, she reads its counts only.
 func TestASystemMailsPeopleAreReadWithTheRoleOnly(t *testing.T) {
-	w, _ := systemTrackedWorld(t)
+	for _, on := range []bool{false, true} {
+		t.Run(map[bool]string{false: "switch off", true: "switch on"}[on], func(t *testing.T) {
+			aSystemMailsPeopleAreReadWithTheRoleOnly(t, on)
+		})
+	}
+}
+
+func aSystemMailsPeopleAreReadWithTheRoleOnly(t *testing.T, senderSees bool) {
+	w, _ := systemTrackedWorldWith(t, handlers.WithSenderSeesRecipients(senderSees))
 	w.account(fatih, true, true)
 	w.account(yusuf, true, true)
 	request := w.submit("elif", w.listSend())
@@ -262,8 +272,12 @@ func TestASystemMailsPeopleAreReadWithTheRoleOnly(t *testing.T) {
 	if notices[w.requested.ID] != 2 || notices[w.resolved.ID] != 1 {
 		t.Fatalf("notices %v; want 2 requested and 1 resolved", notices)
 	}
-	if status := people("elif", answer.send()); status != fiber.StatusOK {
-		t.Errorf("Elif reading the people of her own approved send: %d, want 200", status)
+	want := fiber.StatusForbidden
+	if senderSees {
+		want = fiber.StatusOK
+	}
+	if status := people("elif", answer.send()); status != want {
+		t.Errorf("Elif reading the people of her own approved send: %d, want %d", status, want)
 	}
 }
 
