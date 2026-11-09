@@ -9,6 +9,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
 	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
 	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
 )
@@ -51,13 +52,19 @@ func (p *routePreferences) Resolve(ctx context.Context, subs []uuid.UUID) (map[u
 
 func trackedWorld(t *testing.T, on bool) (*approvalWorld, *routePreferences) {
 	t.Helper()
+	return trackedWorldWith(t, on)
+}
+
+// trackedWorldWith is trackedWorld whose send routes take handlerOpts.
+func trackedWorldWith(t *testing.T, on bool, handlerOpts ...handlers.MailHandlerOption) (*approvalWorld, *routePreferences) {
+	t.Helper()
 	prefs := &routePreferences{}
 	mode := tracking.ModeOff
 	if on {
 		mode = tracking.ModeOn
 	}
 	accounts := &laterAccounts{}
-	w := newApprovalWorldWithPool(t, 0, mailer.WithTracking(mailer.Tracking{
+	w := newApprovalWorldWith(t, 0, handlerOpts, mailer.WithTracking(mailer.Tracking{
 		Config:      tracking.Config{Mode: mode, BaseURL: "https://api.example.test/api/skymail", CoreURL: "http://core.invalid"},
 		Preferences: prefs,
 		Accounts:    accounts,

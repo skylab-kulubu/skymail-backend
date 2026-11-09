@@ -13,6 +13,9 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
 )
 
+// The send's own sender (yusuf) reads its people only while
+// SKYMAIL_SENDER_SEES_RECIPIENTS is on (Yusuf, 2026-11-08; ADR-0074 decision
+// 9, addendum 2026-11-08); off, the default, the role alone does.
 func TestTrackingReadRoutesEnforceRolesSenderAndNinetyDays(t *testing.T) {
 	w, _ := trackedWorld(t, true)
 	ctx := context.Background()
@@ -41,7 +44,7 @@ func TestTrackingReadRoutesEnforceRolesSenderAndNinetyDays(t *testing.T) {
 	}
 	approvalPeople["tracking_admin"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skymail:access", handlers.TrackingReadRole}}
 	defer delete(approvalPeople, "tracking_admin")
-	for who, want := range map[string]int{"yusuf": 200, "baska": 403, "fatih": 403, "tracking_admin": 200} {
+	for who, want := range map[string]int{"yusuf": 403, "baska": 403, "fatih": 403, "tracking_admin": 200} {
 		status, raw := w.call(who, "GET", base+"/recipients", nil, nil)
 		if status != want {
 			t.Errorf("recipients as %s: %d %s", who, status, raw)
@@ -51,7 +54,7 @@ func TestTrackingReadRoutesEnforceRolesSenderAndNinetyDays(t *testing.T) {
 		}
 	}
 	for _, query := range []string{"?filter=invalid", "?page=0", "?page_size=101"} {
-		if status, _ := w.call("yusuf", "GET", base+"/recipients"+query, nil, nil); status != 400 {
+		if status, _ := w.call("tracking_admin", "GET", base+"/recipients"+query, nil, nil); status != 400 {
 			t.Errorf("%s status %d", query, status)
 		}
 	}
@@ -65,7 +68,7 @@ func TestTrackingReadRoutesEnforceRolesSenderAndNinetyDays(t *testing.T) {
 		if age == "1 day" || age == "89 days" {
 			want = 200
 		}
-		if status, raw := w.call("yusuf", "GET", base+"/recipients", nil, nil); status != want {
+		if status, raw := w.call("tracking_admin", "GET", base+"/recipients", nil, nil); status != want {
 			t.Errorf("%s: %d %s", age, status, raw)
 		}
 	}
@@ -110,6 +113,54 @@ func TestTrackingReadRoutesEnforceRolesSenderAndNinetyDays(t *testing.T) {
 		if !wantWithheld && small.Report != nil && (*small.Report)["tracked_recipients"] != float64(3) {
 			t.Errorf("retained counts of 3 as %s: %s", who, raw)
 		}
+	}
+}
+
+// SKYMAIL_SENDER_SEES_RECIPIENTS=on gives the send's own sender its people
+// back, as before 2026-11-08; another person still needs the role. The
+// summary says to whom it would give them (recipients_readable).
+func TestTheSenderReadsItsPeopleWhileTheSwitchIsOn(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		var opts []handlers.MailHandlerOption
+		if on {
+			opts = append(opts, handlers.WithSenderSeesRecipients(true))
+		}
+		w, _ := trackedWorldWith(t, true, opts...)
+		send := w.listSend()
+		send["mail_list_id"] = w.group
+		send["tracking"] = true
+		var created struct {
+			ID uuid.UUID `json:"id"`
+		}
+		if status, raw := w.call("yusuf", "POST", "/v1/mail_tasks", send, &created); status != 201 {
+			t.Fatalf("create: %d %s", status, raw)
+		}
+		if _, err := w.store.Conn.Exec(context.Background(), `UPDATE mail_queue SET status='sent',sent_at=now()-interval '2 minutes' WHERE task_id=$1`, created.ID); err != nil {
+			t.Fatal(err)
+		}
+		base := "/v1/mail_tasks/" + created.ID.String() + "/tracking"
+		approvalPeople["yusuf_okur"] = approvalPerson{sub: yusuf.sub, name: yusuf.name, email: yusuf.email, roles: append(append([]string{}, yusuf.roles...), "skymail:mails:read")}
+		approvalPeople["takip_okur"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skymail:access", "skymail:mails:read", handlers.TrackingReadRole}}
+		senderWant := fiber.StatusForbidden
+		if on {
+			senderWant = fiber.StatusOK
+		}
+		for who, want := range map[string]int{"yusuf": senderWant, "yusuf_okur": senderWant, "baska": 403, "takip_okur": 200} {
+			if status, raw := w.call(who, "GET", base+"/recipients", nil, nil); status != want {
+				t.Errorf("switch on=%v, recipients as %s: %d %s; want %d", on, who, status, raw, want)
+			}
+		}
+		for who, want := range map[string]bool{"yusuf_okur": on, "baska": false, "takip_okur": true} {
+			var summary struct {
+				RecipientsReadable *bool `json:"recipients_readable"`
+			}
+			status, raw := w.call(who, "GET", base, nil, &summary)
+			if status != 200 || summary.RecipientsReadable == nil || *summary.RecipientsReadable != want {
+				t.Errorf("switch on=%v, summary as %s: %d %s; want recipients_readable %v", on, who, status, raw, want)
+			}
+		}
+		delete(approvalPeople, "yusuf_okur")
+		delete(approvalPeople, "takip_okur")
 	}
 }
 

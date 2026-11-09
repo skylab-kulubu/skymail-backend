@@ -29,9 +29,15 @@ import (
 // systemTrackedWorld is accountsWorld with SKYMAIL_TRACKING_SYSTEM on.
 func systemTrackedWorld(t *testing.T) (*approvalWorld, *routePreferences) {
 	t.Helper()
+	return systemTrackedWorldWith(t)
+}
+
+// systemTrackedWorldWith is systemTrackedWorld whose send routes take handlerOpts.
+func systemTrackedWorldWith(t *testing.T, handlerOpts ...handlers.MailHandlerOption) (*approvalWorld, *routePreferences) {
+	t.Helper()
 	prefs := &routePreferences{}
 	accounts := &laterAccounts{}
-	w := newApprovalWorldWithPool(t, 0, mailer.WithTracking(mailer.Tracking{
+	w := newApprovalWorldWith(t, 0, handlerOpts, mailer.WithTracking(mailer.Tracking{
 		Config: tracking.Config{Mode: tracking.ModeOn, System: tracking.ModeOn,
 			BaseURL: "https://api.example.test/api/skymail", CoreURL: "http://core.invalid"},
 		Preferences: prefs,

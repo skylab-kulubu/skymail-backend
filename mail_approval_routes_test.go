@@ -355,6 +355,13 @@ func newApprovalWorld(t *testing.T) *approvalWorld {
 // most poolSize connections; 0 keeps pgxpool's default. opts make its mailer.
 func newApprovalWorldWithPool(t *testing.T, poolSize int, opts ...mailer.Option) *approvalWorld {
 	t.Helper()
+	return newApprovalWorldWith(t, poolSize, nil, opts...)
+}
+
+// newApprovalWorldWith is newApprovalWorldWithPool whose send routes take
+// handlerOpts too (SKYMAIL_SENDER_SEES_RECIPIENTS, for one).
+func newApprovalWorldWith(t *testing.T, poolSize int, handlerOpts []handlers.MailHandlerOption, opts ...mailer.Option) *approvalWorld {
+	t.Helper()
 	postgres := testpostgres.StartDatabase(t)
 	if _, err := migrations.Run(context.Background(), postgres.URL, 0); err != nil {
 		t.Fatal(err)
@@ -427,7 +434,7 @@ func newApprovalWorldWithPool(t *testing.T, poolSize int, opts ...mailer.Option)
 	})
 	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
 	registerMailApprovalRoutes(api, auth, w.handler)
-	registerMailTaskRoutes(api, auth, handlers.NewMailHandler(store, w.mail, w.directory))
+	registerMailTaskRoutes(api, auth, handlers.NewMailHandler(store, w.mail, w.directory, handlerOpts...))
 	w.app = app
 	return w
 }
