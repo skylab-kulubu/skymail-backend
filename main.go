@@ -165,6 +165,12 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid open and click tracking configuration")
 	}
+	// Who reads a send's people: skymail:mails:tracking:read; its own sender
+	// too only while SKYMAIL_SENDER_SEES_RECIPIENTS=on (README, tracking).
+	senderSeesRecipients, err := handlers.SenderSeesRecipientsFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid open and click tracking configuration")
+	}
 	// Its retention run: off unless SKYMAIL_TRACKING_RETENTION says
 	// dry-run, apply or purge (README, tracking retention).
 	trackingRetention, err := tracking.RetentionModeFromEnv(config.Value, trackingConfig)
@@ -260,6 +266,8 @@ func main() {
 		Msg("open and click tracking (SKYMAIL_TRACKING)")
 	logSystemTracking(trackingConfig)
 	logOperatorTracking(trackingConfig)
+	log.Info().Bool("on", senderSeesRecipients).
+		Msg("a send's own sender reads its people (SKYMAIL_SENDER_SEES_RECIPIENTS; off: the counts only)")
 	log.Info().Str("mode", string(trackingRetention)).Int("event_retention_days", tracking.EventRetentionDays).Int64("max_rows", trackingRetentionMaxRows).
 		Msg("open and click tracking retention (SKYMAIL_TRACKING_RETENTION)")
 	logSendLanes(sendLanes)
@@ -329,11 +337,13 @@ func main() {
 
 	templateHandler := handlers.NewTemplateHandler(db)
 	listHandler := handlers.NewListHandler(db, kcClient)
-	mailHandler := handlers.NewMailHandler(db, mailerService, kcClient, handlers.WithContentRetentionDays(contentRetentionDays), handlers.WithFormSourceLimit(formsSourceConfig.MaxRecipients))
+	mailHandler := handlers.NewMailHandler(db, mailerService, kcClient, handlers.WithContentRetentionDays(contentRetentionDays), handlers.WithFormSourceLimit(formsSourceConfig.MaxRecipients), handlers.WithSenderSeesRecipients(senderSeesRecipients))
 	approvalHandler := handlers.NewMailApprovalHandler(db, mailerService, kcClient, handlers.MailApprovalOptions{
 		ClientID: cfg.KeycloakClientID,
 		UIURL:    config.Value("SKYMAIL_UI_URL"),
 		Teams:    teamLeaders,
+
+		SenderSeesRecipients: senderSeesRecipients,
 	})
 	erasureHandler := handlers.NewAccountErasureHandler(db, erasuretoken.NewVerifier(erasureTokenConfig(cfg)), accountAccessGate)
 	withdrawalHandler := handlers.NewTrackingWithdrawalHandler(db, erasuretoken.NewVerifier(withdrawalTokenConfig(cfg)), accountAccessGate)

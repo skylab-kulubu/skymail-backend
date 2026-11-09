@@ -1062,7 +1062,9 @@ SkyMail'i adlandırmalıdır (yoksa 401; servis hesabı 403
 `auth.person_required`). Rolsüz Leader yalnız ekip postası gönderir, yalnız
 serbest duyuru çerçevesiyle (`free.basic`, `403
 team_mail.free_announcement_only`), yalnız kendi isteklerini görür; başka
-hiçbir SkyMail ucuna giremez.
+hiçbir SkyMail ucuna giremez. Onaylanan isteğinin sonucunu
+`GET /v1/mail_approvals/{id}` yanıtındaki `result` toplamlarından okur
+("Piksel, tıklama ve raporlar").
 
 **Kişinin ekipleri.** `GET /v1/me/team_audiences` lider olduğu ekipleri yol
 sırasında verir: `id`, `path`, `code`, `display_name`, ağaç (`parent_id`,
@@ -1420,6 +1422,7 @@ Olay yazımı, raporlar ve saklama işi aynı sabiti kullanır.
 | `SKYMAIL_TRACKING_OPERATOR` | `off` | panelin (operatörün) gönderimleri: `off` kutuyla (yalnız isteyen), `on` her zaman takipli, kutu yok; başka değer açılışı durdurur; yalnız `SKYMAIL_TRACKING=on` iken etkili (aşağıda, "Operatör postaları") |
 | `SKYMAIL_TRACKING_BASE_URL` | yok | `/t/`'nin herkese açık adresi (`https://api.yildizskylab.com/api/skymail`); yalnız https, kimlik bilgisi, sorgu ve parça yok; `on` iken zorunlu |
 | `CORE_URL` | yok | core'un Docker ağındaki adresi (`http://core-backend:8080`); `on` iken zorunlu |
+| `SKYMAIL_SENDER_SEES_RECIPIENTS` | `off` | gönderimin kendi göndereni kişi raporunu (`GET /v1/mail_tasks/{id}/tracking/recipients`) okur mu: `off` yalnız toplu sayılar, `on` kendi gönderiminin kişileri de; başka değer açılışı durdurur. `skymail:mails:tracking:read` sahiplerini etkilemez (aşağıda, "Kim okur") |
 | `SKYMAIL_TRACKING_RETENTION` | `off` | saklama işi: `off`, `dry-run`, `apply` ya da `purge`; başka değer açılışı durdurur; `purge` için `SKYMAIL_TRACKING=off` zorunlu |
 | `SKYMAIL_TRACKING_RETENTION_MAX_ROWS` | `50000` | saklama freni: bir apply'da kapanacak belirteç, silinecek olay ya da boşalacak bağlantı sınırı (1–10.000.000); başka değer açılışı durdurur |
 
@@ -1429,6 +1432,8 @@ Hatalı adres, değeri değil değişkeni söyleyerek açılışı durdurur. Aç
 sistem postalarının geçerli kipini (`mode`) ve istenen değeri (`requested`),
 `open and click tracking of every operator send (SKYMAIL_TRACKING_OPERATOR; …)`
 satırı aynısını operatör postaları için,
+`a send's own sender reads its people (SKYMAIL_SENDER_SEES_RECIPIENTS; …)`
+satırı anahtarın değerini (`on`),
 `open and click tracking retention (SKYMAIL_TRACKING_RETENTION)` satırı
 saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
 
@@ -1594,8 +1599,9 @@ açılmasını hiçbir zaman engellemez).
   okuyamaz (KVKK aydınlatma metni s3 §4: sistemin gönderdiği postalardaki
   kişi bilgisini yalnız YK, DK ve sistem yöneticileri görür). Kişinin
   takipli gönderimi her zaman toplu şerittedir (sistem şeridi istekle ya da
-  `SKYMAIL_TRACKING_OPERATOR` ile hiçbir zaman takip edilmez), gönderen
-  onu okumaya devam eder. Bu kural bayrağa bağlı değildir; bugün sistem
+  `SKYMAIL_TRACKING_OPERATOR` ile hiçbir zaman takip edilmez); gönderen
+  onun kişilerini yalnız `SKYMAIL_SENDER_SEES_RECIPIENTS=on` iken okur
+  ("Kim okur"). Bu kural bayrağa bağlı değildir; bugün sistem
   şeridinde takipli gönderim olmadığı için birleşmeyle görünür bir şey
   değişmez.
 - **Geri dönüş:** `SKYMAIL_TRACKING_SYSTEM=off` + yeniden dağıtım: yeni
@@ -1722,8 +1728,22 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   sürümdeki bütün patlama `scanner_likely` olur. IP hiç okunmaz; ham UA ve
   Referer saklanmaz. `/t/o` ve `/t/c` hata/bozuk yol dahil kendi yanıtını
   üretir: günlük yalnız uç adı, sonuç sınıfı ve süre taşır.
+- **Kim okur (Yusuf, 2026-11-08; ADR-0074 karar 9 eki 2026-11-08, ADR-0075
+  eki madde 10):** kişi bazında rapor (alıcının adı, adresi, açma ve
+  tıklaması) yalnız `skymail:mails:tracking:read` (YK, ADMIN, DK) ile
+  okunur. Gönderen, ekip postasının Leader'ı ve Mail onayı isteyeni dahil,
+  kendi gönderiminde yalnız toplu sayıları görür; kişi raporu ona `403`
+  döner. `SKYMAIL_SENDER_SEES_RECIPIENTS=on` bunu geri alır: gönderen
+  sistem şeridi dışındaki kendi gönderiminin kişilerini yine okur. Anahtar
+  10 kişi eşiğini de izler: kapalıyken gönderen, takipli alıcısı 10'dan az
+  olan kendi gönderiminin sayılarını da `withheld: true` olarak alır.
+  Kuyruk (`GET /{id}/queue`) ve içerik uçları gönderene göre değil rolle
+  (`skymail:mails:read`) açılır; anahtar onlara dokunmaz.
 - `GET /v1/mail_tasks/{id}/tracking` (`skymail:mails:read`) yanıtı
-  `{tracking_available, tracking_requested, retained, withheld, report}`. Raporda
+  `{tracking_available, tracking_requested, retained, withheld,
+  recipients_readable, report}`; `recipients_readable` çağıranın kişi
+  raporunu okuyup okuyamayacağını söyler (ekran kişileri yalnız o zaman
+  ister). Raporda
   `tracked_recipients`, `untracked_by_reason`, `unique_opens`,
   `unique_likely_human_opens` (otomatik olmayan tıklamadan çıkarım dahil),
   `automated_only_recipients`, `unique_clickers`, `clicks_by_link`
@@ -1739,13 +1759,34 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   (`tracking.TotalsMinRecipients`) ya da sistem
   şeridindeki bir gönderimin sayıları kişiye dair bilgidir ("1/1 açıldı,
   14:00"; alıcı `GET /{id}/queue`'da görünür). Bu sayıları yalnız kişi
-  raporunu okuyabilen (aşağıdaki kural: `skymail:mails:tracking:read` ya
-  da sistem şeridi dışında gönderimin kendi göndereni) alır; başka bir
+  raporunu okuyabilen (aşağıdaki kural: `skymail:mails:tracking:read`;
+  `SKYMAIL_SENDER_SEES_RECIPIENTS=on` iken sistem şeridi dışında
+  gönderimin kendi göndereni de) alır; başka bir
   `mails:read` sahibine `withheld: true` ve `report: null` döner (KVKK
   aydınlatma metni s3 §4).
+- **Onaylanan isteğin sonucu (hub bileti ekip-postasi 09):**
+  `GET /v1/mail_approvals/{id}` onaylanıp gönderilmiş istekte `result`
+  döner; isteyen `skymail:mails:read` olmadan da okur (erişim kuralı aynı:
+  onaycı ya da isteğin sahibi). Yalnız toplamlar: `sent`, `skipped`
+  (kuralla gönderilmeyen: bastırılmış ya da çıkmış adres, kapatılmış
+  kategori, etkin olmayan hesap, ortak adres, ayrılmış alan adı, iptal),
+  `failed`, `pending` (işlenen dahil); kişi kişi gönderimde bütün
+  gönderimlerin tek toplamı, gönderim başına satır yok; ad ve adres yok.
+  Takipli gönderimlerin `tracking` toplamı (`tracked_recipients`,
+  `opened` = `unique_likely_human_opens`, `clicked` = `unique_clickers`)
+  `GET /{id}/tracking` ile aynı kuralla gizlenir (`tracking_withheld:
+  true`, `tracking: null`): toplam takipli 10'dan az ya da sistem şeridi,
+  ve kişi raporunu okuyamayan çağıran. Ekip postasında küçük ekiplerin
+  toplamı 10'dan azken büyükleri de varsa aynı: büyüklerin sayısını okuyan
+  farkı çıkarabilirdi. Bekleyen, geri gönderilmiş, reddedilmiş ve süresi
+  dolmuş istekte `result` yoktur. Sonuç okunamazsa (2 sn bütçe, DB
+  hatası) istek yine `200` döner ve günlüğe yazılır: teslim toplamları
+  okunamadıysa `result` hiç yoktur, yalnız takip okunamadıysa `tracking:
+  null` ve `tracking_withheld: false`.
 - `GET /v1/mail_tasks/{id}/tracking/recipients` rolü
-  `skymail:mails:tracking:read` **ya da** `sent_by = token sub` ister;
-  `mails:read` tek başına yetmez, gönderen için ayrıca gerekmez. Servis
+  `skymail:mails:tracking:read` ister; `mails:read` tek başına yetmez.
+  `sent_by = token sub` (gönderimin kendi göndereni) yalnız
+  `SKYMAIL_SENDER_SEES_RECIPIENTS=on` iken yeter (varsayılan `off`: `403`). Servis
   token'ı ve sistem şeridindeki gönderim (servis tekil postası, Mail onayı
   bildirimi) yalnız rolle okunur ("Sistem postaları"). Parametreler
   `filter=opened|not_opened|clicked|automated_only`, `page` (1–1000000) ve

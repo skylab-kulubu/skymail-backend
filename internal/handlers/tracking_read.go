@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -23,13 +25,42 @@ const trackingReadBudget = 2 * time.Second
 // or null when there is none (a send of fewer than 10 tracked recipients a
 // year after it was created). Withheld
 // says the send's counts would tell of people (see GetTracking) and the
-// caller may not read its people: report is then null.
+// caller may not read its people: report is then null. RecipientsReadable
+// says whether the caller may read the send's people (GET
+// /mail_tasks/{id}/tracking/recipients), so a screen asks for them only then.
 type TrackingSummary struct {
-	TrackingAvailable bool               `json:"tracking_available"`
-	TrackingRequested bool               `json:"tracking_requested"`
-	Retained          bool               `json:"retained"`
-	Withheld          bool               `json:"withheld"`
-	Report            *TrackingAggregate `json:"report"`
+	TrackingAvailable  bool               `json:"tracking_available"`
+	TrackingRequested  bool               `json:"tracking_requested"`
+	Retained           bool               `json:"retained"`
+	Withheld           bool               `json:"withheld"`
+	RecipientsReadable bool               `json:"recipients_readable"`
+	Report             *TrackingAggregate `json:"report"`
+}
+
+// SenderSeesRecipientsEnv names the switch that gives a send's own sender
+// its people (ADR-0074 decision 9, addendum 2026-11-08; ADR-0075 addendum
+// 2026-11-08 item 10). Off, the default, the sender reads the counts only.
+const SenderSeesRecipientsEnv = "SKYMAIL_SENDER_SEES_RECIPIENTS"
+
+// SenderSeesRecipientsFromEnv reads SKYMAIL_SENDER_SEES_RECIPIENTS: off
+// (unset) or on. Anything else stops startup: a typo must not open the
+// people to their senders.
+func SenderSeesRecipientsFromEnv(getenv func(string) string) (bool, error) {
+	switch raw := strings.ToLower(strings.TrimSpace(getenv(SenderSeesRecipientsEnv))); raw {
+	case "", "off":
+		return false, nil
+	case "on":
+		return true, nil
+	default:
+		return false, fmt.Errorf("%s must be off or on, not %q", SenderSeesRecipientsEnv, raw)
+	}
+}
+
+// WithSenderSeesRecipients gives a send's own sender its people
+// (SKYMAIL_SENDER_SEES_RECIPIENTS=on); without it the sender reads the
+// counts only.
+func WithSenderSeesRecipients(on bool) MailHandlerOption {
+	return func(h *mailHandlerImpl) { h.senderSeesRecipients = on }
 }
 
 type TrackingRecipientPage struct {
@@ -91,7 +122,7 @@ type TrackingRecipientLink struct {
 // GetTracking godoc
 //
 //	@Summary		Tracking counts, per-link counts and hour/day series
-//	@Description	Requires skymail:mails:read. No identities, link tokens or target URLs. After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts tell of people when it has fewer than 10 tracked recipients (tracking.TotalsMinRecipients) or is mail the system sends (the system lane): then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read, or the send's own sender outside the system lane) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4).
+//	@Description	Requires skymail:mails:read. No identities, link tokens or target URLs. After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts tell of people when it has fewer than 10 tracked recipients (tracking.TotalsMinRecipients) or is mail the system sends (the system lane): then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read; the send's own sender outside the system lane only while SKYMAIL_SENDER_SEES_RECIPIENTS=on) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4). recipients_readable says whether the caller may read the send's people.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id	path		string	true	"Mail task ID"
@@ -111,31 +142,42 @@ func (h *mailHandlerImpl) GetTracking(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	retained := task.TrackingClosedAt != nil || !task.SentAt.Add(tracking.EventRetention).After(h.now())
+	aggregate, retained, err := trackingReportOf(ctx, h.db, task, h.now())
+	if err != nil {
+		return err
+	}
+	people := h.mayReadTrackingPeople(c, task)
+	withheld := aggregate != nil && countsTellOfPeople(task, aggregate) && !people
+	if withheld {
+		aggregate = nil
+	}
+	return c.JSON(TrackingSummary{TrackingAvailable: h.mailer.TrackingAvailable(), TrackingRequested: task.TrackingRequested, Retained: retained, Withheld: withheld, RecipientsReadable: people, Report: aggregate})
+}
+
+// trackingReportOf is a send's counts as GET /mail_tasks/{id}/tracking reads
+// them, before the rule of who may read them: 90 days after its last mail went
+// out (or once tracking closed) the retained totals, nil when none were kept
+// (retained true); before, the live report.
+func trackingReportOf(ctx context.Context, db *database.Store, task database.TrackingTaskAccessRow, now time.Time) (*TrackingAggregate, bool, error) {
+	retained := task.TrackingClosedAt != nil || !task.SentAt.Add(tracking.EventRetention).After(now)
 	var report []byte
+	var err error
 	if retained {
-		report, err = h.db.GetRetainedTrackingReport(ctx, id)
+		report, err = db.GetRetainedTrackingReport(ctx, task.ID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			err = nil
 		}
 	} else {
-		report, err = h.db.GetTrackingReport(ctx, database.GetTrackingReportParams{TaskID: id, SentAt: task.StartedAt})
+		report, err = db.GetTrackingReport(ctx, database.GetTrackingReportParams{TaskID: task.ID, SentAt: task.StartedAt})
 	}
-	if err != nil {
-		return err
+	if err != nil || len(report) == 0 {
+		return nil, retained, err
 	}
-	var aggregate *TrackingAggregate
-	if len(report) > 0 {
-		aggregate = &TrackingAggregate{}
-		if err := json.Unmarshal(report, aggregate); err != nil {
-			return err
-		}
+	aggregate := &TrackingAggregate{}
+	if err := json.Unmarshal(report, aggregate); err != nil {
+		return nil, retained, err
 	}
-	withheld := aggregate != nil && countsTellOfPeople(task, aggregate) && !mayReadTrackingPeople(c, task)
-	if withheld {
-		aggregate = nil
-	}
-	return c.JSON(TrackingSummary{TrackingAvailable: h.mailer.TrackingAvailable(), TrackingRequested: task.TrackingRequested, Retained: retained, Withheld: withheld, Report: aggregate})
+	return aggregate, retained, nil
 }
 
 // countsTellOfPeople says a send's counts are as good as its people's: a
@@ -146,22 +188,32 @@ func countsTellOfPeople(task database.TrackingTaskAccessRow, report *TrackingAgg
 	return task.SystemLane || report.TrackedRecipients < tracking.TotalsMinRecipients
 }
 
-// mayReadTrackingPeople is who reads a send's people: skymail:mails:tracking:read,
-// or the send's own sender. A service is no sender here: the mail it sends
-// (SKYMAIL_TRACKING_SYSTEM) is read with the role only. Nor is the person a
-// system mail names as its sender (a Mail onayı notice's requester or
-// decider): the system lane's mail is the system's, whose people only YK,
-// DK and the admins see (KVKK notice s3, §4).
-func mayReadTrackingPeople(c fiber.Ctx, task database.TrackingTaskAccessRow) bool {
-	caller := contentCallerOf(c)
-	sender := caller.sub != "" && caller.sub == task.SentBy && !middlewares.IsServiceAccount(c) && !task.SystemLane
-	return caller.has(TrackingReadRole) || sender
+// mayReadTrackingPeople is who reads a send's people (trackingPeopleReadable).
+func (h *mailHandlerImpl) mayReadTrackingPeople(c fiber.Ctx, task database.TrackingTaskAccessRow) bool {
+	return trackingPeopleReadable(contentCallerOf(c), middlewares.IsServiceAccount(c), task, h.senderSeesRecipients)
+}
+
+// trackingPeopleReadable is the rule: skymail:mails:tracking:read (YK, DK,
+// ADMIN) reads any send's people. The send's own sender reads them only
+// while SKYMAIL_SENDER_SEES_RECIPIENTS is on (senderSees); off, the default
+// (Yusuf, 2026-11-08; ADR-0074 decision 9, addendum 2026-11-08), the sender
+// reads the counts only, Team mail's Leader and a Mail onayı requester alike.
+// A service is no sender here: the mail it sends (SKYMAIL_TRACKING_SYSTEM)
+// is read with the role only. Nor is the person a system mail names as its
+// sender (a Mail onayı notice's requester or decider): the system lane's
+// mail is the system's, whose people only YK, DK and the admins see (KVKK
+// notice s3, §4).
+func trackingPeopleReadable(caller contentCaller, service bool, task database.TrackingTaskAccessRow, senderSees bool) bool {
+	if caller.has(TrackingReadRole) {
+		return true
+	}
+	return senderSees && caller.sub != "" && caller.sub == task.SentBy && !service && !task.SystemLane
 }
 
 // GetTrackingRecipients godoc
 //
 //	@Summary		Recipient opening and click observations
-//	@Description	Requires skymail:mails:tracking:read or the send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 90 days after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.
+//	@Description	Requires skymail:mails:tracking:read. The send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role) reads it only while SKYMAIL_SENDER_SEES_RECIPIENTS=on; off, the default, the sender gets 403 and reads the counts (GET /mail_tasks/{id}/tracking). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 90 days after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id			path		string	true	"Mail task ID"
@@ -185,7 +237,7 @@ func (h *mailHandlerImpl) GetTrackingRecipients(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if !mayReadTrackingPeople(c, task) {
+	if !h.mayReadTrackingPeople(c, task) {
 		return apperrors.ErrForbidden
 	}
 	if task.TrackingClosedAt != nil || !task.SentAt.Add(tracking.EventRetention).After(h.now()) {

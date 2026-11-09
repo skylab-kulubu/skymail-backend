@@ -48,6 +48,8 @@ type mailHandlerImpl struct {
 	// How many days a send's content is shown; 0 is DefaultContentRetentionDays.
 	contentRetentionDays int
 	formSourceLimit      int
+	// SKYMAIL_SENDER_SEES_RECIPIENTS: a send's own sender reads its people.
+	senderSeesRecipients bool
 }
 
 func NewMailHandler(db *database.Store, mailer mailer.Mailer, kc keycloak.Client, opts ...MailHandlerOption) MailHandler {
