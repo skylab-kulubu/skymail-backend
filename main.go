@@ -834,7 +834,8 @@ func registerMailApprovalRoutes(api fiber.Router, auth middlewares.AuthMiddlewar
 // registerSuppressionRoutes serves the suppression list and the unsubscribe
 // record (README, "Geri dönen posta ve bastırma listesi", "Tek tık çıkış
 // ucu"): a bounce is removed with skymail:suppressions:manage, which also
-// reads the bounce rate and the NDR reader's state, an
+// reads the bounce rate, the NDR reader's state and the addresses with
+// repeated soft bounces, an
 // unsubscribe reversed only with skymail:unsubscribes:reactivate, which also
 // reads the reversals; either role reads the list.
 func registerSuppressionRoutes(api fiber.Router, auth middlewares.AuthMiddleware, suppressions handlers.SuppressionHandler) {
@@ -842,6 +843,7 @@ func registerSuppressionRoutes(api fiber.Router, auth middlewares.AuthMiddleware
 	group.Get("/", auth.RequireAnyPermission(handlers.SuppressionsManageRole, handlers.UnsubscribesReactivateRole), suppressions.List)
 	group.Get("/reactivations", auth.RequireAnyPermission(handlers.UnsubscribesReactivateRole), suppressions.Reactivations)
 	group.Get("/bounces", auth.RequireAnyPermission(handlers.SuppressionsManageRole), suppressions.Bounces)
+	group.Get("/soft-bounces", auth.RequireAnyPermission(handlers.SuppressionsManageRole), suppressions.SoftBounces)
 	group.Delete("/:id", auth.RequireAnyPermission(handlers.SuppressionsManageRole), suppressions.Delete)
 	group.Post("/:id/reactivate", auth.RequireAnyPermission(handlers.UnsubscribesReactivateRole), suppressions.Reactivate)
 }
