@@ -215,6 +215,19 @@ takes the person out of them:
   with its send. The key is the caller's and is kept as sent: callers name
   the record (a ticket, a response, an erasure request), never an address, a
   name or a person's subject (README "Tek postada tekrar anahtarı").
+- `mail_attachments` — a Mail attachment (ADR 0082; README "Posta eki"): a
+  file a service sent with its mail to one person, today core's ticket PDF,
+  which names the person. The file (`content`) is kept only while its queue
+  row is still to go out: a trigger (migration `20261122150000`) empties it
+  in the transaction that writes the row sent or failed, whichever image
+  writes it. What stays is `filename`, `content_type` and `size_bytes`, which
+  the send's report shows; callers never put a person's name in a file name.
+  The record goes when the content sweep empties its send (with the
+  rendered mail, `MAIL_CONTENT_RETENTION_DAYS`), with its queue row, and on
+  Account erasure of mail to the person. A sensitive send is masked once
+  none of its rows is to go out, so its files are gone by then; masking has
+  nothing of them to keep. Backups hold what the table held at dump time: a
+  file of a mail not yet sent then (minutes, usually).
 - `mail_tasks.sent_by` — who sent: the Keycloak subject of the token that
   queued the send — for an approved Mail onayı request, its submitter's — or
   `skymail` for the mail SkyMail sends of its own accord, the notice that a
@@ -690,6 +703,7 @@ person is cleared whole, never masked.
 | Where | Which rows | What happens |
 |---|---|---|
 | `recipients` | `email` in E | deleted, with their `mailing_list_recipients` |
+| `mail_attachments` | of a `mail_queue` row to the person, not `processing` | deleted (`attachments_deleted`): a pending mail's file, a sent one's name, type and size; a row being sent is waited for |
 | `mail_queue`, `pending` | `recipient_email` in E or `recipient_sub` = S | deleted: never sent |
 | `mail_queue`, `processing` | `recipient_email` in E or `recipient_sub` = S | waited for (`202`) |
 | `mail_queue`, `sent`/`failed` | `recipient_email` in E or `recipient_sub` = S | `recipient_full_name` Silinmiş kullanıcı, `recipient_email`, `subject`, `body` `''`, `body_html`, `error`, `recipient_sub`, `list_unsubscribe_url` NULL; the row stays for the counts |
@@ -756,7 +770,8 @@ bastırma listesi").
   `approval_recipient_placeholders`, `approval_send_links_deleted`,
   `tracking_events_deleted`, `tracking_links_cleared`,
   `suppressions_deleted`, `inbox_items_deleted`,
-  `inbox_items_naming_deleted`, `unsubscribes_deleted`. The counts
+  `inbox_items_naming_deleted`, `unsubscribes_deleted`,
+  `attachments_deleted`. The counts
   are what the completing call did; work committed by an earlier `202` call
   is not in them. A repeat, or a concurrent duplicate, returns the stored
   body without doing the work again. Other answers: `202` (above),
@@ -980,3 +995,8 @@ mail tasks.
 Removing one recipient from a mailing list remains a physical deletion of the
 `mailing_list_recipients` relationship row. Queue residue and other transient
 worker data remain outside this durable-record lifecycle.
+
+A Mail attachment's file is transient worker data of this kind: kept with its
+queue row only until the row is sent or fails for good (see
+[Personal data](#personal-data)); its name, type and size follow the send's
+content.

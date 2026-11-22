@@ -66,7 +66,12 @@ func singleIdempotency(c fiber.Ctx, service bool, sentBy string, params requests
 		return nil, errSingleIdempotencyKeyInvalid
 	}
 	// The request as it was understood: the same mail hashes the same
-	// whatever its JSON looked like (map keys are sorted).
+	// whatever its JSON looked like (map keys are sorted). Its attachments
+	// are not part of it: a retry carries the file drawn again (a PDF holds
+	// the time it was made), and the mail is the same; the first request's
+	// file is the one that goes. Without attachments the digest is what it
+	// was before them (omitempty).
+	params.Attachments = nil
 	canonical, err := json.Marshal(params)
 	if err != nil {
 		return nil, err

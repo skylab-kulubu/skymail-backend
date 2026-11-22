@@ -199,6 +199,10 @@ type Querier interface {
 	// account's pace, not the recipient (duyuru-haber 05 G3). throttles counts
 	// such replies: past maxRowThrottles the row's attempts count (bulk_guard.go).
 	DeferThrottledMailQueueItem(ctx context.Context, arg DeferThrottledMailQueueItemParams) (int64, error)
+	// Deletes up to batch_size attachment records of sends whose content the
+	// sweep has emptied: their name, type and size go with the rest of the mail
+	// (the files went when each row was sent).
+	DeleteClearedMailAttachments(ctx context.Context, batchSize int) (int64, error)
 	// The inbox sweep: at most batch_size items past their expiry.
 	DeleteExpiredInboxItems(ctx context.Context, arg DeleteExpiredInboxItemsParams) (int64, error)
 	DeleteExpiredMailFormSources(ctx context.Context, arg DeleteExpiredMailFormSourcesParams) (int64, error)
@@ -366,6 +370,12 @@ type Querier interface {
 	// gone in 90 days, or at expires_at when that is sooner. A person already
 	// holding the notification's item is left as they are.
 	InsertInboxItems(ctx context.Context, arg InsertInboxItemsParams) (int64, error)
+	// A service's Mail attachment (ADR 0082; migration 20261122150000) on each
+	// queue row of the send still to go out by e-mail: a single mail has one, a
+	// notification to one person one at most. A row already failed at queueing
+	// (a reserved or suppressed address, preference) gets none. Returns how many
+	// rows got it, in the transaction that queued the send.
+	InsertMailAttachment(ctx context.Context, arg InsertMailAttachmentParams) (int64, error)
 	// Records what a report or a relay's refusal said about a queue row. A report
 	// already recorded (its id's hash) records nothing: 0 rows.
 	InsertMailBounce(ctx context.Context, arg InsertMailBounceParams) (int64, error)
@@ -415,6 +425,12 @@ type Querier interface {
 	// state it is in as of as_of: one undecided past its deadline is expired,
 	// whether or not the sweep has written it yet.
 	ListMailApprovals(ctx context.Context, arg ListMailApprovalsParams) ([]ListMailApprovalsRow, error)
+	// The attachments of the given queue rows as a send's report shows them:
+	// name, type and size, never the file.
+	ListMailAttachmentInfo(ctx context.Context, queueIds []uuid.UUID) ([]ListMailAttachmentInfoRow, error)
+	// A queue row's attachments as its mail carries them, in order; content is
+	// null when it was emptied (a row sent again after its outcome).
+	ListMailAttachmentsToSend(ctx context.Context, queueID uuid.UUID) ([]ListMailAttachmentsToSendRow, error)
 	// The respondents' names, to count those a send greets without one (a
 	// recipient name tag prints its fallback, or nothing, for them) by the
 	// mailer's own rule (mailer.HasRecipientName), not SQL's idea of white space.

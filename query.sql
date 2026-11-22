@@ -2895,3 +2895,50 @@ WHERE source_ref = sqlc.arg(source_ref)::text;
 SELECT count(*)::int FROM mail_tasks
 WHERE sent_by = sqlc.arg(sent_by)::text AND template_id = sqlc.arg(template_id)::uuid AND source_ref IS NULL
   AND created_at > now() - interval '1 minute';
+
+-- A service's Mail attachment (ADR 0082; migration 20261122150000) on each
+-- queue row of the send still to go out by e-mail: a single mail has one, a
+-- notification to one person one at most. A row already failed at queueing
+-- (a reserved or suppressed address, preference) gets none. Returns how many
+-- rows got it, in the transaction that queued the send.
+-- name: InsertMailAttachment :execrows
+INSERT INTO mail_attachments (queue_id, position, filename, content_type, size_bytes, content)
+SELECT q.id,
+       sqlc.arg(position)::smallint,
+       sqlc.arg(filename)::text,
+       sqlc.arg(content_type)::text,
+       octet_length(sqlc.arg(content)::bytea),
+       sqlc.arg(content)::bytea
+FROM mail_queue q
+WHERE q.task_id = sqlc.arg(task_id)::uuid
+  AND q.channel = 'email'
+  AND COALESCE(q.status, 'pending') = 'pending';
+
+-- A queue row's attachments as its mail carries them, in order; content is
+-- null when it was emptied (a row sent again after its outcome).
+-- name: ListMailAttachmentsToSend :many
+SELECT position, filename, content_type, size_bytes, content
+FROM mail_attachments
+WHERE queue_id = sqlc.arg(queue_id)::uuid
+ORDER BY position;
+
+-- The attachments of the given queue rows as a send's report shows them:
+-- name, type and size, never the file.
+-- name: ListMailAttachmentInfo :many
+SELECT queue_id, position, filename, content_type, size_bytes
+FROM mail_attachments
+WHERE queue_id = ANY (sqlc.arg(queue_ids)::uuid[])
+ORDER BY queue_id, position;
+
+-- Deletes up to batch_size attachment records of sends whose content the
+-- sweep has emptied: their name, type and size go with the rest of the mail
+-- (the files went when each row was sent).
+-- name: DeleteClearedMailAttachments :execrows
+DELETE
+FROM mail_attachments
+WHERE (queue_id, position) IN (SELECT a.queue_id, a.position
+                               FROM mail_attachments a
+                                        JOIN mail_queue q ON q.id = a.queue_id
+                                        JOIN mail_tasks mt ON mt.id = q.task_id
+                               WHERE mt.content_cleared_at IS NOT NULL
+                               LIMIT sqlc.arg(batch_size)::int FOR UPDATE OF a SKIP LOCKED);
