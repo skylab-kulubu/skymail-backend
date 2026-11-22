@@ -103,6 +103,32 @@ func (s *Store) DeleteSuppressionRemovals(ctx context.Context, batchSize int) (i
 	}
 }
 
+// IdempotencyKeyRetentionHours is how long a service's Idempotency-Key on
+// POST /mail_tasks/single is kept and answered again: 72 hours, longer than
+// any caller retries one mail (core gives up after 24).
+const IdempotencyKeyRetentionHours = 72
+
+// DeleteMailTaskIdempotencyKeys runs DeleteOldMailTaskIdempotencyKeys until a
+// batch comes back short: it deletes every key older than
+// IdempotencyKeyRetentionHours, batchSize at a time. It returns how many it
+// deleted.
+func (s *Store) DeleteMailTaskIdempotencyKeys(ctx context.Context, batchSize int) (int64, error) {
+	var deleted int64
+	for {
+		n, err := s.DeleteOldMailTaskIdempotencyKeys(ctx, DeleteOldMailTaskIdempotencyKeysParams{
+			RetentionHours: IdempotencyKeyRetentionHours,
+			BatchSize:      batchSize,
+		})
+		deleted += n
+		if err != nil || n < int64(batchSize) {
+			return deleted, err
+		}
+		if err := ctx.Err(); err != nil {
+			return deleted, err
+		}
+	}
+}
+
 // ClearMailContent runs ClearDueMailContent until a batch comes back short:
 // it empties the content of every send due (a sensitive one once none of its
 // rows is still to go out, any other past retentionDays), batchSize sends at a

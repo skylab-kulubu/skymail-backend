@@ -124,6 +124,7 @@ type Querier interface {
 	// Counts taken rows of one lane in the minute starting at minute_start and
 	// the hour starting at hour_start.
 	CountSends(ctx context.Context, arg CountSendsParams) error
+	CountSoftBounceAddresses(ctx context.Context, arg CountSoftBounceAddressesParams) (int64, error)
 	CountSuppressionEntries(ctx context.Context, arg CountSuppressionEntriesParams) (int64, error)
 	// Counts one recipient of a send that failed for good at the relay, and
 	// pauses the send ('failure_rate') once at least min_failures of its
@@ -205,6 +206,9 @@ type Querier interface {
 	// Deletes up to batch_size of the oldest bounces older than retention_days
 	// (a year): the content sweep's step.
 	DeleteOldMailBounces(ctx context.Context, arg DeleteOldMailBouncesParams) (int64, error)
+	// Deletes up to batch_size of the keys older than retention_hours: the
+	// content sweep's step.
+	DeleteOldMailTaskIdempotencyKeys(ctx context.Context, arg DeleteOldMailTaskIdempotencyKeysParams) (int64, error)
 	// Deletes up to batch_size of the oldest records of who opened a masked mail
 	// that are older than retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
 	DeleteOldSentContentViews(ctx context.Context, arg DeleteOldSentContentViewsParams) (int64, error)
@@ -284,6 +288,7 @@ type Querier interface {
 	// whether it is one (bulk: its rows are in the bulk lane), who sent it, and
 	// whether any of its rows are still to be sent.
 	GetMailTaskControl(ctx context.Context, id uuid.UUID) (GetMailTaskControlRow, error)
+	GetMailTaskIdempotencyKey(ctx context.Context, arg GetMailTaskIdempotencyKeyParams) (GetMailTaskIdempotencyKeyRow, error)
 	// The key of a send's template and whether it is a system template, which
 	// together say whether it is account mail (mailer.AccountMail), and the
 	// send's purpose, which says its stream (mailer.LaneOf).
@@ -370,6 +375,10 @@ type Querier interface {
 	// template's content_sensitive ('unset' for NULL). It never changes after:
 	// mail_task_content_sensitive() reads it first (20261020120000).
 	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (InsertMailTaskRow, error)
+	// A single mail accepted under a service's Idempotency-Key, written in the
+	// transaction that queues it (hub ticket forms-posta-core 11); nothing when
+	// the key is taken: the caller answers the earlier request's answer.
+	InsertMailTaskIdempotencyKey(ctx context.Context, arg InsertMailTaskIdempotencyKeyParams) (uuid.UUID, error)
 	// A notification accepted under its caller's Idempotency-Key; nothing when
 	// the caller already used the key (a concurrent request with it waits here
 	// for the first to commit or roll back).
@@ -443,6 +452,16 @@ type Querier interface {
 	// between the reading and the writing (a row it is emptying is waited for and
 	// read again: emptied, it is not taken).
 	ListQueueRowsToMask(ctx context.Context, arg ListQueueRowsToMaskParams) ([]ListQueueRowsToMaskRow, error)
+	// The addresses that had threshold or more soft bounces in the last days
+	// (hub ticket skymail-bounce-isleme 13; ADR 0073 decision 5): a soft bounce
+	// never suppresses, so these are not on the list; the panel marks them. A
+	// mail counts once however many reports it had; only reports that named the
+	// row's own address count, of rows that still hold one (Account erasure
+	// clears it). An address already suppressed is left out: it is on the
+	// suppression list already, where account mail, still sent to it, is flagged
+	// (ADR 0073 decision 6).
+	// Of the last bounce its codes only, never text.
+	ListSoftBounceAddresses(ctx context.Context, arg ListSoftBounceAddressesParams) ([]ListSoftBounceAddressesRow, error)
 	// The suppression list and the unsubscribe record as one list, most recent
 	// first: reason bounce (mail_suppressions, every stream) or unsubscribed
 	// (mail_unsubscribes, its stream). reason, when given, keeps one of them;

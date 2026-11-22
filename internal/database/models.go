@@ -518,6 +518,18 @@ type MailTask struct {
 	EraseAfterSend bool `json:"erase_after_send"`
 }
 
+// A service's Idempotency-Key on POST /mail_tasks/single: the request's digest, the send it queued and its answer, replayed to a retry. No address. Kept 72 hours.
+type MailTaskIdempotencyKey struct {
+	SentBy         string `json:"sent_by"`
+	IdempotencyKey string `json:"idempotency_key"`
+	// SHA-256 (hex) of the request as it was understood: the same key with another request is refused.
+	RequestSha256 string    `json:"request_sha256"`
+	TaskID        uuid.UUID `json:"task_id"`
+	// The 201 answer the request got (the send's id, tracking, purpose): a retry gets it again.
+	Result    []byte    `json:"result"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // A send's links that are the same for every recipient, each with its random token: the only addresses /t/c redirects to.
 type MailTaskLink struct {
 	ID               int64     `json:"id"`

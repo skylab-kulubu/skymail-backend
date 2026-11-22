@@ -173,6 +173,35 @@ gövdesinde `erase_after_send: true` taşırlar:
   sorgularında değil: sonucu yazan her yol ondan geçer.
 - Yanıt `erase_after_send: true` der; eski imaj alanı hiç yazmaz.
 
+### Tek postada tekrar anahtarı (`Idempotency-Key`)
+
+Servis `POST /v1/mail_tasks/single`'a isteğe bağlı `Idempotency-Key`
+başlığı gönderebilir (hub biletleri forms-posta-core 11, horizontal-scale 28).
+Kural `POST /v1/notifications`'ınkiyle aynıdır, yalnız başlık burada zorunlu
+değildir:
+
+- Anahtar 1–255 görünür ASCII karakterdir; aynı postanın her denemesinde
+  aynıdır (core'un kalıbı `core:<tür>:<kayıt>:v1`). Kapsam servis başınadır
+  (`sent_by`): iki servisin aynı anahtarı ayrı postalardır.
+- **Anahtara adres, ad ya da kişi kimliği (`sub`) konmaz.** Kaydın kendi
+  kimliği kullanılır (bilet, yanıt, silme isteği). Anahtar 72 saat olduğu gibi
+  saklanır; içinde kişi olursa, alıcısının kaydını tutmayan posta
+  (`erase_after_send`) da onu tutmuş olur.
+- Aynı anahtar ve aynı istek: posta yeniden kuyruğa girmez; ilk yanıt
+  (`201`, aynı gövde) `Idempotent-Replayed: true` ile döner.
+- Aynı anahtar, başka istek (gövdenin SHA-256'sı farklı): `422
+  mail_task.idempotency_key_reused`, hiçbir şey kuyruğa girmez.
+- Aynı anda gelen aynı anahtarlı istekler tek gönderim yazar: anahtar
+  gönderimle aynı işlemde yazılır, ikinci istek ilkinin yanıtını alır.
+- Kişinin token'ı başlık gönderemez (`400
+  mail_task.idempotency_key_not_allowed`); geçersiz anahtar `400
+  mail_task.idempotency_key_invalid`.
+- Yalnız kuyruğa giren posta anahtarını saklar: reddedilen istek (`4xx`,
+  `503`) anahtar bırakmaz, aynı anahtarla yeniden denenebilir.
+- Anahtar 72 saat tutulur (`mail_task_idempotency_keys`; içerik süpürmesi
+  siler). Sonra aynı anahtar yeni bir postadır. Başlıksız istek bugünkü gibi
+  çalışır; Keycloak SPI'ı ve Forms etkilenmez.
+
 ## Mail göndericisi (`MAIL_SENDER`)
 
 `MAIL_SENDER` `on` (varsayılan, yoksa da açık) ya da `paused` olur; başka bir
@@ -441,6 +470,16 @@ reddidir (aşağıda).
   sonradan kalıcı (`hard`), yumuşak (`soft`) ya da gecikme (`delay`) raporu
   aldığı ve `hard_rate = hard / sent`; `reader` her kutunun son okuması,
   hatası (Graph'ın durumu ve kodu) ve sayılarıdır, delta bağlantısı olmadan.
+- **Tekrarlayan yumuşak ret** (`GET /v1/suppressions/soft-bounces`,
+  `skymail:suppressions:manage`; hub bileti skymail-bounce-isleme 13, ADR 0073
+  karar 5): son 30 günde 3 ya da daha çok postası yumuşak retle dönen
+  adresler, son ret önce, sayfalı (`_start`, `_end`, en çok 100; `q` adres
+  parçası; `X-Total-Count`). Satır: adres, posta sayısı (aynı postaya gelen
+  iki rapor bir sayılır), son ret zamanı ve son retin kodları
+  (`5.2.2`, `5.4.1 AS(…)`), metin yok. Yumuşak ret bastırmaz, bu adreslere
+  posta gitmeye devam eder; panel onları işaretler. Zaten bastırılmış adres,
+  başka adresi adlandıran rapor ve hesap silmenin adresini boşalttığı posta
+  sayılmaz. Pencere ve eşik sabittir.
 
 - **Ayrıştırma** (`internal/dsn`, yalnız stdlib): üst tür `multipart/report;
   report-type=delivery-status` olmalı; yalnız `message/delivery-status`
