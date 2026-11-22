@@ -466,6 +466,16 @@ reddidir (aşağıda).
   sonradan kalıcı (`hard`), yumuşak (`soft`) ya da gecikme (`delay`) raporu
   aldığı ve `hard_rate = hard / sent`; `reader` her kutunun son okuması,
   hatası (Graph'ın durumu ve kodu) ve sayılarıdır, delta bağlantısı olmadan.
+- **Tekrarlayan yumuşak ret** (`GET /v1/suppressions/soft-bounces`,
+  `skymail:suppressions:manage`; hub bileti skymail-bounce-isleme 13, ADR 0073
+  karar 5): son 30 günde 3 ya da daha çok postası yumuşak retle dönen
+  adresler, son ret önce, sayfalı (`_start`, `_end`, en çok 100; `q` adres
+  parçası; `X-Total-Count`). Satır: adres, posta sayısı (aynı postaya gelen
+  iki rapor bir sayılır), son ret zamanı ve son retin kodları
+  (`5.2.2`, `5.4.1 AS(…)`), metin yok. Yumuşak ret bastırmaz, bu adreslere
+  posta gitmeye devam eder; panel onları işaretler. Zaten bastırılmış adres,
+  başka adresi adlandıran rapor ve hesap silmenin adresini boşalttığı posta
+  sayılmaz. Pencere ve eşik sabittir.
 
 - **Ayrıştırma** (`internal/dsn`, yalnız stdlib): üst tür `multipart/report;
   report-type=delivery-status` olmalı; yalnız `message/delivery-status`
