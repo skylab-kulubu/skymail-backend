@@ -1346,7 +1346,7 @@ const docTemplate = `{
             "handlers.QueueItem": {
                 "properties": {
                     "attachments": {
-                        "description": "The mail's attachments, by name, type and size; left out when it had none.",
+                        "description": "The mail's attachments, by name, type and size; [] when it had none.",
                         "items": {
                             "$ref": "#/components/schemas/handlers.AttachmentInfo"
                         },

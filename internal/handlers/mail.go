@@ -606,8 +606,8 @@ func (h *mailHandlerImpl) GetTaskQueueItems(c fiber.Ctx) error {
 // not kept past the send.
 type QueueItem struct {
 	database.GetMailQueueItemsByTaskIdRow
-	// The mail's attachments, by name, type and size; left out when it had none.
-	Attachments []AttachmentInfo `json:"attachments,omitempty"`
+	// The mail's attachments, by name, type and size; [] when it had none.
+	Attachments []AttachmentInfo `json:"attachments"`
 }
 
 // queueItemsOf is items with their attachments, read for the page at once.
@@ -630,7 +630,9 @@ func queueItemsOf(ctx context.Context, db *database.Store, items []database.GetM
 		byRow[f.QueueID] = append(byRow[f.QueueID], AttachmentInfo{Filename: f.Filename, ContentType: f.ContentType, Size: f.SizeBytes})
 	}
 	for i := range out {
-		out[i].Attachments = byRow[out[i].ID]
+		if out[i].Attachments = byRow[out[i].ID]; out[i].Attachments == nil {
+			out[i].Attachments = []AttachmentInfo{}
+		}
 	}
 	return out, nil
 }

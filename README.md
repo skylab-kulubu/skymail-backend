@@ -228,7 +228,8 @@ bileti bilet-qr-ve-pdf 08). İlk kullanıcı core'un PDF biletidir.
   standart base64, dolgulu (`attachment.content_invalid`); çözülmüş toplam
   en çok 512 KB (`attachment.too_large`). Hepsi `400`, `params.index` hangi
   dosya olduğunu söyler. Sağlayıcıların sınırı çok daha yüksek (Gmail ve
-  Exchange Online ~20–25 MB, Graph JSON isteği 4 MB, SES ve Postmark 10 MB):
+  Exchange Online ~20–25 MB, Graph JSON isteği 4 MB, SES v2 40 MB, Postmark
+  10 MB; Postmark da yasak liste yerine izinli tür listesi kullanır):
   sınır, eki olağan bir işlem postası gibi tutmak için düşük.
 - **Dosya adı** reddedilmez, sadeleşir: Türkçe harf Latin karşılığına, boşluk
   `-`'ye döner; harf, rakam, `.`, `-`, `_` dışındaki karakter ve yol düşer;
@@ -258,7 +259,8 @@ bileti bilet-qr-ve-pdf 08). İlk kullanıcı core'un PDF biletidir.
   (`/single`'da üst düzeyde, bildirimde `channels.email.attachments`); ek
   yoksa ya da satır kuyruğa girerken düştüyse (ayrılmış alan, bastırılmış
   adres) alan yazılmaz. `GET /v1/mail_tasks/{id}/queue` her satırın ekini
-  ad, tür ve boyutla gösterir, dosyayı göstermez.
+  (`attachments`, eksiz satırda `[]`) ad, tür ve boyutla gösterir, dosyayı
+  göstermez.
 - **Tekrar anahtarı:** ek isteğin özetine (`request_sha256`) girmez. Core
   denemede PDF'i yeniden üretir; yeni PDF'in baytları (oluşturma zamanı)
   farklıdır ama posta aynıdır. Aynı anahtarla tekrar ilk yanıtı alır ve yeni

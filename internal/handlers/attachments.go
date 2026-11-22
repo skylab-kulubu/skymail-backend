@@ -16,8 +16,8 @@ import (
 // Mail attachments (ADR 0082 decision 6, CONTEXT "Mail attachment"; hub
 // ticket bilet-qr-ve-pdf 08): a service's file with its mail to one person,
 // today core's ticket PDF. The limits sit well under every provider's (Gmail
-// and Exchange Online take about 20-25 MB, Graph's JSON request 4 MB, SES and
-// Postmark 10 MB) and keep a mail with them an ordinary transactional mail:
+// and Exchange Online take about 20-25 MB, Graph's JSON request 4 MB, SES v2
+// 40 MB, Postmark 10 MB) and keep a mail with them an ordinary transactional mail:
 // one or two small expected files, of a type the recipient's client opens.
 
 const (
