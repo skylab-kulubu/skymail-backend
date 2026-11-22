@@ -4251,7 +4251,8 @@ paths:
         Without it a retry queues the mail again.'
       parameters:
       - description: 'A service''s own key for this mail: 1 to 255 visible ASCII characters,
-          the same on every retry'
+          the same on every retry; it names the record (a ticket, a response), never
+          an address, a name or a person''s subject'
         in: header
         name: Idempotency-Key
         schema:

@@ -457,7 +457,9 @@ type Querier interface {
 	// never suppresses, so these are not on the list; the panel marks them. A
 	// mail counts once however many reports it had; only reports that named the
 	// row's own address count, of rows that still hold one (Account erasure
-	// clears it). An address already suppressed is left out: no mail goes to it.
+	// clears it). An address already suppressed is left out: it is on the
+	// suppression list already, where account mail, still sent to it, is flagged
+	// (ADR 0073 decision 6).
 	// Of the last bounce its codes only, never text.
 	ListSoftBounceAddresses(ctx context.Context, arg ListSoftBounceAddressesParams) ([]ListSoftBounceAddressesRow, error)
 	// The suppression list and the unsubscribe record as one list, most recent

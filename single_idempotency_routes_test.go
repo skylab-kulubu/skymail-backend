@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -17,6 +19,7 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skymail-backend/internal/requests"
 	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
 )
 
@@ -277,5 +280,110 @@ func TestATrackedOrErasedSingleMailIsReplayedAsAnswered(t *testing.T) {
 	}
 	if got := w.count(`SELECT count(*) FROM mail_tasks`) - before; got != 1 {
 		t.Errorf("%d sends queued by %d callers, want 1", got, callers)
+	}
+}
+
+// requestDigest is the digest SendSingle keeps of send: its JSON as the
+// request type reads it.
+func requestDigest(t *testing.T, send map[string]any) string {
+	t.Helper()
+	raw, _ := json.Marshal(send)
+	var params requests.SendSingleMail
+	if err := json.Unmarshal(raw, &params); err != nil {
+		t.Fatal(err)
+	}
+	canonical, _ := json.Marshal(params)
+	sum := sha256.Sum256(canonical)
+	return hex.EncodeToString(sum[:])
+}
+
+// A request that finds its key taken by a transaction not yet committed
+// waits for it in the key's INSERT, past the replay that looked first: the
+// test holds that transaction open itself, sees the request blocked on its
+// lock, then ends it. Committed with the same request: the request's own send
+// is rolled back and it answers the held one. Committed with another request:
+// 422. Rolled back: the request queues its own send.
+func TestASingleMailWaitsForTheTransactionHoldingItsKey(t *testing.T) {
+	app, w := singleSendWorld(t)
+	ctx := context.Background()
+	core := uuid.NewString()
+	send := w.singleSendTo(elif.email, "Elif", false)
+	digest := requestDigest(t, send)
+
+	for _, c := range []struct {
+		name     string
+		digest   string
+		commit   bool
+		status   int
+		replayed string
+		code     string
+		sends    int
+	}{
+		// sends: the held one when committed, the request's own when not.
+		{"committed, the same mail", digest, true, fiber.StatusCreated, "true", "", 1},
+		{"committed, another mail", strings.Repeat("0", 64), true, fiber.StatusUnprocessableEntity, "", "mail_task.idempotency_key_reused", 1},
+		{"rolled back", digest, false, fiber.StatusCreated, "", "", 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			key := "core:held:" + uuid.NewString()
+			before := w.count(`SELECT count(*) FROM mail_tasks`)
+			held, err := w.store.Conn.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = held.Rollback(ctx) }()
+			var heldTask uuid.UUID
+			if err := held.QueryRow(ctx, `INSERT INTO mail_tasks (sent_by, body_variables) VALUES ($1, '{}') RETURNING id`, core).Scan(&heldTask); err != nil {
+				t.Fatal(err)
+			}
+			heldAnswer := `{"id":"` + heldTask.String() + `","tracking":false,"purpose":null,"category":null}`
+			if _, err := held.Exec(ctx, `
+				INSERT INTO mail_task_idempotency_keys (sent_by, idempotency_key, request_sha256, task_id, result)
+				VALUES ($1, $2, $3, $4, $5)`, core, key, c.digest, heldTask, heldAnswer); err != nil {
+				t.Fatal(err)
+			}
+
+			answered := make(chan singlePost, 1)
+			go func() { answered <- postSingle(t, app, core, true, key, send) }()
+
+			// The request is past its replay and waits on the held row's lock.
+			deadline := time.Now().Add(20 * time.Second)
+			for w.count(`SELECT count(*) FROM pg_locks WHERE NOT granted`) == 0 {
+				select {
+				case p := <-answered:
+					t.Fatalf("the request answered %d %s without waiting for the held key", p.status, p.raw)
+				default:
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("the request never waited on the held key")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+
+			if c.commit {
+				err = held.Commit(ctx)
+			} else {
+				err = held.Rollback(ctx)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := <-answered
+			if p.status != c.status || p.replayed != c.replayed || p.error.Code != c.code {
+				t.Fatalf("answer = %d %s (replayed %q), want %d %q %q", p.status, p.raw, p.replayed, c.status, c.replayed, c.code)
+			}
+			if c.commit && c.status == fiber.StatusCreated && p.created.ID != heldTask {
+				t.Errorf("answered send %s, want the held one %s", p.created.ID, heldTask)
+			}
+			if !c.commit && p.created.ID == heldTask {
+				t.Errorf("answered the rolled-back send")
+			}
+			if got := w.count(`SELECT count(*) FROM mail_tasks`) - before; got != c.sends {
+				t.Errorf("%d sends exist after it, want %d", got, c.sends)
+			}
+			if n := w.count(`SELECT count(*) FROM mail_queue WHERE task_id = $1`, heldTask); n != 0 {
+				t.Errorf("the held send has %d queue rows", n)
+			}
+		})
 	}
 }

@@ -212,7 +212,9 @@ takes the person out of them:
   person's: a person's token may not send a key), the key, a SHA-256 of the
   request (which held the recipient's address), the send and its answer. No
   address. Deleted by the content sweep 72 hours after it was written, and
-  with its send.
+  with its send. The key is the caller's and is kept as sent: callers name
+  the record (a ticket, a response, an erasure request), never an address, a
+  name or a person's subject (README "Tek postada tekrar anahtarı").
 - `mail_tasks.sent_by` — who sent: the Keycloak subject of the token that
   queued the send — for an approved Mail onayı request, its submitter's — or
   `skymail` for the mail SkyMail sends of its own accord, the notice that a

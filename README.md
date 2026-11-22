@@ -183,6 +183,10 @@ değildir:
 - Anahtar 1–255 görünür ASCII karakterdir; aynı postanın her denemesinde
   aynıdır (core'un kalıbı `core:<tür>:<kayıt>:v1`). Kapsam servis başınadır
   (`sent_by`): iki servisin aynı anahtarı ayrı postalardır.
+- **Anahtara adres, ad ya da kişi kimliği (`sub`) konmaz.** Kaydın kendi
+  kimliği kullanılır (bilet, yanıt, silme isteği). Anahtar 72 saat olduğu gibi
+  saklanır; içinde kişi olursa, alıcısının kaydını tutmayan posta
+  (`erase_after_send`) da onu tutmuş olur.
 - Aynı anahtar ve aynı istek: posta yeniden kuyruğa girmez; ilk yanıt
   (`201`, aynı gövde) `Idempotent-Replayed: true` ile döner.
 - Aynı anahtar, başka istek (gövdenin SHA-256'sı farklı): `422

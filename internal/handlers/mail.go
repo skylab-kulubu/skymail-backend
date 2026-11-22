@@ -249,7 +249,7 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 //	@Tags			Mail
 //	@Accept			json
 //	@Produce		json
-//	@Param			Idempotency-Key	header		string					false	"A service's own key for this mail: 1 to 255 visible ASCII characters, the same on every retry"
+//	@Param			Idempotency-Key	header		string					false	"A service's own key for this mail: 1 to 255 visible ASCII characters, the same on every retry; it names the record (a ticket, a response), never an address, a name or a person's subject"
 //	@Param			mail			body		requests.SendSingleMail	true	"Mail details"
 //	@Success		201				{object}	handlers.CreatedMailTask
 //	@Header			201				{string}	Idempotent-Replayed	"true when the answer is the first answer to this Idempotency-Key"
