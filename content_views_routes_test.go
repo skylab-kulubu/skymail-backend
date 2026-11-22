@@ -12,7 +12,8 @@ import (
 // alone. The roles that open the content — system-mails:read, mails:write —
 // and mails:read and the tracking role do not read it: those audited do not
 // read their own record (Purview's Audit Reader, NIST SP 800-53 AU-9(4)).
-// Without skymail:access nothing of /v1 answers.
+// (skymail:access, /v1's own gate, is protectedAPI's: this world does not
+// mount it.)
 func TestContentViewsTakeTheAuditRoleAlone(t *testing.T) {
 	w := newApprovalWorld(t)
 	var created struct {
@@ -25,17 +26,15 @@ func TestContentViewsTakeTheAuditRoleAlone(t *testing.T) {
 	approvalPeople["denetci"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skymail:access", handlers.AuditReadRole}}
 	approvalPeople["icerik_acan"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skymail:access", "skymail:mails:read",
 		"skymail:mails:write", handlers.SystemMailsReadRole, handlers.TrackingReadRole}}
-	approvalPeople["koltuksuz"] = approvalPerson{sub: uuid.NewString(), roles: []string{handlers.AuditReadRole}}
 	defer delete(approvalPeople, "denetci")
 	defer delete(approvalPeople, "icerik_acan")
-	defer delete(approvalPeople, "koltuksuz")
 	path := "/v1/mail_tasks/" + created.ID.String() + "/content-views"
 
 	var views []handlers.SentContentView
 	if status, raw := w.call("denetci", "GET", path, nil, &views); status != 200 || len(views) != 0 {
 		t.Fatalf("the audit role: %d %s, want 200 and no openings", status, raw)
 	}
-	for _, who := range []string{"icerik_acan", "yusuf", "baska", "koltuksuz"} {
+	for _, who := range []string{"icerik_acan", "yusuf", "baska"} {
 		if status, raw := w.call(who, "GET", path, nil, nil); status != 403 {
 			t.Errorf("%s: %d %s, want 403", who, status, raw)
 		}

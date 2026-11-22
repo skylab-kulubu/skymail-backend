@@ -61,7 +61,7 @@ func TestContentViewsListWhoOpenedAMaskedMailNewestFirst(t *testing.T) {
 	app := contentApp(t, db, now)
 	system := []string{"skymail:access", "skymail:mails:read", SystemMailsReadRole}
 	task, row := seedRenderedSend(t, db, keycloakLike("keycloak.reset-password", "service-account-keycloak-mailer", now.Add(-time.Hour)))
-	other, _ := seedRenderedSend(t, db, keycloakLike("keycloak.reset-password", "service-account-keycloak-mailer", now.Add(-time.Hour)))
+	other, _ := seedRenderedSend(t, db, keycloakLike("keycloak.verify-email", "service-account-keycloak-mailer", now.Add(-time.Hour)))
 
 	// None yet: an empty list, not an error.
 	if got := contentViewsAs(t, app, task, ""); got.status != fiber.StatusOK || len(got.views) != 0 || got.total != "0" || got.body != "[]" {
