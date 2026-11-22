@@ -49,6 +49,7 @@ func contentApp(t *testing.T, db *database.Store, now time.Time) *fiber.App {
 	app.Get("/mail_tasks", handler.GetTasks)
 	app.Get("/mail_tasks/:id", handler.GetTask)
 	app.Get("/mail_tasks/:id/queue/:itemId/content", handler.GetQueueItemContent)
+	app.Get("/mail_tasks/:id/content-views", handler.ListContentViews)
 	return app
 }
 

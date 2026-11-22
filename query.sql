@@ -1487,6 +1487,20 @@ INSERT INTO sent_content_views (task_id, queue_item_id, actor_sub, actor_name, m
 VALUES (sqlc.arg(task_id), sqlc.arg(queue_item_id), sqlc.narg(actor_sub), sqlc.narg(actor_name),
         sqlc.arg(masked_by), sqlc.arg(masked_variables)::text[]);
 
+-- The openings of a send's masked content, newest first: who, which queue row,
+-- how it was masked. No recipient (idx_sent_content_views_task).
+-- name: ListSentContentViews :many
+SELECT id, queue_item_id, actor_sub, actor_name, masked_by, masked_variables, created_at
+FROM sent_content_views
+WHERE task_id = sqlc.arg(task_id)
+ORDER BY created_at DESC, id DESC
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
+
+-- name: CountSentContentViews :one
+SELECT count(*)
+FROM sent_content_views
+WHERE task_id = sqlc.arg(task_id);
+
 -- Empties the content of up to batch_size sends none of whose rows is still to
 -- go out (pending or processing) once they are older than retention_days,
 -- sensitive or not: a sensitive send's content is kept as long as any other's

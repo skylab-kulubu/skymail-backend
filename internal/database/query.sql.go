@@ -1114,6 +1114,19 @@ func (q *Queries) CountSends(ctx context.Context, arg CountSendsParams) error {
 	return err
 }
 
+const countSentContentViews = `-- name: CountSentContentViews :one
+SELECT count(*)
+FROM sent_content_views
+WHERE task_id = $1
+`
+
+func (q *Queries) CountSentContentViews(ctx context.Context, taskID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countSentContentViews, taskID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countSoftBounceAddresses = `-- name: CountSoftBounceAddresses :one
 SELECT count(*)::bigint AS total
 FROM (SELECT lower(btrim(q.recipient_email)) AS address
@@ -5250,6 +5263,60 @@ func (q *Queries) ListQueueRowsToMask(ctx context.Context, arg ListQueueRowsToMa
 			&i.Body,
 			&i.BodyHtml,
 			&i.ListUnsubscribeUrl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSentContentViews = `-- name: ListSentContentViews :many
+SELECT id, queue_item_id, actor_sub, actor_name, masked_by, masked_variables, created_at
+FROM sent_content_views
+WHERE task_id = $1
+ORDER BY created_at DESC, id DESC
+LIMIT $3 OFFSET $2
+`
+
+type ListSentContentViewsParams struct {
+	TaskID    uuid.UUID `json:"task_id"`
+	RowOffset int32     `json:"row_offset"`
+	RowLimit  int32     `json:"row_limit"`
+}
+
+type ListSentContentViewsRow struct {
+	ID              uuid.UUID `json:"id"`
+	QueueItemID     uuid.UUID `json:"queue_item_id"`
+	ActorSub        *string   `json:"actor_sub"`
+	ActorName       *string   `json:"actor_name"`
+	MaskedBy        string    `json:"masked_by"`
+	MaskedVariables []string  `json:"masked_variables"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+// The openings of a send's masked content, newest first: who, which queue row,
+// how it was masked. No recipient (idx_sent_content_views_task).
+func (q *Queries) ListSentContentViews(ctx context.Context, arg ListSentContentViewsParams) ([]ListSentContentViewsRow, error) {
+	rows, err := q.db.Query(ctx, listSentContentViews, arg.TaskID, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSentContentViewsRow
+	for rows.Next() {
+		var i ListSentContentViewsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.QueueItemID,
+			&i.ActorSub,
+			&i.ActorName,
+			&i.MaskedBy,
+			&i.MaskedVariables,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
