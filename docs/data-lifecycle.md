@@ -207,6 +207,12 @@ takes the person out of them:
   posta") keeps none of the above past its outcome: the row is erased as
   Account erasure erases mail to the person the moment it is sent or fails
   for good (a trigger, migration `20261031230000`), its variables with it.
+- `mail_task_idempotency_keys` — a service's `Idempotency-Key` on
+  `POST /v1/mail_tasks/single`: the service account's subject (never a
+  person's: a person's token may not send a key), the key, a SHA-256 of the
+  request (which held the recipient's address), the send and its answer. No
+  address. Deleted by the content sweep 72 hours after it was written, and
+  with its send.
 - `mail_tasks.sent_by` — who sent: the Keycloak subject of the token that
   queued the send — for an approved Mail onayı request, its submitter's — or
   `skymail` for the mail SkyMail sends of its own accord, the notice that a

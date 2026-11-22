@@ -205,6 +205,9 @@ type Querier interface {
 	// Deletes up to batch_size of the oldest bounces older than retention_days
 	// (a year): the content sweep's step.
 	DeleteOldMailBounces(ctx context.Context, arg DeleteOldMailBouncesParams) (int64, error)
+	// Deletes up to batch_size of the keys older than retention_hours: the
+	// content sweep's step.
+	DeleteOldMailTaskIdempotencyKeys(ctx context.Context, arg DeleteOldMailTaskIdempotencyKeysParams) (int64, error)
 	// Deletes up to batch_size of the oldest records of who opened a masked mail
 	// that are older than retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
 	DeleteOldSentContentViews(ctx context.Context, arg DeleteOldSentContentViewsParams) (int64, error)
@@ -284,6 +287,7 @@ type Querier interface {
 	// whether it is one (bulk: its rows are in the bulk lane), who sent it, and
 	// whether any of its rows are still to be sent.
 	GetMailTaskControl(ctx context.Context, id uuid.UUID) (GetMailTaskControlRow, error)
+	GetMailTaskIdempotencyKey(ctx context.Context, arg GetMailTaskIdempotencyKeyParams) (GetMailTaskIdempotencyKeyRow, error)
 	// The key of a send's template and whether it is a system template, which
 	// together say whether it is account mail (mailer.AccountMail), and the
 	// send's purpose, which says its stream (mailer.LaneOf).
@@ -370,6 +374,10 @@ type Querier interface {
 	// template's content_sensitive ('unset' for NULL). It never changes after:
 	// mail_task_content_sensitive() reads it first (20261020120000).
 	InsertMailTask(ctx context.Context, arg InsertMailTaskParams) (InsertMailTaskRow, error)
+	// A single mail accepted under a service's Idempotency-Key, written in the
+	// transaction that queues it (hub ticket forms-posta-core 11); nothing when
+	// the key is taken: the caller answers the earlier request's answer.
+	InsertMailTaskIdempotencyKey(ctx context.Context, arg InsertMailTaskIdempotencyKeyParams) (uuid.UUID, error)
 	// A notification accepted under its caller's Idempotency-Key; nothing when
 	// the caller already used the key (a concurrent request with it waits here
 	// for the first to commit or roll back).

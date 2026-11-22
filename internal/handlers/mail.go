@@ -245,29 +245,22 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 // SendSingle godoc
 //
 //	@Summary		Send a single email
-//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): a person's send may be islem (with transactional_statement true; bilgi@; tracked as any person's send, in the bulk lane then, else the system lane) or duyuru with a category (the bulk lane, duyuru@); without a purpose, duyuru, club:duyuru, tracked or not. A service's token is always islem; its fields are ignored. A service's mail with erase_after_send keeps no record of its recipient: never tracked, in the system lane, its row erased when its outcome is written (recipient Silinmiş kullanıcı, no address, no content, no variables); the answer says erase_after_send true.
+//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): a person's send may be islem (with transactional_statement true; bilgi@; tracked as any person's send, in the bulk lane then, else the system lane) or duyuru with a category (the bulk lane, duyuru@); without a purpose, duyuru, club:duyuru, tracked or not. A service's token is always islem; its fields are ignored. A service's mail with erase_after_send keeps no record of its recipient: never tracked, in the system lane, its row erased when its outcome is written (recipient Silinmiş kullanıcı, no address, no content, no variables); the answer says erase_after_send true. A service may send an Idempotency-Key (optional; a person's token may not): the same key from the same service answers the first answer again (Idempotent-Replayed: true) and queues nothing, for 72 hours; a different request with it is 422. Without it a retry queues the mail again.
 //	@Tags			Mail
 //	@Accept			json
 //	@Produce		json
-//	@Param			mail	body		requests.SendSingleMail	true	"Mail details"
-//	@Success		201		{object}	handlers.CreatedMailTask
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request. A person's purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team; mail_task.erase_after_send_not_allowed: a person's token asked for erase_after_send"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
-//	@Failure		503		{object}	apperrors.AppError	"mail_task.preference_unavailable (Retry-After): a person's duyuru mail while every duyuru send obeys the recipient's preferences (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing is queued"
+//	@Param			Idempotency-Key	header		string					false	"A service's own key for this mail: 1 to 255 visible ASCII characters, the same on every retry"
+//	@Param			mail			body		requests.SendSingleMail	true	"Mail details"
+//	@Success		201				{object}	handlers.CreatedMailTask
+//	@Header			201				{string}	Idempotent-Replayed	"true when the answer is the first answer to this Idempotency-Key"
+//	@Failure		400				{object}	apperrors.AppError	"Bad Request. A person's purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team; mail_task.erase_after_send_not_allowed: a person's token asked for erase_after_send; mail_task.idempotency_key_invalid; mail_task.idempotency_key_not_allowed: a person's token sent an Idempotency-Key"
+//	@Failure		422				{object}	apperrors.AppError	"mail_task.idempotency_key_reused: the key was used for a different mail"
+//	@Failure		500				{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		503				{object}	apperrors.AppError	"mail_task.preference_unavailable (Retry-After): a person's duyuru mail while every duyuru send obeys the recipient's preferences (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing is queued"
 //	@Router			/mail_tasks/single [post]
 func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	var params requests.SendSingleMail
 	if err := c.Bind().Body(&params); err != nil {
-		return err
-	}
-
-	templateID, err := h.resolveTemplate(c, params)
-	if err != nil {
-		return err
-	}
-
-	bodyVarsJson, err := json.Marshal(params.BodyVariables)
-	if err != nil {
 		return err
 	}
 
@@ -282,6 +275,29 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	// operator's mail. A service's mail stays in the system lane and is
 	// tracked only while SKYMAIL_TRACKING_SYSTEM says so.
 	service := middlewares.IsServiceAccount(c)
+
+	// A service's retry under its Idempotency-Key answers before anything
+	// is looked up again.
+	idem, err := singleIdempotency(c, service, sentBy, params)
+	if err != nil {
+		return err
+	}
+	if idem != nil {
+		if done, err := idem.replay(c, h.db); done || err != nil {
+			return err
+		}
+	}
+
+	templateID, err := h.resolveTemplate(c, params)
+	if err != nil {
+		return err
+	}
+
+	bodyVarsJson, err := json.Marshal(params.BodyVariables)
+	if err != nil {
+		return err
+	}
+
 	if params.EraseAfterSend && !service {
 		return errEraseAfterSendNotAllowed
 	}
@@ -319,6 +335,29 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 		CommercialContentAbsent: purpose.CommercialContentAbsent,
 		EraseAfterSend:          params.EraseAfterSend,
 	}
+	// The answer to the send: tracked is what the mailer says of a service's
+	// mail while SKYMAIL_TRACKING_SYSTEM is on, else what was decided above.
+	answer := func(taskID uuid.UUID, tracked bool) CreatedMailTask {
+		if params.EraseAfterSend {
+			created := createdMailTask(taskID, false, purpose)
+			created.EraseAfterSend = true
+			return created
+		}
+		return createdMailTask(taskID, tracked, purpose)
+	}
+	ctx := c.Context()
+	systemTracked := service && !params.EraseAfterSend && h.mailer.SystemTrackingAvailable()
+	if idem != nil {
+		// The key is written in the transaction that queues the send, with
+		// the answer this request gets.
+		ctx = mailer.WithSendHook(ctx, func(ctx context.Context, q *database.Queries, sent mailer.Sent) error {
+			tracked := tracking
+			if systemTracked {
+				tracked = sent.Tracked
+			}
+			return idem.record(ctx, q, sent.TaskID, answer(sent.TaskID, tracked))
+		})
+	}
 	var taskID uuid.UUID
 	switch {
 	case params.EraseAfterSend:
@@ -326,28 +365,30 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 		// SKYMAIL_TRACKING_SYSTEM says: its row is erased once sent, and an
 		// opening recorded after that would name no one or bring the row
 		// back. The system lane, as any service's mail.
-		taskID, err = h.mailer.EnqueueSingle(c.Context(), arg)
-		if err != nil {
-			return err
-		}
-		created := createdMailTask(taskID, false, purpose)
-		created.EraseAfterSend = true
-		return c.Status(fiber.StatusCreated).JSON(created)
-	case service && h.mailer.SystemTrackingAvailable():
-		taskID, tracking, err = h.mailer.EnqueueSystemSingle(c.Context(), arg, nil)
+		taskID, err = h.mailer.EnqueueSingle(ctx, arg)
+	case systemTracked:
+		taskID, tracking, err = h.mailer.EnqueueSystemSingle(ctx, arg, nil)
 	case tracking, isDuyuru(purpose):
 		// The bulk lane, where tracking is planned: an operator's tracked
 		// mail (islem too, which goes out from bilgi@ all the same), or a
 		// duyuru single the person did not ask tracking for.
-		taskID, err = h.mailer.EnqueueTrackedSingle(c.Context(), arg, nil)
+		taskID, err = h.mailer.EnqueueTrackedSingle(ctx, arg, nil)
 	default:
-		taskID, err = h.mailer.EnqueueSingle(c.Context(), arg)
+		taskID, err = h.mailer.EnqueueSingle(ctx, arg)
+	}
+	if errors.Is(err, errIdempotentReplay) {
+		// Another request with this key queued its send first, while this
+		// one was on its way: this one queued nothing.
+		if done, err := idem.replay(c, h.db); done || err != nil {
+			return err
+		}
+		return apperrors.ErrConflict
 	}
 	if err != nil {
 		return err
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(createdMailTask(taskID, tracking, purpose))
+	return c.Status(fiber.StatusCreated).JSON(answer(taskID, tracking))
 }
 
 // MailTaskItem is a send as the send list, a send's own page and the home
