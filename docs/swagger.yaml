@@ -4244,7 +4244,19 @@ paths:
         islem; its fields are ignored. A service''s mail with erase_after_send keeps
         no record of its recipient: never tracked, in the system lane, its row erased
         when its outcome is written (recipient Silinmiş kullanıcı, no address, no
-        content, no variables); the answer says erase_after_send true.'
+        content, no variables); the answer says erase_after_send true. A service may
+        send an Idempotency-Key (optional; a person''s token may not): the same key
+        from the same service answers the first answer again (Idempotent-Replayed:
+        true) and queues nothing, for 72 hours; a different request with it is 422.
+        Without it a retry queues the mail again.'
+      parameters:
+      - description: 'A service''s own key for this mail: 1 to 255 visible ASCII characters,
+          the same on every retry; it names the record (a ticket, a response), never
+          an address, a name or a person''s subject'
+        in: header
+        name: Idempotency-Key
+        schema:
+          type: string
       requestBody:
         content:
           application/json:
@@ -4263,6 +4275,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/handlers.CreatedMailTask'
           description: Created
+          headers:
+            Idempotent-Replayed:
+              description: true when the answer is the first answer to this Idempotency-Key
+              schema:
+                type: string
         "400":
           content:
             application/json:
@@ -4275,7 +4292,15 @@ paths:
             mail_task.category_invalid, mail_task.commercial_statement_required (duyuru,
             SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team
             category no team; mail_task.erase_after_send_not_allowed: a person''s
-            token asked for erase_after_send'
+            token asked for erase_after_send; mail_task.idempotency_key_invalid; mail_task.idempotency_key_not_allowed:
+            a person''s token sent an Idempotency-Key'
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: 'mail_task.idempotency_key_reused: the key was used for a different
+            mail'
         "500":
           content:
             application/json:

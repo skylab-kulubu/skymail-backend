@@ -707,27 +707,60 @@ func (q *queue) WithPreferences(verdicts *PreferenceVerdicts) Queue {
 
 func (m *mailerImpl) Wake() { m.wake() }
 
+// Sent is a send as a SendHook sees it, in the transaction that queued it.
+type Sent struct {
+	TaskID uuid.UUID
+	// Whether its pending row got a tracking token: what EnqueueSystemSingle
+	// answers. false for any send that is not one mail to one person.
+	Tracked bool
+}
+
+// SendHook writes what belongs with a send in the transaction that queues
+// it, after its rows: the send and what the hook wrote exist together or not
+// at all. An error rolls the send back and is what Mailer's method returns.
+type SendHook func(ctx context.Context, q *database.Queries, sent Sent) error
+
+type sendHookKey struct{}
+
+// WithSendHook is ctx carrying hook to the next send Mailer's methods queue
+// with it (POST /mail_tasks/single writes its caller's Idempotency-Key so).
+// A send that queues nothing (no task) does not call it.
+func WithSendHook(ctx context.Context, hook SendHook) context.Context {
+	return context.WithValue(ctx, sendHookKey{}, hook)
+}
+
+func sendHookOf(ctx context.Context) SendHook {
+	hook, _ := ctx.Value(sendHookKey{}).(SendHook)
+	return hook
+}
+
 // pooled writes a send in the lane priority in a transaction of its own, so
 // the send and its queue rows exist together or not at all: a send that fails
 // to queue leaves no send without rows behind. It wakes the dispatcher once
-// rows are queued.
-func (m *mailerImpl) pooled(ctx context.Context, priority Priority, write func(*queue) (uuid.UUID, bool, error)) (uuid.UUID, error) {
+// rows are queued. ctx's SendHook, if any, runs in the same transaction.
+func (m *mailerImpl) pooled(ctx context.Context, priority Priority, write func(*queue) (uuid.UUID, queueResult, error)) (uuid.UUID, error) {
 	return m.pooledWith(ctx, priority, nil, write)
 }
 
 // pooledWith is pooled for a send core was asked about (ResolvePreferences).
-func (m *mailerImpl) pooledWith(ctx context.Context, priority Priority, verdicts *PreferenceVerdicts, write func(*queue) (uuid.UUID, bool, error)) (uuid.UUID, error) {
+func (m *mailerImpl) pooledWith(ctx context.Context, priority Priority, verdicts *PreferenceVerdicts, write func(*queue) (uuid.UUID, queueResult, error)) (uuid.UUID, error) {
 	var id uuid.UUID
-	var queued bool
+	var result queueResult
+	hook := sendHookOf(ctx)
 	err := m.db.InTx(ctx, func(q *database.Queries) error {
 		var err error
-		id, queued, err = write(m.queueOf(q, priority, verdicts))
-		return err
+		if id, result, err = write(m.queueOf(q, priority, verdicts)); err != nil {
+			return err
+		}
+		if hook == nil || id == uuid.Nil {
+			return nil
+		}
+		return hook(ctx, q, Sent{TaskID: id, Tracked: result.tracked})
 	})
 	if err != nil {
 		return uuid.Nil, err
 	}
-	m.wakeIf(queued)
+	m.wakeIf(result.queued)
 	return id, nil
 }
 
@@ -748,15 +781,15 @@ func (m *mailerImpl) Enqueue(ctx context.Context, arg database.CreateMailTaskPar
 			return uuid.Nil, err
 		}
 	}
-	return m.pooledWith(ctx, PriorityBulk, verdicts, func(q *queue) (uuid.UUID, bool, error) {
-		return q.enqueue(ctx, arg)
+	return m.pooledWith(ctx, PriorityBulk, verdicts, func(q *queue) (uuid.UUID, queueResult, error) {
+		id, queued, err := q.enqueue(ctx, arg)
+		return id, queueResult{queued: queued}, err
 	})
 }
 
 func (m *mailerImpl) EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error) {
-	return m.pooled(ctx, PrioritySystem, func(q *queue) (uuid.UUID, bool, error) {
-		id, result, err := q.enqueueSingle(ctx, arg, nil, false)
-		return id, result.queued, err
+	return m.pooled(ctx, PrioritySystem, func(q *queue) (uuid.UUID, queueResult, error) {
+		return q.enqueueSingle(ctx, arg, nil, false)
 	})
 }
 
@@ -770,10 +803,10 @@ func (m *mailerImpl) EnqueueSystemSingle(ctx context.Context, arg database.Creat
 		preferences = m.ResolveSystemTracking(ctx, []RecipientInfo{{FullName: arg.RecipientFullName, Email: arg.RecipientEmail}})
 	}
 	var tracked bool
-	id, err := m.pooled(ctx, PrioritySystem, func(q *queue) (uuid.UUID, bool, error) {
+	id, err := m.pooled(ctx, PrioritySystem, func(q *queue) (uuid.UUID, queueResult, error) {
 		id, result, err := q.enqueueSingle(ctx, arg, preferences, true)
 		tracked = result.tracked
-		return id, result.queued, err
+		return id, result, err
 	})
 	return id, err == nil && tracked, err
 }
@@ -788,9 +821,8 @@ func (m *mailerImpl) EnqueueTrackedSingle(ctx context.Context, arg database.Crea
 	if err != nil {
 		return uuid.Nil, err
 	}
-	return m.pooledWith(ctx, PriorityBulk, verdicts, func(q *queue) (uuid.UUID, bool, error) {
-		id, result, err := q.enqueueSingle(ctx, arg, preferences, false)
-		return id, result.queued, err
+	return m.pooledWith(ctx, PriorityBulk, verdicts, func(q *queue) (uuid.UUID, queueResult, error) {
+		return q.enqueueSingle(ctx, arg, preferences, false)
 	})
 }
 
@@ -810,8 +842,9 @@ func (m *mailerImpl) EnqueueWithRecipients(ctx context.Context, params EnqueueWi
 			return uuid.Nil, err
 		}
 	}
-	return m.pooledWith(ctx, PriorityBulk, verdicts, func(q *queue) (uuid.UUID, bool, error) {
-		return q.enqueueWithRecipients(ctx, params)
+	return m.pooledWith(ctx, PriorityBulk, verdicts, func(q *queue) (uuid.UUID, queueResult, error) {
+		id, queued, err := q.enqueueWithRecipients(ctx, params)
+		return id, queueResult{queued: queued}, err
 	})
 }
 

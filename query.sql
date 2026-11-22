@@ -2217,6 +2217,33 @@ FROM notifications
 WHERE sent_by = sqlc.arg(sent_by)::text
   AND idempotency_key = sqlc.arg(idempotency_key)::text;
 
+-- A single mail accepted under a service's Idempotency-Key, written in the
+-- transaction that queues it (hub ticket forms-posta-core 11); nothing when
+-- the key is taken: the caller answers the earlier request's answer.
+-- name: InsertMailTaskIdempotencyKey :one
+INSERT INTO mail_task_idempotency_keys (sent_by, idempotency_key, request_sha256, task_id, result)
+VALUES (sqlc.arg(sent_by)::text, sqlc.arg(idempotency_key)::text, sqlc.arg(request_sha256)::text,
+        sqlc.arg(task_id)::uuid, sqlc.arg(result)::jsonb)
+ON CONFLICT (sent_by, idempotency_key) DO NOTHING
+RETURNING task_id;
+
+-- name: GetMailTaskIdempotencyKey :one
+SELECT request_sha256, result
+FROM mail_task_idempotency_keys
+WHERE sent_by = sqlc.arg(sent_by)::text
+  AND idempotency_key = sqlc.arg(idempotency_key)::text;
+
+-- Deletes up to batch_size of the keys older than retention_hours: the
+-- content sweep's step.
+-- name: DeleteOldMailTaskIdempotencyKeys :execrows
+DELETE
+FROM mail_task_idempotency_keys
+WHERE (sent_by, idempotency_key) IN (SELECT k.sent_by, k.idempotency_key
+                                     FROM mail_task_idempotency_keys k
+                                     WHERE k.created_at < now() - make_interval(hours => sqlc.arg(retention_hours)::int)
+                                     ORDER BY k.created_at
+                                     LIMIT sqlc.arg(batch_size)::int FOR UPDATE SKIP LOCKED);
+
 -- name: SetNotificationResult :exec
 UPDATE notifications
 SET result = sqlc.arg(result)::jsonb
@@ -2764,7 +2791,9 @@ SELECT ((SELECT count(*)
 -- never suppresses, so these are not on the list; the panel marks them. A
 -- mail counts once however many reports it had; only reports that named the
 -- row's own address count, of rows that still hold one (Account erasure
--- clears it). An address already suppressed is left out: no mail goes to it.
+-- clears it). An address already suppressed is left out: it is on the
+-- suppression list already, where account mail, still sent to it, is flagged
+-- (ADR 0073 decision 6).
 -- Of the last bounce its codes only, never text.
 -- name: ListSoftBounceAddresses :many
 WITH soft AS (SELECT lower(btrim(q.recipient_email)) AS address, b.id, b.queue_id, b.received_at,

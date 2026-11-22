@@ -1936,6 +1936,31 @@ func (q *Queries) DeleteOldMailBounces(ctx context.Context, arg DeleteOldMailBou
 	return result.RowsAffected(), nil
 }
 
+const deleteOldMailTaskIdempotencyKeys = `-- name: DeleteOldMailTaskIdempotencyKeys :execrows
+DELETE
+FROM mail_task_idempotency_keys
+WHERE (sent_by, idempotency_key) IN (SELECT k.sent_by, k.idempotency_key
+                                     FROM mail_task_idempotency_keys k
+                                     WHERE k.created_at < now() - make_interval(hours => $1::int)
+                                     ORDER BY k.created_at
+                                     LIMIT $2::int FOR UPDATE SKIP LOCKED)
+`
+
+type DeleteOldMailTaskIdempotencyKeysParams struct {
+	RetentionHours int `json:"retention_hours"`
+	BatchSize      int `json:"batch_size"`
+}
+
+// Deletes up to batch_size of the keys older than retention_hours: the
+// content sweep's step.
+func (q *Queries) DeleteOldMailTaskIdempotencyKeys(ctx context.Context, arg DeleteOldMailTaskIdempotencyKeysParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOldMailTaskIdempotencyKeys, arg.RetentionHours, arg.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteOldSentContentViews = `-- name: DeleteOldSentContentViews :execrows
 DELETE
 FROM sent_content_views
@@ -2983,6 +3008,30 @@ func (q *Queries) GetMailTaskControl(ctx context.Context, id uuid.UUID) (GetMail
 		&i.Bulk,
 		&i.Unfinished,
 	)
+	return i, err
+}
+
+const getMailTaskIdempotencyKey = `-- name: GetMailTaskIdempotencyKey :one
+SELECT request_sha256, result
+FROM mail_task_idempotency_keys
+WHERE sent_by = $1::text
+  AND idempotency_key = $2::text
+`
+
+type GetMailTaskIdempotencyKeyParams struct {
+	SentBy         string `json:"sent_by"`
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
+type GetMailTaskIdempotencyKeyRow struct {
+	RequestSha256 string `json:"request_sha256"`
+	Result        []byte `json:"result"`
+}
+
+func (q *Queries) GetMailTaskIdempotencyKey(ctx context.Context, arg GetMailTaskIdempotencyKeyParams) (GetMailTaskIdempotencyKeyRow, error) {
+	row := q.db.QueryRow(ctx, getMailTaskIdempotencyKey, arg.SentBy, arg.IdempotencyKey)
+	var i GetMailTaskIdempotencyKeyRow
+	err := row.Scan(&i.RequestSha256, &i.Result)
 	return i, err
 }
 
@@ -4081,6 +4130,38 @@ func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) 
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const insertMailTaskIdempotencyKey = `-- name: InsertMailTaskIdempotencyKey :one
+INSERT INTO mail_task_idempotency_keys (sent_by, idempotency_key, request_sha256, task_id, result)
+VALUES ($1::text, $2::text, $3::text,
+        $4::uuid, $5::jsonb)
+ON CONFLICT (sent_by, idempotency_key) DO NOTHING
+RETURNING task_id
+`
+
+type InsertMailTaskIdempotencyKeyParams struct {
+	SentBy         string    `json:"sent_by"`
+	IdempotencyKey string    `json:"idempotency_key"`
+	RequestSha256  string    `json:"request_sha256"`
+	TaskID         uuid.UUID `json:"task_id"`
+	Result         []byte    `json:"result"`
+}
+
+// A single mail accepted under a service's Idempotency-Key, written in the
+// transaction that queues it (hub ticket forms-posta-core 11); nothing when
+// the key is taken: the caller answers the earlier request's answer.
+func (q *Queries) InsertMailTaskIdempotencyKey(ctx context.Context, arg InsertMailTaskIdempotencyKeyParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, insertMailTaskIdempotencyKey,
+		arg.SentBy,
+		arg.IdempotencyKey,
+		arg.RequestSha256,
+		arg.TaskID,
+		arg.Result,
+	)
+	var task_id uuid.UUID
+	err := row.Scan(&task_id)
+	return task_id, err
 }
 
 const insertNotification = `-- name: InsertNotification :one
@@ -5311,7 +5392,9 @@ type ListSoftBounceAddressesRow struct {
 // never suppresses, so these are not on the list; the panel marks them. A
 // mail counts once however many reports it had; only reports that named the
 // row's own address count, of rows that still hold one (Account erasure
-// clears it). An address already suppressed is left out: no mail goes to it.
+// clears it). An address already suppressed is left out: it is on the
+// suppression list already, where account mail, still sent to it, is flagged
+// (ADR 0073 decision 6).
 // Of the last bounce its codes only, never text.
 func (q *Queries) ListSoftBounceAddresses(ctx context.Context, arg ListSoftBounceAddressesParams) ([]ListSoftBounceAddressesRow, error) {
 	rows, err := q.db.Query(ctx, listSoftBounceAddresses,
