@@ -668,6 +668,9 @@ func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, m
 	// Who may see the content itself the handler decides from the send and
 	// the caller's roles (handlers.SystemMailsReadRole).
 	tasks.Get("/:id/queue/:itemId/content", auth.RequireAnyPermission("skymail:mails:read"), mail.GetQueueItemContent)
+	// Who opened a masked mail: the audit role alone (handlers.AuditReadRole),
+	// not the roles that open the content, nor mails:read.
+	tasks.Get("/:id/content-views", auth.RequireAnyPermission(handlers.AuditReadRole), mail.ListContentViews)
 }
 
 // contentSweepInterval is how often the content sweep runs: a sensitive

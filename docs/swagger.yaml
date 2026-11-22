@@ -260,6 +260,13 @@ components:
           description: The value before and after; null is "left to the kind of send".
           type: boolean
       type: object
+    handlers.ContentViewer:
+      properties:
+        name:
+          type: string
+        sub:
+          type: string
+      type: object
     handlers.CreatedMailTask:
       properties:
         attachments:
@@ -1469,6 +1476,30 @@ components:
           description: 'True while SKYMAIL_TRACKING=on: a send may ask for open and
             click tracking. The send form shows its tracking box only then.'
           type: boolean
+      type: object
+    handlers.SentContentView:
+      properties:
+        actor:
+          $ref: '#/components/schemas/handlers.ContentViewer'
+        created_at:
+          type: string
+        id:
+          type: string
+        masked_by:
+          description: How the mail was masked when it was opened, and the variables
+            masked.
+          enum:
+          - variables
+          - patterns
+          type: string
+        masked_variables:
+          items:
+            type: string
+          type: array
+          uniqueItems: false
+        queue_item_id:
+          description: The queue row whose mail was opened (GET /mail_tasks/{id}/queue).
+          type: string
       type: object
     handlers.SentMailContent:
       properties:
@@ -3874,6 +3905,71 @@ paths:
                 $ref: '#/components/schemas/apperrors.AppError'
           description: mail_task.not_bulk or mail_task.finished
       summary: Cancel a send
+      tags:
+      - Mail
+  /mail_tasks/{id}/content-views:
+    get:
+      description: 'Every opening of a recipient''s masked mail of the send (GET /mail_tasks/{id}/queue/{itemId}/content
+        answering masked), newest first: who, when, which queue row, how it was masked.
+        Names no recipient. Takes skymail:audit:read, which the roles that open the
+        content do not carry. An erased account reads as Silinmiş kullanıcı. Records
+        older than SENT_CONTENT_VIEWS_RETENTION_DAYS are gone. Never cached.'
+      parameters:
+      - description: Task ID
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      - description: Start index
+        in: query
+        name: _start
+        schema:
+          type: integer
+      - description: End index
+        in: query
+        name: _end
+        schema:
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/handlers.SentContentView'
+                type: array
+          description: OK
+          headers:
+            X-Total-Count:
+              description: Number of openings
+              schema:
+                type: integer
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.AppError'
+          description: Internal Server Error
+      summary: List who opened a send's masked content
       tags:
       - Mail
   /mail_tasks/{id}/pause:

@@ -252,6 +252,89 @@ func (h *mailHandlerImpl) GetQueueItemContent(c fiber.Ctx) error {
 	return c.JSON(answer)
 }
 
+// AuditReadRole reads who opened a masked mail's content: the record every
+// opening writes (sent_content_views). It is apart from the roles that open
+// the content — system-mails:read, mails:write, the send's own sender — so
+// those audited do not read their own record (Yusuf, 2026-11-22: DK alone;
+// Microsoft Purview's Audit Reader, NIST SP 800-53 AU-9(4)).
+const AuditReadRole = "skymail:audit:read"
+
+// ContentViewer is who opened a masked mail, as their token named them then.
+// Account erasure replaces both with database.DeletedUserSubject and
+// database.DeletedUserName.
+type ContentViewer struct {
+	Sub  *string `json:"sub"`
+	Name *string `json:"name"`
+}
+
+// SentContentView is one opening of one recipient's masked mail. It names the
+// queue row, never the recipient.
+type SentContentView struct {
+	ID uuid.UUID `json:"id"`
+	// The queue row whose mail was opened (GET /mail_tasks/{id}/queue).
+	QueueItemID uuid.UUID     `json:"queue_item_id"`
+	Actor       ContentViewer `json:"actor"`
+	// How the mail was masked when it was opened, and the variables masked.
+	MaskedBy        string    `json:"masked_by" enums:"variables,patterns"`
+	MaskedVariables []string  `json:"masked_variables"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+// ListContentViews godoc
+//
+//	@Summary		List who opened a send's masked content
+//	@Description	Every opening of a recipient's masked mail of the send (GET /mail_tasks/{id}/queue/{itemId}/content answering masked), newest first: who, when, which queue row, how it was masked. Names no recipient. Takes skymail:audit:read, which the roles that open the content do not carry. An erased account reads as Silinmiş kullanıcı. Records older than SENT_CONTENT_VIEWS_RETENTION_DAYS are gone. Never cached.
+//	@Tags			Mail
+//	@Produce		json
+//	@Param			id		path		string	true	"Task ID"
+//	@Param			_start	query		int		false	"Start index"
+//	@Param			_end	query		int		false	"End index"
+//	@Success		200		{array}		handlers.SentContentView
+//	@Header			200		{integer}	X-Total-Count		"Number of openings"
+//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
+//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
+//	@Failure		404		{object}	apperrors.AppError	"Not Found"
+//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Router			/mail_tasks/{id}/content-views [get]
+func (h *mailHandlerImpl) ListContentViews(c fiber.Ctx) error {
+	c.Set(fiber.HeaderCacheControl, "no-store")
+	taskID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return fiber.ErrBadRequest
+	}
+	if _, err := h.db.GetMailTaskById(c.Context(), taskID); err != nil {
+		return err
+	}
+	limit, offset := getPaginationParams(c)
+	rows, err := h.db.ListSentContentViews(c.Context(), database.ListSentContentViewsParams{
+		TaskID: taskID, RowLimit: limit, RowOffset: offset,
+	})
+	if err != nil {
+		return err
+	}
+	count, err := h.db.CountSentContentViews(c.Context(), taskID)
+	if err != nil {
+		return err
+	}
+	views := make([]SentContentView, len(rows))
+	for i, row := range rows {
+		masked := row.MaskedVariables
+		if masked == nil {
+			masked = []string{}
+		}
+		views[i] = SentContentView{
+			ID:              row.ID,
+			QueueItemID:     row.QueueItemID,
+			Actor:           ContentViewer{Sub: row.ActorSub, Name: row.ActorName},
+			MaskedBy:        row.MaskedBy,
+			MaskedVariables: masked,
+			CreatedAt:       row.CreatedAt,
+		}
+	}
+	c.Response().Header.Set("X-Total-Count", strconv.FormatInt(count, 10))
+	return c.JSON(views)
+}
+
 // ViewRetentionEnv names how many days a record of who opened a masked mail
 // (sent_content_views) is kept.
 const ViewRetentionEnv = "SENT_CONTENT_VIEWS_RETENTION_DAYS"

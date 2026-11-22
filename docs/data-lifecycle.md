@@ -546,8 +546,10 @@ send's `body_variables` are listed only when `available`.
 (from the token), `masked_by`, `masked_variables`, `created_at`. No content
 is returned unless the row is written. It names no recipient; Account erasure
 replaces the actor; it is deleted after `SENT_CONTENT_VIEWS_RETENTION_DAYS`
-(two years by default, below). No API reads it yet (hub ticket
-`.scratch/skymail-frontend-rewrite/issues/32-maskeli-icerik-acilis-kaydi-okuma.md`).
+(two years by default, below). `GET /v1/mail_tasks/{id}/content-views` reads
+it, newest first, paged with `X-Total-Count`, never the recipient, and only
+for holders of `skymail:audit:read` (DK; Yusuf, 2026-11-22). The roles that
+open the content do not read the record of their openings.
 
 **Who sees it.** The route takes `skymail:mails:read`; the handler then shows
 the content to the send's sender, for a send to many to holders of

@@ -1494,6 +1494,17 @@ docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | 
 
 - `skymail:system-mails:read` SkyMail istemcisinin rolüdür (yönetici: YK, DK,
   ADMIN).
+- **Kim açtı:** `GET /v1/mail_tasks/{id}/content-views` gönderimin maskeli
+  içeriğinin her açılışını en yeniden eskiye döner (sayfalı `_start`/`_end`,
+  `X-Total-Count`, `Cache-Control: no-store`): `actor` (`sub`, `name`),
+  `queue_item_id`, `masked_by`, `masked_variables`, `created_at`. Alıcının adı
+  ve adresi dönmez. Yalnız `skymail:audit:read` okur (Yusuf, 2026-11-22: yalnız
+  DK). İçeriği açan roller (`skymail:system-mails:read`, `skymail:mails:write`,
+  gönderimin sahibi) ve `skymail:mails:read` bu rolü taşımaz, kaydı okuyamaz:
+  denetlenen kendi kaydını okumaz (Microsoft Purview Audit Reader, NIST SP
+  800-53 AU-9(4)). Silinen hesabın açılışı `Silinmiş kullanıcı` döner. Rol
+  e-skylab-keycloak'ta tanımlanır ve DK'ya bir kez tohumlanır; rol yokken uç
+  kimseye açık değildir (zararsız).
 - Süpürücü beş dakikada bir önce hassasları maskeler, sonra
   `MAIL_CONTENT_RETENTION_DAYS` (varsayılan `365`, 1–3650) dolmuş
   gönderimlerin içeriğini boşaltır, sonra

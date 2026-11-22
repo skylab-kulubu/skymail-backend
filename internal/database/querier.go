@@ -124,6 +124,7 @@ type Querier interface {
 	// Counts taken rows of one lane in the minute starting at minute_start and
 	// the hour starting at hour_start.
 	CountSends(ctx context.Context, arg CountSendsParams) error
+	CountSentContentViews(ctx context.Context, taskID uuid.UUID) (int64, error)
 	CountSoftBounceAddresses(ctx context.Context, arg CountSoftBounceAddressesParams) (int64, error)
 	CountSuppressionEntries(ctx context.Context, arg CountSuppressionEntriesParams) (int64, error)
 	// Counts one recipient of a send that failed for good at the relay, and
@@ -468,6 +469,9 @@ type Querier interface {
 	// between the reading and the writing (a row it is emptying is waited for and
 	// read again: emptied, it is not taken).
 	ListQueueRowsToMask(ctx context.Context, arg ListQueueRowsToMaskParams) ([]ListQueueRowsToMaskRow, error)
+	// The openings of a send's masked content, newest first: who, which queue row,
+	// how it was masked. No recipient (idx_sent_content_views_task).
+	ListSentContentViews(ctx context.Context, arg ListSentContentViewsParams) ([]ListSentContentViewsRow, error)
 	// The addresses that had threshold or more soft bounces in the last days
 	// (hub ticket skymail-bounce-isleme 13; ADR 0073 decision 5): a soft bounce
 	// never suppresses, so these are not on the list; the panel marks them. A
