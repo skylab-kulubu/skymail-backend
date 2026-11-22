@@ -1771,6 +1771,30 @@
                 },
                 "type": "object"
             },
+            "handlers.SoftBounceAddress": {
+                "properties": {
+                    "address": {
+                        "description": "Lower-case.",
+                        "example": "ad.soyad@example.com",
+                        "type": "string"
+                    },
+                    "count": {
+                        "description": "The mails to it a report (or the relay) refused softly in the window:\na full mailbox, a policy, a time-out. A mail counts once.",
+                        "example": 3,
+                        "type": "integer"
+                    },
+                    "last_bounced_at": {
+                        "description": "When the last of them was recorded.",
+                        "type": "string"
+                    },
+                    "last_code": {
+                        "description": "The last one's codes, never its text: 5.2.2, 5.7.1, 5.4.1 AS(…); the\nrelay's reply code when the report gave none.",
+                        "example": "5.2.2",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "handlers.Suppression": {
                 "properties": {
                     "address": {
@@ -7382,6 +7406,94 @@
                     }
                 },
                 "summary": "List the reversals of unsubscribes",
+                "tags": [
+                    "Suppressions"
+                ]
+            }
+        },
+        "/suppressions/soft-bounces": {
+            "get": {
+                "description": "The addresses that had 3 or more soft bounces (a full mailbox, a policy refusal, a time-out: a permanent failure other than \"no such address\") in the last 30 days, most recent first: how many mails, when the last one was and its codes, never its text. A soft bounce never suppresses (ADR 0073 decision 5), so these addresses are not on the suppression list and mail still goes to them; an address already suppressed is left out. A mail counts once however many reports it had; only reports that named the mail's own address count. The window and the threshold are fixed. q keeps the addresses that contain it, case-insensitively; X-Total-Count counts them. Needs skymail:suppressions:manage.",
+                "parameters": [
+                    {
+                        "description": "Part of an address",
+                        "in": "query",
+                        "name": "q",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Start index",
+                        "in": "query",
+                        "name": "_start",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "End index (at most 100 rows a page)",
+                        "in": "query",
+                        "name": "_end",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "items": {
+                                        "$ref": "#/components/schemas/handlers.SoftBounceAddress"
+                                    },
+                                    "type": "array"
+                                }
+                            }
+                        },
+                        "description": "OK",
+                        "headers": {
+                            "X-Total-Count": {
+                                "description": "Number of addresses matching q",
+                                "schema": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "List the addresses with repeated soft bounces",
                 "tags": [
                     "Suppressions"
                 ]
