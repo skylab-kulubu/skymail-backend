@@ -23,6 +23,7 @@ type SubmitMailApproval struct {
 	Tracking bool `json:"tracking"`
 	// The purpose of the send once approved (as POST /mail_tasks takes it): islem only to people or to a Forms source.
 	SendPurpose
+	NoAttachments
 }
 
 // MailApprovalRecipient is one person a request goes to.

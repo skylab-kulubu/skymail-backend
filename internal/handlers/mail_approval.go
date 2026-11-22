@@ -349,7 +349,7 @@ func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc ke
 //	@Param			send	body		requests.SubmitMailApproval	true	"The send"
 //	@Success		201		{object}	handlers.MailApproval		"The request, pending, with notification"
 //	@Success		200		{object}	handlers.MailApproval		"Same request for an exact Forms source retry"
-//	@Failure		400		{object}	apperrors.AppError			"validation.error (params.errors: [{field, code, params}]): no template_id; not exactly one of mail_list_id and recipients (mail_list_id, exactly_one_of); more than 100 people (recipients, max_length); a missing or malformed address (recipients[i].email, required or invalid_email); an address twice (recipients[i].email, duplicate, params.first naming the first; or, for an address only Postgres finds twice, recipients, duplicate). Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid (duyuru)"
+//	@Failure		400		{object}	apperrors.AppError			"validation.error (params.errors: [{field, code, params}]): no template_id; not exactly one of mail_list_id and recipients (mail_list_id, exactly_one_of); more than 100 people (recipients, max_length); a missing or malformed address (recipients[i].email, required or invalid_email); an address twice (recipients[i].email, duplicate, params.first naming the first; or, for an address only Postgres finds twice, recipients, duplicate). attachment.not_allowed: a request takes no attachments. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid (duyuru)"
 //	@Failure		403		{object}	apperrors.AppError			"server.forbidden: params.missing_roles names what the caller lacks of skymail:templates:read and, for a mailing list, skymail:lists:read"
 //	@Failure		404		{object}	apperrors.AppError			"No such Forms source owned by the caller"
 //	@Failure		409		{object}	apperrors.AppError			"Forms source invalidated, consumed differently or busy"
@@ -376,6 +376,9 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 	var params requests.SubmitMailApproval
 	if err := bindBody(c, &params); err != nil {
 		return err
+	}
+	if params.HasAttachments() {
+		return errAttachmentsNotAllowed
 	}
 	send, err := approvalSendOf(params)
 	if err != nil {
@@ -782,7 +785,7 @@ func (h *mailApprovalHandlerImpl) Decline(c fiber.Ctx) error {
 //	@Param			id		path		string						true	"Request ID"
 //	@Param			send	body		requests.SubmitMailApproval	true	"The send"
 //	@Success		200		{object}	handlers.MailApproval		"The request, pending, with notification"
-//	@Failure		400		{object}	apperrors.AppError			"validation.error, or the purpose as POST /mail_approvals checks it: mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, mail_task.purpose_not_allowed, mail_task.category_not_allowed, mail_task.transactional_statement_required, mail_task.category_required, mail_task.category_invalid"
+//	@Failure		400		{object}	apperrors.AppError			"validation.error; attachment.not_allowed; or the purpose as POST /mail_approvals checks it: mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, mail_task.purpose_not_allowed, mail_task.category_not_allowed, mail_task.transactional_statement_required, mail_task.category_required, mail_task.category_invalid"
 //	@Failure		403		{object}	apperrors.AppError			"mail_approval.not_submitter, or server.forbidden with params.missing_roles as a submission"
 //	@Failure		404		{object}	apperrors.AppError			"No such request, or not the caller's to see"
 //	@Failure		409		{object}	apperrors.AppError			"mail_approval.state_conflict or mail_approval.busy"
@@ -800,6 +803,9 @@ func (h *mailApprovalHandlerImpl) Resubmit(c fiber.Ctx) error {
 	var params requests.SubmitMailApproval
 	if err := bindBody(c, &params); err != nil {
 		return err
+	}
+	if params.HasAttachments() {
+		return errAttachmentsNotAllowed
 	}
 	send, err := approvalSendOf(params)
 	if err != nil {

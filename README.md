@@ -202,6 +202,78 @@ değildir:
   siler). Sonra aynı anahtar yeni bir postadır. Başlıksız istek bugünkü gibi
   çalışır; Keycloak SPI'ı ve Forms etkilenmez.
 
+### Posta eki (`attachments`, Mail attachment)
+
+Servis tek kişiye giden postasına dosya ekleyebilir (ADR 0082 karar 6; hub
+bileti bilet-qr-ve-pdf 08). İlk kullanıcı core'un PDF biletidir.
+
+```json
+"attachments": [{"filename": "bilet-gecekodu-2026.pdf", "content_type": "application/pdf", "content_base64": "JVBERi0x…"}]
+```
+
+- **Nerede:** `POST /v1/mail_tasks/single` ve tek alıcılı
+  `POST /v1/notifications`. Yalnız servisin token'ı gönderir; kişinin token'ı
+  `400 attachment.service_only` alır. Bildirimde alıcı sayısı 1 değilse
+  `400 attachment.single_recipient_only`. Ek yalnız e-postaya gider; kutu
+  onu yok sayar.
+- **Toplu uç ek almaz:** `POST /v1/mail_tasks` (liste, grup), Mail onayı
+  (`/v1/mail_approvals`, yeniden sunma dahil) ve haber gönderimi
+  `400 attachment.not_allowed` döner; Forms kaynağı gövdesi bilinmeyen alanı
+  zaten `400 validation.error` ile reddeder. Toplu postaya kişiye özel dosya
+  konmaz.
+- **Sınırlar:** en çok 2 dosya (`attachment.too_many`); tür
+  `application/pdf` ya da `image/png` (`attachment.type_not_allowed`;
+  parametre ve büyük harf yok sayılır); dosya türünün imzasıyla başlamalı
+  (`%PDF-`, PNG imzası; değilse `attachment.content_type_mismatch`); içerik
+  standart base64, dolgulu (`attachment.content_invalid`); çözülmüş toplam
+  en çok 512 KB (`attachment.too_large`). Hepsi `400`, `params.index` hangi
+  dosya olduğunu söyler. Sağlayıcıların sınırı çok daha yüksek (Gmail ve
+  Exchange Online ~20–25 MB, Graph JSON isteği 4 MB, SES ve Postmark 10 MB):
+  sınır, eki olağan bir işlem postası gibi tutmak için düşük.
+- **Dosya adı** reddedilmez, sadeleşir: Türkçe harf Latin karşılığına, boşluk
+  `-`'ye döner; harf, rakam, `.`, `-`, `_` dışındaki karakter ve yol düşer;
+  türün uzantısıyla (`.pdf`, `.png`) biter; en çok 100 karakter. Boş kalırsa
+  `ek.pdf`. **Dosya adına kişinin adı konmaz:** ad, gönderimin raporunda kalır.
+- **Gönderim:** SMTP yolu (kapalı yol ve XOAUTH2 şeridi) postayı
+  `multipart/mixed` yazar: önce gövde (düz metin ve HTML alternatifi), sonra
+  her dosya base64, `Content-Disposition: attachment; filename="…"`. Graph
+  JSON yolu dosyayı `message.attachments[]` içinde
+  `#microsoft.graph.fileAttachment` (`name`, `contentType`, `contentBytes`)
+  olarak gönderir; `saveToSentItems: false` korunur, istek 4 MB'ı aşarsa
+  bugünkü gibi gönderilmez. Graph MIME yolu (List-Unsubscribe'lı posta,
+  ör. tek alıcılı isteğe bağlı bir bildirim) SMTP'nin yazdığı aynı
+  `multipart/mixed` postayı gönderir, ek onda da vardır.
+- **Saklama (KVKK):** dosya `mail_attachments` tablosunda kuyruk satırının
+  yanında **yalnız gönderilene kadar** durur. Satırın sonucu yazıldığı anda
+  (gönderildi, kalıcı hata, kuyruğa girerken düşen satır, iptal, geri yükleme
+  sonrası kapatma) bir tetikleyici aynı işlemde dosyayı siler (migration
+  `20261122150000`); başlatma sırasında hâlâ çalışan eski imajın yazdığı
+  sonuç da buna dahildir. Geriye yalnız dosyanın adı, türü ve boyutu kalır;
+  gönderilmiş postanın dosyası hiç saklanmaz. Bu kayıt içerik süpürmesi
+  gönderimin içeriğini boşaltınca silinir; satır silinince onunla gider.
+  Hesap silme kişiye giden postanın eklerini (bekleyenin dosyasını,
+  gönderilmişin kaydını) siler (`attachments_deleted`). Hassas içerik
+  maskelemesi bitmiş gönderime bakar; o zaman dosya zaten yoktur.
+- **Yanıt:** gönderimin yanıtı `attachments` sayısını söyler
+  (`/single`'da üst düzeyde, bildirimde `channels.email.attachments`); ek
+  yoksa ya da satır kuyruğa girerken düştüyse (ayrılmış alan, bastırılmış
+  adres) alan yazılmaz. `GET /v1/mail_tasks/{id}/queue` her satırın ekini
+  ad, tür ve boyutla gösterir, dosyayı göstermez.
+- **Tekrar anahtarı:** ek isteğin özetine (`request_sha256`) girmez. Core
+  denemede PDF'i yeniden üretir; yeni PDF'in baytları (oluşturma zamanı)
+  farklıdır ama posta aynıdır. Aynı anahtarla tekrar ilk yanıtı alır ve yeni
+  dosya yazılmaz; giden dosya ilk isteğinkidir. Eksiz istekte özet, ek
+  desteğinden önceki özetle aynıdır (alan `omitempty`): açık anahtarlar yayın
+  sırasında geçerli kalır.
+- **Sayım:** `mail_attachments_queued` (gönderim, dosya sayısı, toplam bayt)
+  ve `mail_attachments_sent` (satır, dosya sayısı, toplam bayt) log satırları;
+  ad, dosya ya da kişi yazılmaz. Gönderilmeden önce dosyası boşalmış satır
+  (ör. elle yeniden denenen satır) eksiz gider ve `mail_attachment_missing`
+  yazılır.
+- **Geri alma:** eski imaja dönüşte tablo yerinde kalır, eski imaj okumaz;
+  kuyrukta bekleyen ekli posta eksiz gider, tetikleyici dosyayı yine siler.
+  Core tarafında kapatma `TICKET_PDF_ATTACHMENT=off`.
+
 ## Mail göndericisi (`MAIL_SENDER`)
 
 `MAIL_SENDER` `on` (varsayılan, yoksa da açık) ya da `paused` olur; başka bir

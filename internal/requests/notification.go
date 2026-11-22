@@ -24,6 +24,8 @@ type SendNotification struct {
 	Source *NotificationSource `json:"source"`
 	// When what the notification is about ends (an event that is over): its inbox items go then rather than after 90 days. Must be in the future; left out, 90 days.
 	ExpiresAt *time.Time `json:"expires_at,omitempty" example:"2026-11-01T18:00:00Z"`
+	// Mail attachments (ADR 0082), only with exactly one recipient (else 400 attachment.single_recipient_only): at most 2, PDF or PNG, 512 KB decoded in all. Only the e-mail carries them; the inbox ignores them. Kept only until the mail is sent or fails for good. Not part of the Idempotency-Key's request digest: a retry with a file drawn again is the same notification.
+	Attachments []MailAttachment `json:"attachments,omitempty"`
 }
 
 // NotificationRecipient is one person a notification goes to.

@@ -30,6 +30,7 @@ type CreateMailTask struct {
 	// Open and click tracking: each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links. Ignored (and answered false) while SkyMail's tracking is off and for a System or sensitive template, which are never tracked; a mailing list's address-only recipients are not tracked (no_account).
 	Tracking bool `json:"tracking"`
 	SendPurpose
+	NoAttachments
 }
 
 // SendSingleMail addresses the template either by id or by key. Keycloak's mail
@@ -47,6 +48,8 @@ type SendSingleMail struct {
 	Tracking bool `json:"tracking"`
 	// A service's mail that keeps no record of its recipient (core's account deletion notices, sent after the person's Erasure command): never tracked, in the system lane, and its queue row is erased the moment its outcome is written, as Account erasure leaves mail to an erased person (recipient Silinmiş kullanıcı, no address, no content, no variables; the row, its status and its dates stay). A person's token is refused (400 mail_task.erase_after_send_not_allowed). The answer says erase_after_send true when the send was queued so.
 	EraseAfterSend bool `json:"erase_after_send"`
+	// A service's Mail attachments (ADR 0082): at most 2, PDF or PNG, 512 KB decoded in all; a person's token is refused (400 attachment.service_only). Kept only until the mail is sent or fails for good. Not part of the Idempotency-Key's request digest: a retry with a file drawn again is the same mail.
+	Attachments []MailAttachment `json:"attachments,omitempty"`
 }
 
 // CreateFormMailSource is accepted only from the configured Forms service.

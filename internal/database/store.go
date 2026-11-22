@@ -129,6 +129,25 @@ func (s *Store) DeleteMailTaskIdempotencyKeys(ctx context.Context, batchSize int
 	}
 }
 
+// DeleteMailAttachmentRecords runs DeleteClearedMailAttachments until a
+// batch comes back short: it deletes the attachment records (name, type,
+// size) of every send whose content the sweep has emptied, batchSize at a
+// time. The files themselves went when each row was sent. It returns how
+// many it deleted.
+func (s *Store) DeleteMailAttachmentRecords(ctx context.Context, batchSize int) (int64, error) {
+	var deleted int64
+	for {
+		n, err := s.DeleteClearedMailAttachments(ctx, batchSize)
+		deleted += n
+		if err != nil || n < int64(batchSize) {
+			return deleted, err
+		}
+		if err := ctx.Err(); err != nil {
+			return deleted, err
+		}
+	}
+}
+
 // ClearMailContent runs ClearDueMailContent until a batch comes back short:
 // it empties the content of every send due (a sensitive one once none of its
 // rows is still to go out, any other past retentionDays), batchSize sends at a

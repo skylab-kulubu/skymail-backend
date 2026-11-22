@@ -693,8 +693,9 @@ const viewSweepBatch = 500
 // to go out. Then it deletes the records of who opened a masked mail older
 // than viewRetentionDays, the bounces older than a year
 // (bounce.RetentionDays) and the records of reversed unsubscribes and of
-// removed suppressions older than three years, and the Idempotency-Keys of
-// single mails older than 72 hours. It logs counts only.
+// removed suppressions older than three years, the Idempotency-Keys of
+// single mails older than 72 hours, and the attachment records (name, type,
+// size) of the sends it emptied. It logs counts only.
 func clearMailContent(ctx context.Context, db *database.Store, retentionDays, viewRetentionDays int, interval time.Duration) {
 	log.Info().Int("retention_days", retentionDays).Int("view_retention_days", viewRetentionDays).
 		Msg("mail content sweep (MAIL_CONTENT_RETENTION_DAYS, SENT_CONTENT_VIEWS_RETENTION_DAYS)")
@@ -718,6 +719,15 @@ func clearMailContent(ctx context.Context, db *database.Store, retentionDays, vi
 		}
 		if sends > 0 {
 			log.Info().Int("sends", sends).Int64("rows", rows).Msg("emptied the content of sends past retention")
+		}
+		// A Mail attachment's file goes when its row is sent (a trigger);
+		// its name and size go with the send's content.
+		attachments, err := db.DeleteMailAttachmentRecords(ctx, viewSweepBatch)
+		if err != nil && ctx.Err() == nil {
+			log.Error().Err(err).Msg("mail attachment record sweep failed")
+		}
+		if attachments > 0 {
+			log.Info().Int64("attachments", attachments).Msg("deleted the attachment records of sends emptied")
 		}
 		views, err := db.DeleteSentContentViews(ctx, viewRetentionDays, viewSweepBatch)
 		if err != nil && ctx.Err() == nil {

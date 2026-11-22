@@ -84,6 +84,16 @@ Content-Type: application/json
   bildirimle saklanır.
 - `expires_at` (isteğe bağlı, gelecekte): konusu bitince kutu öğeleri o an
   gider (en çok 90 gün). Geçmiş tarih `400 notification.expires_at_past`.
+- `attachments` (isteğe bağlı, ADR 0082 Mail attachment): yalnız **tek
+  alıcılı** istekte (`recipients` uzunluğu 1; değilse
+  `400 attachment.single_recipient_only`). En çok 2 dosya, `application/pdf`
+  ya da `image/png`, çözülmüş toplam 512 KB, standart base64:
+  `[{"filename": "bilet-gecekodu-2026.pdf", "content_type": "application/pdf", "content_base64": "JVBERi0x…"}]`.
+  Yalnız e-posta taşır, kutu yok sayar; kişi atlanırsa (ör. `not_allowed`)
+  dosya saklanmaz. Dosya postanın satırıyla yalnız gönderilene kadar durur.
+  Kurallar ve hata kodları README "Posta eki". Ek isteğin özetine girmez:
+  aynı anahtarla yeniden üretilmiş PDF'li tekrar ilk yanıtı alır, ikinci dosya
+  yazılmaz.
 
 ### Kanal seçimi (kişi başına)
 
@@ -128,7 +138,7 @@ bağlantıya konmaz (README, "Sistem postaları"). Varsayılan: takip yok.
   "recipients": 2,
   "duplicates": 0,
   "channels": {
-    "email": {"task_id": "…", "queued": 1, "failed": 0, "skipped": {"not_allowed": 1}},
+    "email": {"task_id": "…", "queued": 1, "failed": 0, "skipped": {"not_allowed": 1}, "attachments": 1},
     "inbox": {"task_id": null, "queued": 2, "failed": 0, "skipped": {}}
   }
 }
@@ -137,7 +147,9 @@ bağlantıya konmaz (README, "Sistem postaları"). Varsayılan: takip yok.
 `task_id` e-posta gönderimidir (`GET /v1/mail_tasks/{id}`); kimse kuyruğa
 girmediyse ve kutuda her zaman `null`. `failed`: metni render edilemeyen
 alıcılar (e-postada gönderimde `failed` satır olarak görünür; kutuda öğe
-yazılmaz). Kutuda `queued` yazılan öğe sayısıdır.
+yazılmaz). Kutuda `queued` yazılan öğe sayısıdır. `attachments` (yalnız
+e-postada): postayla giden ek sayısı; ek yoksa ya da satır kuyruğa girerken
+düştüyse yazılmaz.
 
 ### Idempotency (`Idempotency-Key`)
 
@@ -158,7 +170,7 @@ yazılmaz). Kutuda `queued` yazılan öğe sayısıdır.
 
 | Durum | Kod |
 |---|---|
-| 400 | `validation.error`, `notification.idempotency_key_required`, `notification.allowed_channels_required`, `notification.expires_at_past`, `notification.unsubscribe_url_not_allowed`, `notification.unsubscribe_url_invalid`, `notification.unsubscribe_url_required` |
+| 400 | `validation.error`, `notification.idempotency_key_required`, `notification.allowed_channels_required`, `notification.expires_at_past`, `notification.unsubscribe_url_not_allowed`, `notification.unsubscribe_url_invalid`, `notification.unsubscribe_url_required`, `attachment.single_recipient_only`, `attachment.too_many`, `attachment.type_not_allowed`, `attachment.content_invalid`, `attachment.content_type_mismatch`, `attachment.too_large` |
 | 403 | `server.forbidden` (rol yok), `auth.service_account_required` (kişi token'ı) |
 | 409 | `notification.email_variant_missing` (tür e-postayla gider, anahtarında kullanımda şablon yok), `notification.inbox_variant_missing` (tür kutuya gider, kutu metni yok) |
 | 422 | `notification.type_unknown` (yok ya da arşivli), `notification.idempotency_key_reused` |

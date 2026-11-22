@@ -106,6 +106,8 @@ type CreatedMailTask struct {
 	Category *string `json:"category"`
 	// true on a send that keeps no record of its recipient (POST /mail_tasks/single erase_after_send): its row is erased when its outcome is written. Left out on every other send, and by an image from before it.
 	EraseAfterSend bool `json:"erase_after_send,omitempty"`
+	// How many of the request's Mail attachments go with the mail (ADR 0082): left out when none, and when its recipient's row was written failed at queueing (a reserved or suppressed address), which goes nowhere.
+	Attachments int `json:"attachments,omitempty"`
 }
 
 // createdMailTask is the answer to a send just queued.
@@ -140,7 +142,7 @@ func operatorTracking(ctx context.Context, m mailer.Mailer, asked bool, template
 //	@Produce		json
 //	@Param			task	body		requests.CreateMailTask	true	"Mail task details"
 //	@Success		201		{object}	handlers.CreatedMailTask
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team"
+//	@Failure		400		{object}	apperrors.AppError	"Bad Request. attachment.not_allowed: a send to a list or a group takes no attachments. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team"
 //	@Failure		422		{object}	apperrors.AppError	"mail.audience_unavailable: the Keycloak group is unknown or gone"
 //	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
 //	@Failure		503		{object}	apperrors.AppError	"mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE; README, \"Toplu postada tercih\"), core did not say whom the send may go to; nothing is queued"
@@ -149,6 +151,9 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 	var params requests.CreateMailTask
 	if err := c.Bind().Body(&params); err != nil {
 		return err
+	}
+	if params.HasAttachments() {
+		return errAttachmentsNotAllowed
 	}
 	// A list or a Keycloak group is always duyuru.
 	purposesOn := h.mailer.PurposeAvailable()
@@ -245,7 +250,7 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 // SendSingle godoc
 //
 //	@Summary		Send a single email
-//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): a person's send may be islem (with transactional_statement true; bilgi@; tracked as any person's send, in the bulk lane then, else the system lane) or duyuru with a category (the bulk lane, duyuru@); without a purpose, duyuru, club:duyuru, tracked or not. A service's token is always islem; its fields are ignored. A service's mail with erase_after_send keeps no record of its recipient: never tracked, in the system lane, its row erased when its outcome is written (recipient Silinmiş kullanıcı, no address, no content, no variables); the answer says erase_after_send true. A service may send an Idempotency-Key (optional; a person's token may not): the same key from the same service answers the first answer again (Idempotent-Replayed: true) and queues nothing, for 72 hours; a different request with it is 422. Without it a retry queues the mail again.
+//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): a person's send may be islem (with transactional_statement true; bilgi@; tracked as any person's send, in the bulk lane then, else the system lane) or duyuru with a category (the bulk lane, duyuru@); without a purpose, duyuru, club:duyuru, tracked or not. A service's token is always islem; its fields are ignored. A service's mail with erase_after_send keeps no record of its recipient: never tracked, in the system lane, its row erased when its outcome is written (recipient Silinmiş kullanıcı, no address, no content, no variables); the answer says erase_after_send true. A service may send an Idempotency-Key (optional; a person's token may not): the same key from the same service answers the first answer again (Idempotent-Replayed: true) and queues nothing, for 72 hours; a different request with it is 422. Without it a retry queues the mail again. A service's mail may carry Mail attachments (ADR 0082; README "Posta eki"): at most 2, application/pdf or image/png, 512 KB decoded in all, standard base64; the file name is reduced to [A-Za-z0-9._-], at most 100 characters, with the type's extension. The files go with the e-mail (SMTP multipart/mixed; Graph fileAttachment) and are kept only until the row's outcome is written; the queue then shows their name, type and size. They are not part of the Idempotency-Key's digest: a retry with a file drawn again answers the first answer and writes no file. The answer's attachments says how many went with the mail.
 //	@Tags			Mail
 //	@Accept			json
 //	@Produce		json
@@ -253,7 +258,7 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 //	@Param			mail			body		requests.SendSingleMail	true	"Mail details"
 //	@Success		201				{object}	handlers.CreatedMailTask
 //	@Header			201				{string}	Idempotent-Replayed	"true when the answer is the first answer to this Idempotency-Key"
-//	@Failure		400				{object}	apperrors.AppError	"Bad Request. A person's purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team; mail_task.erase_after_send_not_allowed: a person's token asked for erase_after_send; mail_task.idempotency_key_invalid; mail_task.idempotency_key_not_allowed: a person's token sent an Idempotency-Key"
+//	@Failure		400				{object}	apperrors.AppError	"Bad Request. A person's purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team; mail_task.erase_after_send_not_allowed: a person's token asked for erase_after_send; mail_task.idempotency_key_invalid; mail_task.idempotency_key_not_allowed: a person's token sent an Idempotency-Key; attachment.service_only: a person's token sent attachments; attachment.too_many, attachment.type_not_allowed, attachment.content_invalid, attachment.content_type_mismatch, attachment.too_large (params.index: which file)"
 //	@Failure		422				{object}	apperrors.AppError	"mail_task.idempotency_key_reused: the key was used for a different mail"
 //	@Failure		500				{object}	apperrors.AppError	"Internal Server Error"
 //	@Failure		503				{object}	apperrors.AppError	"mail_task.preference_unavailable (Retry-After): a person's duyuru mail while every duyuru send obeys the recipient's preferences (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing is queued"
@@ -301,6 +306,14 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	if params.EraseAfterSend && !service {
 		return errEraseAfterSendNotAllowed
 	}
+	// Mail attachments: a service's only (ADR 0082 decision 6).
+	if len(params.Attachments) > 0 && !service {
+		return errAttachmentsServiceOnly
+	}
+	attachments, err := parseAttachments(params.Attachments)
+	if err != nil {
+		return err
+	}
 	// A service's mail (account mail, a Forms confirmation, a notice) is
 	// always islem: what its body says about a purpose is ignored. A
 	// person's may be either, tracked as any person's send.
@@ -337,20 +350,36 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	}
 	// The answer to the send: tracked is what the mailer says of a service's
 	// mail while SKYMAIL_TRACKING_SYSTEM is on, else what was decided above.
+	// stored is how many attachments went with the row, once written.
+	stored := 0
 	answer := func(taskID uuid.UUID, tracked bool) CreatedMailTask {
+		created := createdMailTask(taskID, tracked, purpose)
 		if params.EraseAfterSend {
-			created := createdMailTask(taskID, false, purpose)
+			created = createdMailTask(taskID, false, purpose)
 			created.EraseAfterSend = true
-			return created
 		}
-		return createdMailTask(taskID, tracked, purpose)
+		created.Attachments = stored
+		return created
 	}
 	ctx := c.Context()
 	systemTracked := service && !params.EraseAfterSend && h.mailer.SystemTrackingAvailable()
-	if idem != nil {
-		// The key is written in the transaction that queues the send, with
-		// the answer this request gets.
+	if idem != nil || len(attachments) > 0 {
+		// The attachments, then the key, are written in the transaction that
+		// queues the send, the key with the answer this request gets: a
+		// retry under it writes no file again.
 		ctx = mailer.WithSendHook(ctx, func(ctx context.Context, q *database.Queries, sent mailer.Sent) error {
+			if len(attachments) > 0 {
+				rows, err := mailer.StoreAttachments(ctx, q, sent.TaskID, attachments)
+				if err != nil {
+					return err
+				}
+				if rows > 0 {
+					stored = len(attachments)
+				}
+			}
+			if idem == nil {
+				return nil
+			}
 			tracked := tracking
 			if systemTracked {
 				tracked = sent.Tracked
@@ -387,6 +416,7 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	logAttachmentsQueued(taskID, attachments, stored)
 
 	return c.Status(fiber.StatusCreated).JSON(answer(taskID, tracking))
 }
@@ -525,7 +555,7 @@ func (h *mailHandlerImpl) GetTask(c fiber.Ctx) error {
 //	@Param			_start	query		int		false	"Start index"
 //	@Param			_end	query		int		false	"End index"
 //	@Param			status	query		string	false	"Recipient queue status"	Enums(pending,processing,sent,failed)
-//	@Success		200		{array}		database.GetMailQueueItemsByTaskIdRow
+//	@Success		200		{array}		handlers.QueueItem
 //	@Header			200		{integer}	X-Total-Count		"Number of recipients matching the filter"
 //	@Failure		400		{object}	apperrors.AppError	"Bad Request"
 //	@Failure		403		{object}	apperrors.AppError	"Forbidden"
@@ -562,6 +592,45 @@ func (h *mailHandlerImpl) GetTaskQueueItems(c fiber.Ctx) error {
 		return err
 	}
 
+	queued, err := queueItemsOf(c.Context(), h.db, items)
+	if err != nil {
+		return err
+	}
+
 	c.Response().Header.Set("X-Total-Count", strconv.FormatInt(count, 10))
-	return c.JSON(items)
+	return c.JSON(queued)
+}
+
+// QueueItem is one recipient of a send, with the Mail attachments its mail
+// carried (ADR 0082): their name, type and size, never the file, which is
+// not kept past the send.
+type QueueItem struct {
+	database.GetMailQueueItemsByTaskIdRow
+	// The mail's attachments, by name, type and size; left out when it had none.
+	Attachments []AttachmentInfo `json:"attachments,omitempty"`
+}
+
+// queueItemsOf is items with their attachments, read for the page at once.
+func queueItemsOf(ctx context.Context, db *database.Store, items []database.GetMailQueueItemsByTaskIdRow) ([]QueueItem, error) {
+	out := make([]QueueItem, len(items))
+	if len(items) == 0 {
+		return out, nil
+	}
+	ids := make([]uuid.UUID, len(items))
+	for i, item := range items {
+		out[i].GetMailQueueItemsByTaskIdRow = item
+		ids[i] = item.ID
+	}
+	files, err := db.ListMailAttachmentInfo(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	byRow := make(map[uuid.UUID][]AttachmentInfo, len(files))
+	for _, f := range files {
+		byRow[f.QueueID] = append(byRow[f.QueueID], AttachmentInfo{Filename: f.Filename, ContentType: f.ContentType, Size: f.SizeBytes})
+	}
+	for i := range out {
+		out[i].Attachments = byRow[out[i].ID]
+	}
+	return out, nil
 }
