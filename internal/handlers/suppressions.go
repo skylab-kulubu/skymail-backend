@@ -14,7 +14,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skymail-backend/internal/bounce"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skymail-backend/internal/dsn"
 )
 
 // SuppressionsManageRole lets an operator read the suppression list and
@@ -65,6 +67,7 @@ type SuppressionHandler interface {
 	Reactivate(c fiber.Ctx) error
 	Reactivations(c fiber.Ctx) error
 	Bounces(c fiber.Ctx) error
+	SoftBounces(c fiber.Ctx) error
 }
 
 type suppressionHandlerImpl struct {
@@ -450,4 +453,84 @@ func (h *suppressionHandlerImpl) Bounces(c fiber.Ctx) error {
 		})
 	}
 	return c.JSON(summary)
+}
+
+// The rule of GET /suppressions/soft-bounces (ADR 0073 decision 5: "son 30
+// günde 3 ya da daha çok yumuşak ret"), fixed.
+const (
+	SoftBounceWindowDays = 30
+	SoftBounceThreshold  = 3
+)
+
+// SoftBounceAddress is an address that had SoftBounceThreshold or more soft
+// bounces in the last SoftBounceWindowDays days. It is not suppressed: the
+// panel marks it.
+type SoftBounceAddress struct {
+	// Lower-case.
+	Address string `json:"address" example:"ad.soyad@example.com"`
+	// The mails to it a report (or the relay) refused softly in the window:
+	// a full mailbox, a policy, a time-out. A mail counts once.
+	Count int `json:"count" example:"3"`
+	// When the last of them was recorded.
+	LastBouncedAt time.Time `json:"last_bounced_at"`
+	// The last one's codes, never its text: 5.2.2, 5.7.1, 5.4.1 AS(…); the
+	// relay's reply code when the report gave none.
+	LastCode string `json:"last_code" example:"5.2.2"`
+}
+
+// SoftBounces godoc
+//
+//	@Summary		List the addresses with repeated soft bounces
+//	@Description	The addresses that had 3 or more soft bounces (a full mailbox, a policy refusal, a time-out: a permanent failure other than "no such address") in the last 30 days, most recent first: how many mails, when the last one was and its codes, never its text. A soft bounce never suppresses (ADR 0073 decision 5), so these addresses are not on the suppression list and mail still goes to them; an address already suppressed is left out. A mail counts once however many reports it had; only reports that named the mail's own address count. The window and the threshold are fixed. q keeps the addresses that contain it, case-insensitively; X-Total-Count counts them. Needs skymail:suppressions:manage.
+//	@Tags			Suppressions
+//	@Produce		json
+//	@Param			q		query		string	false	"Part of an address"
+//	@Param			_start	query		int		false	"Start index"
+//	@Param			_end	query		int		false	"End index (at most 100 rows a page)"
+//	@Success		200		{array}		handlers.SoftBounceAddress
+//	@Header			200		{integer}	X-Total-Count		"Number of addresses matching q"
+//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
+//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
+//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Router			/suppressions/soft-bounces [get]
+func (h *suppressionHandlerImpl) SoftBounces(c fiber.Ctx) error {
+	var search *string
+	if q := strings.TrimSpace(c.Query("q")); q != "" {
+		if len(q) > maxSuppressionSearch {
+			return fiber.NewError(fiber.StatusBadRequest, "q is too long")
+		}
+		search = &q
+	}
+	limit, offset := getPaginationParams(c)
+	if limit > maxSuppressionsPage {
+		limit = maxSuppressionsPage
+	}
+	rows, err := h.db.ListSoftBounceAddresses(c.Context(), database.ListSoftBounceAddressesParams{
+		Days: SoftBounceWindowDays, Threshold: SoftBounceThreshold, Search: search,
+		RowLimit: int(limit), RowOffset: int(offset),
+	})
+	if err != nil {
+		return err
+	}
+	total, err := h.db.CountSoftBounceAddresses(c.Context(), database.CountSoftBounceAddressesParams{
+		Days: SoftBounceWindowDays, Threshold: SoftBounceThreshold, Search: search,
+	})
+	if err != nil {
+		return err
+	}
+	items := make([]SoftBounceAddress, 0, len(rows))
+	for _, row := range rows {
+		last := dsn.Recipient{SMTPCode: int(row.LastSmtpCode.Int16)}
+		if row.LastStatus != nil {
+			last.Status = *row.LastStatus
+		}
+		if row.LastExoAsCode != nil {
+			last.ASCode = *row.LastExoAsCode
+		}
+		items = append(items, SoftBounceAddress{
+			Address: row.Address, Count: row.Mails, LastBouncedAt: row.LastBouncedAt, LastCode: bounce.ReasonCode(last),
+		})
+	}
+	c.Response().Header.Set("X-Total-Count", strconv.FormatInt(total, 10))
+	return c.JSON(items)
 }

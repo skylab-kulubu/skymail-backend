@@ -1114,6 +1114,35 @@ func (q *Queries) CountSends(ctx context.Context, arg CountSendsParams) error {
 	return err
 }
 
+const countSoftBounceAddresses = `-- name: CountSoftBounceAddresses :one
+SELECT count(*)::bigint AS total
+FROM (SELECT lower(btrim(q.recipient_email)) AS address
+      FROM mail_bounces b
+               JOIN mail_queue q ON q.id = b.queue_id
+      WHERE b.kind = 'soft'
+        AND b.recipient_matched
+        AND q.channel = 'email'
+        AND btrim(q.recipient_email) <> ''
+        AND b.received_at >= now() - make_interval(days => $1::int)
+        AND NOT EXISTS (SELECT 1 FROM mail_suppressions m WHERE m.address = lower(btrim(q.recipient_email)))
+        AND ($2::text IS NULL OR strpos(lower(btrim(q.recipient_email)), lower($2::text)) > 0)
+      GROUP BY 1
+      HAVING count(DISTINCT b.queue_id) >= $3::int) a
+`
+
+type CountSoftBounceAddressesParams struct {
+	Days      int     `json:"days"`
+	Search    *string `json:"search"`
+	Threshold int     `json:"threshold"`
+}
+
+func (q *Queries) CountSoftBounceAddresses(ctx context.Context, arg CountSoftBounceAddressesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSoftBounceAddresses, arg.Days, arg.Search, arg.Threshold)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
 const countSuppressionEntries = `-- name: CountSuppressionEntries :one
 SELECT ((SELECT count(*)
         FROM mail_suppressions s
@@ -1901,6 +1930,31 @@ type DeleteOldMailBouncesParams struct {
 // (a year): the content sweep's step.
 func (q *Queries) DeleteOldMailBounces(ctx context.Context, arg DeleteOldMailBouncesParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteOldMailBounces, arg.RetentionDays, arg.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteOldMailTaskIdempotencyKeys = `-- name: DeleteOldMailTaskIdempotencyKeys :execrows
+DELETE
+FROM mail_task_idempotency_keys
+WHERE (sent_by, idempotency_key) IN (SELECT k.sent_by, k.idempotency_key
+                                     FROM mail_task_idempotency_keys k
+                                     WHERE k.created_at < now() - make_interval(hours => $1::int)
+                                     ORDER BY k.created_at
+                                     LIMIT $2::int FOR UPDATE SKIP LOCKED)
+`
+
+type DeleteOldMailTaskIdempotencyKeysParams struct {
+	RetentionHours int `json:"retention_hours"`
+	BatchSize      int `json:"batch_size"`
+}
+
+// Deletes up to batch_size of the keys older than retention_hours: the
+// content sweep's step.
+func (q *Queries) DeleteOldMailTaskIdempotencyKeys(ctx context.Context, arg DeleteOldMailTaskIdempotencyKeysParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOldMailTaskIdempotencyKeys, arg.RetentionHours, arg.BatchSize)
 	if err != nil {
 		return 0, err
 	}
@@ -2954,6 +3008,30 @@ func (q *Queries) GetMailTaskControl(ctx context.Context, id uuid.UUID) (GetMail
 		&i.Bulk,
 		&i.Unfinished,
 	)
+	return i, err
+}
+
+const getMailTaskIdempotencyKey = `-- name: GetMailTaskIdempotencyKey :one
+SELECT request_sha256, result
+FROM mail_task_idempotency_keys
+WHERE sent_by = $1::text
+  AND idempotency_key = $2::text
+`
+
+type GetMailTaskIdempotencyKeyParams struct {
+	SentBy         string `json:"sent_by"`
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
+type GetMailTaskIdempotencyKeyRow struct {
+	RequestSha256 string `json:"request_sha256"`
+	Result        []byte `json:"result"`
+}
+
+func (q *Queries) GetMailTaskIdempotencyKey(ctx context.Context, arg GetMailTaskIdempotencyKeyParams) (GetMailTaskIdempotencyKeyRow, error) {
+	row := q.db.QueryRow(ctx, getMailTaskIdempotencyKey, arg.SentBy, arg.IdempotencyKey)
+	var i GetMailTaskIdempotencyKeyRow
+	err := row.Scan(&i.RequestSha256, &i.Result)
 	return i, err
 }
 
@@ -4052,6 +4130,38 @@ func (q *Queries) InsertMailTask(ctx context.Context, arg InsertMailTaskParams) 
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const insertMailTaskIdempotencyKey = `-- name: InsertMailTaskIdempotencyKey :one
+INSERT INTO mail_task_idempotency_keys (sent_by, idempotency_key, request_sha256, task_id, result)
+VALUES ($1::text, $2::text, $3::text,
+        $4::uuid, $5::jsonb)
+ON CONFLICT (sent_by, idempotency_key) DO NOTHING
+RETURNING task_id
+`
+
+type InsertMailTaskIdempotencyKeyParams struct {
+	SentBy         string    `json:"sent_by"`
+	IdempotencyKey string    `json:"idempotency_key"`
+	RequestSha256  string    `json:"request_sha256"`
+	TaskID         uuid.UUID `json:"task_id"`
+	Result         []byte    `json:"result"`
+}
+
+// A single mail accepted under a service's Idempotency-Key, written in the
+// transaction that queues it (hub ticket forms-posta-core 11); nothing when
+// the key is taken: the caller answers the earlier request's answer.
+func (q *Queries) InsertMailTaskIdempotencyKey(ctx context.Context, arg InsertMailTaskIdempotencyKeyParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, insertMailTaskIdempotencyKey,
+		arg.SentBy,
+		arg.IdempotencyKey,
+		arg.RequestSha256,
+		arg.TaskID,
+		arg.Result,
+	)
+	var task_id uuid.UUID
+	err := row.Scan(&task_id)
+	return task_id, err
 }
 
 const insertNotification = `-- name: InsertNotification :one
@@ -5221,6 +5331,93 @@ func (q *Queries) ListQueueRowsToMask(ctx context.Context, arg ListQueueRowsToMa
 			&i.Body,
 			&i.BodyHtml,
 			&i.ListUnsubscribeUrl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSoftBounceAddresses = `-- name: ListSoftBounceAddresses :many
+WITH soft AS (SELECT lower(btrim(q.recipient_email)) AS address, b.id, b.queue_id, b.received_at,
+                     b.status, b.smtp_code, b.exo_as_code
+              FROM mail_bounces b
+                       JOIN mail_queue q ON q.id = b.queue_id
+              WHERE b.kind = 'soft'
+                AND b.recipient_matched
+                AND q.channel = 'email'
+                AND btrim(q.recipient_email) <> ''
+                AND b.received_at >= now() - make_interval(days => $3::int)),
+     addresses AS (SELECT s.address, count(DISTINCT s.queue_id)::int AS mails, max(s.received_at)::timestamptz AS last_bounced_at
+                   FROM soft s
+                   WHERE NOT EXISTS (SELECT 1 FROM mail_suppressions m WHERE m.address = s.address)
+                     AND ($4::text IS NULL OR strpos(s.address, lower($4::text)) > 0)
+                   GROUP BY s.address
+                   HAVING count(DISTINCT s.queue_id) >= $5::int)
+SELECT a.address, a.mails, a.last_bounced_at, l.status AS last_status, l.smtp_code AS last_smtp_code,
+       l.exo_as_code AS last_exo_as_code
+FROM addresses a
+         CROSS JOIN LATERAL (SELECT s.status, s.smtp_code, s.exo_as_code
+                             FROM soft s
+                             WHERE s.address = a.address
+                             ORDER BY s.received_at DESC, s.id DESC
+                             LIMIT 1) l
+ORDER BY a.last_bounced_at DESC, a.address
+LIMIT $2::int OFFSET $1::int
+`
+
+type ListSoftBounceAddressesParams struct {
+	RowOffset int     `json:"row_offset"`
+	RowLimit  int     `json:"row_limit"`
+	Days      int     `json:"days"`
+	Search    *string `json:"search"`
+	Threshold int     `json:"threshold"`
+}
+
+type ListSoftBounceAddressesRow struct {
+	Address       string      `json:"address"`
+	Mails         int         `json:"mails"`
+	LastBouncedAt time.Time   `json:"last_bounced_at"`
+	LastStatus    *string     `json:"last_status"`
+	LastSmtpCode  pgtype.Int2 `json:"last_smtp_code"`
+	LastExoAsCode *string     `json:"last_exo_as_code"`
+}
+
+// The addresses that had threshold or more soft bounces in the last days
+// (hub ticket skymail-bounce-isleme 13; ADR 0073 decision 5): a soft bounce
+// never suppresses, so these are not on the list; the panel marks them. A
+// mail counts once however many reports it had; only reports that named the
+// row's own address count, of rows that still hold one (Account erasure
+// clears it). An address already suppressed is left out: it is on the
+// suppression list already, where account mail, still sent to it, is flagged
+// (ADR 0073 decision 6).
+// Of the last bounce its codes only, never text.
+func (q *Queries) ListSoftBounceAddresses(ctx context.Context, arg ListSoftBounceAddressesParams) ([]ListSoftBounceAddressesRow, error) {
+	rows, err := q.db.Query(ctx, listSoftBounceAddresses,
+		arg.RowOffset,
+		arg.RowLimit,
+		arg.Days,
+		arg.Search,
+		arg.Threshold,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSoftBounceAddressesRow
+	for rows.Next() {
+		var i ListSoftBounceAddressesRow
+		if err := rows.Scan(
+			&i.Address,
+			&i.Mails,
+			&i.LastBouncedAt,
+			&i.LastStatus,
+			&i.LastSmtpCode,
+			&i.LastExoAsCode,
 		); err != nil {
 			return nil, err
 		}

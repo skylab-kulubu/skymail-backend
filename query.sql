@@ -2217,6 +2217,33 @@ FROM notifications
 WHERE sent_by = sqlc.arg(sent_by)::text
   AND idempotency_key = sqlc.arg(idempotency_key)::text;
 
+-- A single mail accepted under a service's Idempotency-Key, written in the
+-- transaction that queues it (hub ticket forms-posta-core 11); nothing when
+-- the key is taken: the caller answers the earlier request's answer.
+-- name: InsertMailTaskIdempotencyKey :one
+INSERT INTO mail_task_idempotency_keys (sent_by, idempotency_key, request_sha256, task_id, result)
+VALUES (sqlc.arg(sent_by)::text, sqlc.arg(idempotency_key)::text, sqlc.arg(request_sha256)::text,
+        sqlc.arg(task_id)::uuid, sqlc.arg(result)::jsonb)
+ON CONFLICT (sent_by, idempotency_key) DO NOTHING
+RETURNING task_id;
+
+-- name: GetMailTaskIdempotencyKey :one
+SELECT request_sha256, result
+FROM mail_task_idempotency_keys
+WHERE sent_by = sqlc.arg(sent_by)::text
+  AND idempotency_key = sqlc.arg(idempotency_key)::text;
+
+-- Deletes up to batch_size of the keys older than retention_hours: the
+-- content sweep's step.
+-- name: DeleteOldMailTaskIdempotencyKeys :execrows
+DELETE
+FROM mail_task_idempotency_keys
+WHERE (sent_by, idempotency_key) IN (SELECT k.sent_by, k.idempotency_key
+                                     FROM mail_task_idempotency_keys k
+                                     WHERE k.created_at < now() - make_interval(hours => sqlc.arg(retention_hours)::int)
+                                     ORDER BY k.created_at
+                                     LIMIT sqlc.arg(batch_size)::int FOR UPDATE SKIP LOCKED);
+
 -- name: SetNotificationResult :exec
 UPDATE notifications
 SET result = sqlc.arg(result)::jsonb
@@ -2758,6 +2785,57 @@ SELECT ((SELECT count(*)
               WHERE (sqlc.narg(reason)::text IS NULL OR sqlc.narg(reason)::text = 'unsubscribed')
                 AND (sqlc.narg(search)::text IS NULL OR strpos(u.address, lower(sqlc.narg(search)::text)) > 0)))::bigint
            AS total;
+
+-- The addresses that had threshold or more soft bounces in the last days
+-- (hub ticket skymail-bounce-isleme 13; ADR 0073 decision 5): a soft bounce
+-- never suppresses, so these are not on the list; the panel marks them. A
+-- mail counts once however many reports it had; only reports that named the
+-- row's own address count, of rows that still hold one (Account erasure
+-- clears it). An address already suppressed is left out: it is on the
+-- suppression list already, where account mail, still sent to it, is flagged
+-- (ADR 0073 decision 6).
+-- Of the last bounce its codes only, never text.
+-- name: ListSoftBounceAddresses :many
+WITH soft AS (SELECT lower(btrim(q.recipient_email)) AS address, b.id, b.queue_id, b.received_at,
+                     b.status, b.smtp_code, b.exo_as_code
+              FROM mail_bounces b
+                       JOIN mail_queue q ON q.id = b.queue_id
+              WHERE b.kind = 'soft'
+                AND b.recipient_matched
+                AND q.channel = 'email'
+                AND btrim(q.recipient_email) <> ''
+                AND b.received_at >= now() - make_interval(days => sqlc.arg(days)::int)),
+     addresses AS (SELECT s.address, count(DISTINCT s.queue_id)::int AS mails, max(s.received_at)::timestamptz AS last_bounced_at
+                   FROM soft s
+                   WHERE NOT EXISTS (SELECT 1 FROM mail_suppressions m WHERE m.address = s.address)
+                     AND (sqlc.narg(search)::text IS NULL OR strpos(s.address, lower(sqlc.narg(search)::text)) > 0)
+                   GROUP BY s.address
+                   HAVING count(DISTINCT s.queue_id) >= sqlc.arg(threshold)::int)
+SELECT a.address, a.mails, a.last_bounced_at, l.status AS last_status, l.smtp_code AS last_smtp_code,
+       l.exo_as_code AS last_exo_as_code
+FROM addresses a
+         CROSS JOIN LATERAL (SELECT s.status, s.smtp_code, s.exo_as_code
+                             FROM soft s
+                             WHERE s.address = a.address
+                             ORDER BY s.received_at DESC, s.id DESC
+                             LIMIT 1) l
+ORDER BY a.last_bounced_at DESC, a.address
+LIMIT sqlc.arg(row_limit)::int OFFSET sqlc.arg(row_offset)::int;
+
+-- name: CountSoftBounceAddresses :one
+SELECT count(*)::bigint AS total
+FROM (SELECT lower(btrim(q.recipient_email)) AS address
+      FROM mail_bounces b
+               JOIN mail_queue q ON q.id = b.queue_id
+      WHERE b.kind = 'soft'
+        AND b.recipient_matched
+        AND q.channel = 'email'
+        AND btrim(q.recipient_email) <> ''
+        AND b.received_at >= now() - make_interval(days => sqlc.arg(days)::int)
+        AND NOT EXISTS (SELECT 1 FROM mail_suppressions m WHERE m.address = lower(btrim(q.recipient_email)))
+        AND (sqlc.narg(search)::text IS NULL OR strpos(lower(btrim(q.recipient_email)), lower(sqlc.narg(search)::text)) > 0)
+      GROUP BY 1
+      HAVING count(DISTINCT b.queue_id) >= sqlc.arg(threshold)::int) a;
 
 -- name: GetSuppressionID :one
 SELECT id
