@@ -717,6 +717,59 @@ func TestConcurrentErasuresOfOneRequestDoTheWorkOnce(t *testing.T) {
 	}
 }
 
+// A Mail attachment of a mail going out to the person right now stays with
+// it, file and all: the worker holds the file already. The trigger empties
+// the file when the outcome is written, and the call after takes the record.
+func TestEraseAccountTakesAnInFlightAttachmentOnTheNextCall(t *testing.T) {
+	store := erasureStore(t)
+	ctx := context.Background()
+	if _, err := store.Conn.Exec(ctx, `
+		INSERT INTO mail_queue (id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status)
+		VALUES ('50000000-0000-4000-8000-0000000000f3', '40000000-0000-4000-8000-00000000000f', 'Deniz Yılmaz', 'DENIZ@example.com',
+		        'Yeni dönem', 'Merhaba Deniz Yılmaz', '<p>Merhaba Deniz Yılmaz</p>', 'processing');
+		INSERT INTO mail_attachments (queue_id, position, filename, content_type, size_bytes, content)
+		VALUES ('50000000-0000-4000-8000-0000000000f3', 1, 'bilet-yeni-donem.pdf', 'application/pdf', 8, '%PDF-1.7'::bytea)`); err != nil {
+		t.Fatal(err)
+	}
+	inFlight := func() (records, files int) {
+		t.Helper()
+		if err := store.Conn.QueryRow(ctx, `SELECT count(*), count(content) FROM mail_attachments
+			WHERE queue_id = '50000000-0000-4000-8000-0000000000f3'`).Scan(&records, &files); err != nil {
+			t.Fatal(err)
+		}
+		return records, files
+	}
+	requestID := uuid.New()
+
+	if _, err := store.EraseAccount(ctx, eraseDeniz(requestID)); !errors.Is(err, ErrAccountErasureInProgress) {
+		t.Fatalf("err = %v, want in progress", err)
+	}
+	if records, files := inFlight(); records != 1 || files != 1 {
+		t.Errorf("the mail in flight kept %d records, %d files; want its file untouched", records, files)
+	}
+	// The other mail to the person, still to go out, lost its file at once.
+	if n := queryCount(t, store, `SELECT count(*) FROM mail_attachments WHERE queue_id = '50000000-0000-4000-8000-0000000000f1'`); n != 0 {
+		t.Error("the pending mail's attachment stayed")
+	}
+
+	if _, err := store.Conn.Exec(ctx, `UPDATE mail_queue SET status = 'sent' WHERE id = '50000000-0000-4000-8000-0000000000f3'`); err != nil {
+		t.Fatal(err)
+	}
+	if records, files := inFlight(); records != 1 || files != 0 {
+		t.Errorf("sent: %d records, %d files; want the record without its file", records, files)
+	}
+	receipt, err := store.EraseAccount(ctx, eraseDeniz(requestID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records, _ := inFlight(); records != 0 {
+		t.Error("the sent mail's attachment record outlived the erasure")
+	}
+	if n := receiptCounts(t, receipt)[AccountErasureAttachmentsDeleted]; n != 1 {
+		t.Errorf("attachments_deleted = %d, want the one the completing call took", n)
+	}
+}
+
 // A send going out to the person right now cannot be changed under the
 // worker: the work done so far is committed, and the next call finishes.
 func TestEraseAccountWaitsForASendInFlightToThePerson(t *testing.T) {

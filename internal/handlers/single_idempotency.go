@@ -65,19 +65,28 @@ func singleIdempotency(c fiber.Ctx, service bool, sentBy string, params requests
 	if !validIdempotencyKey(key) {
 		return nil, errSingleIdempotencyKeyInvalid
 	}
-	// The request as it was understood: the same mail hashes the same
-	// whatever its JSON looked like (map keys are sorted). Its attachments
-	// are not part of it: a retry carries the file drawn again (a PDF holds
-	// the time it was made), and the mail is the same; the first request's
-	// file is the one that goes. Without attachments the digest is what it
-	// was before them (omitempty).
-	params.Attachments = nil
-	canonical, err := json.Marshal(params)
+	hash, err := singleRequestSHA256(params)
 	if err != nil {
 		return nil, err
 	}
+	return &singleKey{sentBy: sentBy, key: key, hash: hash}, nil
+}
+
+// singleRequestSHA256 is the request as it was understood: the same mail
+// hashes the same whatever its JSON looked like (map keys are sorted). Its
+// attachments are not part of it: a retry carries the file drawn again (a
+// PDF holds the time it was made), and the mail is the same; the first
+// request's file is the one that goes. Without attachments the digest is
+// what it was before them (omitempty): keys stored before attachments came
+// answer their retries as before.
+func singleRequestSHA256(params requests.SendSingleMail) (string, error) {
+	params.Attachments = nil
+	canonical, err := json.Marshal(params)
+	if err != nil {
+		return "", err
+	}
 	sum := sha256.Sum256(canonical)
-	return &singleKey{sentBy: sentBy, key: key, hash: hex.EncodeToString(sum[:])}, nil
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // replay answers a request whose key its service already used: the first

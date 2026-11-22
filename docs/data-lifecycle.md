@@ -227,7 +227,13 @@ takes the person out of them:
   Account erasure of mail to the person. A sensitive send is masked once
   none of its rows is to go out, so its files are gone by then; masking has
   nothing of them to keep. Backups hold what the table held at dump time: a
-  file of a mail not yet sent then (minutes, usually).
+  file of a mail not yet sent then (minutes, usually). Outside SkyMail's
+  database: a delivery status notification (bounce) that a receiving server
+  returns to the sender mailbox may carry the original mail whole, its file
+  included (SkyMail asks for headers only, RET=HDRS, where the relay offers
+  DSN, but a remote server may ignore it); such a report stays in that
+  mailbox under its retention policy (30 days for Inbox) and is not deleted
+  by the trigger or by Account erasure.
 - `mail_tasks.sent_by` — who sent: the Keycloak subject of the token that
   queued the send — for an approved Mail onayı request, its submitter's — or
   `skymail` for the mail SkyMail sends of its own accord, the notice that a

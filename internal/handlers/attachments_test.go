@@ -95,6 +95,8 @@ func TestAttachmentFilename(t *testing.T) {
 		{"Gece Kodu Bileti.pdf", ".pdf", "Gece-Kodu-Bileti.pdf"},
 		{"Şölen için ÇIĞ bileti.PDF", ".pdf", "Solen-icin-CIG-bileti.pdf"},
 		{"bilet", ".pdf", "bilet.pdf"},
+		{"Kâğıt bilet.pdf", ".pdf", "Kagit-bilet.pdf"},
+		{"Hâlâ Îmar Ûmran.pdf", ".pdf", "Hala-Imar-Umran.pdf"},
 		{"qr.jpg", ".png", "qr.jpg.png"},
 		{"../../etc/passwd", ".pdf", "passwd.pdf"},
 		{`C:\Users\x\bilet.pdf`, ".pdf", "bilet.pdf"},

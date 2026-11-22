@@ -111,10 +111,12 @@ func parseAttachments(in []requests.MailAttachment) ([]mailer.Attachment, error)
 	return out, nil
 }
 
-// turkishLetters are the letters a file name keeps as their Latin ones.
+// turkishLetters are the letters a file name keeps as their Latin ones,
+// the circumflexed â, î and û of Turkish spelling (Kâğıt, Hâlâ) among them.
 var turkishLetters = strings.NewReplacer(
 	"ç", "c", "Ç", "C", "ğ", "g", "Ğ", "G", "ı", "i", "İ", "I",
 	"ö", "o", "Ö", "O", "ş", "s", "Ş", "S", "ü", "u", "Ü", "U",
+	"â", "a", "Â", "A", "î", "i", "Î", "I", "û", "u", "Û", "U",
 )
 
 // attachmentFilename reduces name to what every mail client shows and saves
