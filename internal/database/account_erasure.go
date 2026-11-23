@@ -54,6 +54,10 @@ const (
 	// text names them.
 	AccountErasureInboxItemsDeleted       = "inbox_items_deleted"
 	AccountErasureInboxItemsNamingDeleted = "inbox_items_naming_deleted"
+	// Mail attachments (ADR 0082): every file record of mail to the person,
+	// a file still to go out with its name and size, a sent one's name and
+	// size.
+	AccountErasureAttachmentsDeleted = "attachments_deleted"
 )
 
 // ErrAccountErasureInProgress says a send to the person, or another person's
@@ -287,6 +291,7 @@ func newEraser(ctx context.Context, tx pgx.Tx, erasure AccountErasure) (*eraser,
 		AccountErasureApprovalRecipientsRemoved, AccountErasureApprovalPlaceholders, AccountErasureApprovalSendLinksDeleted,
 		AccountErasureTrackingEventsDeleted, AccountErasureTrackingLinksCleared, AccountErasureSuppressionsDeleted,
 		AccountErasureInboxItemsDeleted, AccountErasureInboxItemsNamingDeleted, AccountErasureUnsubscribesDeleted,
+		AccountErasureAttachmentsDeleted,
 	} {
 		counts[key] = 0
 	}
@@ -456,6 +461,20 @@ var keepNamesSteps = []erasureStep{
 		count: AccountErasureInboxItemsNamingDeleted,
 		sql: `DELETE FROM inbox_items i
 		      WHERE (` + nameIn("i.title") + ` OR ` + nameIn("i.summary") + ` OR ` + nameIn("COALESCE(i.link, '')") + `)`,
+	},
+	{
+		// Mail attachments of mail to the person (ADR 0082), before their
+		// queued rows go (which would take theirs along uncounted): the
+		// file of a mail still to go out, the name and size of a sent one.
+		name:  "attachments of mail to the person",
+		count: AccountErasureAttachmentsDeleted,
+		// A row being sent now is waited for, as its row is: the mailer
+		// holds the file already, and the next call takes the record.
+		sql: `DELETE FROM mail_attachments a
+		      USING mail_queue q
+		      WHERE a.queue_id = q.id
+		        AND COALESCE(q.status::text, 'pending') <> 'processing'
+		        AND ` + toPerson,
 	},
 	{
 		// Queue residue: never sent. A row the dispatcher has just taken is

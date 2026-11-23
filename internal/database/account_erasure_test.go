@@ -102,6 +102,12 @@ INSERT INTO mail_queue (id, task_id, recipient_full_name, recipient_email, subje
     ('50000000-0000-4000-8000-0000000000f1', '40000000-0000-4000-8000-00000000000f', 'Deniz Yılmaz', '` + erasedPersonal + `', 'Yeni dönem', 'Merhaba Deniz Yılmaz', '<p>Merhaba Deniz Yılmaz</p>', 'pending', NULL),
     ('50000000-0000-4000-8000-0000000000f2', '40000000-0000-4000-8000-00000000000f', 'Ayşe Kaya', 'ayse@example.com', 'Yeni dönem', 'Merhaba Ayşe Kaya', '<p>Merhaba Ayşe Kaya</p>', 'pending', NULL),
     ('50000000-0000-4000-8000-000000000101', '40000000-0000-4000-8000-000000000010', 'Deniz Yılmaz', 'd.yilmaz@example.org', 'Selam', 'Merhaba Deniz Yılmaz', '<p>Merhaba Deniz Yılmaz</p>', 'sent', NULL);
+-- Mail attachments (ADR 0082): the file of Deniz's mail still to go out, the
+-- name and size of Deniz's sent one, and Ayşe's sent one's, which stays.
+INSERT INTO mail_attachments (queue_id, position, filename, content_type, size_bytes, content) VALUES
+    ('50000000-0000-4000-8000-0000000000f1', 1, 'bilet-yeni-donem.pdf', 'application/pdf', 8, '%PDF-1.7'::bytea),
+    ('50000000-0000-4000-8000-0000000000a1', 1, 'bilet-bahar.pdf', 'application/pdf', 8, NULL),
+    ('50000000-0000-4000-8000-0000000000a2', 1, 'bilet-bahar.pdf', 'application/pdf', 8, NULL);
 -- The suppression list: Deniz's school address (refused at RCPT TO), an old
 -- address of Deniz's known only by the subject, and Ayşe's, which stays. A
 -- report about Keycloak's reset mail to Deniz stays with that mail: codes only.
@@ -231,6 +237,7 @@ var erasureTables = map[string]string{
 	"mail_suppression_removals":         "id::text",
 	"mail_unsubscribes":                 "address || '/' || stream",
 	"mail_unsubscribe_reactivations":    "id::text",
+	"mail_attachments":                  "queue_id::text || '/' || position::text",
 }
 
 type tableRows map[string]map[string]string
@@ -355,6 +362,7 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 		AccountErasureInboxItemsNamingDeleted:   1,
 		AccountErasureSuppressionsDeleted:       2,
 		AccountErasureUnsubscribesDeleted:       1,
+		AccountErasureAttachmentsDeleted:        2,
 	}
 	if counts := receiptCounts(t, receipt); !reflect.DeepEqual(counts, wantCounts) {
 		t.Errorf("counts = %v\nwant     %v", counts, wantCounts)
@@ -404,7 +412,13 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 		},
 		// Deniz's own item, and Ayşe's that names Deniz; her other item stays.
 		"inbox_items": {"81000000-0000-4000-8000-000000000001", "81000000-0000-4000-8000-000000000002"},
+		// The file still to go out to Deniz and his sent mail's record;
+		// Ayşe's stays.
+		"mail_attachments": {"50000000-0000-4000-8000-0000000000f1/1", "50000000-0000-4000-8000-0000000000a1/1"},
 	})
+	if n := queryCount(t, store, `SELECT count(*) FROM mail_attachments WHERE queue_id = '50000000-0000-4000-8000-0000000000a2'`); n != 1 {
+		t.Errorf("Ayşe's attachment record went")
+	}
 	if n := queryCount(t, store, `SELECT count(*) FROM inbox_items WHERE id IN ('81000000-0000-4000-8000-000000000001', '81000000-0000-4000-8000-000000000002')`); n != 0 {
 		t.Errorf("inbox items to or naming the person left = %d", n)
 	}
@@ -700,6 +714,59 @@ func TestConcurrentErasuresOfOneRequestDoTheWorkOnce(t *testing.T) {
 	}
 	if n := queryCount(t, store, `SELECT count(*) FROM account_erasure_receipts`); n != 1 {
 		t.Errorf("receipts = %d, want 1", n)
+	}
+}
+
+// A Mail attachment of a mail going out to the person right now stays with
+// it, file and all: the worker holds the file already. The trigger empties
+// the file when the outcome is written, and the call after takes the record.
+func TestEraseAccountTakesAnInFlightAttachmentOnTheNextCall(t *testing.T) {
+	store := erasureStore(t)
+	ctx := context.Background()
+	if _, err := store.Conn.Exec(ctx, `
+		INSERT INTO mail_queue (id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status)
+		VALUES ('50000000-0000-4000-8000-0000000000f3', '40000000-0000-4000-8000-00000000000f', 'Deniz Yılmaz', 'DENIZ@example.com',
+		        'Yeni dönem', 'Merhaba Deniz Yılmaz', '<p>Merhaba Deniz Yılmaz</p>', 'processing');
+		INSERT INTO mail_attachments (queue_id, position, filename, content_type, size_bytes, content)
+		VALUES ('50000000-0000-4000-8000-0000000000f3', 1, 'bilet-yeni-donem.pdf', 'application/pdf', 8, '%PDF-1.7'::bytea)`); err != nil {
+		t.Fatal(err)
+	}
+	inFlight := func() (records, files int) {
+		t.Helper()
+		if err := store.Conn.QueryRow(ctx, `SELECT count(*), count(content) FROM mail_attachments
+			WHERE queue_id = '50000000-0000-4000-8000-0000000000f3'`).Scan(&records, &files); err != nil {
+			t.Fatal(err)
+		}
+		return records, files
+	}
+	requestID := uuid.New()
+
+	if _, err := store.EraseAccount(ctx, eraseDeniz(requestID)); !errors.Is(err, ErrAccountErasureInProgress) {
+		t.Fatalf("err = %v, want in progress", err)
+	}
+	if records, files := inFlight(); records != 1 || files != 1 {
+		t.Errorf("the mail in flight kept %d records, %d files; want its file untouched", records, files)
+	}
+	// The other mail to the person, still to go out, lost its file at once.
+	if n := queryCount(t, store, `SELECT count(*) FROM mail_attachments WHERE queue_id = '50000000-0000-4000-8000-0000000000f1'`); n != 0 {
+		t.Error("the pending mail's attachment stayed")
+	}
+
+	if _, err := store.Conn.Exec(ctx, `UPDATE mail_queue SET status = 'sent' WHERE id = '50000000-0000-4000-8000-0000000000f3'`); err != nil {
+		t.Fatal(err)
+	}
+	if records, files := inFlight(); records != 1 || files != 0 {
+		t.Errorf("sent: %d records, %d files; want the record without its file", records, files)
+	}
+	receipt, err := store.EraseAccount(ctx, eraseDeniz(requestID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records, _ := inFlight(); records != 0 {
+		t.Error("the sent mail's attachment record outlived the erasure")
+	}
+	if n := receiptCounts(t, receipt)[AccountErasureAttachmentsDeleted]; n != 1 {
+		t.Errorf("attachments_deleted = %d, want the one the completing call took", n)
 	}
 }
 

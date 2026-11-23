@@ -69,6 +69,8 @@ type graphMessage struct {
 	ToRecipients           []graphRecipient `json:"toRecipients"`
 	ReplyTo                []graphRecipient `json:"replyTo,omitempty"`
 	InternetMessageHeaders []graphHeader    `json:"internetMessageHeaders"`
+	// A single mail's Mail attachments (attachment.go); left out without.
+	Attachments []graphAttachment `json:"attachments,omitempty"`
 }
 
 type graphSendMail struct {
@@ -100,7 +102,7 @@ func recipientAddress(job database.MailQueue) (*netmail.Address, error) {
 }
 
 // graphRequest is the sendMail body of job from lane's mailbox.
-func (s *emailSender) graphRequest(ctx context.Context, job database.MailQueue, lane LaneConfig) ([]byte, error) {
+func (s *emailSender) graphRequest(ctx context.Context, job database.MailQueue, lane LaneConfig, attachments []Attachment) ([]byte, error) {
 	to, err := recipientAddress(job)
 	if err != nil {
 		return nil, err
@@ -115,6 +117,7 @@ func (s *emailSender) graphRequest(ctx context.Context, job database.MailQueue, 
 		From:                   recipientOf(lane.From),
 		ToRecipients:           []graphRecipient{recipientOf(to)},
 		InternetMessageHeaders: []graphHeader{{Name: dsn.QueueIDHeader, Value: queueHeader(job, s.config.FQDN)}},
+		Attachments:            graphAttachments(attachments),
 	}
 	if s.lanes.ReplyTo != nil {
 		message.ReplyTo = []graphRecipient{recipientOf(s.lanes.ReplyTo)}
@@ -142,11 +145,11 @@ const graphTooLargeError = "graph_rejected: the mail is over Graph's 4 MB reques
 // graphMIMERequest is the MIME sendMail body of job from lane's mailbox with
 // List-Unsubscribe: the mail as the SMTP path writes it (Reply-To, Message-ID,
 // X-SkyMail-Queue-Id, the plain text and the HTML), base64.
-func (s *emailSender) graphMIMERequest(ctx context.Context, job database.MailQueue, lane LaneConfig, unsubscribe string) ([]byte, error) {
+func (s *emailSender) graphMIMERequest(ctx context.Context, job database.MailQueue, lane LaneConfig, unsubscribe string, attachments []Attachment) ([]byte, error) {
 	if _, err := recipientAddress(job); err != nil {
 		return nil, err
 	}
-	msg, err := s.message(ctx, job, lane.From.String(), true)
+	msg, err := s.message(ctx, job, lane.From.String(), true, attachments)
 	if err != nil {
 		return nil, err
 	}
@@ -164,8 +167,8 @@ func (s *emailSender) graphMIMERequest(ctx context.Context, job database.MailQue
 }
 
 // sendGraph sends job from lane's mailbox with Graph sendMail, as JSON.
-func (s *emailSender) sendGraph(ctx context.Context, job database.MailQueue, lane Lane, config LaneConfig) error {
-	payload, err := s.graphRequest(ctx, job, config)
+func (s *emailSender) sendGraph(ctx context.Context, job database.MailQueue, lane Lane, config LaneConfig, attachments []Attachment) error {
+	payload, err := s.graphRequest(ctx, job, config, attachments)
 	if err != nil {
 		return err
 	}
@@ -174,8 +177,8 @@ func (s *emailSender) sendGraph(ctx context.Context, job database.MailQueue, lan
 
 // sendGraphMIME sends job from lane's mailbox with Graph sendMail, as MIME
 // with List-Unsubscribe.
-func (s *emailSender) sendGraphMIME(ctx context.Context, job database.MailQueue, lane Lane, config LaneConfig, unsubscribe string) error {
-	payload, err := s.graphMIMERequest(ctx, job, config, unsubscribe)
+func (s *emailSender) sendGraphMIME(ctx context.Context, job database.MailQueue, lane Lane, config LaneConfig, unsubscribe string, attachments []Attachment) error {
+	payload, err := s.graphMIMERequest(ctx, job, config, unsubscribe, attachments)
 	if err != nil {
 		return err
 	}

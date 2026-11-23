@@ -139,6 +139,12 @@ func SetTemplateKeys(m Transactional, keyOf func(ctx context.Context, taskID uui
 	}
 }
 
+// SetAttachments makes m read a queue row's Mail attachments with of instead
+// of the database.
+func SetAttachments(m Transactional, of func(ctx context.Context, queueID uuid.UUID) ([]Attachment, error)) {
+	m.(*mailerImpl).attachments = of
+}
+
 // SetSendLanes is SetTemplateKeys with the send's purpose too.
 func SetSendLanes(m Transactional, laneOf func(ctx context.Context, taskID uuid.UUID) (key *string, system bool, purpose *string, err error)) {
 	m.(*mailerImpl).templateKey = func(ctx context.Context, taskID uuid.UUID) (sendLane, error) {

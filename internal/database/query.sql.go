@@ -1114,6 +1114,19 @@ func (q *Queries) CountSends(ctx context.Context, arg CountSendsParams) error {
 	return err
 }
 
+const countSentContentViews = `-- name: CountSentContentViews :one
+SELECT count(*)
+FROM sent_content_views
+WHERE task_id = $1
+`
+
+func (q *Queries) CountSentContentViews(ctx context.Context, taskID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countSentContentViews, taskID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countSoftBounceAddresses = `-- name: CountSoftBounceAddresses :one
 SELECT count(*)::bigint AS total
 FROM (SELECT lower(btrim(q.recipient_email)) AS address
@@ -1846,6 +1859,28 @@ func (q *Queries) DeferThrottledMailQueueItem(ctx context.Context, arg DeferThro
 		arg.ClaimedBy,
 		arg.ClaimedAt,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteClearedMailAttachments = `-- name: DeleteClearedMailAttachments :execrows
+DELETE
+FROM mail_attachments
+WHERE (queue_id, position) IN (SELECT a.queue_id, a.position
+                               FROM mail_attachments a
+                                        JOIN mail_queue q ON q.id = a.queue_id
+                                        JOIN mail_tasks mt ON mt.id = q.task_id
+                               WHERE mt.content_cleared_at IS NOT NULL
+                               LIMIT $1::int FOR UPDATE OF a SKIP LOCKED)
+`
+
+// Deletes up to batch_size attachment records of sends whose content the
+// sweep has emptied: their name, type and size go with the rest of the mail
+// (the files went when each row was sent).
+func (q *Queries) DeleteClearedMailAttachments(ctx context.Context, batchSize int) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteClearedMailAttachments, batchSize)
 	if err != nil {
 		return 0, err
 	}
@@ -4018,6 +4053,47 @@ func (q *Queries) InsertInboxItems(ctx context.Context, arg InsertInboxItemsPara
 	return result.RowsAffected(), nil
 }
 
+const insertMailAttachment = `-- name: InsertMailAttachment :execrows
+INSERT INTO mail_attachments (queue_id, position, filename, content_type, size_bytes, content)
+SELECT q.id,
+       $1::smallint,
+       $2::text,
+       $3::text,
+       octet_length($4::bytea),
+       $4::bytea
+FROM mail_queue q
+WHERE q.task_id = $5::uuid
+  AND q.channel = 'email'
+  AND COALESCE(q.status, 'pending') = 'pending'
+`
+
+type InsertMailAttachmentParams struct {
+	Position    int16     `json:"position"`
+	Filename    string    `json:"filename"`
+	ContentType string    `json:"content_type"`
+	Content     []byte    `json:"content"`
+	TaskID      uuid.UUID `json:"task_id"`
+}
+
+// A service's Mail attachment (ADR 0082; migration 20261122150000) on each
+// queue row of the send still to go out by e-mail: a single mail has one, a
+// notification to one person one at most. A row already failed at queueing
+// (a reserved or suppressed address, preference) gets none. Returns how many
+// rows got it, in the transaction that queued the send.
+func (q *Queries) InsertMailAttachment(ctx context.Context, arg InsertMailAttachmentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertMailAttachment,
+		arg.Position,
+		arg.Filename,
+		arg.ContentType,
+		arg.Content,
+		arg.TaskID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertMailBounce = `-- name: InsertMailBounce :execrows
 INSERT INTO mail_bounces (queue_id, source, kind, action, status, smtp_code, exo_as_code, recipient_matched,
                           ndr_id_sha256, received_at)
@@ -4760,6 +4836,92 @@ func (q *Queries) ListMailApprovals(ctx context.Context, arg ListMailApprovalsPa
 	return items, nil
 }
 
+const listMailAttachmentInfo = `-- name: ListMailAttachmentInfo :many
+SELECT queue_id, position, filename, content_type, size_bytes
+FROM mail_attachments
+WHERE queue_id = ANY ($1::uuid[])
+ORDER BY queue_id, position
+`
+
+type ListMailAttachmentInfoRow struct {
+	QueueID     uuid.UUID `json:"queue_id"`
+	Position    int16     `json:"position"`
+	Filename    string    `json:"filename"`
+	ContentType string    `json:"content_type"`
+	SizeBytes   int       `json:"size_bytes"`
+}
+
+// The attachments of the given queue rows as a send's report shows them:
+// name, type and size, never the file.
+func (q *Queries) ListMailAttachmentInfo(ctx context.Context, queueIds []uuid.UUID) ([]ListMailAttachmentInfoRow, error) {
+	rows, err := q.db.Query(ctx, listMailAttachmentInfo, queueIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMailAttachmentInfoRow
+	for rows.Next() {
+		var i ListMailAttachmentInfoRow
+		if err := rows.Scan(
+			&i.QueueID,
+			&i.Position,
+			&i.Filename,
+			&i.ContentType,
+			&i.SizeBytes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMailAttachmentsToSend = `-- name: ListMailAttachmentsToSend :many
+SELECT position, filename, content_type, size_bytes, content
+FROM mail_attachments
+WHERE queue_id = $1::uuid
+ORDER BY position
+`
+
+type ListMailAttachmentsToSendRow struct {
+	Position    int16  `json:"position"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	SizeBytes   int    `json:"size_bytes"`
+	Content     []byte `json:"content"`
+}
+
+// A queue row's attachments as its mail carries them, in order; content is
+// null when it was emptied (a row sent again after its outcome).
+func (q *Queries) ListMailAttachmentsToSend(ctx context.Context, queueID uuid.UUID) ([]ListMailAttachmentsToSendRow, error) {
+	rows, err := q.db.Query(ctx, listMailAttachmentsToSend, queueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMailAttachmentsToSendRow
+	for rows.Next() {
+		var i ListMailAttachmentsToSendRow
+		if err := rows.Scan(
+			&i.Position,
+			&i.Filename,
+			&i.ContentType,
+			&i.SizeBytes,
+			&i.Content,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMailFormSourceRecipientNames = `-- name: ListMailFormSourceRecipientNames :many
 SELECT full_name FROM mail_form_source_recipients WHERE source_id=$1
 `
@@ -5331,6 +5493,60 @@ func (q *Queries) ListQueueRowsToMask(ctx context.Context, arg ListQueueRowsToMa
 			&i.Body,
 			&i.BodyHtml,
 			&i.ListUnsubscribeUrl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSentContentViews = `-- name: ListSentContentViews :many
+SELECT id, queue_item_id, actor_sub, actor_name, masked_by, masked_variables, created_at
+FROM sent_content_views
+WHERE task_id = $1
+ORDER BY created_at DESC, id DESC
+LIMIT $3 OFFSET $2
+`
+
+type ListSentContentViewsParams struct {
+	TaskID    uuid.UUID `json:"task_id"`
+	RowOffset int32     `json:"row_offset"`
+	RowLimit  int32     `json:"row_limit"`
+}
+
+type ListSentContentViewsRow struct {
+	ID              uuid.UUID `json:"id"`
+	QueueItemID     uuid.UUID `json:"queue_item_id"`
+	ActorSub        *string   `json:"actor_sub"`
+	ActorName       *string   `json:"actor_name"`
+	MaskedBy        string    `json:"masked_by"`
+	MaskedVariables []string  `json:"masked_variables"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+// The openings of a send's masked content, newest first: who, which queue row,
+// how it was masked. No recipient (idx_sent_content_views_task).
+func (q *Queries) ListSentContentViews(ctx context.Context, arg ListSentContentViewsParams) ([]ListSentContentViewsRow, error) {
+	rows, err := q.db.Query(ctx, listSentContentViews, arg.TaskID, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSentContentViewsRow
+	for rows.Next() {
+		var i ListSentContentViewsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.QueueItemID,
+			&i.ActorSub,
+			&i.ActorName,
+			&i.MaskedBy,
+			&i.MaskedVariables,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

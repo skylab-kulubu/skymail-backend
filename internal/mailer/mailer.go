@@ -372,8 +372,10 @@ type mailerImpl struct {
 	// by default. templateKey reads a send's template for a mail's lane;
 	// graphTokens and exchangeTokens are the application's tokens, shared
 	// by the workers; graphURL and graphClient are where Graph is.
-	lanes          SendLanes
-	templateKey    templateKeyOf
+	lanes       SendLanes
+	templateKey templateKeyOf
+	// attachments reads a queue row's Mail attachments (attachment.go).
+	attachments    attachmentsOf
 	graphTokens    tokenSource
 	exchangeTokens tokenSource
 	graphURL       string
@@ -426,6 +428,7 @@ func NewMailer(db *database.Store, smtpConfig SMTPConfig, sender Sender, opts ..
 		graphClient: &http.Client{},
 	}
 	m.templateKey = m.databaseTemplateKey
+	m.attachments = m.databaseAttachments
 	m.consentCache = newConsentCache()
 	m.preferenceCache = newPreferenceCache()
 	m.channels = map[string]newChannelSender{ChannelEmail: m.newEmailSender}

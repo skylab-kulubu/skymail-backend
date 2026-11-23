@@ -314,6 +314,18 @@ type MailApprovalTask struct {
 	TaskID     uuid.UUID `json:"task_id"`
 }
 
+// A service's Mail attachment on one queue row (ADR 0082): the file until the row is sent or fails for good, then only its name, type and size.
+type MailAttachment struct {
+	QueueID     uuid.UUID `json:"queue_id"`
+	Position    int16     `json:"position"`
+	Filename    string    `json:"filename"`
+	ContentType string    `json:"content_type"`
+	SizeBytes   int       `json:"size_bytes"`
+	// The file, kept only while its queue row is still to go out; emptied by mail_queue_drop_attachment_content when the row's outcome is written.
+	Content   []byte    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // What a delivery status notification or a relay's refusal said about a queue row: kind, action and codes. No address, no text. Kept a year.
 type MailBounce struct {
 	ID        int64       `json:"id"`
