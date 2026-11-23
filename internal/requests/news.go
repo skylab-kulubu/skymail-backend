@@ -24,6 +24,7 @@ type SendNews struct {
 	CommercialContentAbsent *bool `json:"commercial_content_absent"`
 	// Open and click tracking, by the rules of every person's send (SKYMAIL_TRACKING, SKYMAIL_TRACKING_OPERATOR).
 	Tracking bool `json:"tracking"`
+	NoAttachments
 }
 
 // CountNewsSend asks how many a News send would reach (POST

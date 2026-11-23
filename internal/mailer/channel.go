@@ -83,6 +83,8 @@ type emailSender struct {
 	// picks a mail's lane, only while a lane is on.
 	lanes       SendLanes
 	templateKey templateKeyOf
+	// attachments reads a row's Mail attachments (attachment.go).
+	attachments attachmentsOf
 	// xoauth2 is the worker's SMTP client for the lanes sent with XOAUTH2:
 	// its username and token are set before each send. nil while none is.
 	xoauth2        *mail.Client
@@ -101,7 +103,7 @@ func (m *mailerImpl) newEmailSender() (ChannelSender, error) {
 	}
 	sender := &emailSender{
 		client: client, config: m.smtpConfig, logger: m.logger, db: m.db, tracking: m.tracking,
-		lanes: m.lanes, templateKey: m.templateKey,
+		lanes: m.lanes, templateKey: m.templateKey, attachments: m.attachments,
 		exchangeTokens: m.exchangeTokens, graphTokens: m.graphTokens, graphURL: m.graphURL, graphClient: m.graphClient,
 		sendBudget: m.sendBudget,
 	}
@@ -170,22 +172,38 @@ func (s *emailSender) Send(ctx context.Context, job database.MailQueue) error {
 		return err
 	}
 	unsubscribe := s.listUnsubscribe(lane, config, job)
+	// A Mail attachment (attachment.go): read for every row, as a row does
+	// not say whether it has one; failing to read it is tried again later.
+	attachments, err := s.attachments(ctx, job.ID)
+	if err != nil {
+		return fmt.Errorf("read the row's attachments: %w", err)
+	}
+	if err = s.sendWith(ctx, job, lane, config, unsubscribe, attachments); err == nil && len(attachments) > 0 {
+		// The count and the size, never a name or a file.
+		s.logger.Info().Str("event", "mail_attachments_sent").Str("job_id", job.ID.String()).
+			Int("attachments", len(attachments)).Int("bytes", AttachmentBytes(attachments)).Msg("sent a mail with attachments")
+	}
+	return err
+}
+
+// sendWith sends job the way its lane says, with its attachments.
+func (s *emailSender) sendWith(ctx context.Context, job database.MailQueue, lane Lane, config LaneConfig, unsubscribe string, attachments []Attachment) error {
 	switch config.Transport {
 	case TransportGraph:
 		if s.graphTokens == nil || config.From == nil {
 			return fmt.Errorf("send failed: the %s lane is graph without the application's credentials", lane)
 		}
 		if unsubscribe != "" {
-			return s.sendGraphMIME(ctx, job, lane, config, unsubscribe)
+			return s.sendGraphMIME(ctx, job, lane, config, unsubscribe, attachments)
 		}
-		return s.sendGraph(ctx, job, lane, config)
+		return s.sendGraph(ctx, job, lane, config, attachments)
 	case TransportXOAUTH2:
 		if s.exchangeTokens == nil || s.xoauth2 == nil || config.From == nil {
 			return fmt.Errorf("send failed: the %s lane is xoauth2 without the application's credentials", lane)
 		}
-		return s.sendXOAUTH2(ctx, job, lane, config, unsubscribe)
+		return s.sendXOAUTH2(ctx, job, lane, config, unsubscribe, attachments)
 	default:
-		msg, err := s.message(ctx, job, s.config.FromEmail, false)
+		msg, err := s.message(ctx, job, s.config.FromEmail, false, attachments)
 		if err != nil {
 			return err
 		}
@@ -218,8 +236,9 @@ func (s *emailSender) streamOf(ctx context.Context, job database.MailQueue) (Lan
 
 // message is job's mail from from. queueHeader adds X-SkyMail-Queue-Id, which
 // the lanes write (graph.go); the off path writes the mail as it always has,
-// with SMTP_REPLY_TO's Reply-To when it is set.
-func (s *emailSender) message(ctx context.Context, job database.MailQueue, from string, withQueueHeader bool) (*mail.Msg, error) {
+// with SMTP_REPLY_TO's Reply-To when it is set. With attachments the mail is
+// multipart/mixed: its body, then each file.
+func (s *emailSender) message(ctx context.Context, job database.MailQueue, from string, withQueueHeader bool, attachments []Attachment) (*mail.Msg, error) {
 	msg := mail.NewMsg()
 	if err := msg.From(from); err != nil {
 		return nil, permanentError{fmt.Errorf("invalid from email: %w", err)}
@@ -247,6 +266,9 @@ func (s *emailSender) message(ctx context.Context, job database.MailQueue, from 
 	if job.BodyHtml != nil {
 		msg.AddAlternativeString(mail.TypeTextHTML, s.outgoingHTML(ctx, job))
 	}
+	if err := attach(msg, attachments); err != nil {
+		return nil, err
+	}
 	return msg, nil
 }
 
@@ -254,8 +276,8 @@ func (s *emailSender) message(ctx context.Context, job database.MailQueue, from 
 // Exchange Online token for the application, with List-Unsubscribe when
 // unsubscribe is a link. The token is dropped when the connection or the AUTH
 // fails, so the next try asks for a new one.
-func (s *emailSender) sendXOAUTH2(ctx context.Context, job database.MailQueue, lane Lane, config LaneConfig, unsubscribe string) error {
-	msg, err := s.message(ctx, job, config.From.String(), true)
+func (s *emailSender) sendXOAUTH2(ctx context.Context, job database.MailQueue, lane Lane, config LaneConfig, unsubscribe string, attachments []Attachment) error {
+	msg, err := s.message(ctx, job, config.From.String(), true, attachments)
 	if err != nil {
 		return err
 	}

@@ -168,7 +168,7 @@ type NewsSendResult struct {
 //	@Produce		json
 //	@Param			send	body		requests.SendNews	true	"The record, the audience and the mail"
 //	@Success		201		{object}	handlers.NewsSendResult
-//	@Failure		400		{object}	apperrors.AppError	"validation.error; news_send.commercial_statement_required; news_send.teams_invalid; news_send.team_unknown; news_send.slug_too_long"
+//	@Failure		400		{object}	apperrors.AppError	"validation.error; attachment.not_allowed: a News send takes no attachments; news_send.commercial_statement_required; news_send.teams_invalid; news_send.team_unknown; news_send.slug_too_long"
 //	@Failure		403		{object}	apperrors.AppError	"server.forbidden: no skymail:announcements:send"
 //	@Failure		404		{object}	apperrors.AppError	"news_send.not_found: unknown or archived"
 //	@Failure		409		{object}	apperrors.AppError	"news_send.already_sent (params.task_id); news_send.cancel_finishing (params.task_id); news_send.private_record; news_send.template_missing"
@@ -182,6 +182,9 @@ func (h *newsSendHandlerImpl) Send(c fiber.Ctx) error {
 	var params requests.SendNews
 	if err := c.Bind().Body(&params); err != nil {
 		return err
+	}
+	if params.HasAttachments() {
+		return errAttachmentsNotAllowed
 	}
 	if params.CommercialContentAbsent == nil || !*params.CommercialContentAbsent {
 		return errNewsCommercialStatement
