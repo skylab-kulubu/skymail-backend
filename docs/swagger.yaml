@@ -798,9 +798,9 @@ components:
         tracking:
           $ref: '#/components/schemas/handlers.MailApprovalTracking'
         tracking_withheld:
-          description: 'Its sends were tracked, but their counts tell of people (fewer
-            than 10 tracked recipients, or the system lane) and the caller may not
-            read the sends'' people: tracking is null.'
+          description: 'Its sends were tracked, but their counts tell of people (the
+            system lane) and the caller may not read the sends'' people: tracking
+            is null.'
           type: boolean
       type: object
     handlers.MailApprovalSubmitter:
@@ -1930,6 +1930,10 @@ components:
           type: integer
         unique_clickers:
           type: integer
+        url:
+          type: string
+        url_cleared_reason:
+          type: string
       type: object
     handlers.TrackingMode:
       properties:
@@ -2024,6 +2028,12 @@ components:
           type: string
         link_id:
           type: integer
+        position:
+          type: integer
+        url:
+          type: string
+        url_cleared_reason:
+          type: string
       type: object
     handlers.TrackingRecipientPage:
       properties:
@@ -3240,18 +3250,18 @@ paths:
         an approver or its submitter; to anyone else it is not found. An approved
         request has result: how its sends went, in totals only (sent, skipped, failed,
         pending; tracking, the opens and clicks of its tracked sends summed, null
-        and tracking_withheld true when the sum, or the sends of fewer than 10 tracked
-        recipients among others, would tell of people and the caller may not read
-        the sends'' people, by GET /mail_tasks/{id}/tracking''s rule), with no person
-        in it and one total for a request to people, never a row per send; it needs
-        no skymail:mails:read. Any other request has none. Reading the result never
-        fails the read: totals not read in time leave the answer without result, opens
-        and clicks not read in time leave tracking null with tracking_withheld false.
-        preview_recipient is whose mail the preview is: the first of its people, or
-        for a list the submitter, as if they were on it; it is given also when the
-        preview does not render. A request undecided past its deadline reads as expired;
-        reading writes nothing and mails no one — the sweep, within a minute, records
-        the expiry and tells the submitter.'
+        and tracking_withheld true when a send is mail the system sends and the caller
+        may not read the sends'' people, by GET /mail_tasks/{id}/tracking''s rule;
+        shown whatever the number of tracked recipients), with no person in it and
+        one total for a request to people, never a row per send; it needs no skymail:mails:read.
+        Any other request has none. Reading the result never fails the read: totals
+        not read in time leave the answer without result, opens and clicks not read
+        in time leave tracking null with tracking_withheld false. preview_recipient
+        is whose mail the preview is: the first of its people, or for a list the submitter,
+        as if they were on it; it is given also when the preview does not render.
+        A request undecided past its deadline reads as expired; reading writes nothing
+        and mails no one — the sweep, within a minute, records the expiry and tells
+        the submitter.'
       parameters:
       - description: Request ID
         in: path
@@ -4208,12 +4218,15 @@ paths:
       - Mail
   /mail_tasks/{id}/tracking:
     get:
-      description: 'Requires skymail:mails:read. No identities, link tokens or target
-        URLs. After 90 days only retained totals, or null: for good with at least
-        10 tracked recipients, until a year after the send with fewer. tracking_available
-        follows the current flag. A send''s counts tell of people when it has fewer
-        than 10 tracked recipients (tracking.TotalsMinRecipients) or is mail the system
-        sends (the system lane): then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients:
+      description: 'Requires skymail:mails:read. No identities or link tokens. Each
+        link of clicks_by_link has its full target, url: as sent, one-time links and
+        codes included (nothing masked); null once the link was emptied (url_cleared_reason
+        expired or erased). After 90 days only retained totals, or null: for good
+        with at least 10 tracked recipients, until a year after the send with fewer.
+        tracking_available follows the current flag. A send''s counts are shown to
+        anyone with skymail:mails:read whatever its number of tracked recipients (Yusuf,
+        2026-11-24, K6); only mail the system sends (the system lane) tells of people:
+        then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients:
         skymail:mails:tracking:read; the send''s own sender outside the system lane
         only while SKYMAIL_SENDER_SEES_RECIPIENTS=on) gets report; anyone else gets
         withheld true and report null (KVKK notice s3, §4). recipients_readable says
@@ -4258,7 +4271,8 @@ paths:
         is read with the role only: its sender is refused. First likely human opening
         falls back to a non-automated click, marked click_inferred. Returns 410 90
         days after the last mail went out, even if retention has not run. Does not
-        return tracking tokens or target URLs.'
+        return tracking tokens. Each clicked link has its position and full target
+        url, as sent (nothing masked).'
       parameters:
       - description: Mail task ID
         in: path
