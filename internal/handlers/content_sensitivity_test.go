@@ -103,6 +103,7 @@ func TestCredentialTemplatesAreLockedSensitive(t *testing.T) {
 		"keycloak.personal-email-confirm", "keycloak.generic",
 		"account.security-alert", "account.primary-email-changed", "account.deletion-requested", "account.deletion-completed",
 		"core.contact-consent-confirm", "event.ticket-created", "event.reminder",
+		"event.waitlist-promoted", "event.waitlist-joined",
 		// Flows that may move here: a mail-and-code sign-in, a login link, a reset.
 		"auth.email-code", "login.link", "otp.mail", "place.login-link", "core.login-code", "forms.guest-verify-email",
 		"core.magic-link", "core.password-reset", "club.invite", "forms.email-otp",
@@ -118,6 +119,7 @@ func TestCredentialTemplatesAreLockedSensitive(t *testing.T) {
 	for _, key := range []string{
 		// Shown: what sends to SkyMail today without a credential.
 		"free.basic", "core.welcome", "core.certificate", "club.team-membership", "event.updated", "event.cancelled",
+		"event.registration-full", "event.attendance-recorded",
 		"mail.approval-requested", "mail.approval-resolved", "ops.send-failed",
 		"forms.form-copy", "forms.status-changed", "forms.pending-reminder", "forms.attempt-update",
 		"keycloak", "accounts.x", "core.codex-news", "club.resetting", "core.signal",

@@ -35,7 +35,9 @@ import (
 //     link), account.deletion-completed;
 //   - core-backend: core.contact-consent-confirm (confirmation link), and the
 //     event mails the repo holds for it: event.ticket-created and
-//     event.reminder (ticket code, QR link).
+//     event.reminder (ticket code, QR link); since 2026-11-24 the waiting
+//     list mails event.waitlist-promoted (ticket code, QR, page link) and
+//     event.waitlist-joined (page link), migration 20261124120000.
 //
 // Shown, and so not here: core.welcome, core.certificate (its VerifyURL is
 // public), club.team-membership, forms.* (form ids, no token), mail.approval-*
@@ -44,7 +46,7 @@ import (
 // auth., login. and otp. are reserved for such flows when they move here.
 var (
 	lockedSensitiveKeyPrefixes = []string{"keycloak.", "account.", "auth.", "login.", "otp."}
-	lockedSensitiveKeys        = []string{"core.contact-consent-confirm", "event.ticket-created", "event.reminder"}
+	lockedSensitiveKeys        = []string{"core.contact-consent-confirm", "event.ticket-created", "event.reminder", "event.waitlist-promoted", "event.waitlist-joined"}
 	// A key that names one of these as a word (between dots and dashes), or as
 	// two words written with a dash (sign-in, log-in, 2-fa), is taken for a
 	// credential mail too, whoever sends it: place.login-link,
