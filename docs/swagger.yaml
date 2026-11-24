@@ -1,14 +1,30 @@
 components:
   schemas:
-    apperrors.AppError:
+    apperrors.Problem:
       properties:
         code:
+          type: string
+        detail:
+          description: Detail is the message, for a person.
+          type: string
+        instance:
+          description: Instance is the request's path, without its query.
           type: string
         message:
           type: string
         params:
           additionalProperties: {}
           type: object
+        status:
+          type: integer
+        title:
+          description: Title is the status's reason phrase (§4.2.1).
+          type: string
+        type:
+          description: |-
+            Type is about:blank: the problem is what the status says (§4.2.1);
+            what SkyMail means is code.
+          type: string
       type: object
     database.ContractVariable:
       properties:
@@ -2998,14 +3014,14 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Invalid snapshot, duplicate address or configured count limit
             exceeded
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: The caller is not the configured Forms service or lacks current
             send-or-write permission
         "413":
@@ -3018,7 +3034,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forms source preparation is not configured
       summary: Prepare an immutable Forms audience
       tags:
@@ -3048,19 +3064,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: No such source owned by the caller
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Source invalidated or already consumed
         "410":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Prepare the Forms audience again
       summary: Read a prepared Forms audience
       tags:
@@ -3119,19 +3135,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'validation.error: an unknown state'
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: List requests for approval
       tags:
@@ -3171,7 +3187,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'validation.error (params.errors: [{field, code, params}]):
             no template_id; not exactly one of mail_list_id and recipients (mail_list_id,
             exactly_one_of); more than 100 people (recipients, max_length); a missing
@@ -3188,32 +3204,32 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'server.forbidden: params.missing_roles names what the caller
             lacks of skymail:templates:read and, for a mailing list, skymail:lists:read'
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: No such Forms source owned by the caller
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forms source invalidated, consumed differently or busy
         "410":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Prepare the Forms audience again
         "422":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'mail_approval.template_unavailable, mail_approval.audience_unavailable,
             mail_approval.required_variables_missing (params.missing: [{name, source,
             reason}]) or mail_approval.unrenderable (params.error)'
@@ -3221,7 +3237,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Submit a send for approval
       tags:
@@ -3264,19 +3280,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: No such request, or not the caller's to see
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Read a request for approval
       tags:
@@ -3304,7 +3320,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: mail_approval.not_submitter; server.forbidden (params.missing_roles
             skymail:access) for a Leader without skymail:access accepting a request
             that is not Team mail
@@ -3312,13 +3328,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: No such request, or not the caller's to see
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: mail_approval.state_conflict, mail_approval.expired, mail_approval.busy,
             mail_approval.changed, mail_approval.template_republished, mail_approval.template_unavailable,
             mail_approval.audience_unavailable or mail_approval.audience_empty; for
@@ -3327,7 +3343,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Accept an approver's edit and send it
       tags:
@@ -3366,26 +3382,26 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'validation.error; mail_task.category_unknown: the duyuru send''s
             team is no team (SKYMAIL_BULK_PREFERENCE)'
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not an approver
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: No such request
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'mail_approval.state_conflict (params.state, params.allowed),
             mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished
             (params.submitted_version_id, params.published_version_id), mail_approval.template_unavailable,
@@ -3398,20 +3414,20 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: The edit leaves a Required variable empty (mail_approval.required_variables_missing)
             or does not render (mail_approval.unrenderable)
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
         "503":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'mail_task.preference_unavailable (Retry-After): while every
             duyuru send obeys the recipients'' preferences (SKYMAIL_BULK_PREFERENCE),
             core did not say whom the send may go to at the approval; nothing is queued
@@ -3453,31 +3469,31 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: validation.error
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: mail_approval.not_submitter
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: No such request, or not the caller's to see
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: mail_approval.state_conflict, mail_approval.expired or mail_approval.busy
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Decline an approver's edit
       tags:
@@ -3517,31 +3533,31 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'validation.error: no reason, or a blank one'
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not an approver
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: No such request
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: mail_approval.state_conflict, mail_approval.expired or mail_approval.busy
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Reject a request
       tags:
@@ -3580,7 +3596,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'validation.error; attachment.not_allowed; or the purpose as
             POST /mail_approvals checks it: mail_task.purpose_required, mail_task.commercial_content_not_allowed,
             mail_task.purpose_invalid, mail_task.purpose_not_allowed, mail_task.category_not_allowed,
@@ -3590,33 +3606,33 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: mail_approval.not_submitter, or server.forbidden with params.missing_roles
             as a submission
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: No such request, or not the caller's to see
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: mail_approval.state_conflict or mail_approval.busy
         "422":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: mail_approval.template_unavailable, mail_approval.audience_unavailable,
             mail_approval.required_variables_missing or mail_approval.unrenderable
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Resubmit a rejected or declined request
       tags:
@@ -3659,38 +3675,38 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: validation.error
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not an approver
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: No such request
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: mail_approval.state_conflict, mail_approval.expired or mail_approval.busy
         "422":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: mail_approval.no_edit, mail_approval.required_variables_missing
             or mail_approval.unrenderable
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Return an edited request to its submitter
       tags:
@@ -3744,19 +3760,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: List all mail tasks
       tags:
@@ -3798,7 +3814,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'Bad Request. attachment.not_allowed: a send to a list or a
             group takes no attachments. Purpose, checked in this order, while purposes
             are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed,
@@ -3810,20 +3826,20 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'mail.audience_unavailable: the Keycloak group is unknown or
             gone'
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
         "503":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'mail_task.preference_unavailable (Retry-After): while every
             duyuru send obeys the recipients'' preferences (SKYMAIL_BULK_PREFERENCE;
             README, \"Toplu postada tercih\"), core did not say whom the send may
@@ -3853,25 +3869,25 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Get a mail task by ID
       tags:
@@ -3900,19 +3916,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: mail_task.not_bulk or mail_task.finished
       summary: Cancel a send
       tags:
@@ -3959,25 +3975,25 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: List who opened a send's masked content
       tags:
@@ -4007,20 +4023,20 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'Forbidden: neither skymail:announcements:send nor the send''s
             sender'
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: mail_task.not_bulk, mail_task.cancelled or mail_task.finished
       summary: Pause a send
       tags:
@@ -4076,19 +4092,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Get mail queue items for a task
       tags:
@@ -4137,25 +4153,25 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Get one recipient's mail as kept
       tags:
@@ -4183,19 +4199,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: mail_task.not_bulk or mail_task.cancelled
       summary: Resume a paused send
       tags:
@@ -4233,13 +4249,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
       summary: Tracking counts, per-link counts and hour/day series
       tags:
@@ -4290,19 +4306,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "410":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Gone
       summary: Recipient opening and click observations
       tags:
@@ -4351,7 +4367,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'Invalid request or caller-supplied recipient/metadata fields.
             Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE):
             mail_task.purpose_required, mail_task.commercial_content_not_allowed,
@@ -4365,38 +4381,38 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'Current skymail:mails:write permission required: skymail:mails:send
             opens single mails only, its holder submits the source for approval'
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: No such source owned by the caller
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Source invalidated, consumed differently or busy
         "410":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Prepare the Forms audience again
         "422":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Template or variables unavailable or invalid
         "503":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'Transactional sending unavailable; mail_task.preference_unavailable
             (Retry-After): a duyuru send while every duyuru send obeys the recipients''
             preferences (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing
@@ -4480,7 +4496,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'Bad Request. A person''s purpose, checked in this order, while
             purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed,
             mail_task.purpose_invalid, then the purpose''s own: mail_task.category_not_allowed,
@@ -4497,20 +4513,20 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'mail_task.idempotency_key_reused: the key was used for a different
             mail'
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
         "503":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'mail_task.preference_unavailable (Retry-After): a person''s
             duyuru mail while every duyuru send obeys the recipient''s preferences
             (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing is queued'
@@ -4556,19 +4572,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Summarise mail sends
       tags:
@@ -4590,7 +4606,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
       summary: How a person's send is tracked
       tags:
@@ -4633,13 +4649,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: List all mailing lists
       tags:
@@ -4668,13 +4684,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Create a new mailing list
       tags:
@@ -4697,19 +4713,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Archive a mailing list
       tags:
@@ -4735,19 +4751,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Get a mailing list by ID
       tags:
@@ -4783,19 +4799,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Update a mailing list
       tags:
@@ -4833,19 +4849,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Neither an internal list nor a Keycloak group
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: List recipients of a mailing list
       tags:
@@ -4882,13 +4898,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Add a recipient to a mailing list
       tags:
@@ -4916,13 +4932,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Remove a recipient from a mailing list
       tags:
@@ -4949,13 +4965,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Conflict
       summary: Restore an archived mailing list
       tags:
@@ -4981,14 +4997,14 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'server.unauthorized: no live token, or one not issued for
             SkyMail'
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'auth.person_required: a service''s token'
       summary: Which of my addresses mail does not reach
       tags:
@@ -5029,20 +5045,20 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: inbox.invalid_query; inbox.invalid_cursor
         "401":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'server.unauthorized: no live token, or one not issued for
             SkyMail'
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'auth.person_required: a service''s token'
       summary: List my inbox
       tags:
@@ -5069,19 +5085,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: server.unauthorized
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: auth.person_required
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'server.not_found: not the caller''s, not there, or expired'
       summary: Archive one of my items
       tags:
@@ -5108,19 +5124,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: server.unauthorized
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: auth.person_required
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'server.not_found: not the caller''s, not there, or expired'
       summary: Mark one of my items read
       tags:
@@ -5147,19 +5163,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: server.unauthorized
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: auth.person_required
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'server.not_found: not the caller''s, not there, or expired'
       summary: Mark one of my items seen
       tags:
@@ -5185,19 +5201,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: server.unauthorized
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: auth.person_required
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'server.not_found: not the caller''s, not there, or expired'
       summary: Mark one of my items unread
       tags:
@@ -5217,13 +5233,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: server.unauthorized
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: auth.person_required
       summary: Count my unseen and unread items
       tags:
@@ -5243,13 +5259,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: server.unauthorized
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: auth.person_required
       summary: Mark all my items read
       tags:
@@ -5269,13 +5285,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: server.unauthorized
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: auth.person_required
       summary: Mark all my items seen
       tags:
@@ -5301,26 +5317,26 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: A token without skymail:access whose aud does not name SkyMail
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Neither skymail:access nor a Team the caller leads; auth.person_required
             for a service account's token without skymail:access
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'team_mail.off: SKYMAIL_TEAM_SEND is off'
         "503":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'team_mail.leadership_unavailable (Retry-After): core did not
             say which Teams the caller leads'
       summary: The Teams the caller may send Team mail to
@@ -5366,7 +5382,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'validation.error; attachment.not_allowed: a News send takes
             no attachments; news_send.commercial_statement_required; news_send.teams_invalid;
             news_send.team_unknown; news_send.slug_too_long'
@@ -5374,32 +5390,32 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'server.forbidden: no skymail:announcements:send'
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'news_send.not_found: unknown or archived'
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: news_send.already_sent (params.task_id); news_send.cancel_finishing
             (params.task_id); news_send.private_record; news_send.template_missing
         "422":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'news_send.no_recipients (params: the counts)'
         "503":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'news_send.not_enabled; news_send.cms_unavailable; news_send.audience_unavailable:
             nothing was queued'
       summary: Mail a published News record to an audience
@@ -5420,7 +5436,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
       summary: Whether News records may be mailed
       tags:
@@ -5455,31 +5471,31 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: validation.error; news_send.teams_invalid; news_send.team_unknown
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: news_send.not_found
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: news_send.private_record; news_send.template_missing
         "503":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: news_send.not_enabled; news_send.cms_unavailable; news_send.audience_unavailable
       summary: Count who a News send would reach
       tags:
@@ -5515,31 +5531,31 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: validation.error; news_send.teams_invalid
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: news_send.not_found
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: news_send.private_record; news_send.template_missing
         "503":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: news_send.not_enabled; news_send.cms_unavailable
       summary: Render a News send's mail
       tags:
@@ -5576,37 +5592,37 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: validation.error; news_send.teams_invalid
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'server.forbidden: no skymail:announcements:send or skymail:mails:write'
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: news_send.not_found
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: news_send.no_test_address; news_send.private_record; news_send.template_missing
         "429":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: news_send.test_rate_limited
         "503":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: news_send.not_enabled; news_send.cms_unavailable
       summary: Send a News send's mail to yourself
       tags:
@@ -5628,7 +5644,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
       summary: List the notification types
       tags:
@@ -5653,13 +5669,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
       summary: Get a notification type
       tags:
@@ -5703,7 +5719,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: validation.error; notification_type.invalid_category; notification_type.inbox_variant_required;
             notification_type.inbox_variant_unused; notification_type.inbox_variant_invalid
             (params.part)
@@ -5711,7 +5727,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
       summary: State a notification type (Template seed)
       tags:
@@ -5773,7 +5789,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'validation.error; notification.idempotency_key_required; notification.allowed_channels_required,
             notification.unsubscribe_url_not_allowed, notification.unsubscribe_url_invalid,
             notification.unsubscribe_url_required (an optional bulk-lane type''s e-mail
@@ -5786,27 +5802,27 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'server.forbidden: no skymail:notifications:send; auth.service_account_required:
             a person''s token'
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'notification.email_variant_missing: the type goes by e-mail
             and has no template of its key; notification.inbox_variant_missing'
         "422":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: notification.type_unknown; notification.idempotency_key_reused
         "503":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'notification.directory_unavailable: Keycloak did not answer;
             nothing was queued'
       summary: Send a notification to people
@@ -5867,19 +5883,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: List the suppression list
       tags:
@@ -5905,31 +5921,31 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'suppression.use_reactivate: an unsubscribe, not a bounce'
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Remove an address from the suppression list
       tags:
@@ -5966,32 +5982,32 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: suppression.reason_required, suppression.reason_has_address,
             or a malformed id
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'suppression.use_delete: a bounce, not an unsubscribe'
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Reverse an address's unsubscribe
       tags:
@@ -6020,19 +6036,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: The bounce rate and the NDR reader's state
       tags:
@@ -6071,13 +6087,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: List the reversals of unsubscribes
       tags:
@@ -6127,19 +6143,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: List the addresses with repeated soft bounces
       tags:
@@ -6181,13 +6197,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: List all email templates
       tags:
@@ -6219,20 +6235,20 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "422":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: The subject, plain text or HTML content does not parse (template.unparseable,
             params.part)
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Create a new email template
       tags:
@@ -6255,19 +6271,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Archive an email template
       tags:
@@ -6292,19 +6308,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Get an email template by ID
       tags:
@@ -6344,19 +6360,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'template.system_key_immutable or template.sensitive_key_immutable:
             the key of a system template, or of one whose mail carries a credential,
             cannot be changed or removed'
@@ -6364,7 +6380,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: The subject, plain text or HTML content does not parse (template.unparseable,
             params.part) or the HTML drops a Required variable (template.required_variables_missing,
             params.missing names each with its set and reason)
@@ -6372,7 +6388,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Update an email template
       tags:
@@ -6419,32 +6435,32 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'template.content_sensitive_locked: the template carries a
             credential and stays hidden; params.key'
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Set whether a template's sends show their content
       tags:
@@ -6489,13 +6505,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
       summary: List the changes of a template's content_sensitive
       tags:
@@ -6543,26 +6559,26 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: validation.error (params.errors, sorted by field), template.invalid_base
             or template.main_source_missing
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'Not Found: no such template, or it is archived'
         "422":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'template.unparseable: params.part (subject, plain_text or
             html) does not parse, params.error is the parser''s message; or template.required_variables_missing:
             params.missing names each Required variable the HTML drops, with its source
@@ -6571,7 +6587,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Save a draft of a template
       tags:
@@ -6615,32 +6631,32 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: The name is not a variable name (validation.error)
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'No such template in use: unknown or archived'
         "422":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: The published body does not reference the variable (template.required_variables_missing)
             or does not parse (template.unparseable, params.part "html")
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Mark a variable of a template required
       tags:
@@ -6675,32 +6691,32 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: The name is not a variable name (template.invalid_variable_name)
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'No such template in use: unknown or archived'
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: The variable is in the contract set (template.required_variable_in_contract,
             params.name)
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Release a variable operators marked required
       tags:
@@ -6726,13 +6742,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Conflict
       summary: Restore an archived email template
       tags:
@@ -6791,25 +6807,25 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'validation.error: an unknown state'
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: List a template's versions
       tags:
@@ -6844,19 +6860,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Read one version of a template
       tags:
@@ -6893,26 +6909,26 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'Not Found: no such template or version, or the template is
             archived'
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'template.not_a_draft: the version is published'
         "500":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Discard a draft
       tags:
@@ -6957,32 +6973,32 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: validation.error
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'Not Found: no such template or version, or the template is
             archived'
         "409":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: template.stale_base, template.not_a_draft or template.draft_discarded
         "422":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'template.unparseable (params.part: subject, plain_text or
             html), or template.required_variables_missing: the draft drops a Required
             variable the template has now, a variable marked since it was saved included
@@ -6991,7 +7007,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Publish a draft
       tags:
@@ -7035,20 +7051,20 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Forbidden
         "404":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'Not Found: no such template or version, or the template is
             archived'
         "422":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'template.unparseable: the copy would not parse; or template.required_variables_missing:
             it drops a Required variable the template has now (params.missing: [{name,
             source, reason}]) — checked as a saved draft is'
@@ -7056,7 +7072,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Restore a version as a draft
       tags:
@@ -7082,7 +7098,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Not Found
       summary: Get an email template by key
       tags:
@@ -7129,13 +7145,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Bad Request (validation.error, force included)
         "403":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'server.forbidden: system differs from what the template has
             (false for a new key) and the caller lacks skymail:templates:system; params:
             missing_roles, field (system), system (the mark the template has)'
@@ -7143,7 +7159,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: 'template.seed_conflict: an operator changed the template since
             the last seed; params: key, template_id, rules, published_version, last_seed_version,
             operator_versions (each a version summary, as the history serves it),
@@ -7152,7 +7168,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: The subject, plain text or HTML content does not parse (template.unparseable,
             params.part) or the HTML drops a Required variable (template.required_variables_missing,
             params.missing names each with its set and reason)
@@ -7160,7 +7176,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/apperrors.AppError'
+                $ref: '#/components/schemas/apperrors.Problem'
           description: Internal Server Error
       summary: Create or replace a template addressed by key
       tags:

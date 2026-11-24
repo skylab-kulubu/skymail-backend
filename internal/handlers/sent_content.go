@@ -185,10 +185,10 @@ type SentMailContent struct {
 //	@Param			id		path		string	true	"Task ID"
 //	@Param			itemId	path		string	true	"Queue row ID"
 //	@Success		200		{object}	handlers.SentMailContent
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404		{object}	apperrors.AppError	"Not Found"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem	"Bad Request"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404		{object}	apperrors.Problem	"Not Found"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/mail_tasks/{id}/queue/{itemId}/content [get]
 func (h *mailHandlerImpl) GetQueueItemContent(c fiber.Ctx) error {
 	c.Set(fiber.HeaderCacheControl, "no-store")
@@ -291,10 +291,10 @@ type SentContentView struct {
 //	@Param			_end	query		int		false	"End index"
 //	@Success		200		{array}		handlers.SentContentView
 //	@Header			200		{integer}	X-Total-Count		"Number of openings"
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404		{object}	apperrors.AppError	"Not Found"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem	"Bad Request"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404		{object}	apperrors.Problem	"Not Found"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/mail_tasks/{id}/content-views [get]
 func (h *mailHandlerImpl) ListContentViews(c fiber.Ctx) error {
 	c.Set(fiber.HeaderCacheControl, "no-store")

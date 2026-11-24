@@ -113,8 +113,8 @@ func userFullName(u *gocloak.User) string {
 //	@Produce		json
 //	@Param			list	body		requests.CreateMailingList	true	"List details"
 //	@Success		201		{object}	database.MailingList
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem	"Bad Request"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/mailing_lists [post]
 func (h *listHandlerImpl) CreateList(c fiber.Ctx) error {
 	var params requests.CreateMailingList
@@ -141,8 +141,8 @@ func (h *listHandlerImpl) CreateList(c fiber.Ctx) error {
 //	@Param			_end		query		int		false	"End index"
 //	@Param			lifecycle	query		string	false	"Lifecycle filter: current, inactive, all"	Enums(current,inactive,all)	default(current)
 //	@Success		200			{array}		handlers.MailingListItem
-//	@Failure		400			{object}	apperrors.AppError	"Bad Request"
-//	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400			{object}	apperrors.Problem	"Bad Request"
+//	@Failure		500			{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/mailing_lists [get]
 func (h *listHandlerImpl) GetLists(c fiber.Ctx) error {
 	limit, offset := getPaginationParams(c)
@@ -203,9 +203,9 @@ func (h *listHandlerImpl) GetLists(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			id	path		string	true	"List ID"
 //	@Success		200	{object}	handlers.MailingListItem
-//	@Failure		400	{object}	apperrors.AppError	"Bad Request"
-//	@Failure		404	{object}	apperrors.AppError	"Not Found"
-//	@Failure		500	{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400	{object}	apperrors.Problem	"Bad Request"
+//	@Failure		404	{object}	apperrors.Problem	"Not Found"
+//	@Failure		500	{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/mailing_lists/{id} [get]
 func (h *listHandlerImpl) GetList(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -244,9 +244,9 @@ func (h *listHandlerImpl) GetList(c fiber.Ctx) error {
 //	@Param			id		path		string						true	"List ID"
 //	@Param			list	body		requests.UpdateMailingList	true	"List details"
 //	@Success		200		{object}	database.MailingList
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
-//	@Failure		404		{object}	apperrors.AppError	"Not Found"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem	"Bad Request"
+//	@Failure		404		{object}	apperrors.Problem	"Not Found"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/mailing_lists/{id} [patch]
 func (h *listHandlerImpl) UpdateList(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -278,9 +278,9 @@ func (h *listHandlerImpl) UpdateList(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			id	path	string	true	"List ID"
 //	@Success		204	"No Content"
-//	@Failure		400	{object}	apperrors.AppError	"Bad Request"
-//	@Failure		404	{object}	apperrors.AppError	"Not Found"
-//	@Failure		500	{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400	{object}	apperrors.Problem	"Bad Request"
+//	@Failure		404	{object}	apperrors.Problem	"Not Found"
+//	@Failure		500	{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/mailing_lists/{id} [delete]
 func (h *listHandlerImpl) DeleteList(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -305,8 +305,8 @@ func (h *listHandlerImpl) DeleteList(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			id	path		string	true	"List ID"
 //	@Success		200	{object}	handlers.MailingListItem
-//	@Failure		404	{object}	apperrors.AppError	"Not Found"
-//	@Failure		409	{object}	apperrors.AppError	"Conflict"
+//	@Failure		404	{object}	apperrors.Problem	"Not Found"
+//	@Failure		409	{object}	apperrors.Problem	"Conflict"
 //	@Router			/mailing_lists/{id}/restore [post]
 func (h *listHandlerImpl) RestoreList(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -331,8 +331,8 @@ func (h *listHandlerImpl) RestoreList(c fiber.Ctx) error {
 //	@Param			id			path		string					true	"List ID"
 //	@Param			recipient	body		requests.AddRecipient	true	"Recipient details"
 //	@Success		201			{object}	database.Recipient
-//	@Failure		400			{object}	apperrors.AppError	"Bad Request"
-//	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400			{object}	apperrors.Problem	"Bad Request"
+//	@Failure		500			{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/mailing_lists/{id}/recipients [post]
 func (h *listHandlerImpl) AddRecipient(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -366,8 +366,8 @@ func (h *listHandlerImpl) AddRecipient(c fiber.Ctx) error {
 //	@Param			id			path	string	true	"List ID"
 //	@Param			recipientId	path	string	true	"Recipient ID"
 //	@Success		204			"No Content"
-//	@Failure		400			{object}	apperrors.AppError	"Bad Request"
-//	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400			{object}	apperrors.Problem	"Bad Request"
+//	@Failure		500			{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/mailing_lists/{id}/recipients/{recipientId} [delete]
 func (h *listHandlerImpl) RemoveRecipient(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -401,9 +401,9 @@ func (h *listHandlerImpl) RemoveRecipient(c fiber.Ctx) error {
 //	@Param			_start	query		int		false	"Start index"
 //	@Param			_end	query		int		false	"End index"
 //	@Success		200		{array}		database.Recipient
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
-//	@Failure		404		{object}	apperrors.AppError	"Neither an internal list nor a Keycloak group"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem	"Bad Request"
+//	@Failure		404		{object}	apperrors.Problem	"Neither an internal list nor a Keycloak group"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/mailing_lists/{id}/recipients [get]
 func (h *listHandlerImpl) GetRecipients(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))

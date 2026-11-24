@@ -280,11 +280,11 @@ var errNotificationReplay = errors.New("idempotency key already used")
 //	@Param			notification	body		requests.SendNotification	true	"The notification"
 //	@Success		201				{object}	handlers.NotificationResult
 //	@Header			201				{string}	Idempotent-Replayed	"true when the answer is the first answer to this Idempotency-Key"
-//	@Failure		400				{object}	apperrors.AppError	"validation.error; notification.idempotency_key_required; notification.allowed_channels_required, notification.unsubscribe_url_not_allowed, notification.unsubscribe_url_invalid, notification.unsubscribe_url_required (an optional bulk-lane type's e-mail recipient without one while SKYMAIL_BULK_PREFERENCE is on) (params.recipient: its index); notification.expires_at_past; attachment.single_recipient_only, attachment.too_many, attachment.type_not_allowed, attachment.content_invalid, attachment.content_type_mismatch, attachment.too_large (params.index: which file)"
-//	@Failure		403				{object}	apperrors.AppError	"server.forbidden: no skymail:notifications:send; auth.service_account_required: a person's token"
-//	@Failure		409				{object}	apperrors.AppError	"notification.email_variant_missing: the type goes by e-mail and has no template of its key; notification.inbox_variant_missing"
-//	@Failure		422				{object}	apperrors.AppError	"notification.type_unknown; notification.idempotency_key_reused"
-//	@Failure		503				{object}	apperrors.AppError	"notification.directory_unavailable: Keycloak did not answer; nothing was queued"
+//	@Failure		400				{object}	apperrors.Problem	"validation.error; notification.idempotency_key_required; notification.allowed_channels_required, notification.unsubscribe_url_not_allowed, notification.unsubscribe_url_invalid, notification.unsubscribe_url_required (an optional bulk-lane type's e-mail recipient without one while SKYMAIL_BULK_PREFERENCE is on) (params.recipient: its index); notification.expires_at_past; attachment.single_recipient_only, attachment.too_many, attachment.type_not_allowed, attachment.content_invalid, attachment.content_type_mismatch, attachment.too_large (params.index: which file)"
+//	@Failure		403				{object}	apperrors.Problem	"server.forbidden: no skymail:notifications:send; auth.service_account_required: a person's token"
+//	@Failure		409				{object}	apperrors.Problem	"notification.email_variant_missing: the type goes by e-mail and has no template of its key; notification.inbox_variant_missing"
+//	@Failure		422				{object}	apperrors.Problem	"notification.type_unknown; notification.idempotency_key_reused"
+//	@Failure		503				{object}	apperrors.Problem	"notification.directory_unavailable: Keycloak did not answer; nothing was queued"
 //	@Router			/notifications [post]
 func (h *notificationHandlerImpl) Send(c fiber.Ctx) error {
 	key := c.Get(IdempotencyKeyHeader)
@@ -608,7 +608,7 @@ func logNotification(result NotificationResult, lane string) {
 //	@Tags			Notifications
 //	@Produce		json
 //	@Success		200	{array}		handlers.NotificationType
-//	@Failure		403	{object}	apperrors.AppError	"Forbidden"
+//	@Failure		403	{object}	apperrors.Problem	"Forbidden"
 //	@Router			/notification_types [get]
 func (h *notificationHandlerImpl) ListTypes(c fiber.Ctx) error {
 	rows, err := h.db.ListNotificationTypes(c.Context())
@@ -639,8 +639,8 @@ func (h *notificationHandlerImpl) ListTypes(c fiber.Ctx) error {
 //	@Produce	json
 //	@Param		key	path		string	true	"The type's key"
 //	@Success	200	{object}	handlers.NotificationType
-//	@Failure	403	{object}	apperrors.AppError	"Forbidden"
-//	@Failure	404	{object}	apperrors.AppError	"Not Found"
+//	@Failure	403	{object}	apperrors.Problem	"Forbidden"
+//	@Failure	404	{object}	apperrors.Problem	"Not Found"
 //	@Router		/notification_types/{key} [get]
 func (h *notificationHandlerImpl) GetType(c fiber.Ctx) error {
 	row, err := h.db.GetNotificationType(c.Context(), c.Params("key"))
@@ -668,8 +668,8 @@ func (h *notificationHandlerImpl) GetType(c fiber.Ctx) error {
 //	@Param			key		path		string							true	"The type's key, the Template key's alphabet"
 //	@Param			body	body		requests.PutNotificationType	true	"The type"
 //	@Success		200		{object}	handlers.NotificationType
-//	@Failure		400		{object}	apperrors.AppError	"validation.error; notification_type.invalid_category; notification_type.inbox_variant_required; notification_type.inbox_variant_unused; notification_type.inbox_variant_invalid (params.part)"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
+//	@Failure		400		{object}	apperrors.Problem	"validation.error; notification_type.invalid_category; notification_type.inbox_variant_required; notification_type.inbox_variant_unused; notification_type.inbox_variant_invalid (params.part)"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
 //	@Router			/notification_types/{key} [put]
 func (h *notificationHandlerImpl) PutType(c fiber.Ctx) error {
 	key := c.Params("key")

@@ -150,9 +150,9 @@ func getPaginationParams(c fiber.Ctx) (int32, int32) {
 //	@Produce		json
 //	@Param			template	body		requests.CreateTemplate	true	"Template details"
 //	@Success		201			{object}	handlers.Template
-//	@Failure		400			{object}	apperrors.AppError	"Bad Request"
-//	@Failure		422			{object}	apperrors.AppError	"The subject, plain text or HTML content does not parse (template.unparseable, params.part)"
-//	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400			{object}	apperrors.Problem	"Bad Request"
+//	@Failure		422			{object}	apperrors.Problem	"The subject, plain text or HTML content does not parse (template.unparseable, params.part)"
+//	@Failure		500			{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/templates [post]
 func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
 	var params requests.CreateTemplate
@@ -193,8 +193,8 @@ func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
 //	@Param			_end		query		int		false	"End index"
 //	@Param			lifecycle	query		string	false	"Lifecycle filter: current, inactive, all"	Enums(current,inactive,all)	default(current)
 //	@Success		200			{array}		handlers.Template
-//	@Failure		400			{object}	apperrors.AppError	"Bad Request"
-//	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400			{object}	apperrors.Problem	"Bad Request"
+//	@Failure		500			{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/templates [get]
 func (h *templateHandlerImpl) GetTemplates(c fiber.Ctx) error {
 	limit, offset := getPaginationParams(c)
@@ -245,9 +245,9 @@ func (h *templateHandlerImpl) GetTemplates(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			id	path		string	true	"Template ID"
 //	@Success		200	{object}	handlers.Template
-//	@Failure		400	{object}	apperrors.AppError	"Bad Request"
-//	@Failure		404	{object}	apperrors.AppError	"Not Found"
-//	@Failure		500	{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400	{object}	apperrors.Problem	"Bad Request"
+//	@Failure		404	{object}	apperrors.Problem	"Not Found"
+//	@Failure		500	{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/templates/{id} [get]
 func (h *templateHandlerImpl) GetTemplate(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -273,11 +273,11 @@ func (h *templateHandlerImpl) GetTemplate(c fiber.Ctx) error {
 //	@Param			id			path		string					true	"Template ID"
 //	@Param			template	body		requests.UpdateTemplate	true	"Template details"
 //	@Success		200			{object}	handlers.Template
-//	@Failure		400			{object}	apperrors.AppError	"Bad Request"
-//	@Failure		404			{object}	apperrors.AppError	"Not Found"
-//	@Failure		409			{object}	apperrors.AppError	"template.system_key_immutable or template.sensitive_key_immutable: the key of a system template, or of one whose mail carries a credential, cannot be changed or removed"
-//	@Failure		422			{object}	apperrors.AppError	"The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
-//	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400			{object}	apperrors.Problem	"Bad Request"
+//	@Failure		404			{object}	apperrors.Problem	"Not Found"
+//	@Failure		409			{object}	apperrors.Problem	"template.system_key_immutable or template.sensitive_key_immutable: the key of a system template, or of one whose mail carries a credential, cannot be changed or removed"
+//	@Failure		422			{object}	apperrors.Problem	"The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
+//	@Failure		500			{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/templates/{id} [patch]
 func (h *templateHandlerImpl) UpdateTemplate(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -343,9 +343,9 @@ func (h *templateHandlerImpl) UpdateTemplate(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			id	path	string	true	"Template ID"
 //	@Success		204	"No Content"
-//	@Failure		400	{object}	apperrors.AppError	"Bad Request"
-//	@Failure		404	{object}	apperrors.AppError	"Not Found"
-//	@Failure		500	{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400	{object}	apperrors.Problem	"Bad Request"
+//	@Failure		404	{object}	apperrors.Problem	"Not Found"
+//	@Failure		500	{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/templates/{id} [delete]
 func (h *templateHandlerImpl) DeleteTemplate(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -378,8 +378,8 @@ func (h *templateHandlerImpl) DeleteTemplate(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			id	path		string	true	"Template ID"
 //	@Success		200	{object}	handlers.Template
-//	@Failure		404	{object}	apperrors.AppError	"Not Found"
-//	@Failure		409	{object}	apperrors.AppError	"Conflict"
+//	@Failure		404	{object}	apperrors.Problem	"Not Found"
+//	@Failure		409	{object}	apperrors.Problem	"Conflict"
 //	@Router			/templates/{id}/restore [post]
 func (h *templateHandlerImpl) RestoreTemplate(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -509,7 +509,7 @@ func sensitiveVariables(sent *[]string) []string {
 //	@Produce		json
 //	@Param			key	path		string	true	"Template key"
 //	@Success		200	{object}	handlers.Template
-//	@Failure		404	{object}	apperrors.AppError	"Not Found"
+//	@Failure		404	{object}	apperrors.Problem	"Not Found"
 //	@Router			/templates/by-key/{key} [get]
 func (h *templateHandlerImpl) GetTemplateByKey(c fiber.Ctx) error {
 	key := c.Params("key")
@@ -540,11 +540,11 @@ func (h *templateHandlerImpl) GetTemplateByKey(c fiber.Ctx) error {
 //	@Param			force		query		bool							false	"Write even over an operator's change since the last seed"
 //	@Param			template	body		requests.UpsertTemplateByKey	true	"Template details"
 //	@Success		200			{object}	handlers.SeededTemplate			"The template; forced over an operator's change, also what it overrode"
-//	@Failure		400			{object}	apperrors.AppError				"Bad Request (validation.error, force included)"
-//	@Failure		403			{object}	apperrors.AppError				"server.forbidden: system differs from what the template has (false for a new key) and the caller lacks skymail:templates:system; params: missing_roles, field (system), system (the mark the template has)"
-//	@Failure		409			{object}	apperrors.AppError				"template.seed_conflict: an operator changed the template since the last seed; params: key, template_id, rules, published_version, last_seed_version, operator_versions (each a version summary, as the history serves it), subject (sent now) and requested_subject (the seed's)"
-//	@Failure		422			{object}	apperrors.AppError				"The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
-//	@Failure		500			{object}	apperrors.AppError				"Internal Server Error"
+//	@Failure		400			{object}	apperrors.Problem				"Bad Request (validation.error, force included)"
+//	@Failure		403			{object}	apperrors.Problem				"server.forbidden: system differs from what the template has (false for a new key) and the caller lacks skymail:templates:system; params: missing_roles, field (system), system (the mark the template has)"
+//	@Failure		409			{object}	apperrors.Problem				"template.seed_conflict: an operator changed the template since the last seed; params: key, template_id, rules, published_version, last_seed_version, operator_versions (each a version summary, as the history serves it), subject (sent now) and requested_subject (the seed's)"
+//	@Failure		422			{object}	apperrors.Problem				"The subject, plain text or HTML content does not parse (template.unparseable, params.part) or the HTML drops a Required variable (template.required_variables_missing, params.missing names each with its set and reason)"
+//	@Failure		500			{object}	apperrors.Problem				"Internal Server Error"
 //	@Router			/templates/by-key/{key} [put]
 func (h *templateHandlerImpl) UpsertTemplateByKey(c fiber.Ctx) error {
 	key := c.Params("key")

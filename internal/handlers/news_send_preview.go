@@ -45,7 +45,7 @@ type NewsSendAvailability struct {
 //	@Tags			News sends
 //	@Produce		json
 //	@Success		200	{object}	handlers.NewsSendAvailability
-//	@Failure		403	{object}	apperrors.AppError	"Forbidden"
+//	@Failure		403	{object}	apperrors.Problem	"Forbidden"
 //	@Router			/news_sends/availability [get]
 func (h *newsSendHandlerImpl) Availability(c fiber.Ctx) error {
 	return c.JSON(NewsSendAvailability{Available: h.options.Enabled, ReadMore: h.options.ReadMore})
@@ -94,11 +94,11 @@ func sampleRecipient(c fiber.Ctx, params requests.SendNews, kind string) mailer.
 //	@Produce		json
 //	@Param			send	body		requests.SendNews	true	"The record and the mail, as POST /news_sends takes them"
 //	@Success		200		{object}	mailer.Rendered
-//	@Failure		400		{object}	apperrors.AppError	"validation.error; news_send.teams_invalid"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404		{object}	apperrors.AppError	"news_send.not_found"
-//	@Failure		409		{object}	apperrors.AppError	"news_send.private_record; news_send.template_missing"
-//	@Failure		503		{object}	apperrors.AppError	"news_send.not_enabled; news_send.cms_unavailable"
+//	@Failure		400		{object}	apperrors.Problem	"validation.error; news_send.teams_invalid"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404		{object}	apperrors.Problem	"news_send.not_found"
+//	@Failure		409		{object}	apperrors.Problem	"news_send.private_record; news_send.template_missing"
+//	@Failure		503		{object}	apperrors.Problem	"news_send.not_enabled; news_send.cms_unavailable"
 //	@Router			/news_sends/preview [post]
 func (h *newsSendHandlerImpl) Preview(c fiber.Ctx) error {
 	var params requests.SendNews
@@ -130,12 +130,12 @@ func (h *newsSendHandlerImpl) Preview(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			send	body		requests.SendNews	true	"The record and the mail, as POST /news_sends takes them"
 //	@Success		201		{object}	handlers.CreatedMailTask
-//	@Failure		400		{object}	apperrors.AppError	"validation.error; news_send.teams_invalid"
-//	@Failure		403		{object}	apperrors.AppError	"server.forbidden: no skymail:announcements:send or skymail:mails:write"
-//	@Failure		404		{object}	apperrors.AppError	"news_send.not_found"
-//	@Failure		409		{object}	apperrors.AppError	"news_send.no_test_address; news_send.private_record; news_send.template_missing"
-//	@Failure		429		{object}	apperrors.AppError	"news_send.test_rate_limited"
-//	@Failure		503		{object}	apperrors.AppError	"news_send.not_enabled; news_send.cms_unavailable"
+//	@Failure		400		{object}	apperrors.Problem	"validation.error; news_send.teams_invalid"
+//	@Failure		403		{object}	apperrors.Problem	"server.forbidden: no skymail:announcements:send or skymail:mails:write"
+//	@Failure		404		{object}	apperrors.Problem	"news_send.not_found"
+//	@Failure		409		{object}	apperrors.Problem	"news_send.no_test_address; news_send.private_record; news_send.template_missing"
+//	@Failure		429		{object}	apperrors.Problem	"news_send.test_rate_limited"
+//	@Failure		503		{object}	apperrors.Problem	"news_send.not_enabled; news_send.cms_unavailable"
 //	@Router			/news_sends/test [post]
 func (h *newsSendHandlerImpl) Test(c fiber.Ctx) error {
 	var params requests.SendNews
@@ -218,11 +218,11 @@ type NewsSendCount struct {
 //	@Produce		json
 //	@Param			count	body		requests.CountNewsSend	true	"The record and the audience"
 //	@Success		200		{object}	handlers.NewsSendCount
-//	@Failure		400		{object}	apperrors.AppError	"validation.error; news_send.teams_invalid; news_send.team_unknown"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404		{object}	apperrors.AppError	"news_send.not_found"
-//	@Failure		409		{object}	apperrors.AppError	"news_send.private_record; news_send.template_missing"
-//	@Failure		503		{object}	apperrors.AppError	"news_send.not_enabled; news_send.cms_unavailable; news_send.audience_unavailable"
+//	@Failure		400		{object}	apperrors.Problem	"validation.error; news_send.teams_invalid; news_send.team_unknown"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404		{object}	apperrors.Problem	"news_send.not_found"
+//	@Failure		409		{object}	apperrors.Problem	"news_send.private_record; news_send.template_missing"
+//	@Failure		503		{object}	apperrors.Problem	"news_send.not_enabled; news_send.cms_unavailable; news_send.audience_unavailable"
 //	@Router			/news_sends/count [post]
 func (h *newsSendHandlerImpl) Count(c fiber.Ctx) error {
 	var params requests.CountNewsSend

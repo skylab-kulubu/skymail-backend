@@ -19,6 +19,30 @@
 * **Şablonlar:** React ve Tailwind ile email şablonları oluşturun.
 * **Mail Listeleri:** Kolayca toplu mail gönderin.
 
+## Hata gövdesi (RFC 9457)
+
+Her hata `application/problem+json` döner (ADR-0010; RFC 9457, RFC 7807'nin
+yerine; core-backend'in biçimi): `type` (`about:blank`), `title` (durumun
+HTTP adı: `Conflict`, `Not Found`), `status`, `detail` (insan için ileti),
+`instance` (isteğin yolu, sorgu dizesi olmadan). SkyMail'in önceki gövdesi
+uzantı üyesi olarak aynen durur (RFC 9457 §3.2): `code` (makinenin okuduğu
+hata kodu, örn. `mail_approval.state_conflict`), `message` (`detail` ile
+aynı), varsa `params`. İstemciler `code` ve `params` okumaya devam eder.
+`code` ve `message` başta yazılır: gövdenin yalnız başını basan bir
+istemci (Template seed günlüğü) onları yine görür. Core'un tanı okuması
+gövdeyi 2 KiB'ta keser ve kesik JSON'u ayrıştıramaz; tam gövdede `message`
+okur, o da yerinde durur. Dikkat: `status` artık hata gövdesinde HTTP durumu (sayı); başarılı
+yanıtında `status` adında başka bir alan taşıyan bir uç (ör. gönderim
+denetimi) için hata ve başarı gövdesini aynı tipe açan istemci kırılır.
+
+```json
+{"code":"mail_approval.state_conflict","message":"…","type":"about:blank","title":"Conflict","status":409,
+ "detail":"…","instance":"/v1/mail_approvals/…/approve","params":{"state":"approved"}}
+```
+
+Hesap silme (`/internal/v1/account-erasures`) ve takip geri alma uçları
+zaten problem+json dönüyordu; biçimleri değişmedi.
+
 ## Health endpoints
 
 `GET /health` is process-only liveness (always `204`). `GET /ready` answers

@@ -168,12 +168,12 @@ type NewsSendResult struct {
 //	@Produce		json
 //	@Param			send	body		requests.SendNews	true	"The record, the audience and the mail"
 //	@Success		201		{object}	handlers.NewsSendResult
-//	@Failure		400		{object}	apperrors.AppError	"validation.error; attachment.not_allowed: a News send takes no attachments; news_send.commercial_statement_required; news_send.teams_invalid; news_send.team_unknown; news_send.slug_too_long"
-//	@Failure		403		{object}	apperrors.AppError	"server.forbidden: no skymail:announcements:send"
-//	@Failure		404		{object}	apperrors.AppError	"news_send.not_found: unknown or archived"
-//	@Failure		409		{object}	apperrors.AppError	"news_send.already_sent (params.task_id); news_send.cancel_finishing (params.task_id); news_send.private_record; news_send.template_missing"
-//	@Failure		422		{object}	apperrors.AppError	"news_send.no_recipients (params: the counts)"
-//	@Failure		503		{object}	apperrors.AppError	"news_send.not_enabled; news_send.cms_unavailable; news_send.audience_unavailable: nothing was queued"
+//	@Failure		400		{object}	apperrors.Problem	"validation.error; attachment.not_allowed: a News send takes no attachments; news_send.commercial_statement_required; news_send.teams_invalid; news_send.team_unknown; news_send.slug_too_long"
+//	@Failure		403		{object}	apperrors.Problem	"server.forbidden: no skymail:announcements:send"
+//	@Failure		404		{object}	apperrors.Problem	"news_send.not_found: unknown or archived"
+//	@Failure		409		{object}	apperrors.Problem	"news_send.already_sent (params.task_id); news_send.cancel_finishing (params.task_id); news_send.private_record; news_send.template_missing"
+//	@Failure		422		{object}	apperrors.Problem	"news_send.no_recipients (params: the counts)"
+//	@Failure		503		{object}	apperrors.Problem	"news_send.not_enabled; news_send.cms_unavailable; news_send.audience_unavailable: nothing was queued"
 //	@Router			/news_sends [post]
 func (h *newsSendHandlerImpl) Send(c fiber.Ctx) error {
 	if !h.options.Enabled {
