@@ -84,10 +84,10 @@ type Querier interface {
 	// Returns each send and its count.
 	ConfirmMaskFailures(ctx context.Context, ids []uuid.UUID) ([]ConfirmMaskFailuresRow, error)
 	ConsumeMailFormSource(ctx context.Context, arg ConsumeMailFormSourceParams) (MailFormSource, error)
-	CountAllMailingListsIncludingArchived(ctx context.Context) (int64, error)
-	CountAllTemplatesIncludingArchived(ctx context.Context) (int64, error)
-	CountArchivedMailingLists(ctx context.Context) (int64, error)
-	CountArchivedTemplates(ctx context.Context) (int64, error)
+	CountAllMailingListsIncludingArchived(ctx context.Context, search *string) (int64, error)
+	CountAllTemplatesIncludingArchived(ctx context.Context, search *string) (int64, error)
+	CountArchivedMailingLists(ctx context.Context, search *string) (int64, error)
+	CountArchivedTemplates(ctx context.Context, search *string) (int64, error)
 	// A person's unseen and unread items, archived and expired ones left out.
 	CountInboxItems(ctx context.Context, userID uuid.UUID) (CountInboxItemsRow, error)
 	CountMailApprovals(ctx context.Context, arg CountMailApprovalsParams) (int64, error)
@@ -96,7 +96,8 @@ type Querier interface {
 	// A send's queue rows as POST /v1/notifications answers them: queued (any row
 	// not failed) and failed (a recipient whose mail did not render).
 	CountMailTaskRows(ctx context.Context, taskID uuid.UUID) (CountMailTaskRowsRow, error)
-	CountMailTaskSends(ctx context.Context, status *string) (int64, error)
+	// The sends ListMailTaskSends lists under the same filters, every page.
+	CountMailTaskSends(ctx context.Context, arg CountMailTaskSendsParams) (int64, error)
 	CountMailTasks(ctx context.Context) (int64, error)
 	// Sends by the status mail_task_status derives, over every send: the same
 	// numbers CountMailTaskSends gives for each status filter.
@@ -107,7 +108,7 @@ type Querier interface {
 	// preference: opted_out, inactive or ambiguous, cancelled); failed is every
 	// other failed row; pending counts processing too.
 	CountMailTasksOutcomes(ctx context.Context, taskIds []uuid.UUID) (CountMailTasksOutcomesRow, error)
-	CountMailingLists(ctx context.Context) (int64, error)
+	CountMailingLists(ctx context.Context, search *string) (int64, error)
 	// A person's test mails of a template in the last minute: a News send's
 	// test (POST /v1/news_sends/test) is a send of club.news to its sender
 	// without a source, at most 3 a minute.
@@ -137,7 +138,7 @@ type Querier interface {
 	CountTaskSendFailure(ctx context.Context, arg CountTaskSendFailureParams) (CountTaskSendFailureRow, error)
 	CountTemplateContentSensitiveEvents(ctx context.Context, templateID uuid.UUID) (int64, error)
 	CountTemplateVersions(ctx context.Context, arg CountTemplateVersionsParams) (int64, error)
-	CountTemplates(ctx context.Context) (int64, error)
+	CountTemplates(ctx context.Context, search *string) (int64, error)
 	CountUnsubscribeReactivations(ctx context.Context) (int64, error)
 	// A recipient whose mail did not render, say a template that slices an empty
 	// full name, is written failed, with the render error the send's page shows:
@@ -239,8 +240,12 @@ type Querier interface {
 	DiscardTemplateDraft(ctx context.Context, arg DiscardTemplateDraftParams) error
 	// Account mail went to these suppressed addresses anyway.
 	FlagSuppressionsExempt(ctx context.Context, addresses []string) error
+	// A NULL search lists every list; else those whose name or description
+	// contains it, case-insensitively (as do the counts and the other lifecycles).
 	GetAllMailingLists(ctx context.Context, arg GetAllMailingListsParams) ([]MailingList, error)
 	GetAllMailingListsIncludingArchived(ctx context.Context, arg GetAllMailingListsIncludingArchivedParams) ([]MailingList, error)
+	// A NULL search lists every template; else those whose name, key or subject
+	// contains it, case-insensitively (as do the counts and the other lifecycles).
 	GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams) ([]Template, error)
 	GetAllTemplatesIncludingArchived(ctx context.Context, arg GetAllTemplatesIncludingArchivedParams) ([]Template, error)
 	GetArchivedMailingLists(ctx context.Context, arg GetArchivedMailingListsParams) ([]MailingList, error)
@@ -265,7 +270,9 @@ type Querier interface {
 	// next_attempt_at is not used: every row older than the retry migration holds
 	// that migration's timestamp in it.
 	// Days are calendar days in time_zone; the series ends on as_of's day and has
-	// one row per day, zero-filled.
+	// one row per day, zero-filled. Each day's mail is split by stream: system (a
+	// System template's mail), duyuru (the send's purpose, or, for a send without
+	// one, a row in the bulk lane, the rule of before) and islem (any other).
 	GetDailySentCounts(ctx context.Context, arg GetDailySentCountsParams) ([]GetDailySentCountsRow, error)
 	// Which of the sends of rows just taken are paused or cancelled: their rows
 	// go back parked, or are written cancelled, instead of being sent (a retry
@@ -283,7 +290,11 @@ type Querier interface {
 	GetMailQueueItemContent(ctx context.Context, arg GetMailQueueItemContentParams) (GetMailQueueItemContentRow, error)
 	// A send's recipients, newest first. A list send's rows come from one insert
 	// and share a created_at, so the id breaks the tie: pages neither repeat nor
-	// skip a recipient. A NULL status lists every recipient.
+	// skip a recipient. A NULL status lists every recipient. skipped keeps the
+	// failed rows that were not sent on purpose, as mail_task_status() reads them
+	// (a reserved domain, a suppressed or unsubscribed address, a preference, a
+	// cancelled send). A NULL search lists every recipient; else those whose
+	// address or name contains it, case-insensitively.
 	// suppressed_but_sent: account mail sent to a suppressed address, flagged.
 	// undelivered: a report said the address does not exist (a hard bounce of
 	// the row's own address) after the relay took the mail.
@@ -424,7 +435,9 @@ type Querier interface {
 	// Requests newest submission first, the id breaking ties. A NULL submitter
 	// lists everyone's and a NULL state every state. A request is filtered by the
 	// state it is in as of as_of: one undecided past its deadline is expired,
-	// whether or not the sweep has written it yet.
+	// whether or not the sweep has written it yet. A NULL search keeps every
+	// request; else those whose template's name, key or subject, list's name,
+	// Forms form's title or requester's name contains it, case-insensitively.
 	ListMailApprovals(ctx context.Context, arg ListMailApprovalsParams) ([]ListMailApprovalsRow, error)
 	// The attachments of the given queue rows as a send's report shows them:
 	// name, type and size, never the file.
@@ -443,7 +456,16 @@ type Querier interface {
 	// A send as every screen shows it — the home screen, the send list and a
 	// send's own page: the task, the template it used, who it went to, its status
 	// as mail_task_status derives it, and its recipients by status. A NULL task_id
-	// lists every send and a NULL status every status. The page is cut first so
+	// lists every send and a NULL filter keeps every send (GET /mail_tasks):
+	// search matches the template's name, key or subject, the list's name, the
+	// Forms form's title, an approved send's requester, or, on a send to people,
+	// a recipient's address or name, case-insensitively; created_from and
+	// created_before bound created_at; kind is bulk (mail_task_bulk), system (a
+	// System template's mail, not bulk) or single. Newest first, or as sort and
+	// ascending say: sort open_rate orders by the share of tracked recipients
+	// who likely opened (GET /mail_tasks/{id}/tracking's
+	// unique_likely_human_opens / tracked_recipients, the retained totals once
+	// its events are gone), sends with no rate last. The page is cut first so
 	// only its rows are counted.
 	ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error)
 	// The mailboxes a row of a News record was queued to go to, lower-cased:

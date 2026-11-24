@@ -471,6 +471,7 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			state	query		string	false	"Only requests in this state"	Enums(pending,returned,approved,rejected,declined,expired)
 //	@Param			mine	query		bool	false	"Only the caller's own requests"
+//	@Param			q		query		string	false	"Part of the template's name, key or subject, the list's name, the Forms form's title or the requester's name (at most 200 characters)"
 //	@Param			_start	query		int		false	"Start index"
 //	@Param			_end	query		int		false	"End index"
 //	@Success		200		{array}		handlers.MailApprovalItem
@@ -492,16 +493,20 @@ func (h *mailApprovalHandlerImpl) List(c fiber.Ctx) error {
 	if !caller.approver || c.Query("mine") == "true" {
 		submitter = &caller.sub
 	}
+	search, ok := searchParam(c.Query("q"))
+	if !ok {
+		return errSearchTooLong
+	}
 
 	now := h.now()
 	limit, offset := getPaginationParams(c)
 	rows, err := h.db.ListMailApprovals(c.Context(), database.ListMailApprovalsParams{
-		Limit: limit, Offset: offset, SubmitterSub: submitter, State: state, AsOf: now,
+		Limit: limit, Offset: offset, SubmitterSub: submitter, State: state, AsOf: now, Search: search,
 	})
 	if err != nil {
 		return err
 	}
-	count, err := h.db.CountMailApprovals(c.Context(), database.CountMailApprovalsParams{SubmitterSub: submitter, State: state, AsOf: now})
+	count, err := h.db.CountMailApprovals(c.Context(), database.CountMailApprovalsParams{SubmitterSub: submitter, State: state, AsOf: now, Search: search})
 	if err != nil {
 		return err
 	}

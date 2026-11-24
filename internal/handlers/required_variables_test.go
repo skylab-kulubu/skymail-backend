@@ -485,7 +485,7 @@ func TestAPartTheMailerCannotParseIsRefused(t *testing.T) {
 		})
 		assertUnparseable(t, response.StatusCode, body, tc.part)
 	}
-	if count, err := db.CountAllTemplatesIncludingArchived(context.Background()); err != nil || count != 0 {
+	if count, err := db.CountAllTemplatesIncludingArchived(context.Background(), nil); err != nil || count != 0 {
 		t.Fatalf("templates after refused creates = %d, %v", count, err)
 	}
 

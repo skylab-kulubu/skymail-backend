@@ -146,7 +146,7 @@ func operatorTracking(ctx context.Context, m mailer.Mailer, asked bool, template
 //	@Failure		400		{object}	apperrors.AppError	"Bad Request. attachment.not_allowed: a send to a list or a group takes no attachments. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team"
 //	@Failure		422		{object}	apperrors.AppError	"mail.audience_unavailable: the Keycloak group is unknown or gone"
 //	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
-//	@Failure		503		{object}	apperrors.AppError	"mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE; README, \"Toplu postada tercih\"), core did not say whom the send may go to; nothing is queued"
+//	@Failure		503		{object}	apperrors.AppError	"mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE; README, \"Toplu	postada	tercih\"), core did not say whom the send may go to; nothing is queued"
 //	@Router			/mail_tasks [post]
 func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 	var params requests.CreateMailTask
@@ -441,6 +441,8 @@ type MailTaskItem struct {
 	Status          SendStatus   `json:"status"`
 	RecipientCounts QueueTotals  `json:"recipient_counts"`
 	Audience        SendAudience `json:"audience"`
+	// bulk (a list, a group, a Forms source, an approved send), system (a System template's mail that is not bulk: a login code, a ticket, a Forms confirmation) or single (any other); the kind filter of GET /mail_tasks.
+	Kind string `json:"kind" enums:"bulk,single,system"`
 	// Whether the caller may open the send's content (GET /mail_tasks/{id}/queue/{itemId}/content), and if not why.
 	// masked: a sensitive send, kept with its codes and one-time links masked; pending: a sensitive send not masked yet, not shown; not_kept: a sensitive send emptied (before sensitive content was kept, or not masked for certain).
 	ContentAccess ContentAccess `json:"content_access" enums:"available,masked,pending,restricted,expired,not_kept"`
@@ -475,36 +477,41 @@ type SendPurposeFields struct {
 // GetTasks godoc
 //
 //	@Summary		List all mail tasks
-//	@Description	Get a list of all mail tasks with pagination, newest first, each with its derived status, recipients by status and audience. The status filter keeps only sends with that derived status; X-Total-Count counts the filtered sends. Keycloak group names are looked up within 2 seconds for the whole page and are null past that.
+//	@Description	Get a list of all mail tasks with pagination, newest first, each with its derived status, recipients by status and audience. Every filter given keeps only the sends that match it, and X-Total-Count counts them. q matches, case-insensitively, the template's name, key or subject, the list's name, the Forms form's title, an approved send's requester or, on a send to people (no list, no Forms source), a recipient's address or name. _sort=open_rate orders by the share of tracked recipients who likely opened (unique_likely_human_opens / tracked_recipients, as GET /mail_tasks/{id}/tracking reads them), sends with no rate last; it needs skymail:mails:tracking:read (403 mail_task.sort_forbidden), since the order tells counts that endpoint may withhold. Keycloak group names are looked up within 2 seconds for the whole page and are null past that.
 //	@Tags			Mail
 //	@Produce		json
-//	@Param			_start	query		int		false	"Start index"
-//	@Param			_end	query		int		false	"End index"
-//	@Param			status	query		string	false	"Derived send status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent)"	Enums(failed,sending,sent)
-//	@Success		200		{array}		handlers.MailTaskItem
-//	@Header			200		{integer}	X-Total-Count		"Number of sends matching the filter"
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Param			_start		query		int		false	"Start index"
+//	@Param			_end		query		int		false	"End index"
+//	@Param			status		query		string	false	"Derived send status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent)"	Enums(failed,sending,sent)
+//	@Param			q			query		string	false	"Text to find (at most 200 characters)"
+//	@Param			from		query		string	false	"Sends created on or after this date (YYYY-MM-DD, Europe/Istanbul) or RFC 3339 time"
+//	@Param			to			query		string	false	"Sends created on or before this date (YYYY-MM-DD, Europe/Istanbul, the whole day) or RFC 3339 time"
+//	@Param			kind		query		string	false	"bulk (a list, a group, a Forms source, an approved send), system (a System template's mail, not bulk), single (any other)"	Enums(bulk,single,system)
+//	@Param			template_id	query		string	false	"Sends of this template"																									format(uuid)
+//	@Param			list_id		query		string	false	"Sends to this SkyMail list"																								format(uuid)
+//	@Param			sent_by		query		string	false	"Sends by this sender (the sender's sub, as sent_by returns it)"
+//	@Param			_sort		query		string	false	"Order"		Enums(created_at,open_rate)	default(created_at)
+//	@Param			_order		query		string	false	"Direction"	Enums(asc,desc)				default(desc)
+//	@Success		200			{array}		handlers.MailTaskItem
+//	@Header			200			{integer}	X-Total-Count		"Number of sends matching the filter"
+//	@Failure		400			{object}	apperrors.AppError	"Bad Request"
+//	@Failure		403			{object}	apperrors.AppError	"Forbidden"
+//	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
 //	@Router			/mail_tasks [get]
 func (h *mailHandlerImpl) GetTasks(c fiber.Ctx) error {
-	status, err := parseSendStatusFilter(c.Query("status"))
+	query, err := parseSendListQuery(c)
 	if err != nil {
 		return err
 	}
 
 	limit, offset := getPaginationParams(c)
 
-	sends, err := h.db.ListMailTaskSends(c.Context(), database.ListMailTaskSendsParams{
-		Limit:  limit,
-		Offset: offset,
-		Status: status,
-	})
+	sends, err := h.db.ListMailTaskSends(c.Context(), query.list(limit, offset))
 	if err != nil {
 		return err
 	}
 
-	count, err := h.db.CountMailTaskSends(c.Context(), status)
+	count, err := h.db.CountMailTaskSends(c.Context(), query.filter)
 	if err != nil {
 		return err
 	}
@@ -549,13 +556,14 @@ func (h *mailHandlerImpl) GetTask(c fiber.Ctx) error {
 // GetTaskQueueItems godoc
 //
 //	@Summary		Get mail queue items for a task
-//	@Description	Get a send's recipients, one queue row each, newest first with the row id breaking ties so pages neither repeat nor skip a recipient. The status filter keeps only recipients in that queue status; X-Total-Count counts the filtered recipients.
+//	@Description	Get a send's recipients, one queue row each, newest first with the row id breaking ties so pages neither repeat nor skip a recipient. The status filter keeps only recipients in that queue status, or with skipped the failed ones that were not sent on purpose (a reserved domain, a suppressed or unsubscribed address, a preference, a cancelled send: the rows that never make the send read failed); failed still lists every failed row. q keeps the recipients whose address or name contains it, case-insensitively. X-Total-Count counts the filtered recipients.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id		path		string	true	"Task ID"
 //	@Param			_start	query		int		false	"Start index"
 //	@Param			_end	query		int		false	"End index"
-//	@Param			status	query		string	false	"Recipient queue status"	Enums(pending,processing,sent,failed)
+//	@Param			status	query		string	false	"Recipient queue status, or skipped"	Enums(pending,processing,sent,failed,skipped)
+//	@Param			q		query		string	false	"Part of an address or a name (at most 200 characters)"
 //	@Success		200		{array}		handlers.QueueItem
 //	@Header			200		{integer}	X-Total-Count		"Number of recipients matching the filter"
 //	@Failure		400		{object}	apperrors.AppError	"Bad Request"
@@ -568,26 +576,34 @@ func (h *mailHandlerImpl) GetTaskQueueItems(c fiber.Ctx) error {
 		return err
 	}
 
-	status, err := parseRecipientStatusFilter(c.Query("status"))
+	status, skipped, err := parseRecipientListFilter(c.Query("status"))
 	if err != nil {
 		return err
+	}
+	search, ok := searchParam(c.Query("q"))
+	if !ok {
+		return errSearchTooLong
 	}
 
 	limit, offset := getPaginationParams(c)
 
 	items, err := h.db.GetMailQueueItemsByTaskId(c.Context(), database.GetMailQueueItemsByTaskIdParams{
-		TaskID: id,
-		Limit:  limit,
-		Offset: offset,
-		Status: status,
+		TaskID:  id,
+		Limit:   limit,
+		Offset:  offset,
+		Status:  status,
+		Skipped: skipped,
+		Search:  search,
 	})
 	if err != nil {
 		return err
 	}
 
 	count, err := h.db.CountMailQueueItemsByTaskId(c.Context(), database.CountMailQueueItemsByTaskIdParams{
-		TaskID: id,
-		Status: status,
+		TaskID:  id,
+		Status:  status,
+		Skipped: skipped,
+		Search:  search,
 	})
 	if err != nil {
 		return err

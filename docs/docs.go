@@ -388,6 +388,9 @@ const docTemplate = `{
             },
             "handlers.DailySent": {
                 "properties": {
+                    "by_stream": {
+                        "$ref": "#/components/schemas/handlers.StreamCounts"
+                    },
                     "date": {
                         "example": "2026-09-22",
                         "type": "string"
@@ -1031,6 +1034,15 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "id": {
+                        "type": "string"
+                    },
+                    "kind": {
+                        "description": "bulk (a list, a group, a Forms source, an approved send), system (a System template's mail that is not bulk: a login code, a ticket, a Forms confirmation) or single (any other); the kind filter of GET /mail_tasks.",
+                        "enum": [
+                            "bulk",
+                            "single",
+                            "system"
+                        ],
                         "type": "string"
                     },
                     "mail_list_id": {
@@ -1880,6 +1892,21 @@ const docTemplate = `{
                         "description": "The last one's codes, never its text: 5.2.2, 5.7.1, 5.4.1 AS(…); the\nrelay's reply code when the report gave none.",
                         "example": "5.2.2",
                         "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.StreamCounts": {
+                "description": "The day's sent mail by stream; the three add up to sent.",
+                "properties": {
+                    "duyuru": {
+                        "type": "integer"
+                    },
+                    "islem": {
+                        "type": "integer"
+                    },
+                    "system": {
+                        "type": "integer"
                     }
                 },
                 "type": "object"
@@ -3575,6 +3602,14 @@ const docTemplate = `{
                         }
                     },
                     {
+                        "description": "Part of the template's name, key or subject, the list's name, the Forms form's title or the requester's name (at most 200 characters)",
+                        "in": "query",
+                        "name": "q",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
                         "description": "Start index",
                         "in": "query",
                         "name": "_start",
@@ -4453,7 +4488,7 @@ const docTemplate = `{
         },
         "/mail_tasks": {
             "get": {
-                "description": "Get a list of all mail tasks with pagination, newest first, each with its derived status, recipients by status and audience. The status filter keeps only sends with that derived status; X-Total-Count counts the filtered sends. Keycloak group names are looked up within 2 seconds for the whole page and are null past that.",
+                "description": "Get a list of all mail tasks with pagination, newest first, each with its derived status, recipients by status and audience. Every filter given keeps only the sends that match it, and X-Total-Count counts them. q matches, case-insensitively, the template's name, key or subject, the list's name, the Forms form's title, an approved send's requester or, on a send to people (no list, no Forms source), a recipient's address or name. _sort=open_rate orders by the share of tracked recipients who likely opened (unique_likely_human_opens / tracked_recipients, as GET /mail_tasks/{id}/tracking reads them), sends with no rate last; it needs skymail:mails:tracking:read (403 mail_task.sort_forbidden), since the order tells counts that endpoint may withhold. Keycloak group names are looked up within 2 seconds for the whole page and are null past that.",
                 "parameters": [
                     {
                         "description": "Start index",
@@ -4480,6 +4515,95 @@ const docTemplate = `{
                                 "failed",
                                 "sending",
                                 "sent"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Text to find (at most 200 characters)",
+                        "in": "query",
+                        "name": "q",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Sends created on or after this date (YYYY-MM-DD, Europe/Istanbul) or RFC 3339 time",
+                        "in": "query",
+                        "name": "from",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Sends created on or before this date (YYYY-MM-DD, Europe/Istanbul, the whole day) or RFC 3339 time",
+                        "in": "query",
+                        "name": "to",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "bulk (a list, a group, a Forms source, an approved send), system (a System template's mail, not bulk), single (any other)",
+                        "in": "query",
+                        "name": "kind",
+                        "schema": {
+                            "enum": [
+                                "bulk",
+                                "single",
+                                "system"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Sends of this template",
+                        "in": "query",
+                        "name": "template_id",
+                        "schema": {
+                            "format": "uuid",
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Sends to this SkyMail list",
+                        "in": "query",
+                        "name": "list_id",
+                        "schema": {
+                            "format": "uuid",
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Sends by this sender (the sender's sub, as sent_by returns it)",
+                        "in": "query",
+                        "name": "sent_by",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Order",
+                        "in": "query",
+                        "name": "_sort",
+                        "schema": {
+                            "default": "created_at",
+                            "enum": [
+                                "created_at",
+                                "open_rate"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Direction",
+                        "in": "query",
+                        "name": "_order",
+                        "schema": {
+                            "default": "desc",
+                            "enum": [
+                                "asc",
+                                "desc"
                             ],
                             "type": "string"
                         }
@@ -4614,7 +4738,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE; README, \\\"Toplu postada tercih\\\"), core did not say whom the send may go to; nothing is queued"
+                        "description": "mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE; README, \\\"Toplu\tpostada\ttercih\\\"), core did not say whom the send may go to; nothing is queued"
                     }
                 },
                 "summary": "Create a new mail task",
@@ -4838,7 +4962,7 @@ const docTemplate = `{
         },
         "/mail_tasks/summary": {
             "get": {
-                "description": "Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); tracking_always, true while SKYMAIL_TRACKING_OPERATOR=on too (every person's send is tracked, the field is ignored, the send form shows no box); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).",
+                "description": "Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); tracking_always, true while SKYMAIL_TRACKING_OPERATOR=on too (every person's send is tracked, the field is ignored, the send form shows no box); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today), each split by stream (by_stream: system, duyuru, islem); and the latest sends. Derived status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).",
                 "parameters": [
                     {
                         "description": "Days in the daily series, ending today in Europe/Istanbul (1-90)",
@@ -5235,7 +5359,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/queue": {
             "get": {
-                "description": "Get a send's recipients, one queue row each, newest first with the row id breaking ties so pages neither repeat nor skip a recipient. The status filter keeps only recipients in that queue status; X-Total-Count counts the filtered recipients.",
+                "description": "Get a send's recipients, one queue row each, newest first with the row id breaking ties so pages neither repeat nor skip a recipient. The status filter keeps only recipients in that queue status, or with skipped the failed ones that were not sent on purpose (a reserved domain, a suppressed or unsubscribed address, a preference, a cancelled send: the rows that never make the send read failed); failed still lists every failed row. q keeps the recipients whose address or name contains it, case-insensitively. X-Total-Count counts the filtered recipients.",
                 "parameters": [
                     {
                         "description": "Task ID",
@@ -5263,7 +5387,7 @@ const docTemplate = `{
                         }
                     },
                     {
-                        "description": "Recipient queue status",
+                        "description": "Recipient queue status, or skipped",
                         "in": "query",
                         "name": "status",
                         "schema": {
@@ -5271,8 +5395,17 @@ const docTemplate = `{
                                 "pending",
                                 "processing",
                                 "sent",
-                                "failed"
+                                "failed",
+                                "skipped"
                             ],
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Part of an address or a name (at most 200 characters)",
+                        "in": "query",
+                        "name": "q",
+                        "schema": {
                             "type": "string"
                         }
                     }
@@ -5619,7 +5752,7 @@ const docTemplate = `{
         },
         "/mailing_lists": {
             "get": {
-                "description": "Get a list of all mailing lists (internal + Keycloak groups) with pagination.",
+                "description": "Get a list of all mailing lists (internal + Keycloak groups) with pagination. q keeps the internal lists whose name or description contains it and the Keycloak groups whose name or path does, case-insensitively; X-Total-Count counts them.",
                 "parameters": [
                     {
                         "description": "Start index",
@@ -5648,6 +5781,14 @@ const docTemplate = `{
                                 "inactive",
                                 "all"
                             ],
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Part of a name (at most 200 characters)",
+                        "in": "query",
+                        "name": "q",
+                        "schema": {
                             "type": "string"
                         }
                     }
@@ -7927,7 +8068,7 @@ const docTemplate = `{
         },
         "/templates": {
             "get": {
-                "description": "Get a list of all email templates with pagination.",
+                "description": "Get a list of all email templates with pagination. q keeps the templates whose name, key or subject contains it, case-insensitively; X-Total-Count counts them.",
                 "parameters": [
                     {
                         "description": "Start index",
@@ -7956,6 +8097,14 @@ const docTemplate = `{
                                 "inactive",
                                 "all"
                             ],
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Part of a name, key or subject (at most 200 characters)",
+                        "in": "query",
+                        "name": "q",
+                        "schema": {
                             "type": "string"
                         }
                     }
