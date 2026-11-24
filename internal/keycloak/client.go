@@ -288,6 +288,57 @@ func (c *clientImpl) VerifiedAccountByEmail(ctx context.Context, address string)
 	return ExactVerifiedAccount(address, users), nil
 }
 
+// AccountFinder says whether an address is someone's account (the recipient
+// retention run: ADR-0062 keeps a member's rows with the account, and empties
+// only those of people without one).
+type AccountFinder interface {
+	HasAccount(ctx context.Context, address string) (bool, error)
+}
+
+// accountAddressAttributes are the user attributes besides the primary
+// e-mail that hold a person's address (e-skylab-keycloak: the school and the
+// personal address).
+var accountAddressAttributes = []string{"schoolEmail", "personalEmail"}
+
+// HasAccount says whether any user, enabled or not, verified or not, has
+// address as their primary e-mail (Keycloak's exact search) or as their
+// school or personal address (an exact attribute search, with the address
+// as given and lower-cased). Any match is an account: when in doubt a row is
+// kept, never emptied. An error is no answer.
+func (c *clientImpl) HasAccount(ctx context.Context, address string) (bool, error) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return false, nil
+	}
+	token, err := c.getToken(ctx)
+	if err != nil {
+		return false, err
+	}
+	one := func(params gocloak.GetUsersParams) (bool, error) {
+		params.Exact = gocloak.BoolP(true)
+		params.Max = gocloak.IntP(1)
+		params.BriefRepresentation = gocloak.BoolP(true)
+		users, err := c.gc.GetUsers(ctx, token, c.realm, params)
+		return len(users) > 0, err
+	}
+	if found, err := one(gocloak.GetUsersParams{Email: &address}); err != nil || found {
+		return found, err
+	}
+	forms := []string{address}
+	if lower := strings.ToLower(address); lower != address {
+		forms = append(forms, lower)
+	}
+	for _, attribute := range accountAddressAttributes {
+		for _, form := range forms {
+			q := attribute + ":" + form
+			if found, err := one(gocloak.GetUsersParams{Q: &q}); err != nil || found {
+				return found, err
+			}
+		}
+	}
+	return false, nil
+}
+
 // ExactVerifiedAccount is the account of address among users, as Keycloak's
 // exact e-mail search gave them: the only one whose primary e-mail equals
 // address case-insensitively, if it is enabled and its e-mail verified. None

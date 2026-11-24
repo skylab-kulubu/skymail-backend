@@ -231,3 +231,30 @@ func TestAnUnparsableRecipientsRowAndLogCarryNoAddress(t *testing.T) {
 		}
 	}
 }
+
+// A relay that took the mail and then refuses what go-mail says after it
+// (RSET) is logged as a failed row records it: the stage and the codes, never
+// the relay's text, which may echo the address (hub sector audit 2026-11-24,
+// 06 fix 14).
+func TestAFailureAfterTheMailIsLoggedWithoutTheAddress(t *testing.T) {
+	logs := captureMailerLogs(t)
+	err := sendThrough(t, "RSET", "550 5.1.1 <alici@example.com>: Recipient address rejected", "alici@example.com")
+	if err != nil {
+		t.Fatalf("a mail the relay took = %v, want sent", err)
+	}
+	var logged []string
+	for _, line := range logs.lines(t) {
+		if msg, _ := line["message"].(string); strings.Contains(msg, "SMTP exchange after it failed") {
+			logged = append(logged, line["error"].(string))
+		}
+	}
+	if len(logged) != 1 {
+		t.Fatalf("logged %d failures after the mail, want 1", len(logged))
+	}
+	if strings.Contains(logged[0], "alici") || strings.Contains(logged[0], "Recipient address") {
+		t.Errorf("the log carries the relay's text: %q", logged[0])
+	}
+	if !strings.Contains(logged[0], "550") {
+		t.Errorf("the log lost the reply code: %q", logged[0])
+	}
+}

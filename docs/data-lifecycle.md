@@ -188,14 +188,17 @@ never rewritten but by Account erasure.
 
 ## Personal data
 
-These fields keep a person's identity with no end date, until Account erasure
-takes the person out of them:
+These fields keep a person's identity until Account erasure takes the person
+out of them; for someone without an account, until the recipient retention
+run does (see [Recipients without an account](#recipients-without-an-account)):
 
 - `recipients.full_name` and `email`, and their `mailing_list_recipients` —
-  the people on internal mailing lists.
+  the people on internal mailing lists. A list archived a year ago loses
+  them.
 - `mail_queue.recipient_full_name`, `recipient_email`, `recipient_sub` (the
   recipient's Keycloak subject, when the send knew it: a Keycloak group's
-  member), and `error`, which can quote the address. The mail rendered for them — `subject`, `body`,
+  member), and `error`, which can quote the address. Without an account:
+  emptied once the send's content is (the address in `error` masked). The mail rendered for them — `subject`, `body`,
   `body_html` — is kept only for a while: see
   [Sent mail content](#sent-mail-content). `list_unsubscribe_url`, the
   recipient's one-click unsubscribe link as core signed it (its token names
@@ -254,7 +257,8 @@ takes the person out of them:
   had not verified, which is not kept).
 - `mail_approval_recipients.email` and `full_name` — the people a request
   goes to. A resubmission replaces them; its `resubmitted` event keeps who they
-  were.
+  were. Without an account: emptied in place (`cleared_at`) once the request
+  is over and unchanged for `MAIL_CONTENT_RETENTION_DAYS`.
 - `mail_approvals.body_variables` — the values of the send, which may name or
   address people.
 - `mail_approval_events.actor_sub` and `actor_name` — who did each thing to a
@@ -281,6 +285,32 @@ takes the person out of them:
   through SkyMail's one-click link. `mail_unsubscribe_reactivations.actor_sub`
   and `reason` — who reversed an unsubscribe and why (the address is not
   kept).
+
+## Recipients without an account
+
+ADR-0062: a recipient's row lives with the member's account, and a guest's
+for the guest's time; a manual list's people a year after it was archived
+(hub sector audit 2026-11-24, 06 fix 3; README, "Hesapsız alıcıların
+saklaması"). The recipient retention run (`SKYMAIL_RECIPIENT_RETENTION`,
+`dry-run` by default) runs daily under an advisory lock, one transaction per
+list, send or request, with a brake and a receipt, as the tracking retention
+run does:
+
+| What | Kept | Then |
+|---|---|---|
+| `mailing_list_recipients` of a manual list archived ≥ 1 year ago, and a `recipients` row no other list holds | one year from `mailing_lists.archived_at` | deleted, for everyone |
+| `mail_queue.recipient_email`, `recipient_full_name` of a recipient without an account | while the send's content is kept (`MAIL_CONTENT_RETENTION_DAYS`) | emptied once the content sweep emptied the send (`content_cleared_at`); an address in `error` is masked, its codes stay; the row and the send's counts stay |
+| `mail_approval_recipients.email`, `full_name` of a person without an account | while the request is going or for `MAIL_CONTENT_RETENTION_DAYS` after it last changed, and while a send of it keeps its content | emptied in place (`cleared_at`): its position, and so `task_ids[i]`, stays |
+| `recipient_retention_runs` | without end: one row per run, counts and times only | — |
+
+Without an account means all three: the row names no subject
+(`recipient_sub`); no other queue row and no suppression ties the address to
+one; and Keycloak finds no user, enabled or not, whose primary, school or
+personal address it is. A Keycloak that does not answer leaves the row for
+the next run. A member's row is never touched by the run: Account erasure
+takes it. Not covered: `mail_approval_events.changes` (who a request went to,
+before and after an edit) and `mail_approvals.body_variables` keep what they
+kept.
 
 ## Bounces and suppression
 
