@@ -134,12 +134,13 @@ func (h *listHandlerImpl) CreateList(c fiber.Ctx) error {
 // GetLists godoc
 //
 //	@Summary		List all mailing lists
-//	@Description	Get a list of all mailing lists (internal + Keycloak groups) with pagination.
+//	@Description	Get a list of all mailing lists (internal + Keycloak groups) with pagination. q keeps the internal lists whose name or description contains it and the Keycloak groups whose name or path does (any case, Turkish capitals included; I, ı, İ and i alike); X-Total-Count counts them.
 //	@Tags			Lists
 //	@Produce		json
 //	@Param			_start		query		int		false	"Start index"
 //	@Param			_end		query		int		false	"End index"
 //	@Param			lifecycle	query		string	false	"Lifecycle filter: current, inactive, all"	Enums(current,inactive,all)	default(current)
+//	@Param			q			query		string	false	"Part of a name (at most 200 characters)"
 //	@Success		200			{array}		handlers.MailingListItem
 //	@Failure		400			{object}	apperrors.Problem	"Bad Request"
 //	@Failure		500			{object}	apperrors.Problem	"Internal Server Error"
@@ -151,24 +152,28 @@ func (h *listHandlerImpl) GetLists(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	search, ok := searchParam(c.Query("q"))
+	if !ok {
+		return errSearchTooLong
+	}
 
 	var lists []database.MailingList
 	var dbCount int64
 	switch lifecycle {
 	case lifecycleCurrent:
-		lists, err = h.db.GetAllMailingLists(c.Context(), database.GetAllMailingListsParams{Limit: limit, Offset: offset})
+		lists, err = h.db.GetAllMailingLists(c.Context(), database.GetAllMailingListsParams{Limit: limit, Offset: offset, Search: search})
 		if err == nil {
-			dbCount, err = h.db.CountMailingLists(c.Context())
+			dbCount, err = h.db.CountMailingLists(c.Context(), search)
 		}
 	case lifecycleInactive:
-		lists, err = h.db.GetArchivedMailingLists(c.Context(), database.GetArchivedMailingListsParams{Limit: limit, Offset: offset})
+		lists, err = h.db.GetArchivedMailingLists(c.Context(), database.GetArchivedMailingListsParams{Limit: limit, Offset: offset, Search: search})
 		if err == nil {
-			dbCount, err = h.db.CountArchivedMailingLists(c.Context())
+			dbCount, err = h.db.CountArchivedMailingLists(c.Context(), search)
 		}
 	case lifecycleAll:
-		lists, err = h.db.GetAllMailingListsIncludingArchived(c.Context(), database.GetAllMailingListsIncludingArchivedParams{Limit: limit, Offset: offset})
+		lists, err = h.db.GetAllMailingListsIncludingArchived(c.Context(), database.GetAllMailingListsIncludingArchivedParams{Limit: limit, Offset: offset, Search: search})
 		if err == nil {
-			dbCount, err = h.db.CountAllMailingListsIncludingArchived(c.Context())
+			dbCount, err = h.db.CountAllMailingListsIncludingArchived(c.Context(), search)
 		}
 	}
 	if err != nil {
@@ -181,6 +186,7 @@ func (h *listHandlerImpl) GetLists(c fiber.Ctx) error {
 		if err != nil {
 			return err
 		}
+		groups = groupsMatching(groups, search)
 	}
 
 	items := make([]MailingListItem, 0, len(lists)+len(groups))

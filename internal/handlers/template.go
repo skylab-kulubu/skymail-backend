@@ -186,12 +186,13 @@ func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
 // GetTemplates godoc
 //
 //	@Summary		List all email templates
-//	@Description	Get a list of all email templates with pagination.
+//	@Description	Get a list of all email templates with pagination. q keeps the templates whose name, key or subject contains it (any case, Turkish capitals included; I, ı, İ and i alike); X-Total-Count counts them.
 //	@Tags			Templates
 //	@Produce		json
 //	@Param			_start		query		int		false	"Start index"
 //	@Param			_end		query		int		false	"End index"
 //	@Param			lifecycle	query		string	false	"Lifecycle filter: current, inactive, all"	Enums(current,inactive,all)	default(current)
+//	@Param			q			query		string	false	"Part of a name, key or subject (at most 200 characters)"
 //	@Success		200			{array}		handlers.Template
 //	@Failure		400			{object}	apperrors.Problem	"Bad Request"
 //	@Failure		500			{object}	apperrors.Problem	"Internal Server Error"
@@ -203,24 +204,28 @@ func (h *templateHandlerImpl) GetTemplates(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	search, ok := searchParam(c.Query("q"))
+	if !ok {
+		return errSearchTooLong
+	}
 
 	var templates []database.Template
 	var count int64
 	switch lifecycle {
 	case lifecycleCurrent:
-		templates, err = h.db.GetAllTemplates(c.Context(), database.GetAllTemplatesParams{Limit: limit, Offset: offset})
+		templates, err = h.db.GetAllTemplates(c.Context(), database.GetAllTemplatesParams{Limit: limit, Offset: offset, Search: search})
 		if err == nil {
-			count, err = h.db.CountTemplates(c.Context())
+			count, err = h.db.CountTemplates(c.Context(), search)
 		}
 	case lifecycleInactive:
-		templates, err = h.db.GetArchivedTemplates(c.Context(), database.GetArchivedTemplatesParams{Limit: limit, Offset: offset})
+		templates, err = h.db.GetArchivedTemplates(c.Context(), database.GetArchivedTemplatesParams{Limit: limit, Offset: offset, Search: search})
 		if err == nil {
-			count, err = h.db.CountArchivedTemplates(c.Context())
+			count, err = h.db.CountArchivedTemplates(c.Context(), search)
 		}
 	case lifecycleAll:
-		templates, err = h.db.GetAllTemplatesIncludingArchived(c.Context(), database.GetAllTemplatesIncludingArchivedParams{Limit: limit, Offset: offset})
+		templates, err = h.db.GetAllTemplatesIncludingArchived(c.Context(), database.GetAllTemplatesIncludingArchivedParams{Limit: limit, Offset: offset, Search: search})
 		if err == nil {
-			count, err = h.db.CountAllTemplatesIncludingArchived(c.Context())
+			count, err = h.db.CountAllTemplatesIncludingArchived(c.Context(), search)
 		}
 	}
 	if err != nil {

@@ -161,6 +161,17 @@ type SendCounts struct {
 type DailySent struct {
 	Date string `json:"date" example:"2026-09-22"`
 	Sent int64  `json:"sent"`
+	// The day's sent mail by stream; the three add up to sent.
+	ByStream StreamCounts `json:"by_stream"`
+}
+
+// StreamCounts is mail by stream: system (a System template's mail: account,
+// ticket, Forms confirmation), duyuru (a duyuru send; one without a purpose
+// when it went in the bulk lane) and islem (any other).
+type StreamCounts struct {
+	Duyuru int64 `json:"duyuru"`
+	Islem  int64 `json:"islem"`
+	System int64 `json:"system"`
 }
 
 // SendAudience is who a send went to: a mailing list — an internal one or a
@@ -246,7 +257,7 @@ func (h *mailHandlerImpl) GetTrackingMode(c fiber.Ctx) error {
 // GetSummary godoc
 //
 //	@Summary		Summarise mail sends
-//	@Description	Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); tracking_always, true while SKYMAIL_TRACKING_OPERATOR=on too (every person's send is tracked, the field is ignored, the send form shows no box); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).
+//	@Description	Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); tracking_always, true while SKYMAIL_TRACKING_OPERATOR=on too (every person's send is tracked, the field is ignored, the send form shows no box); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today), each split by stream (by_stream: system, duyuru, islem); and the latest sends. Derived status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			days	query		int	false	"Days in the daily series, ending today in Europe/Istanbul (1-90)"	default(30)
@@ -286,7 +297,8 @@ func (h *mailHandlerImpl) GetSummary(c fiber.Ctx) error {
 	}
 	dailySent := make([]DailySent, len(series))
 	for i, day := range series {
-		dailySent[i] = DailySent{Date: day.Day.Format("2006-01-02"), Sent: day.Sent}
+		dailySent[i] = DailySent{Date: day.Day.Format("2006-01-02"), Sent: day.Sent,
+			ByStream: StreamCounts{Duyuru: day.Duyuru, Islem: day.Islem, System: day.System}}
 	}
 
 	sends, err := h.db.ListMailTaskSends(c.Context(), database.ListMailTaskSendsParams{
@@ -365,6 +377,7 @@ func (h *mailHandlerImpl) mailTaskItems(ctx context.Context, caller contentCalle
 			Status:           SendStatus(send.Status),
 			RecipientCounts:  recipientCounts(send),
 			Audience:         sendAudience(send, groupNames),
+			Kind:             send.Kind,
 			Tracking:         send.TrackingRequested,
 			SendPurposeFields: SendPurposeFields{
 				Purpose:                 send.Purpose,

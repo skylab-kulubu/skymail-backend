@@ -178,6 +178,11 @@ func TestASendersPurposeIsWrittenAndReadBack(t *testing.T) {
 	if got := w.purposeOf(islem.ID); str(got.purpose) != "islem" || got.transactional == nil || !*got.transactional || got.category != nil || w.laneOf(islem.ID) != mailer.PrioritySystem {
 		t.Errorf("islem single written %+v in lane %d", got, w.laneOf(islem.ID))
 	}
+	// A person's untracked single mail goes in the system lane, yet it is
+	// theirs: the send list's kind is single, not system.
+	if kind := w.kindOf(islem.ID); kind != "single" {
+		t.Errorf("a person's islem single in the system lane: kind %s, want single", kind)
+	}
 
 	var duyuru createdPurpose
 	team := "team:6F1D2C3B-0A9E-4F8D-8C7B-6A5E4D3C2B1A:haber"
@@ -319,7 +324,8 @@ func TestAServicesSingleMailIsAlwaysIslem(t *testing.T) {
 		service bool
 		purpose string
 		lane    mailer.Priority
-	}{{"service", true, "islem", mailer.PrioritySystem}, {"person", false, "duyuru", mailer.PriorityBulk}} {
+		kind    string
+	}{{"service", true, "islem", mailer.PrioritySystem, "system"}, {"person", false, "duyuru", mailer.PriorityBulk, "single"}} {
 		body, _ := json.Marshal(send)
 		request := httptest.NewRequest(http.MethodPost, "/v1/mail_tasks/single", bytes.NewReader(body))
 		request.Header.Set("Authorization", "Bearer "+bearer(t, uuid.NewString(), c.service, "skymail:access", "skymail:mails:send"))
@@ -335,6 +341,10 @@ func TestAServicesSingleMailIsAlwaysIslem(t *testing.T) {
 		}
 		if got := w.purposeOf(created.ID); str(got.purpose) != c.purpose || w.laneOf(created.ID) != c.lane || (c.service && (got.category != nil || got.transactional != nil)) {
 			t.Errorf("%s: written %s %s in lane %d", c.name, str(got.purpose), str(got.category), w.laneOf(created.ID))
+		}
+		// The send list's kind: a service's mail is system, a person's single.
+		if kind := w.kindOf(created.ID); kind != c.kind {
+			t.Errorf("%s: kind %s, want %s", c.name, kind, c.kind)
 		}
 	}
 }

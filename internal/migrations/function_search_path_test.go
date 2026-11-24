@@ -158,4 +158,13 @@ func TestEveryFunctionPinsItsSearchPath(t *testing.T) {
 	if _, err := migrations.Run(ctx, database.URL, 0); err != nil {
 		t.Fatalf("up again: %v", err)
 	}
+
+	// Every later migration pins its functions too, but for one:
+	// skymail_search_fold() (20261124200000) runs on every row a list search
+	// reads, and a SQL function with a SET is never inlined; it names
+	// pg_catalog's functions with their schema instead, so it needs no
+	// search_path.
+	if got, want := unpinned(), []string{"skymail_search_fold(text)"}; !slices.Equal(got, want) {
+		t.Fatalf("at the latest migration, functions with no search_path of their own = %v, want only %v; pin each with SET search_path = pg_catalog, public", got, want)
+	}
 }

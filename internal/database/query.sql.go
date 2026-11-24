@@ -732,10 +732,12 @@ func (q *Queries) ConsumeMailFormSource(ctx context.Context, arg ConsumeMailForm
 const countAllMailingListsIncludingArchived = `-- name: CountAllMailingListsIncludingArchived :one
 SELECT count(*)
 FROM mailing_lists
+WHERE ($1::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($1::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(description, '')), skymail_search_fold($1::text)) > 0)
 `
 
-func (q *Queries) CountAllMailingListsIncludingArchived(ctx context.Context) (int64, error) {
-	row := q.db.QueryRow(ctx, countAllMailingListsIncludingArchived)
+func (q *Queries) CountAllMailingListsIncludingArchived(ctx context.Context, search *string) (int64, error) {
+	row := q.db.QueryRow(ctx, countAllMailingListsIncludingArchived, search)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -744,10 +746,13 @@ func (q *Queries) CountAllMailingListsIncludingArchived(ctx context.Context) (in
 const countAllTemplatesIncludingArchived = `-- name: CountAllTemplatesIncludingArchived :one
 SELECT count(*)
 FROM templates
+WHERE ($1::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($1::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(key, '')), skymail_search_fold($1::text)) > 0
+       OR strpos(skymail_search_fold(subject), skymail_search_fold($1::text)) > 0)
 `
 
-func (q *Queries) CountAllTemplatesIncludingArchived(ctx context.Context) (int64, error) {
-	row := q.db.QueryRow(ctx, countAllTemplatesIncludingArchived)
+func (q *Queries) CountAllTemplatesIncludingArchived(ctx context.Context, search *string) (int64, error) {
+	row := q.db.QueryRow(ctx, countAllTemplatesIncludingArchived, search)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -757,10 +762,12 @@ const countArchivedMailingLists = `-- name: CountArchivedMailingLists :one
 SELECT count(*)
 FROM mailing_lists
 WHERE archived_at IS NOT NULL
+  AND ($1::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($1::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(description, '')), skymail_search_fold($1::text)) > 0)
 `
 
-func (q *Queries) CountArchivedMailingLists(ctx context.Context) (int64, error) {
-	row := q.db.QueryRow(ctx, countArchivedMailingLists)
+func (q *Queries) CountArchivedMailingLists(ctx context.Context, search *string) (int64, error) {
+	row := q.db.QueryRow(ctx, countArchivedMailingLists, search)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -770,10 +777,13 @@ const countArchivedTemplates = `-- name: CountArchivedTemplates :one
 SELECT count(*)
 FROM templates
 WHERE archived_at IS NOT NULL
+  AND ($1::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($1::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(key, '')), skymail_search_fold($1::text)) > 0
+       OR strpos(skymail_search_fold(subject), skymail_search_fold($1::text)) > 0)
 `
 
-func (q *Queries) CountArchivedTemplates(ctx context.Context) (int64, error) {
-	row := q.db.QueryRow(ctx, countArchivedTemplates)
+func (q *Queries) CountArchivedTemplates(ctx context.Context, search *string) (int64, error) {
+	row := q.db.QueryRow(ctx, countArchivedTemplates, search)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -804,20 +814,36 @@ func (q *Queries) CountInboxItems(ctx context.Context, userID uuid.UUID) (CountI
 const countMailApprovals = `-- name: CountMailApprovals :one
 SELECT count(*)
 FROM mail_approvals a
+         JOIN templates t ON t.id = a.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = a.mail_list_id
+         LEFT JOIN mail_form_sources fs ON fs.id = a.form_source_id
 WHERE ($1::text IS NULL OR a.submitter_sub = $1::text)
   AND ($2::mail_approval_state IS NULL OR $2::mail_approval_state = (CASE
         WHEN a.state IN ('pending', 'returned') AND a.deadline_at <= $3 THEN 'expired'
         ELSE a.state END))
+  AND ($4::text IS NULL
+       OR strpos(skymail_search_fold(t.name), skymail_search_fold($4::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold($4::text)) > 0
+       OR strpos(skymail_search_fold(t.subject), skymail_search_fold($4::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(ml.name, '')), skymail_search_fold($4::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold($4::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold($4::text)) > 0)
 `
 
 type CountMailApprovalsParams struct {
 	SubmitterSub *string               `json:"submitter_sub"`
 	State        NullMailApprovalState `json:"state"`
 	AsOf         time.Time             `json:"as_of"`
+	Search       *string               `json:"search"`
 }
 
 func (q *Queries) CountMailApprovals(ctx context.Context, arg CountMailApprovalsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countMailApprovals, arg.SubmitterSub, arg.State, arg.AsOf)
+	row := q.db.QueryRow(ctx, countMailApprovals,
+		arg.SubmitterSub,
+		arg.State,
+		arg.AsOf,
+		arg.Search,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -854,15 +880,29 @@ SELECT count(*)
 FROM mail_queue
 WHERE task_id = $1
   AND ($2::mail_queue_status IS NULL OR status = $2::mail_queue_status)
+  AND ($3::boolean IS FALSE
+       OR (status = 'failed'
+           AND (COALESCE(error, '') LIKE 'reserved\_domain:%'
+                OR COALESCE(error, '') LIKE 'suppressed:%'
+                OR COALESCE(error, '') IN ('preference: opted_out', 'preference: inactive', 'preference: ambiguous', 'cancelled'))))
+  AND ($4::text IS NULL OR strpos(skymail_search_fold(recipient_email), skymail_search_fold($4::text)) > 0
+       OR strpos(skymail_search_fold(recipient_full_name), skymail_search_fold($4::text)) > 0)
 `
 
 type CountMailQueueItemsByTaskIdParams struct {
-	TaskID uuid.UUID           `json:"task_id"`
-	Status NullMailQueueStatus `json:"status"`
+	TaskID  uuid.UUID           `json:"task_id"`
+	Status  NullMailQueueStatus `json:"status"`
+	Skipped bool                `json:"skipped"`
+	Search  *string             `json:"search"`
 }
 
 func (q *Queries) CountMailQueueItemsByTaskId(ctx context.Context, arg CountMailQueueItemsByTaskIdParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countMailQueueItemsByTaskId, arg.TaskID, arg.Status)
+	row := q.db.QueryRow(ctx, countMailQueueItemsByTaskId,
+		arg.TaskID,
+		arg.Status,
+		arg.Skipped,
+		arg.Search,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -892,11 +932,61 @@ func (q *Queries) CountMailTaskRows(ctx context.Context, taskID uuid.UUID) (Coun
 const countMailTaskSends = `-- name: CountMailTaskSends :one
 SELECT count(*)
 FROM mail_tasks mt
+         LEFT JOIN templates t ON t.id = mt.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = mt.mail_list_id
+         LEFT JOIN mail_form_sources fs ON fs.id = mt.form_source_id
 WHERE ($1::text IS NULL OR mail_task_status(mt.id) = $1::text)
+  AND ($2::text IS NULL
+       OR strpos(skymail_search_fold(COALESCE(t.name, '')), skymail_search_fold($2::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold($2::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(t.subject, '')), skymail_search_fold($2::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(ml.name, '')), skymail_search_fold($2::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold($2::text)) > 0
+       OR EXISTS (SELECT 1
+                  FROM mail_approval_tasks mat
+                           JOIN mail_approvals a ON a.id = mat.approval_id
+                  WHERE mat.task_id = mt.id
+                    AND strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold($2::text)) > 0)
+       OR (mt.mail_list_id IS NULL AND mt.form_source_id IS NULL AND mt.source_kind IS NULL
+           AND EXISTS (SELECT 1
+                       FROM mail_queue q
+                       WHERE q.task_id = mt.id
+                         AND (strpos(skymail_search_fold(q.recipient_email), skymail_search_fold($2::text)) > 0
+                              OR strpos(skymail_search_fold(q.recipient_full_name), skymail_search_fold($2::text)) > 0))))
+  AND ($3::timestamptz IS NULL OR mt.created_at >= $3::timestamptz)
+  AND ($4::timestamptz IS NULL OR mt.created_at < $4::timestamptz)
+  AND ($5::text IS NULL OR mail_task_kind(mt.id) = $5::text)
+  AND ($6::uuid IS NULL OR mt.template_id = $6::uuid)
+  AND ($7::uuid IS NULL OR mt.mail_list_id = $7::uuid)
+  AND ($8::text IS NULL OR mt.sent_by = $8::text)
 `
 
-func (q *Queries) CountMailTaskSends(ctx context.Context, status *string) (int64, error) {
-	row := q.db.QueryRow(ctx, countMailTaskSends, status)
+type CountMailTaskSendsParams struct {
+	Status        *string    `json:"status"`
+	Search        *string    `json:"search"`
+	CreatedFrom   *time.Time `json:"created_from"`
+	CreatedBefore *time.Time `json:"created_before"`
+	Kind          *string    `json:"kind"`
+	TemplateID    *uuid.UUID `json:"template_id"`
+	ListID        *uuid.UUID `json:"list_id"`
+	SentBy        *string    `json:"sent_by"`
+}
+
+// The sends ListMailTaskSends lists under the same filters, every page. It
+// joins the other tables rather than asking them through EXISTS, as the page
+// does: with no LIMIT to stop early, per-send subqueries cost the planner
+// past jit_above_cost, and JIT compiling took longer than the count.
+func (q *Queries) CountMailTaskSends(ctx context.Context, arg CountMailTaskSendsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countMailTaskSends,
+		arg.Status,
+		arg.Search,
+		arg.CreatedFrom,
+		arg.CreatedBefore,
+		arg.Kind,
+		arg.TemplateID,
+		arg.ListID,
+		arg.SentBy,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -979,10 +1069,12 @@ const countMailingLists = `-- name: CountMailingLists :one
 SELECT count(*)
 FROM mailing_lists
 WHERE archived_at IS NULL
+  AND ($1::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($1::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(description, '')), skymail_search_fold($1::text)) > 0)
 `
 
-func (q *Queries) CountMailingLists(ctx context.Context) (int64, error) {
-	row := q.db.QueryRow(ctx, countMailingLists)
+func (q *Queries) CountMailingLists(ctx context.Context, search *string) (int64, error) {
+	row := q.db.QueryRow(ctx, countMailingLists, search)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1138,7 +1230,7 @@ FROM (SELECT lower(btrim(q.recipient_email)) AS address
         AND btrim(q.recipient_email) <> ''
         AND b.received_at >= now() - make_interval(days => $1::int)
         AND NOT EXISTS (SELECT 1 FROM mail_suppressions m WHERE m.address = lower(btrim(q.recipient_email)))
-        AND ($2::text IS NULL OR strpos(lower(btrim(q.recipient_email)), lower($2::text)) > 0)
+        AND ($2::text IS NULL OR strpos(skymail_search_fold(btrim(q.recipient_email)), skymail_search_fold($2::text)) > 0)
       GROUP BY 1
       HAVING count(DISTINCT b.queue_id) >= $3::int) a
 `
@@ -1263,10 +1355,13 @@ const countTemplates = `-- name: CountTemplates :one
 SELECT count(*)
 FROM templates
 WHERE archived_at IS NULL
+  AND ($1::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($1::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(key, '')), skymail_search_fold($1::text)) > 0
+       OR strpos(skymail_search_fold(subject), skymail_search_fold($1::text)) > 0)
 `
 
-func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
-	row := q.db.QueryRow(ctx, countTemplates)
+func (q *Queries) CountTemplates(ctx context.Context, search *string) (int64, error) {
+	row := q.db.QueryRow(ctx, countTemplates, search)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1506,7 +1601,7 @@ WITH active_source AS (
                $8::boolean, $9::boolean,
                $10::boolean
         FROM active_source
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, source_kind, source_ref, source_version, source_snapshot, source_audience, source_counts, self_test, paused_at, paused_reason, paused_by, send_failures, cancelled_at, cancelled_by, erase_after_send, recipient_retention_at
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, source_kind, source_ref, source_version, source_snapshot, source_audience, source_counts, self_test, paused_at, paused_reason, paused_by, send_failures, cancelled_at, cancelled_by, erase_after_send, recipient_retention_at, sent_by_service
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1629,13 +1724,13 @@ WITH active_template AS (
 ), inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, body_variables, content_sensitive_at_send, tracking_requested,
                             purpose, category, transactional_statement, commercial_content_absent,
-                            erase_after_send)
+                            erase_after_send, sent_by_service)
         SELECT $4, id, $5, content_sensitive, $6::boolean,
                $7::text, $8::text,
                $9::boolean, $10::boolean,
-               $11::boolean
+               $11::boolean, $12::boolean
         FROM active_template
-        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, source_kind, source_ref, source_version, source_snapshot, source_audience, source_counts, self_test, paused_at, paused_reason, paused_by, send_failures, cancelled_at, cancelled_by, erase_after_send, recipient_retention_at
+        RETURNING id, sent_by, template_id, mail_list_id, body_variables, created_at, content_cleared_at, content_sensitive_at_send, content_masked_at, content_masked_by, content_masked_variables, content_mask_due, content_mask_failures, content_mask_retry_at, content_mask_unconfirmed, content_mask_failing_since, tracking_requested, tracking_closed_at, form_source_id, notification_id, purpose, category, transactional_statement, commercial_content_absent, own_event_statement, source_kind, source_ref, source_version, source_snapshot, source_audience, source_counts, self_test, paused_at, paused_reason, paused_by, send_failures, cancelled_at, cancelled_by, erase_after_send, recipient_retention_at, sent_by_service
 )
 SELECT it.id               AS task_id,
        it.body_variables,
@@ -1661,6 +1756,7 @@ type CreateSingleMailTaskParams struct {
 	TransactionalStatement  *bool      `json:"transactional_statement"`
 	CommercialContentAbsent *bool      `json:"commercial_content_absent"`
 	EraseAfterSend          bool       `json:"erase_after_send"`
+	SentByService           *bool      `json:"sent_by_service"`
 }
 
 type CreateSingleMailTaskRow struct {
@@ -1681,6 +1777,7 @@ type CreateSingleMailTaskRow struct {
 // mail_task_content_sensitive() reads it first (20261020120000).
 // erase_after_send: a service's send that keeps no record of its recipient;
 // its row is erased when its outcome is written (20261031230000).
+// sent_by_service: a service or SkyMail queued it (mail_task_kind()).
 func (q *Queries) CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error) {
 	row := q.db.QueryRow(ctx, createSingleMailTask,
 		arg.RecipientFullName,
@@ -1694,6 +1791,7 @@ func (q *Queries) CreateSingleMailTask(ctx context.Context, arg CreateSingleMail
 		arg.TransactionalStatement,
 		arg.CommercialContentAbsent,
 		arg.EraseAfterSend,
+		arg.SentByService,
 	)
 	var i CreateSingleMailTaskRow
 	err := row.Scan(
@@ -2172,17 +2270,22 @@ const getAllMailingLists = `-- name: GetAllMailingLists :many
 SELECT id, name, description, created_at, updated_at, archived_at, archived_by
 FROM mailing_lists
 WHERE archived_at IS NULL
+  AND ($3::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($3::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(description, '')), skymail_search_fold($3::text)) > 0)
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
 
 type GetAllMailingListsParams struct {
-	Limit  int32 `json:"limit"`
-	Offset int32 `json:"offset"`
+	Limit  int32   `json:"limit"`
+	Offset int32   `json:"offset"`
+	Search *string `json:"search"`
 }
 
+// A NULL search lists every list; else those whose name or description
+// contains it, as skymail_search_fold() compares them (as do the counts and the other lifecycles).
 func (q *Queries) GetAllMailingLists(ctx context.Context, arg GetAllMailingListsParams) ([]MailingList, error) {
-	rows, err := q.db.Query(ctx, getAllMailingLists, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, getAllMailingLists, arg.Limit, arg.Offset, arg.Search)
 	if err != nil {
 		return nil, err
 	}
@@ -2212,17 +2315,20 @@ func (q *Queries) GetAllMailingLists(ctx context.Context, arg GetAllMailingLists
 const getAllMailingListsIncludingArchived = `-- name: GetAllMailingListsIncludingArchived :many
 SELECT id, name, description, created_at, updated_at, archived_at, archived_by
 FROM mailing_lists
+WHERE ($3::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($3::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(description, '')), skymail_search_fold($3::text)) > 0)
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
 
 type GetAllMailingListsIncludingArchivedParams struct {
-	Limit  int32 `json:"limit"`
-	Offset int32 `json:"offset"`
+	Limit  int32   `json:"limit"`
+	Offset int32   `json:"offset"`
+	Search *string `json:"search"`
 }
 
 func (q *Queries) GetAllMailingListsIncludingArchived(ctx context.Context, arg GetAllMailingListsIncludingArchivedParams) ([]MailingList, error) {
-	rows, err := q.db.Query(ctx, getAllMailingListsIncludingArchived, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, getAllMailingListsIncludingArchived, arg.Limit, arg.Offset, arg.Search)
 	if err != nil {
 		return nil, err
 	}
@@ -2253,17 +2359,23 @@ const getAllTemplates = `-- name: GetAllTemplates :many
 SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 FROM templates
 WHERE archived_at IS NULL
+  AND ($3::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($3::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(key, '')), skymail_search_fold($3::text)) > 0
+       OR strpos(skymail_search_fold(subject), skymail_search_fold($3::text)) > 0)
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
 
 type GetAllTemplatesParams struct {
-	Limit  int32 `json:"limit"`
-	Offset int32 `json:"offset"`
+	Limit  int32   `json:"limit"`
+	Offset int32   `json:"offset"`
+	Search *string `json:"search"`
 }
 
+// A NULL search lists every template; else those whose name, key or subject
+// contains it, as skymail_search_fold() compares them (as do the counts and the other lifecycles).
 func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams) ([]Template, error) {
-	rows, err := q.db.Query(ctx, getAllTemplates, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, getAllTemplates, arg.Limit, arg.Offset, arg.Search)
 	if err != nil {
 		return nil, err
 	}
@@ -2307,17 +2419,21 @@ func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams
 const getAllTemplatesIncludingArchived = `-- name: GetAllTemplatesIncludingArchived :many
 SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 FROM templates
+WHERE ($3::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($3::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(key, '')), skymail_search_fold($3::text)) > 0
+       OR strpos(skymail_search_fold(subject), skymail_search_fold($3::text)) > 0)
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
 
 type GetAllTemplatesIncludingArchivedParams struct {
-	Limit  int32 `json:"limit"`
-	Offset int32 `json:"offset"`
+	Limit  int32   `json:"limit"`
+	Offset int32   `json:"offset"`
+	Search *string `json:"search"`
 }
 
 func (q *Queries) GetAllTemplatesIncludingArchived(ctx context.Context, arg GetAllTemplatesIncludingArchivedParams) ([]Template, error) {
-	rows, err := q.db.Query(ctx, getAllTemplatesIncludingArchived, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, getAllTemplatesIncludingArchived, arg.Limit, arg.Offset, arg.Search)
 	if err != nil {
 		return nil, err
 	}
@@ -2362,17 +2478,20 @@ const getArchivedMailingLists = `-- name: GetArchivedMailingLists :many
 SELECT id, name, description, created_at, updated_at, archived_at, archived_by
 FROM mailing_lists
 WHERE archived_at IS NOT NULL
+  AND ($3::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($3::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(description, '')), skymail_search_fold($3::text)) > 0)
 ORDER BY archived_at DESC
 LIMIT $1 OFFSET $2
 `
 
 type GetArchivedMailingListsParams struct {
-	Limit  int32 `json:"limit"`
-	Offset int32 `json:"offset"`
+	Limit  int32   `json:"limit"`
+	Offset int32   `json:"offset"`
+	Search *string `json:"search"`
 }
 
 func (q *Queries) GetArchivedMailingLists(ctx context.Context, arg GetArchivedMailingListsParams) ([]MailingList, error) {
-	rows, err := q.db.Query(ctx, getArchivedMailingLists, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, getArchivedMailingLists, arg.Limit, arg.Offset, arg.Search)
 	if err != nil {
 		return nil, err
 	}
@@ -2403,17 +2522,21 @@ const getArchivedTemplates = `-- name: GetArchivedTemplates :many
 SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 FROM templates
 WHERE archived_at IS NOT NULL
+  AND ($3::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($3::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(key, '')), skymail_search_fold($3::text)) > 0
+       OR strpos(skymail_search_fold(subject), skymail_search_fold($3::text)) > 0)
 ORDER BY archived_at DESC
 LIMIT $1 OFFSET $2
 `
 
 type GetArchivedTemplatesParams struct {
-	Limit  int32 `json:"limit"`
-	Offset int32 `json:"offset"`
+	Limit  int32   `json:"limit"`
+	Offset int32   `json:"offset"`
+	Search *string `json:"search"`
 }
 
 func (q *Queries) GetArchivedTemplates(ctx context.Context, arg GetArchivedTemplatesParams) ([]Template, error) {
-	rows, err := q.db.Query(ctx, getArchivedTemplates, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, getArchivedTemplates, arg.Limit, arg.Offset, arg.Search)
 	if err != nil {
 		return nil, err
 	}
@@ -2568,14 +2691,28 @@ const getDailySentCounts = `-- name: GetDailySentCounts :many
 WITH today AS (SELECT ($2::timestamptz AT TIME ZONE $1::text)::date AS day),
      days AS (SELECT today.day - back AS day
               FROM today,
-                   generate_series(0, $3::int - 1) AS back)
+                   generate_series(0, $3::int - 1) AS back),
+     sent_rows AS (SELECT q.created_at,
+                     CASE
+                         WHEN mt.purpose = 'duyuru' THEN 'duyuru'
+                         WHEN COALESCE(t.system, false) THEN 'system'
+                         WHEN mt.purpose IS NULL AND q.priority <= 0 THEN 'duyuru'
+                         ELSE 'islem'
+                         END AS stream
+              FROM mail_queue q
+                       JOIN mail_tasks mt ON mt.id = q.task_id
+                       LEFT JOIN templates t ON t.id = mt.template_id
+              WHERE q.status = 'sent'
+                AND q.created_at >= ((SELECT min(day) FROM days)::timestamp AT TIME ZONE $1::text))
 SELECT d.day::date        AS day,
-       count(q.created_at) AS sent
+       count(s.created_at) AS sent,
+       count(s.created_at) FILTER (WHERE s.stream = 'duyuru') AS duyuru,
+       count(s.created_at) FILTER (WHERE s.stream = 'islem')  AS islem,
+       count(s.created_at) FILTER (WHERE s.stream = 'system') AS system
 FROM days d
-         LEFT JOIN mail_queue q
-                   ON q.status = 'sent'
-                       AND q.created_at >= (d.day::timestamp AT TIME ZONE $1::text)
-                       AND q.created_at < ((d.day + 1)::timestamp AT TIME ZONE $1::text)
+         LEFT JOIN sent_rows s
+                   ON s.created_at >= (d.day::timestamp AT TIME ZONE $1::text)
+                       AND s.created_at < ((d.day + 1)::timestamp AT TIME ZONE $1::text)
 GROUP BY d.day
 ORDER BY d.day
 `
@@ -2587,8 +2724,11 @@ type GetDailySentCountsParams struct {
 }
 
 type GetDailySentCountsRow struct {
-	Day  time.Time `json:"day"`
-	Sent int64     `json:"sent"`
+	Day    time.Time `json:"day"`
+	Sent   int64     `json:"sent"`
+	Duyuru int64     `json:"duyuru"`
+	Islem  int64     `json:"islem"`
+	System int64     `json:"system"`
 }
 
 // A queue row has no sent time of its own. created_at — when that recipient's
@@ -2598,7 +2738,11 @@ type GetDailySentCountsRow struct {
 // next_attempt_at is not used: every row older than the retry migration holds
 // that migration's timestamp in it.
 // Days are calendar days in time_zone; the series ends on as_of's day and has
-// one row per day, zero-filled.
+// one row per day, zero-filled. Each day's mail is split by stream, in this
+// order: duyuru (the send's purpose: a News send too, whose template is a
+// System one), system (a System template's mail), duyuru again for a send
+// without a purpose whose row is in the bulk lane (the rule of before), and
+// islem (any other).
 func (q *Queries) GetDailySentCounts(ctx context.Context, arg GetDailySentCountsParams) ([]GetDailySentCountsRow, error) {
 	rows, err := q.db.Query(ctx, getDailySentCounts, arg.TimeZone, arg.AsOf, arg.Days)
 	if err != nil {
@@ -2608,7 +2752,13 @@ func (q *Queries) GetDailySentCounts(ctx context.Context, arg GetDailySentCounts
 	var items []GetDailySentCountsRow
 	for rows.Next() {
 		var i GetDailySentCountsRow
-		if err := rows.Scan(&i.Day, &i.Sent); err != nil {
+		if err := rows.Scan(
+			&i.Day,
+			&i.Sent,
+			&i.Duyuru,
+			&i.Islem,
+			&i.System,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2836,15 +2986,24 @@ SELECT id, channel, recipient_full_name, recipient_email, status, error, attempt
 FROM mail_queue
 WHERE task_id = $1
   AND ($4::mail_queue_status IS NULL OR status = $4::mail_queue_status)
+  AND ($5::boolean IS FALSE
+       OR (status = 'failed'
+           AND (COALESCE(error, '') LIKE 'reserved\_domain:%'
+                OR COALESCE(error, '') LIKE 'suppressed:%'
+                OR COALESCE(error, '') IN ('preference: opted_out', 'preference: inactive', 'preference: ambiguous', 'cancelled'))))
+  AND ($6::text IS NULL OR strpos(skymail_search_fold(recipient_email), skymail_search_fold($6::text)) > 0
+       OR strpos(skymail_search_fold(recipient_full_name), skymail_search_fold($6::text)) > 0)
 ORDER BY created_at DESC, id DESC
 LIMIT $2 OFFSET $3
 `
 
 type GetMailQueueItemsByTaskIdParams struct {
-	TaskID uuid.UUID           `json:"task_id"`
-	Limit  int32               `json:"limit"`
-	Offset int32               `json:"offset"`
-	Status NullMailQueueStatus `json:"status"`
+	TaskID  uuid.UUID           `json:"task_id"`
+	Limit   int32               `json:"limit"`
+	Offset  int32               `json:"offset"`
+	Status  NullMailQueueStatus `json:"status"`
+	Skipped bool                `json:"skipped"`
+	Search  *string             `json:"search"`
 }
 
 type GetMailQueueItemsByTaskIdRow struct {
@@ -2863,7 +3022,11 @@ type GetMailQueueItemsByTaskIdRow struct {
 
 // A send's recipients, newest first. A list send's rows come from one insert
 // and share a created_at, so the id breaks the tie: pages neither repeat nor
-// skip a recipient. A NULL status lists every recipient.
+// skip a recipient. A NULL status lists every recipient. skipped keeps the
+// failed rows that were not sent on purpose, as mail_task_status() reads them
+// (a reserved domain, a suppressed or unsubscribed address, a preference, a
+// cancelled send). A NULL search lists every recipient; else those whose
+// address or name contains it, as skymail_search_fold() compares them.
 // suppressed_but_sent: account mail sent to a suppressed address, flagged.
 // undelivered: a report said the address does not exist (a hard bounce of
 // the row's own address) after the relay took the mail.
@@ -2873,6 +3036,8 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 		arg.Limit,
 		arg.Offset,
 		arg.Status,
+		arg.Skipped,
+		arg.Search,
 	)
 	if err != nil {
 		return nil, err
@@ -2905,7 +3070,7 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 }
 
 const getMailTaskById = `-- name: GetMailTaskById :one
-SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id, mt.notification_id, mt.purpose, mt.category, mt.transactional_statement, mt.commercial_content_absent, mt.own_event_statement, mt.source_kind, mt.source_ref, mt.source_version, mt.source_snapshot, mt.source_audience, mt.source_counts, mt.self_test, mt.paused_at, mt.paused_reason, mt.paused_by, mt.send_failures, mt.cancelled_at, mt.cancelled_by, mt.erase_after_send, mt.recipient_retention_at,
+SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id, mt.notification_id, mt.purpose, mt.category, mt.transactional_statement, mt.commercial_content_absent, mt.own_event_statement, mt.source_kind, mt.source_ref, mt.source_version, mt.source_snapshot, mt.source_audience, mt.source_counts, mt.self_test, mt.paused_at, mt.paused_reason, mt.paused_by, mt.send_failures, mt.cancelled_at, mt.cancelled_by, mt.erase_after_send, mt.recipient_retention_at, mt.sent_by_service,
        t.name  AS template_name,
        ml.name AS mail_list_name
 FROM mail_tasks mt
@@ -2955,6 +3120,7 @@ type GetMailTaskByIdRow struct {
 	CancelledBy             *string    `json:"cancelled_by"`
 	EraseAfterSend          bool       `json:"erase_after_send"`
 	RecipientRetentionAt    *time.Time `json:"-"`
+	SentByService           *bool      `json:"sent_by_service"`
 	TemplateName            *string    `json:"template_name"`
 	MailListName            *string    `json:"mail_list_name"`
 }
@@ -3003,6 +3169,7 @@ func (q *Queries) GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTas
 		&i.CancelledBy,
 		&i.EraseAfterSend,
 		&i.RecipientRetentionAt,
+		&i.SentByService,
 		&i.TemplateName,
 		&i.MailListName,
 	)
@@ -4746,6 +4913,13 @@ WHERE ($3::text IS NULL OR a.submitter_sub = $3::text)
   AND ($4::mail_approval_state IS NULL OR $4::mail_approval_state = (CASE
         WHEN a.state IN ('pending', 'returned') AND a.deadline_at <= $5 THEN 'expired'
         ELSE a.state END))
+  AND ($6::text IS NULL
+       OR strpos(skymail_search_fold(t.name), skymail_search_fold($6::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold($6::text)) > 0
+       OR strpos(skymail_search_fold(t.subject), skymail_search_fold($6::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(ml.name, '')), skymail_search_fold($6::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold($6::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold($6::text)) > 0)
 ORDER BY a.submitted_at DESC, a.id DESC
 LIMIT $1 OFFSET $2
 `
@@ -4756,6 +4930,7 @@ type ListMailApprovalsParams struct {
 	SubmitterSub *string               `json:"submitter_sub"`
 	State        NullMailApprovalState `json:"state"`
 	AsOf         time.Time             `json:"as_of"`
+	Search       *string               `json:"search"`
 }
 
 type ListMailApprovalsRow struct {
@@ -4779,7 +4954,9 @@ type ListMailApprovalsRow struct {
 // Requests newest submission first, the id breaking ties. A NULL submitter
 // lists everyone's and a NULL state every state. A request is filtered by the
 // state it is in as of as_of: one undecided past its deadline is expired,
-// whether or not the sweep has written it yet.
+// whether or not the sweep has written it yet. A NULL search keeps every
+// request; else those whose template's name, key or subject, list's name,
+// Forms form's title or requester's name contains it, as skymail_search_fold() compares them.
 func (q *Queries) ListMailApprovals(ctx context.Context, arg ListMailApprovalsParams) ([]ListMailApprovalsRow, error) {
 	rows, err := q.db.Query(ctx, listMailApprovals,
 		arg.Limit,
@@ -4787,6 +4964,7 @@ func (q *Queries) ListMailApprovals(ctx context.Context, arg ListMailApprovalsPa
 		arg.SubmitterSub,
 		arg.State,
 		arg.AsOf,
+		arg.Search,
 	)
 	if err != nil {
 		return nil, err
@@ -5028,6 +5206,38 @@ WITH page AS (SELECT mt.id
               FROM mail_tasks mt
               WHERE ($3::uuid IS NULL OR mt.id = $3::uuid)
                 AND ($4::text IS NULL OR mail_task_status(mt.id) = $4::text)
+                AND ($5::text IS NULL
+                    OR EXISTS (SELECT 1
+                               FROM templates t
+                               WHERE t.id = mt.template_id
+                                 AND (strpos(skymail_search_fold(t.name), skymail_search_fold($5::text)) > 0
+                                     OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold($5::text)) > 0
+                                     OR strpos(skymail_search_fold(t.subject), skymail_search_fold($5::text)) > 0))
+                    OR EXISTS (SELECT 1
+                               FROM mailing_lists ml
+                               WHERE ml.id = mt.mail_list_id
+                                 AND strpos(skymail_search_fold(ml.name), skymail_search_fold($5::text)) > 0)
+                    OR EXISTS (SELECT 1
+                               FROM mail_form_sources fs
+                               WHERE fs.id = mt.form_source_id
+                                 AND strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold($5::text)) > 0)
+                    OR EXISTS (SELECT 1
+                               FROM mail_approval_tasks mat
+                                        JOIN mail_approvals a ON a.id = mat.approval_id
+                               WHERE mat.task_id = mt.id
+                                 AND strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold($5::text)) > 0)
+                    OR (mt.mail_list_id IS NULL AND mt.form_source_id IS NULL AND mt.source_kind IS NULL
+                        AND EXISTS (SELECT 1
+                                    FROM mail_queue q
+                                    WHERE q.task_id = mt.id
+                                      AND (strpos(skymail_search_fold(q.recipient_email), skymail_search_fold($5::text)) > 0
+                                          OR strpos(skymail_search_fold(q.recipient_full_name), skymail_search_fold($5::text)) > 0))))
+                AND ($6::timestamptz IS NULL OR mt.created_at >= $6::timestamptz)
+                AND ($7::timestamptz IS NULL OR mt.created_at < $7::timestamptz)
+                AND ($8::text IS NULL OR mail_task_kind(mt.id) = $8::text)
+                AND ($9::uuid IS NULL OR mt.template_id = $9::uuid)
+                AND ($10::uuid IS NULL OR mt.mail_list_id = $10::uuid)
+                AND ($11::text IS NULL OR mt.sent_by = $11::text)
               ORDER BY mt.created_at DESC, mt.id DESC
               LIMIT $1 OFFSET $2)
 SELECT mt.id,
@@ -5068,7 +5278,8 @@ SELECT mt.id,
        mt.paused_at,
        mt.paused_reason,
        mt.cancelled_at,
-       rc.cancelled
+       rc.cancelled,
+       mail_task_kind(mt.id)        AS kind
 FROM page
          JOIN mail_tasks mt ON mt.id = page.id
          LEFT JOIN templates t ON mt.template_id = t.id
@@ -5103,10 +5314,17 @@ ORDER BY mt.created_at DESC, mt.id DESC
 `
 
 type ListMailTaskSendsParams struct {
-	Limit  int32      `json:"limit"`
-	Offset int32      `json:"offset"`
-	TaskID *uuid.UUID `json:"task_id"`
-	Status *string    `json:"status"`
+	Limit         int32      `json:"limit"`
+	Offset        int32      `json:"offset"`
+	TaskID        *uuid.UUID `json:"task_id"`
+	Status        *string    `json:"status"`
+	Search        *string    `json:"search"`
+	CreatedFrom   *time.Time `json:"created_from"`
+	CreatedBefore *time.Time `json:"created_before"`
+	Kind          *string    `json:"kind"`
+	TemplateID    *uuid.UUID `json:"template_id"`
+	ListID        *uuid.UUID `json:"list_id"`
+	SentBy        *string    `json:"sent_by"`
 }
 
 type ListMailTaskSendsRow struct {
@@ -5153,19 +5371,36 @@ type ListMailTaskSendsRow struct {
 	PausedReason            *string    `json:"paused_reason"`
 	CancelledAt             *time.Time `json:"cancelled_at"`
 	Cancelled               int64      `json:"cancelled"`
+	Kind                    string     `json:"kind"`
 }
 
 // A send as every screen shows it — the home screen, the send list and a
 // send's own page: the task, the template it used, who it went to, its status
 // as mail_task_status derives it, and its recipients by status. A NULL task_id
-// lists every send and a NULL status every status. The page is cut first so
-// only its rows are counted.
+// lists every send and a NULL filter keeps every send (GET /mail_tasks):
+// search matches the template's name, key or subject, the list's name, the
+// Forms form's title, an approved send's requester, or, on a send to people
+// (no list, no Forms source, not a News send), a recipient's address or name,
+// as skymail_search_fold() compares them; created_from and created_before
+// bound created_at; kind is mail_task_kind() (bulk, system, single). Newest
+// first, the order idx_mail_tasks_created_at_id keeps: the page is read down
+// the index, filtered on mail_tasks alone (every other table is asked through
+// EXISTS), and cut before anything is counted, so the first page costs as
+// little with 50,000 sends as with 50. ListMailTaskSendsSorted is the other
+// orders, with the same filters and columns.
 func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error) {
 	rows, err := q.db.Query(ctx, listMailTaskSends,
 		arg.Limit,
 		arg.Offset,
 		arg.TaskID,
 		arg.Status,
+		arg.Search,
+		arg.CreatedFrom,
+		arg.CreatedBefore,
+		arg.Kind,
+		arg.TemplateID,
+		arg.ListID,
+		arg.SentBy,
 	)
 	if err != nil {
 		return nil, err
@@ -5218,6 +5453,311 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 			&i.PausedReason,
 			&i.CancelledAt,
 			&i.Cancelled,
+			&i.Kind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMailTaskSendsSorted = `-- name: ListMailTaskSendsSorted :many
+WITH matching AS (SELECT mt.id,
+                         mt.created_at,
+                         mt.tracking_requested,
+                         mt.tracking_closed_at
+                  FROM mail_tasks mt
+         LEFT JOIN templates t ON t.id = mt.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = mt.mail_list_id
+         LEFT JOIN mail_form_sources fs ON fs.id = mt.form_source_id
+                  WHERE ($4::uuid IS NULL OR mt.id = $4::uuid)
+                    AND ($5::text IS NULL OR mail_task_status(mt.id) = $5::text)
+  AND ($6::text IS NULL
+       OR strpos(skymail_search_fold(COALESCE(t.name, '')), skymail_search_fold($6::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold($6::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(t.subject, '')), skymail_search_fold($6::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(ml.name, '')), skymail_search_fold($6::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold($6::text)) > 0
+       OR EXISTS (SELECT 1
+                  FROM mail_approval_tasks mat
+                           JOIN mail_approvals a ON a.id = mat.approval_id
+                  WHERE mat.task_id = mt.id
+                    AND strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold($6::text)) > 0)
+       OR (mt.mail_list_id IS NULL AND mt.form_source_id IS NULL AND mt.source_kind IS NULL
+           AND EXISTS (SELECT 1
+                       FROM mail_queue q
+                       WHERE q.task_id = mt.id
+                         AND (strpos(skymail_search_fold(q.recipient_email), skymail_search_fold($6::text)) > 0
+                              OR strpos(skymail_search_fold(q.recipient_full_name), skymail_search_fold($6::text)) > 0))))
+  AND ($7::timestamptz IS NULL OR mt.created_at >= $7::timestamptz)
+  AND ($8::timestamptz IS NULL OR mt.created_at < $8::timestamptz)
+  AND ($9::text IS NULL OR mail_task_kind(mt.id) = $9::text)
+  AND ($10::uuid IS NULL OR mt.template_id = $10::uuid)
+  AND ($11::uuid IS NULL OR mt.mail_list_id = $11::uuid)
+  AND ($12::text IS NULL OR mt.sent_by = $12::text)),
+     -- The open rate is read only for sort open_rate, and only for the
+     -- matching sends that were tracked (tracking_requested is set on every
+     -- tracked send), in one pass each over their rows and their events:
+     -- per-send subqueries would cost the planner past jit_above_cost.
+     rated_tasks AS (SELECT id
+                     FROM matching
+                     WHERE $13::text = 'open_rate'
+                       AND tracking_requested),
+     tracked AS (SELECT q.task_id,
+                        count(*) FILTER (WHERE q.tracking_token IS NOT NULL OR q.tracking_disabled_at IS NOT NULL) AS tracked,
+                        max(q.sent_at) AS last_sent_at
+                 FROM mail_queue q
+                 WHERE q.task_id IN (SELECT id FROM rated_tasks)
+                 GROUP BY q.task_id),
+     opened AS (SELECT e.task_id, count(DISTINCT e.queue_id) AS opened
+                FROM mail_tracking_events e
+                         JOIN mail_queue q ON q.id = e.queue_id
+                WHERE e.task_id IN (SELECT id FROM rated_tasks)
+                  AND NOT e.automated_likely
+                  AND q.sent_at > now() - interval '90 days'
+                GROUP BY e.task_id),
+     rated AS (SELECT m.id,
+                      m.created_at,
+                      CASE
+                          WHEN $13::text <> 'open_rate' OR NOT m.tracking_requested THEN NULL
+                          -- As GET /mail_tasks/{id}/tracking reads it: the retained
+                          -- totals once tracking closed or 90 days after the last mail.
+                          WHEN m.tracking_closed_at IS NOT NULL
+                              OR COALESCE(tr.last_sent_at, m.created_at) <= now() - interval '90 days'
+                              THEN tt.unique_likely_human_opens::float8 / NULLIF(tt.tracked_recipients, 0)
+                          ELSE COALESCE(op.opened, 0)::float8 / NULLIF(tr.tracked, 0)
+                          END AS open_rate
+               FROM matching m
+                        LEFT JOIN tracked tr ON tr.task_id = m.id
+                        LEFT JOIN opened op ON op.task_id = m.id
+                        LEFT JOIN mail_task_tracking_totals tt ON tt.task_id = m.id),
+     page AS (SELECT id, created_at, open_rate
+              FROM rated
+              ORDER BY CASE WHEN $3::boolean THEN open_rate END ASC NULLS LAST,
+                       CASE WHEN NOT $3::boolean THEN open_rate END DESC NULLS LAST,
+                       CASE WHEN $3::boolean THEN created_at END,
+                       CASE WHEN $3::boolean THEN id END,
+                       created_at DESC, id DESC
+              LIMIT $1 OFFSET $2)
+SELECT mt.id,
+       mt.sent_by,
+       mt.template_id,
+       mt.mail_list_id,
+       mt.form_source_id, fs.form_id, fs.form_title, fs.prepared_at AS form_prepared_at, fs.recipient_count AS form_recipient_count,
+       mt.body_variables,
+       mt.created_at,
+       t.name                       AS template_name,
+       t.key                        AS template_key,
+       ml.name                      AS mail_list_name,
+       (ml.id IS NOT NULL)::boolean AS internal_mail_list,
+       mail_task_status(mt.id)      AS status,
+       rc.pending,
+       rc.processing,
+       rc.sent,
+       rc.failed,
+       rc.suppressed,
+       rc.opted_out,
+       rc.unsubscribed,
+       rc.inactive,
+       rc.ambiguous,
+       rc.suppressed_but_sent,
+       rc.undelivered,
+       single.recipient_full_name   AS single_recipient_full_name,
+       single.recipient_email       AS single_recipient_email,
+       mail_task_bulk(mt.id)::boolean              AS bulk,
+       mail_task_content_sensitive(mt.id)::boolean AS content_sensitive,
+       mt.content_cleared_at,
+       mt.content_masked_at,
+       mt.tracking_requested,
+       mt.purpose,
+       mt.category,
+       mt.transactional_statement,
+       mt.commercial_content_absent,
+       mt.own_event_statement,
+       mt.paused_at,
+       mt.paused_reason,
+       mt.cancelled_at,
+       rc.cancelled,
+       mail_task_kind(mt.id)        AS kind
+FROM page
+         JOIN mail_tasks mt ON mt.id = page.id
+         LEFT JOIN templates t ON mt.template_id = t.id
+         LEFT JOIN mailing_lists ml ON mt.mail_list_id = ml.id
+         LEFT JOIN mail_form_sources fs ON fs.id = mt.form_source_id
+         CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE q.status = 'pending')    AS pending,
+                                    count(*) FILTER (WHERE q.status = 'processing') AS processing,
+                                    count(*) FILTER (WHERE q.status = 'sent')       AS sent,
+                                    count(*) FILTER (WHERE q.status = 'failed')     AS failed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error LIKE 'suppressed:%') AS suppressed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: opted_out') AS opted_out,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'suppressed: unsubscribed') AS unsubscribed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: inactive') AS inactive,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: ambiguous') AS ambiguous,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'cancelled') AS cancelled,
+                                    count(*) FILTER (WHERE q.suppressed_but_sent) AS suppressed_but_sent,
+                                    count(*) FILTER (WHERE EXISTS (SELECT 1
+                                                                   FROM mail_bounces b
+                                                                   WHERE b.queue_id = q.id
+                                                                     AND b.kind = 'hard'
+                                                                     AND b.recipient_matched)) AS undelivered
+                             FROM mail_queue q
+                             WHERE q.task_id = mt.id) rc
+         LEFT JOIN mail_queue single
+                   ON single.id = (SELECT q.id
+                                   FROM mail_queue q
+                                   WHERE mt.mail_list_id IS NULL
+                                     AND q.task_id = mt.id
+                                   ORDER BY q.created_at, q.id
+                                   LIMIT 1)
+ORDER BY CASE WHEN $3::boolean THEN page.open_rate END ASC NULLS LAST,
+         CASE WHEN NOT $3::boolean THEN page.open_rate END DESC NULLS LAST,
+         CASE WHEN $3::boolean THEN page.created_at END,
+         CASE WHEN $3::boolean THEN page.id END,
+         page.created_at DESC, page.id DESC
+`
+
+type ListMailTaskSendsSortedParams struct {
+	Limit         int32      `json:"limit"`
+	Offset        int32      `json:"offset"`
+	Ascending     bool       `json:"ascending"`
+	TaskID        *uuid.UUID `json:"task_id"`
+	Status        *string    `json:"status"`
+	Search        *string    `json:"search"`
+	CreatedFrom   *time.Time `json:"created_from"`
+	CreatedBefore *time.Time `json:"created_before"`
+	Kind          *string    `json:"kind"`
+	TemplateID    *uuid.UUID `json:"template_id"`
+	ListID        *uuid.UUID `json:"list_id"`
+	SentBy        *string    `json:"sent_by"`
+	Sort          string     `json:"sort"`
+}
+
+type ListMailTaskSendsSortedRow struct {
+	ID                      uuid.UUID  `json:"id"`
+	SentBy                  string     `json:"sent_by"`
+	TemplateID              *uuid.UUID `json:"template_id"`
+	MailListID              *uuid.UUID `json:"mail_list_id"`
+	FormSourceID            *uuid.UUID `json:"form_source_id"`
+	FormID                  *uuid.UUID `json:"form_id"`
+	FormTitle               *string    `json:"form_title"`
+	FormPreparedAt          *time.Time `json:"form_prepared_at"`
+	FormRecipientCount      *int       `json:"form_recipient_count"`
+	BodyVariables           []byte     `json:"body_variables"`
+	CreatedAt               time.Time  `json:"created_at"`
+	TemplateName            *string    `json:"template_name"`
+	TemplateKey             *string    `json:"template_key"`
+	MailListName            *string    `json:"mail_list_name"`
+	InternalMailList        bool       `json:"internal_mail_list"`
+	Status                  string     `json:"status"`
+	Pending                 int64      `json:"pending"`
+	Processing              int64      `json:"processing"`
+	Sent                    int64      `json:"sent"`
+	Failed                  int64      `json:"failed"`
+	Suppressed              int64      `json:"suppressed"`
+	OptedOut                int64      `json:"opted_out"`
+	Unsubscribed            int64      `json:"unsubscribed"`
+	Inactive                int64      `json:"inactive"`
+	Ambiguous               int64      `json:"ambiguous"`
+	SuppressedButSent       int64      `json:"suppressed_but_sent"`
+	Undelivered             int64      `json:"undelivered"`
+	SingleRecipientFullName *string    `json:"single_recipient_full_name"`
+	SingleRecipientEmail    *string    `json:"single_recipient_email"`
+	Bulk                    bool       `json:"bulk"`
+	ContentSensitive        bool       `json:"content_sensitive"`
+	ContentClearedAt        *time.Time `json:"content_cleared_at"`
+	ContentMaskedAt         *time.Time `json:"content_masked_at"`
+	TrackingRequested       bool       `json:"tracking_requested"`
+	Purpose                 *string    `json:"purpose"`
+	Category                *string    `json:"category"`
+	TransactionalStatement  *bool      `json:"transactional_statement"`
+	CommercialContentAbsent *bool      `json:"commercial_content_absent"`
+	OwnEventStatement       *bool      `json:"own_event_statement"`
+	PausedAt                *time.Time `json:"paused_at"`
+	PausedReason            *string    `json:"paused_reason"`
+	CancelledAt             *time.Time `json:"cancelled_at"`
+	Cancelled               int64      `json:"cancelled"`
+	Kind                    string     `json:"kind"`
+}
+
+// ListMailTaskSends in another order (GET /mail_tasks _sort=open_rate or
+// _order=asc): the same filters and the same columns, ordered as sort and
+// ascending say. sort open_rate orders by the share of tracked recipients
+// who likely opened (GET /mail_tasks/{id}/tracking's
+// unique_likely_human_opens / tracked_recipients, the retained totals once
+// its events are gone), sends with no rate last. Every matching send is
+// read to order them; the default order uses ListMailTaskSends.
+func (q *Queries) ListMailTaskSendsSorted(ctx context.Context, arg ListMailTaskSendsSortedParams) ([]ListMailTaskSendsSortedRow, error) {
+	rows, err := q.db.Query(ctx, listMailTaskSendsSorted,
+		arg.Limit,
+		arg.Offset,
+		arg.Ascending,
+		arg.TaskID,
+		arg.Status,
+		arg.Search,
+		arg.CreatedFrom,
+		arg.CreatedBefore,
+		arg.Kind,
+		arg.TemplateID,
+		arg.ListID,
+		arg.SentBy,
+		arg.Sort,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMailTaskSendsSortedRow
+	for rows.Next() {
+		var i ListMailTaskSendsSortedRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SentBy,
+			&i.TemplateID,
+			&i.MailListID,
+			&i.FormSourceID,
+			&i.FormID,
+			&i.FormTitle,
+			&i.FormPreparedAt,
+			&i.FormRecipientCount,
+			&i.BodyVariables,
+			&i.CreatedAt,
+			&i.TemplateName,
+			&i.TemplateKey,
+			&i.MailListName,
+			&i.InternalMailList,
+			&i.Status,
+			&i.Pending,
+			&i.Processing,
+			&i.Sent,
+			&i.Failed,
+			&i.Suppressed,
+			&i.OptedOut,
+			&i.Unsubscribed,
+			&i.Inactive,
+			&i.Ambiguous,
+			&i.SuppressedButSent,
+			&i.Undelivered,
+			&i.SingleRecipientFullName,
+			&i.SingleRecipientEmail,
+			&i.Bulk,
+			&i.ContentSensitive,
+			&i.ContentClearedAt,
+			&i.ContentMaskedAt,
+			&i.TrackingRequested,
+			&i.Purpose,
+			&i.Category,
+			&i.TransactionalStatement,
+			&i.CommercialContentAbsent,
+			&i.OwnEventStatement,
+			&i.PausedAt,
+			&i.PausedReason,
+			&i.CancelledAt,
+			&i.Cancelled,
+			&i.Kind,
 		); err != nil {
 			return nil, err
 		}

@@ -542,6 +542,8 @@ type MailTask struct {
 	EraseAfterSend bool `json:"erase_after_send"`
 	// When the recipient retention run decided every recipient of the send whose content is gone: address and name emptied, or an account found. Null until then.
 	RecipientRetentionAt *time.Time `json:"-"`
+	// Whether a service or SkyMail itself queued the send (a service account's single mail, SkyMail's notices); false for a person's single mail; NULL before 20261124200000 and where the kind does not need it.
+	SentByService *bool `json:"sent_by_service"`
 }
 
 // A service's Idempotency-Key on POST /mail_tasks/single: the request's digest, the send it queued and its answer, replayed to a retry. No address. Kept 72 hours.
