@@ -479,6 +479,7 @@ func TestTheDatabaseLocksTheSameKeysAsGo(t *testing.T) {
 	keys := []string{
 		"keycloak.verify-email", "keycloak.generic", "account.security-alert", "auth.x", "login.y", "otp.z",
 		"core.contact-consent-confirm", "event.ticket-created", "event.reminder", "event.ticket-issued",
+		"event.waitlist-promoted", "event.waitlist-joined", "event.registration-full",
 		"core.email-change-link", "place.sign-in-link", "core.log-in", "forms.sign-in", "place.one-time-link",
 		"place.giris-baglantisi", "core.dogrulama-kodu", "club.davet", "forms.onay", "core.sifre", "x.pass-code",
 		"core.welcome", "core.certificate", "club.team-membership", "forms.form-copy", "forms.status-changed",

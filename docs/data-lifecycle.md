@@ -442,7 +442,7 @@ wrote `true` into the copy of every kept send sensitive at the time. The Templat
 
 **Locked sensitive.** `keycloak.*`, `account.*`, `auth.*`, `login.*`,
 `otp.*`, `core.contact-consent-confirm`, `event.ticket-created`,
-`event.reminder`, and any key with a word such as `login`, `code`, `otp`,
+`event.reminder`, `event.waitlist-promoted`, `event.waitlist-joined`, and any key with a word such as `login`, `code`, `otp`,
 `reset`, `verify`, `confirm`, `token`, `magic`, `invite`, `ticket`, `link`, or
 Turkish `giris`, `kod`, `dogrulama`, `sifre`, `parola`, `baglanti`, `davet`,
 `onay` between its dots and dashes (two words joined count too: `sign-in`).
