@@ -1559,8 +1559,12 @@ ya da core yanıt vermezse, ya da kişi yanıtta yoksa, alıcı yine takip
 edilir. Bu yüzden yeni satırlara `no_account` ve `preference_unavailable`
 yazılmaz (eski satırlarda kalır). Geri alma ucu bir sürüm daha `204` döner
 ama hiçbir şey silmez (aşağıda). Daha önce geri alınmış (belirteci kapalı)
-eski postalara geriye dönük bir şey yapılmaz. Acil kapatma anahtarları
-`SKYMAIL_TRACKING*` bayrakları ve core'un frenidir.
+eski postalara geriye dönük bir şey yapılmaz. Kesin acil kapatma yalnız
+`SKYMAIL_TRACKING*` bayraklarıdır: core'un freni yalnız core'a ulaşıldığında
+tutar, core'a ulaşılamazsa gönderim takipli gider.
+Bilinen durum: Keycloak'ta devre dışı bırakılmış ama kulüp üyesi olmayan
+hesap, adresle gönderilen postada takipli kalır (SkyMail yalnız etkin hesap
+arar, core yalnız kulüp üyelerinin devre dışı olduğunu görür).
 
 **Saklama süresi (KVKK aydınlatma metni s6, 2026-10-23; Yusuf'un
 2026-10-19 "1 yıl" kararının yerine): kişi bazındaki açılma ve tıklama
