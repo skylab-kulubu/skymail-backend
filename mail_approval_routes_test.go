@@ -918,6 +918,10 @@ func TestApprovingSendsExactlyWhatWasSubmittedOnce(t *testing.T) {
 	if row := w.queuedRows(notices[0].taskID)[elif.email]; row.Priority != int16(mailer.PrioritySystem) {
 		t.Errorf("approval-resolved notice queued with priority %d, want the system lane", row.Priority)
 	}
+	// SkyMail's own notice is a service's mail in the send list.
+	if kind := w.kindOf(notices[0].taskID); kind != "system" {
+		t.Errorf("approval-resolved notice kind %s, want system", kind)
+	}
 
 	// Approving it again sends nothing; with an edit it is refused.
 	status, again, _ := w.act("yusuf", submitted.ID, "approve", nil)

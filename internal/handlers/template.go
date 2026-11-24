@@ -186,7 +186,7 @@ func (h *templateHandlerImpl) CreateTemplate(c fiber.Ctx) error {
 // GetTemplates godoc
 //
 //	@Summary		List all email templates
-//	@Description	Get a list of all email templates with pagination. q keeps the templates whose name, key or subject contains it, case-insensitively; X-Total-Count counts them.
+//	@Description	Get a list of all email templates with pagination. q keeps the templates whose name, key or subject contains it (any case, Turkish capitals included; I, ı, İ and i alike); X-Total-Count counts them.
 //	@Tags			Templates
 //	@Produce		json
 //	@Param			_start		query		int		false	"Start index"

@@ -348,6 +348,7 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 		TransactionalStatement:  purpose.TransactionalStatement,
 		CommercialContentAbsent: purpose.CommercialContentAbsent,
 		EraseAfterSend:          params.EraseAfterSend,
+		SentByService:           &service,
 	}
 	// The answer to the send: tracked is what the mailer says of a service's
 	// mail while SKYMAIL_TRACKING_SYSTEM is on, else what was decided above.
@@ -441,7 +442,7 @@ type MailTaskItem struct {
 	Status          SendStatus   `json:"status"`
 	RecipientCounts QueueTotals  `json:"recipient_counts"`
 	Audience        SendAudience `json:"audience"`
-	// bulk (a list, a group, a Forms source, an approved send), system (a System template's mail that is not bulk: a login code, a ticket, a Forms confirmation) or single (any other); the kind filter of GET /mail_tasks.
+	// bulk (a list, a group, a Forms source, an approved send, a News send), system (mail a service or SkyMail sent: a core notification, a service's single mail such as a login code, a ticket or a Forms confirmation, a Mail onayı notice; a single send from before 2026-11-24 by its lane) or single (a person's single mail); the kind filter of GET /mail_tasks.
 	Kind string `json:"kind" enums:"bulk,single,system"`
 	// Whether the caller may open the send's content (GET /mail_tasks/{id}/queue/{itemId}/content), and if not why.
 	// masked: a sensitive send, kept with its codes and one-time links masked; pending: a sensitive send not masked yet, not shown; not_kept: a sensitive send emptied (before sensitive content was kept, or not masked for certain).
@@ -477,18 +478,18 @@ type SendPurposeFields struct {
 // GetTasks godoc
 //
 //	@Summary		List all mail tasks
-//	@Description	Get a list of all mail tasks with pagination, newest first, each with its derived status, recipients by status and audience. Every filter given keeps only the sends that match it, and X-Total-Count counts them. q matches, case-insensitively, the template's name, key or subject, the list's name, the Forms form's title, an approved send's requester or, on a send to people (no list, no Forms source), a recipient's address or name. _sort=open_rate orders by the share of tracked recipients who likely opened (unique_likely_human_opens / tracked_recipients, as GET /mail_tasks/{id}/tracking reads them), sends with no rate last; it needs skymail:mails:tracking:read (403 mail_task.sort_forbidden), since the order tells counts that endpoint may withhold. Keycloak group names are looked up within 2 seconds for the whole page and are null past that.
+//	@Description	Get a list of all mail tasks with pagination, newest first, each with its derived status, recipients by status and audience. Every filter given keeps only the sends that match it, and X-Total-Count counts them. q (valid UTF-8, no NUL, at most 200 characters) matches the template's name, key or subject, the list's name, the Forms form's title, an approved send's requester or, on a send to people (no list, no Forms source, not a News send), a recipient's address or name; in any case, Turkish capitals included, with I, ı, İ and i read as one letter. kind: bulk (a list, a group, a Forms source, an approved send, a News send), system (mail a service or SkyMail sent: a core notification, a service account's single mail, a Mail onayı notice; a single send queued before 2026-11-24 counts as system when it went in the system lane), single (a person's single mail). _sort=open_rate orders by the share of tracked recipients who likely opened (unique_likely_human_opens / tracked_recipients, as GET /mail_tasks/{id}/tracking reads them), sends with no rate last; it needs skymail:mails:tracking:read (403 mail_task.sort_forbidden), since the order tells counts that endpoint may withhold. Keycloak group names are looked up within 2 seconds for the whole page and are null past that.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			_start		query		int		false	"Start index"
 //	@Param			_end		query		int		false	"End index"
 //	@Param			status		query		string	false	"Derived send status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent)"	Enums(failed,sending,sent)
 //	@Param			q			query		string	false	"Text to find (at most 200 characters)"
-//	@Param			from		query		string	false	"Sends created on or after this date (YYYY-MM-DD, Europe/Istanbul) or RFC 3339 time"
-//	@Param			to			query		string	false	"Sends created on or before this date (YYYY-MM-DD, Europe/Istanbul, the whole day) or RFC 3339 time"
-//	@Param			kind		query		string	false	"bulk (a list, a group, a Forms source, an approved send), system (a System template's mail, not bulk), single (any other)"	Enums(bulk,single,system)
+//	@Param			from		query		string	false	"Sends created on or after this date (YYYY-MM-DD, Europe/Istanbul) or RFC 3339 time (encode + as %2B; a space where + was is read as +)"
+//	@Param			to			query		string	false	"Sends created on or before this date (YYYY-MM-DD, Europe/Istanbul, the whole day) or RFC 3339 time (encode + as %2B)"
+//	@Param			kind		query		string	false	"bulk (a list, a group, a Forms source, an approved send, a News send), system (mail a service or SkyMail sent), single (a person's single mail)"	Enums(bulk,single,system)
 //	@Param			template_id	query		string	false	"Sends of this template"																									format(uuid)
-//	@Param			list_id		query		string	false	"Sends to this SkyMail list"																								format(uuid)
+//	@Param			list_id		query		string	false	"Sends to this list or Keycloak group (mail_list_id)"																								format(uuid)
 //	@Param			sent_by		query		string	false	"Sends by this sender (the sender's sub, as sent_by returns it)"
 //	@Param			_sort		query		string	false	"Order"		Enums(created_at,open_rate)	default(created_at)
 //	@Param			_order		query		string	false	"Direction"	Enums(asc,desc)				default(desc)
@@ -556,7 +557,7 @@ func (h *mailHandlerImpl) GetTask(c fiber.Ctx) error {
 // GetTaskQueueItems godoc
 //
 //	@Summary		Get mail queue items for a task
-//	@Description	Get a send's recipients, one queue row each, newest first with the row id breaking ties so pages neither repeat nor skip a recipient. The status filter keeps only recipients in that queue status, or with skipped the failed ones that were not sent on purpose (a reserved domain, a suppressed or unsubscribed address, a preference, a cancelled send: the rows that never make the send read failed); failed still lists every failed row. q keeps the recipients whose address or name contains it, case-insensitively. X-Total-Count counts the filtered recipients.
+//	@Description	Get a send's recipients, one queue row each, newest first with the row id breaking ties so pages neither repeat nor skip a recipient. The status filter keeps only recipients in that queue status, or with skipped the failed ones that were not sent on purpose (a reserved domain, a suppressed or unsubscribed address, a preference, a cancelled send: the rows that never make the send read failed); failed still lists every failed row. q keeps the recipients whose address or name contains it (any case, Turkish capitals included; I, ı, İ and i alike). X-Total-Count counts the filtered recipients.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id		path		string	true	"Task ID"

@@ -377,7 +377,7 @@ func (h *mailHandlerImpl) mailTaskItems(ctx context.Context, caller contentCalle
 			Status:           SendStatus(send.Status),
 			RecipientCounts:  recipientCounts(send),
 			Audience:         sendAudience(send, groupNames),
-			Kind:             sendKindOf(send.Bulk, send.TemplateSystem),
+			Kind:             send.Kind,
 			Tracking:         send.TrackingRequested,
 			SendPurposeFields: SendPurposeFields{
 				Purpose:                 send.Purpose,

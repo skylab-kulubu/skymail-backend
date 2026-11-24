@@ -25,6 +25,7 @@ func TestSearchInstantTakesDaysInIstanbulAndTimes(t *testing.T) {
 		{"2026-11-10T10:00:00+03:00", false, "2026-11-10T07:00:00Z"},
 		{"2026-11-10T10:00:00+03:00", true, "2026-11-10T07:00:00.000001Z"},
 		{"2026-11-10T10:00:00.0000009Z", true, "2026-11-10T10:00:00.000001Z"},
+		{"2026-11-10T10:00:00 03:00", false, "2026-11-10T07:00:00Z"}, // an unencoded +
 	} {
 		got, ok := parseSearchInstant(tc.raw, zone, tc.end)
 		if !ok || got.UTC().Format(time.RFC3339Nano) != tc.want {
@@ -38,18 +39,17 @@ func TestSearchInstantTakesDaysInIstanbulAndTimes(t *testing.T) {
 	}
 }
 
-func TestSendKindOf(t *testing.T) {
-	for _, tc := range []struct {
-		bulk, system bool
-		want         string
-	}{
-		{true, false, SendKindBulk},
-		{true, true, SendKindBulk}, // a list send stays bulk whatever its template
-		{false, true, SendKindSystem},
-		{false, false, SendKindSingle},
+func TestSearchFoldReadsTurkishCapitals(t *testing.T) {
+	for _, tc := range []struct{ text, query string }{
+		{"Giriş kodu", "GİRİŞ"},
+		{"Işık Atölyesi", "ışık"},
+		{"ışık", "IŞIK"},
+		{"Tüm üyeler", "TÜM ÜYELER"},
+		{"ÇAĞRI", "çağrı"},
+		{"Öğrenci", "ÖĞRENCİ"},
 	} {
-		if got := sendKindOf(tc.bulk, tc.system); got != tc.want {
-			t.Errorf("bulk %v, system %v: %s; want %s", tc.bulk, tc.system, got, tc.want)
+		if !strings.Contains(searchFold(tc.text), searchFold(tc.query)) {
+			t.Errorf("%q does not find %q (%q, %q)", tc.query, tc.text, searchFold(tc.query), searchFold(tc.text))
 		}
 	}
 }
@@ -65,8 +65,10 @@ func TestSearchParam(t *testing.T) {
 	if _, ok := searchParam(strings.Repeat("ş", 200)); !ok {
 		t.Error("200 characters refused")
 	}
-	if _, ok := searchParam(strings.Repeat("a", 201)); ok {
-		t.Error("201 characters taken")
+	for _, bad := range []string{strings.Repeat("a", 201), "a\x00b", "\xff\xfe", "ab\xc3"} {
+		if _, ok := searchParam(bad); ok {
+			t.Errorf("%q taken", bad)
+		}
 	}
 }
 
@@ -83,6 +85,10 @@ func TestGroupsMatching(t *testing.T) {
 	q := "ekipler"
 	if got := groupsMatching(groups, &q); len(got) != 1 || *got[0].Name != "Yapay Zeka" {
 		t.Errorf("by path: %v", got)
+	}
+	q = "YÖNETİM"
+	if got := groupsMatching(groups, &q); len(got) != 1 || *got[0].Name != "Yönetim Kurulu" {
+		t.Errorf("Turkish capitals: %v", got)
 	}
 	q = "KURUL"
 	if got := groupsMatching(groups, &q); len(got) != 1 || *got[0].Name != "Yönetim Kurulu" {

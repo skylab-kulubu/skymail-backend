@@ -279,12 +279,15 @@ func (h *mailApprovalHandlerImpl) notify(ctx context.Context, key, sentBy string
 		preferences = h.mailer.ResolveSystemTracking(ctx, to)
 	}
 	for _, recipient := range to {
+		// SkyMail's own mail is a service's (mail_task_kind(): system).
+		sentBySkyMail := true
 		arg := database.CreateSingleMailTaskParams{
 			SentBy:            sentBy,
 			TemplateID:        &template.ID,
 			BodyVariables:     raw,
 			RecipientFullName: recipient.FullName,
 			RecipientEmail:    recipient.Email,
+			SentByService:     &sentBySkyMail,
 		}
 		// SkyMail's own mail: tracked as a service's is, when
 		// SKYMAIL_TRACKING_SYSTEM is on.

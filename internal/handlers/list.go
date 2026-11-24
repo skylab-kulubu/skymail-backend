@@ -134,7 +134,7 @@ func (h *listHandlerImpl) CreateList(c fiber.Ctx) error {
 // GetLists godoc
 //
 //	@Summary		List all mailing lists
-//	@Description	Get a list of all mailing lists (internal + Keycloak groups) with pagination. q keeps the internal lists whose name or description contains it and the Keycloak groups whose name or path does, case-insensitively; X-Total-Count counts them.
+//	@Description	Get a list of all mailing lists (internal + Keycloak groups) with pagination. q keeps the internal lists whose name or description contains it and the Keycloak groups whose name or path does (any case, Turkish capitals included; I, ı, İ and i alike); X-Total-Count counts them.
 //	@Tags			Lists
 //	@Produce		json
 //	@Param			_start		query		int		false	"Start index"

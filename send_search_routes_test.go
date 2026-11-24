@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/google/uuid"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
 	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
@@ -23,18 +25,33 @@ const (
 
 	searchPanelTemplate  = "61000000-0000-4000-8000-000000000001"
 	searchSystemTemplate = "61000000-0000-4000-8000-000000000002"
+	searchNewsTemplate   = "61000000-0000-4000-8000-000000000003"
 	searchList           = "62000000-0000-4000-8000-000000000001"
+	searchOtherList      = "62000000-0000-4000-8000-000000000002"
 
-	// A: Tüm üyeler, 12 tracked, 3 likely opened (0.25). B: Ayşe alone,
-	// tracked and opened (1.0). C: a login code (System template). D: two
+	// A: Tüm üyeler, 12 tracked, 3 likely opened (0.25). B: a person's
+	// mail to Ayşe alone, in the system lane, tracked and opened (1.0). C: a
+	// login code from before sent_by_service (system by its lane). D: two
 	// people, one cancelled (skipped) and one refused. E: an approved send,
-	// its tracking rolled up (5 of 10, 0.5).
+	// its tracking rolled up (5 of 10, 0.5). F: core's ops.send-failed
+	// notification, in the bulk lane. G: a service's single mail
+	// (sent_by_service), in the bulk lane. N: a News send (club.news, a
+	// System template; purpose duyuru).
 	searchSendA = "63000000-0000-4000-8000-00000000000a"
 	searchSendB = "63000000-0000-4000-8000-00000000000b"
 	searchSendC = "63000000-0000-4000-8000-00000000000c"
 	searchSendD = "63000000-0000-4000-8000-00000000000d"
 	searchSendE = "63000000-0000-4000-8000-00000000000e"
+	searchSendF = "63000000-0000-4000-8000-00000000000f"
+	searchSendG = "63000000-0000-4000-8000-000000000010"
+	searchSendN = "63000000-0000-4000-8000-000000000011"
 )
+
+// sendLetter names the fixture's sends by letter.
+var sendLetter = map[string]string{
+	searchSendA: "A", searchSendB: "B", searchSendC: "C", searchSendD: "D",
+	searchSendE: "E", searchSendF: "F", searchSendG: "G", searchSendN: "N",
+}
 
 // searchApp serves the send list, a send's recipients and the templates over
 // five sends; the caller's roles are the X-Test-Roles header, comma
@@ -49,14 +66,26 @@ func searchApp(t *testing.T) (*fiber.App, *database.Store) {
 	for _, sql := range []string{
 		`INSERT INTO templates (id, key, name, subject, html_content, plain_text_content, react_email_content, system) VALUES
 		    ('` + searchPanelTemplate + `', 'panel.duyuru', 'Duyuru şablonu', 'Bahar şenliği', '<p>x</p>', 'x', '', false),
-		    ('` + searchSystemTemplate + `', 'keycloak.login-code', 'Giriş kodu', 'Kodunuz', '<p>x</p>', 'x', '', true)`,
-		`INSERT INTO mailing_lists (id, name, description) VALUES ('` + searchList + `', 'Tüm üyeler', 'Kulübün bütün üyeleri')`,
-		`INSERT INTO mail_tasks (id, sent_by, template_id, mail_list_id, body_variables, created_at) VALUES
-		    ('` + searchSendA + `', '` + searchOperator + `', '` + searchPanelTemplate + `', '` + searchList + `', '{}', '2026-11-01 10:00+03'),
-		    ('` + searchSendB + `', '` + searchOther + `', '` + searchPanelTemplate + `', NULL, '{}', '2026-11-10 10:00+03'),
-		    ('` + searchSendC + `', 'keycloak-service', '` + searchSystemTemplate + `', NULL, '{}', '2026-11-20 10:00+03'),
-		    ('` + searchSendD + `', '` + searchOperator + `', '` + searchPanelTemplate + `', NULL, '{}', '2026-11-15 23:30+03'),
-		    ('` + searchSendE + `', '` + searchOperator + `', '` + searchPanelTemplate + `', NULL, '{}', '2026-11-05 10:00+03')`,
+		    ('` + searchSystemTemplate + `', 'keycloak.login-code', 'Giriş kodu', 'Kodunuz', '<p>x</p>', 'x', '', true),
+		    ('` + searchNewsTemplate + `', 'club.news', 'Kulüp haberi', 'Haber', '<p>x</p>', 'x', '', true)`,
+		`INSERT INTO mailing_lists (id, name, description) VALUES
+		    ('` + searchList + `', 'Tüm üyeler', 'Kulübün bütün üyeleri'),
+		    ('` + searchOtherList + `', 'Kayıt_2026', '%100 katılım')`,
+		`INSERT INTO notification_types (key, lane) VALUES ('ops.send-failed', 'bulk')`,
+		`INSERT INTO notifications (id, type, sent_by, idempotency_key, request_sha256) VALUES
+		    ('64000000-0000-4000-8000-000000000001', 'ops.send-failed', 'core-service', 'k1', repeat('a', 64))`,
+		`INSERT INTO mail_tasks (id, sent_by, template_id, mail_list_id, body_variables, created_at, tracking_requested, sent_by_service, notification_id) VALUES
+		    ('` + searchSendA + `', '` + searchOperator + `', '` + searchPanelTemplate + `', '` + searchList + `', '{}', '2026-11-01 10:00+03', true, NULL, NULL),
+		    ('` + searchSendB + `', '` + searchOther + `', '` + searchPanelTemplate + `', NULL, '{}', '2026-11-10 10:00+03', true, false, NULL),
+		    ('` + searchSendC + `', 'keycloak-service', '` + searchSystemTemplate + `', NULL, '{}', '2026-11-20 10:00+03', false, NULL, NULL),
+		    ('` + searchSendD + `', '` + searchOperator + `', '` + searchPanelTemplate + `', NULL, '{}', '2026-11-15 23:30+03', false, NULL, NULL),
+		    ('` + searchSendE + `', '` + searchOperator + `', '` + searchPanelTemplate + `', NULL, '{}', '2026-11-05 10:00+03', true, NULL, NULL),
+		    ('` + searchSendF + `', 'core-service', '` + searchPanelTemplate + `', NULL, '{}', '2026-11-18 10:00+03', false, NULL, '64000000-0000-4000-8000-000000000001'),
+		    ('` + searchSendG + `', 'core-service', '` + searchPanelTemplate + `', NULL, '{}', '2026-11-03 10:00+03', false, true, NULL)`,
+		`INSERT INTO mail_tasks (id, sent_by, template_id, body_variables, created_at, purpose, category,
+		                        source_kind, source_ref, source_version, source_snapshot, source_audience) VALUES
+		    ('` + searchSendN + `', '` + searchOperator + `', '` + searchNewsTemplate + `', '{}', '2026-11-12 10:00+03', 'duyuru', 'club:haber',
+		     'news', 'news:bahar', 1, '{}', 'all')`,
 		// A: 12 list recipients in the bulk lane, tracked, sent yesterday.
 		`INSERT INTO mail_queue (task_id, recipient_full_name, recipient_email, subject, body, status, priority, sent_at, tracking_token)
 		 SELECT '` + searchSendA + `', 'Üye ' || n, 'uye' || n || '@ornek.example.net', 'Bahar şenliği', 'G', 'sent', 0,
@@ -68,7 +97,10 @@ func searchApp(t *testing.T) (*fiber.App, *database.Store) {
 		`INSERT INTO mail_queue (task_id, recipient_full_name, recipient_email, subject, body, status, error, priority) VALUES
 		    ('` + searchSendD + `', 'Zeynep Ak', 'zeynep@ornek.example.net', '', '', 'failed', 'cancelled', 0),
 		    ('` + searchSendD + `', 'Ali Can', 'ali@uzak.example.net', '', '', 'failed', 'smtp: RCPT TO 550 5.1.1', 0),
-		    ('` + searchSendE + `', 'Ece Su', 'ece@ornek.example.net', 'Bahar şenliği', 'G', 'sent', NULL, 0)`,
+		    ('` + searchSendE + `', 'Ece Su', 'ece@ornek.example.net', 'Bahar şenliği', 'G', 'sent', NULL, 0),
+		    ('` + searchSendF + `', 'Operasyon', 'ops@ornek.example.net', '', '', 'pending', NULL, 0),
+		    ('` + searchSendG + `', 'Bilet Sahibi', 'bilet@ornek.example.net', '', '', 'pending', NULL, 0),
+		    ('` + searchSendN + `', 'Haber Okuru', 'haber@ornek.example.net', 'Haber', 'G', 'sent', NULL, 0)`,
 		// Three of A's people likely opened; a fourth only through a proxy.
 		`INSERT INTO mail_tracking_events (queue_id, task_id, kind, source_class, automated_likely, classifier_version)
 		 SELECT q.id, q.task_id, 'open', CASE WHEN q.recipient_email LIKE 'uye4@%' THEN 'apple_proxy_likely' ELSE 'mail_client' END,
@@ -121,6 +153,10 @@ func searchApp(t *testing.T) (*fiber.App, *database.Store) {
 	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
 	registerMailTaskRoutes(api, auth, handlers.NewMailHandler(store, idleMailer{}, noGroups{}))
 	registerTemplateRoutes(api, auth, handlers.NewTemplateHandler(store))
+	// The list and request lists, as main.go routes them, without their
+	// role checks: the search is what is tested here.
+	api.Get("/mailing_lists", handlers.NewListHandler(store, noGroups{}).GetLists)
+	api.Get("/mail_approvals", handlers.NewMailApprovalHandler(store, nil, noGroups{}, handlers.MailApprovalOptions{}).List)
 	return app, store
 }
 
@@ -157,7 +193,11 @@ func letters(t *testing.T, raw string) string {
 	}
 	var out strings.Builder
 	for _, s := range sends {
-		out.WriteString(strings.ToUpper(s.ID[len(s.ID)-1:]))
+		letter, ok := sendLetter[s.ID]
+		if !ok {
+			t.Fatalf("unknown send %s", s.ID)
+		}
+		out.WriteString(letter)
 	}
 	return out.String()
 }
@@ -169,24 +209,30 @@ func TestSendListSearchFiltersAndSorts(t *testing.T) {
 		query string
 		want  string
 	}{
-		{"", "CDBEA"},
-		{"?q=%C3%BCyeler", "A"},     // the list's name
-		{"?q=PANEL.DUYURU", "DBEA"}, // the template's key, any case
-		{"?q=bahar", "DBEA"},        // the template's subject
-		{"?q=giri%C5%9F", "C"},      // the System template's name
-		{"?q=ayse%40ornek", "B"},    // a recipient of a send to people
-		{"?q=zeynep", "D"},          // the same, on a send that failed
-		{"?q=uye1", ""},             // a list's recipients are not searched
-		{"?q=fatma", "E"},           // an approved send's requester
-		{"?kind=bulk", "EA"},        // a list, an approved send
-		{"?kind=system", "C"},       // the System template's mail
-		{"?kind=single", "DB"},      // any other
+		{"", "CFDNBEGA"},
+		{"?q=%C3%BCyeler", "A"},          // the list's name
+		{"?q=T%C3%9CM+%C3%9CYELER", "A"}, // Turkish capitals
+		{"?q=PANEL.DUYURU", "FDBEGA"},    // the template's key, any case
+		{"?q=bahar", "FDBEGA"},           // the template's subject
+		{"?q=giri%C5%9F", "C"},           // the System template's name
+		{"?q=G%C4%B0R%C4%B0%C5%9E", "C"}, // GİRİŞ
+		{"?q=ayse%40ornek", "B"},         // a recipient of a send to people
+		{"?q=zeynep", "D"},               // the same, on a send that failed
+		{"?q=uye1", ""},                  // a list's recipients are not searched
+		{"?q=haber%40ornek", ""},         // nor a News send's
+		{"?q=fatma", "E"},                // an approved send's requester
+		{"?q=%25", ""},                   // % and _ are text, not patterns
+		{"?q=_", ""},
+		{"?kind=bulk", "NEA"},   // a News send, an approved send, a list
+		{"?kind=system", "CFG"}, // by lane (C), notification (F), service (G)
+		{"?kind=single", "DB"},  // B is a person's, though in the system lane
 		{"?template_id=" + searchSystemTemplate, "C"},
 		{"?list_id=" + searchList, "A"},
 		{"?sent_by=" + searchOther, "B"},
-		{"?from=2026-11-10&to=2026-11-15", "DB"}, // to takes the whole day
+		{"?from=2026-11-10&to=2026-11-15", "DNB"}, // to takes the whole day
 		{"?from=2026-11-10T10:00:00%2B03:00&to=2026-11-10T10:00:00%2B03:00", "B"},
-		{"?_order=asc", "AEBDC"},
+		{"?from=2026-11-10T10:00:00+03:00&to=2026-11-10T10:00:00+03:00", "B"}, // an unencoded +
+		{"?_order=asc", "AGEBNDFC"},
 		{"?kind=single&q=bahar&_order=asc", "BD"},
 	} {
 		status, raw, total := searchGet(t, app, searchReader, "/v1/mail_tasks"+tc.query+sep(tc.query)+"_end=50")
@@ -206,9 +252,10 @@ func TestSendListSearchFiltersAndSorts(t *testing.T) {
 	}
 	kinds := map[string]string{}
 	for _, s := range sends {
-		kinds[strings.ToUpper(s.ID[len(s.ID)-1:])] = s.Kind
+		kinds[sendLetter[s.ID]] = s.Kind
 	}
-	if want := map[string]string{"A": "bulk", "B": "single", "C": "system", "D": "single", "E": "bulk"}; !equalMaps(kinds, want) {
+	if want := map[string]string{"A": "bulk", "B": "single", "C": "system", "D": "single", "E": "bulk",
+		"F": "system", "G": "system", "N": "bulk"}; !equalMaps(kinds, want) {
 		t.Errorf("kinds %v; want %v", kinds, want)
 	}
 
@@ -218,11 +265,11 @@ func TestSendListSearchFiltersAndSorts(t *testing.T) {
 		t.Errorf("open rate without the role: %d %s", status, raw)
 	}
 	for query, want := range map[string]string{
-		"?_sort=open_rate":                      "BEACD", // 1.0, 0.5 (rolled up), 0.25, then newest first
-		"?_sort=open_rate&_order=asc":           "AEBDC",
+		"?_sort=open_rate":                      "BEACFDNG", // 1.0, 0.5 (rolled up), 0.25, then newest first
+		"?_sort=open_rate&_order=asc":           "AEBGNDFC",
 		"?_sort=open_rate&_end=2":               "BE",
 		"?_sort=open_rate&_start=2&_end=4":      "AC",
-		"?_sort=open_rate&kind=bulk&_order=asc": "AE",
+		"?_sort=open_rate&kind=bulk&_order=asc": "AEN",
 	} {
 		status, raw, _ := searchGet(t, app, searchTracker, "/v1/mail_tasks"+query+sep(query)+"x=1")
 		if status != 200 {
@@ -234,7 +281,8 @@ func TestSendListSearchFiltersAndSorts(t *testing.T) {
 	}
 
 	for _, query := range []string{"?kind=list", "?from=yesterday", "?to=2026-13-01", "?template_id=x", "?list_id=1",
-		"?_sort=subject", "?_order=up", "?from=2026-11-20&to=2026-11-10", "?q=" + strings.Repeat("a", 201)} {
+		"?_sort=subject", "?_order=up", "?from=2026-11-20&to=2026-11-10", "?q=" + strings.Repeat("a", 201),
+		"?q=a%00b", "?q=%FF%FE", "?sent_by=%00"} {
 		if status, raw, _ := searchGet(t, app, searchTracker, "/v1/mail_tasks"+query); status != 400 || !strings.Contains(raw, "validation.error") {
 			t.Errorf("%s: %d %s; want 400 validation.error", query, status, raw)
 		}
@@ -281,56 +329,95 @@ func TestSendRecipientsSearchAndSkipped(t *testing.T) {
 }
 
 func TestTemplateListAndApprovalSearch(t *testing.T) {
+	app, _ := searchApp(t)
+	approver := searchReader + ",skymail:lists:read," + handlers.MailApproverRole
+
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/v1/templates?q=KEYCLOAK", 1},             // key
+		{"/v1/templates?q=%C5%9Fenli%C4%9Fi", 1},    // subject
+		{"/v1/templates?q=%C5%9Fablon", 1},          // name
+		{"/v1/templates?q=G%C4%B0R%C4%B0%C5%9E", 1}, // GİRİŞ
+		{"/v1/templates?q=yok", 0},
+		{"/v1/templates?q=keycloak&lifecycle=all", 1},
+		{"/v1/templates?q=keycloak&lifecycle=inactive", 0},
+		{"/v1/templates?q=%25", 0},
+		{"/v1/mailing_lists?q=%C3%BCyeler", 1},     // name
+		{"/v1/mailing_lists?q=T%C3%9CM", 1},        // Turkish capitals
+		{"/v1/mailing_lists?q=b%C3%BCt%C3%BCn", 1}, // description
+		{"/v1/mailing_lists?q=_", 1},               // a literal _, not any one letter
+		{"/v1/mailing_lists?q=%25100", 1},          // a literal %
+		{"/v1/mailing_lists?q=yok", 0},
+		{"/v1/mailing_lists?q=kul%C3%BCb&lifecycle=all", 1},
+		{"/v1/mail_approvals?q=fatma", 1}, // requester
+		{"/v1/mail_approvals?q=FATMA+DEM%C4%B0R", 1},
+		{"/v1/mail_approvals?q=panel.duyuru", 1}, // template key
+		{"/v1/mail_approvals?q=bahar", 1},        // template subject
+		{"/v1/mail_approvals?q=t%C3%BCm", 0},     // no list on it
+		{"/v1/mail_approvals?q=_", 0},
+	} {
+		status, raw, total := searchGet(t, app, approver, tc.path)
+		var rows []json.RawMessage
+		if status != 200 || json.Unmarshal([]byte(raw), &rows) != nil || len(rows) != tc.want || total != itoa(tc.want) {
+			t.Errorf("%s: %d, %d rows, X-Total-Count %s; want %d: %s", tc.path, status, len(rows), total, tc.want, raw)
+		}
+	}
+	for _, path := range []string{"/v1/templates?q=a%00", "/v1/mailing_lists?q=%FF", "/v1/mail_approvals?q=" + strings.Repeat("%C5%9F", 201)} {
+		if status, raw, _ := searchGet(t, app, approver, path); status != 400 || !strings.Contains(raw, "validation.error") {
+			t.Errorf("%s: %d %s; want 400", path, status, raw)
+		}
+	}
+}
+
+// The skipped filter and mail_task_status() read the same rows as not sent
+// on purpose: a send with one sent row and one failed row is failed exactly
+// when its failed row is not in GET /:id/queue?status=skipped.
+func TestSkippedRecipientsAreWhatTheSendStatusLeavesOut(t *testing.T) {
 	app, store := searchApp(t)
 	ctx := context.Background()
-
-	for query, want := range map[string]int{
-		"?q=KEYCLOAK":                    1, // key
-		"?q=%C5%9Fenli%C4%9Fi":           1, // subject
-		"?q=%C5%9Fablon":                 1, // name
-		"?q=yok":                         0,
-		"?q=keycloak&lifecycle=all":      1,
-		"?q=keycloak&lifecycle=inactive": 0,
-	} {
-		status, raw, total := searchGet(t, app, searchReader, "/v1/templates"+query)
-		if status != 200 || total != itoa(want) {
-			t.Errorf("templates %s: %d, X-Total-Count %s; want %d: %s", query, status, total, want, raw)
+	errorsByKind := []string{
+		"reserved_domain: not sent", "suppressed: smtp RCPT TO 550", "suppressed: unsubscribed",
+		"preference: opted_out", "preference: inactive", "preference: ambiguous", "cancelled",
+		"preference: no_account", "smtp: RCPT TO 550 5.1.1", "timeout", "",
+	}
+	for i, failure := range errorsByKind {
+		id := fmt.Sprintf("65000000-0000-4000-8000-%012d", i)
+		var errorValue any = failure
+		if failure == "" {
+			errorValue = nil
 		}
-	}
-
-	search := "üyeler"
-	lists, err := store.GetAllMailingLists(ctx, database.GetAllMailingListsParams{Limit: 10, Search: &search})
-	if err != nil || len(lists) != 1 {
-		t.Errorf("lists by name: %v %v", lists, err)
-	}
-	search = "bütün"
-	if count, err := store.CountMailingLists(ctx, &search); err != nil || count != 1 {
-		t.Errorf("lists by description: %d %v", count, err)
-	}
-	search = "yok"
-	if count, err := store.CountAllMailingListsIncludingArchived(ctx, &search); err != nil || count != 0 {
-		t.Errorf("no list: %d %v", count, err)
-	}
-
-	for text, want := range map[string]int64{"fatma": 1, "panel.duyuru": 1, "bahar": 1, "tüm": 0} {
-		text := text
-		params := database.ListMailApprovalsParams{Limit: 10, Search: &text}
-		rows, err := store.ListMailApprovals(ctx, params)
-		if err != nil || int64(len(rows)) != want {
-			t.Errorf("approvals %q: %d rows %v; want %d", text, len(rows), err, want)
+		if _, err := store.Conn.Exec(ctx, `INSERT INTO mail_tasks (id, sent_by, template_id, body_variables) VALUES ($1, $2, $3, '{}')`,
+			id, searchOperator, searchPanelTemplate); err != nil {
+			t.Fatal(err)
 		}
-		count, err := store.CountMailApprovals(ctx, database.CountMailApprovalsParams{Search: &text})
-		if err != nil || count != want {
-			t.Errorf("approvals %q: count %d %v; want %d", text, count, err, want)
+		if _, err := store.Conn.Exec(ctx, `INSERT INTO mail_queue (task_id, recipient_full_name, recipient_email, subject, body, status, error) VALUES
+			($1, 'Gönderilen', 'gonderilen@ornek.example.net', 'K', 'G', 'sent', NULL),
+			($1, 'Kalan', 'kalan@ornek.example.net', '', '', 'failed', $2)`, id, errorValue); err != nil {
+			t.Fatal(err)
+		}
+		var status string
+		if err := store.Conn.QueryRow(ctx, `SELECT mail_task_status($1)`, id).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		code, raw, total := searchGet(t, app, searchReader, "/v1/mail_tasks/"+id+"/queue?status=skipped")
+		if code != 200 {
+			t.Fatalf("%q: %d %s", failure, code, raw)
+		}
+		skipped := total == "1"
+		if skipped == (status == "failed") {
+			t.Errorf("%q: mail_task_status %s, in skipped %v: the two lists differ", failure, status, skipped)
 		}
 	}
 }
 
 func TestDailySentIsSplitByStream(t *testing.T) {
 	app, _ := searchApp(t)
-	// Yesterday: A's 12 (no purpose, bulk lane: duyuru), B's one (system lane,
-	// a panel template: islem), C's login code (system). D and E sent nothing
-	// that day.
+	// A's 12 (no purpose, bulk lane: duyuru), B's one (system lane, a panel
+	// template: islem), C's login code (system), E's one (bulk lane: duyuru),
+	// N's News mail (purpose duyuru, though its template is a System one). D
+	// failed, F and G wait.
 	status, raw, _ := searchGet(t, app, searchReader, "/v1/mail_tasks/summary?days=3")
 	if status != 200 {
 		t.Fatalf("%d %s", status, raw)
@@ -358,9 +445,9 @@ func TestDailySentIsSplitByStream(t *testing.T) {
 		islem += day.ByStream.Islem
 		system += day.ByStream.System
 	}
-	// Queue rows count by created_at (queued now), not sent_at; E's row too.
-	if sent != 15 || duyuru != 13 || islem != 1 || system != 1 {
-		t.Errorf("sent %d: duyuru %d, islem %d, system %d; want 15: 13, 1, 1", sent, duyuru, islem, system)
+	// Queue rows count by created_at (queued now), not sent_at.
+	if sent != 16 || duyuru != 14 || islem != 1 || system != 1 {
+		t.Errorf("sent %d: duyuru %d, islem %d, system %d; want 16: 14, 1, 1", sent, duyuru, islem, system)
 	}
 }
 
@@ -400,4 +487,14 @@ func sameSet(a, b []string) bool {
 		seen[s]--
 	}
 	return true
+}
+
+// kindOf is the send list's kind of task (mail_task_kind()).
+func (w *approvalWorld) kindOf(task uuid.UUID) string {
+	w.t.Helper()
+	var kind string
+	if err := w.store.Conn.QueryRow(context.Background(), `SELECT mail_task_kind($1)`, task).Scan(&kind); err != nil {
+		w.t.Fatal(err)
+	}
+	return kind
 }

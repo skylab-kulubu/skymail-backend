@@ -1049,7 +1049,7 @@
                         "type": "string"
                     },
                     "kind": {
-                        "description": "bulk (a list, a group, a Forms source, an approved send), system (a System template's mail that is not bulk: a login code, a ticket, a Forms confirmation) or single (any other); the kind filter of GET /mail_tasks.",
+                        "description": "bulk (a list, a group, a Forms source, an approved send, a News send), system (mail a service or SkyMail sent: a core notification, a service's single mail such as a login code, a ticket or a Forms confirmation, a Mail onayı notice; a single send from before 2026-11-24 by its lane) or single (a person's single mail); the kind filter of GET /mail_tasks.",
                         "enum": [
                             "bulk",
                             "single",
@@ -4515,7 +4515,7 @@
         },
         "/mail_tasks": {
             "get": {
-                "description": "Get a list of all mail tasks with pagination, newest first, each with its derived status, recipients by status and audience. Every filter given keeps only the sends that match it, and X-Total-Count counts them. q matches, case-insensitively, the template's name, key or subject, the list's name, the Forms form's title, an approved send's requester or, on a send to people (no list, no Forms source), a recipient's address or name. _sort=open_rate orders by the share of tracked recipients who likely opened (unique_likely_human_opens / tracked_recipients, as GET /mail_tasks/{id}/tracking reads them), sends with no rate last; it needs skymail:mails:tracking:read (403 mail_task.sort_forbidden), since the order tells counts that endpoint may withhold. Keycloak group names are looked up within 2 seconds for the whole page and are null past that.",
+                "description": "Get a list of all mail tasks with pagination, newest first, each with its derived status, recipients by status and audience. Every filter given keeps only the sends that match it, and X-Total-Count counts them. q (valid UTF-8, no NUL, at most 200 characters) matches the template's name, key or subject, the list's name, the Forms form's title, an approved send's requester or, on a send to people (no list, no Forms source, not a News send), a recipient's address or name; in any case, Turkish capitals included, with I, ı, İ and i read as one letter. kind: bulk (a list, a group, a Forms source, an approved send, a News send), system (mail a service or SkyMail sent: a core notification, a service account's single mail, a Mail onayı notice; a single send queued before 2026-11-24 counts as system when it went in the system lane), single (a person's single mail). _sort=open_rate orders by the share of tracked recipients who likely opened (unique_likely_human_opens / tracked_recipients, as GET /mail_tasks/{id}/tracking reads them), sends with no rate last; it needs skymail:mails:tracking:read (403 mail_task.sort_forbidden), since the order tells counts that endpoint may withhold. Keycloak group names are looked up within 2 seconds for the whole page and are null past that.",
                 "parameters": [
                     {
                         "description": "Start index",
@@ -4555,7 +4555,7 @@
                         }
                     },
                     {
-                        "description": "Sends created on or after this date (YYYY-MM-DD, Europe/Istanbul) or RFC 3339 time",
+                        "description": "Sends created on or after this date (YYYY-MM-DD, Europe/Istanbul) or RFC 3339 time (encode + as %2B; a space where + was is read as +)",
                         "in": "query",
                         "name": "from",
                         "schema": {
@@ -4563,7 +4563,7 @@
                         }
                     },
                     {
-                        "description": "Sends created on or before this date (YYYY-MM-DD, Europe/Istanbul, the whole day) or RFC 3339 time",
+                        "description": "Sends created on or before this date (YYYY-MM-DD, Europe/Istanbul, the whole day) or RFC 3339 time (encode + as %2B)",
                         "in": "query",
                         "name": "to",
                         "schema": {
@@ -4571,7 +4571,7 @@
                         }
                     },
                     {
-                        "description": "bulk (a list, a group, a Forms source, an approved send), system (a System template's mail, not bulk), single (any other)",
+                        "description": "bulk (a list, a group, a Forms source, an approved send, a News send), system (mail a service or SkyMail sent), single (a person's single mail)",
                         "in": "query",
                         "name": "kind",
                         "schema": {
@@ -4593,7 +4593,7 @@
                         }
                     },
                     {
-                        "description": "Sends to this SkyMail list",
+                        "description": "Sends to this list or Keycloak group (mail_list_id)",
                         "in": "query",
                         "name": "list_id",
                         "schema": {
@@ -5386,7 +5386,7 @@
         },
         "/mail_tasks/{id}/queue": {
             "get": {
-                "description": "Get a send's recipients, one queue row each, newest first with the row id breaking ties so pages neither repeat nor skip a recipient. The status filter keeps only recipients in that queue status, or with skipped the failed ones that were not sent on purpose (a reserved domain, a suppressed or unsubscribed address, a preference, a cancelled send: the rows that never make the send read failed); failed still lists every failed row. q keeps the recipients whose address or name contains it, case-insensitively. X-Total-Count counts the filtered recipients.",
+                "description": "Get a send's recipients, one queue row each, newest first with the row id breaking ties so pages neither repeat nor skip a recipient. The status filter keeps only recipients in that queue status, or with skipped the failed ones that were not sent on purpose (a reserved domain, a suppressed or unsubscribed address, a preference, a cancelled send: the rows that never make the send read failed); failed still lists every failed row. q keeps the recipients whose address or name contains it (any case, Turkish capitals included; I, ı, İ and i alike). X-Total-Count counts the filtered recipients.",
                 "parameters": [
                     {
                         "description": "Task ID",
@@ -5779,7 +5779,7 @@
         },
         "/mailing_lists": {
             "get": {
-                "description": "Get a list of all mailing lists (internal + Keycloak groups) with pagination. q keeps the internal lists whose name or description contains it and the Keycloak groups whose name or path does, case-insensitively; X-Total-Count counts them.",
+                "description": "Get a list of all mailing lists (internal + Keycloak groups) with pagination. q keeps the internal lists whose name or description contains it and the Keycloak groups whose name or path does (any case, Turkish capitals included; I, ı, İ and i alike); X-Total-Count counts them.",
                 "parameters": [
                     {
                         "description": "Start index",
@@ -8095,7 +8095,7 @@
         },
         "/templates": {
             "get": {
-                "description": "Get a list of all email templates with pagination. q keeps the templates whose name, key or subject contains it, case-insensitively; X-Total-Count counts them.",
+                "description": "Get a list of all email templates with pagination. q keeps the templates whose name, key or subject contains it (any case, Turkish capitals included; I, ı, İ and i alike); X-Total-Count counts them.",
                 "parameters": [
                     {
                         "description": "Start index",

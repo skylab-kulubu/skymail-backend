@@ -16,10 +16,10 @@ import (
 // subject, name or address a person types to find one.
 const maxSearch = 200
 
-// Send kinds, as GET /mail_tasks filters and returns them: bulk (a list, a
-// group, a Forms source, an approved send; mail_task_bulk), system (a System
-// template's mail that is not bulk: a login code, a ticket, a Forms
-// confirmation) and single (any other: a person's mail to one or a few).
+// Send kinds, as GET /mail_tasks filters and returns them; mail_task_kind()
+// (20261124200000) is the rule: bulk (a list, a group, a Forms source, an
+// approved send, a News send), system (mail a service or SkyMail sent) and
+// single (a person's single mail).
 const (
 	SendKindBulk   = "bulk"
 	SendKindSingle = "single"
@@ -37,18 +37,6 @@ const (
 // /mail_tasks/{id}/tracking withholds from them.
 var errOpenRateSortForbidden = apperrors.New("mail_task.sort_forbidden",
 	"Sorting by open rate needs skymail:mails:tracking:read.", fiber.StatusForbidden)
-
-// sendKindOf is a send's kind by the rule the kind filter uses.
-func sendKindOf(bulk, templateSystem bool) string {
-	switch {
-	case bulk:
-		return SendKindBulk
-	case templateSystem:
-		return SendKindSystem
-	default:
-		return SendKindSingle
-	}
-}
 
 // sendListQuery is GET /mail_tasks's filters and order, read from the query.
 type sendListQuery struct {
@@ -89,7 +77,7 @@ func parseSendListQuery(c fiber.Ctx) (sendListQuery, error) {
 	out.filter.Status = status
 
 	if search, ok := searchParam(c.Query("q")); !ok {
-		invalid["q"] = "must be at most 200 characters"
+		invalid["q"] = searchRule
 	} else {
 		out.filter.Search = search
 	}
@@ -136,8 +124,8 @@ func parseSendListQuery(c fiber.Ctx) (sendListQuery, error) {
 		}
 	}
 	if raw := strings.TrimSpace(c.Query("sent_by")); raw != "" {
-		if len(raw) > 255 {
-			invalid["sent_by"] = "must be at most 255 characters"
+		if len(raw) > 255 || !utf8.ValidString(raw) || strings.ContainsRune(raw, 0) {
+			invalid["sent_by"] = "must be valid UTF-8 text without NUL, at most 255 bytes"
 		} else {
 			out.filter.SentBy = &raw
 		}
@@ -167,14 +155,18 @@ func parseSendListQuery(c fiber.Ctx) (sendListQuery, error) {
 	return out, nil
 }
 
-// searchParam is a list's q: trimmed, nil when empty, false when longer than
+// searchRule is what a q must be.
+const searchRule = "must be valid UTF-8 text without NUL, at most 200 characters"
+
+// searchParam is a list's q: trimmed, nil when empty, false when it is not
+// valid UTF-8, holds a NUL (PostgreSQL's text takes neither) or is longer than
 // maxSearch characters.
 func searchParam(raw string) (*string, bool) {
 	q := strings.TrimSpace(raw)
 	if q == "" {
 		return nil, true
 	}
-	if utf8.RuneCountInString(q) > maxSearch {
+	if !utf8.ValidString(q) || strings.ContainsRune(q, 0) || utf8.RuneCountInString(q) > maxSearch {
 		return nil, false
 	}
 	return &q, true
@@ -192,6 +184,11 @@ func parseSearchInstant(raw string, zone *time.Location, end bool) (time.Time, b
 		return day, true
 	}
 	at, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil && strings.Contains(raw, " ") {
+		// An unencoded + in a query string reads as a space:
+		// 2026-11-10T10:00:00+03:00 arrives as 2026-11-10T10:00:00 03:00.
+		at, err = time.Parse(time.RFC3339Nano, strings.Replace(raw, " ", "+", 1))
+	}
 	if err != nil {
 		return time.Time{}, false
 	}
@@ -210,9 +207,9 @@ func summaryLocation() *time.Location {
 	return time.FixedZone(summaryTimeZone, 3*60*60)
 }
 
-// errSearchTooLong refuses a q longer than maxSearch characters.
+// errSearchTooLong refuses a q searchParam does not take.
 var errSearchTooLong = apperrors.ErrValidation.WithParams(map[string]interface{}{
-	"q": "must be at most 200 characters",
+	"q": searchRule,
 })
 
 // recipientStatusSkipped is the recipient filter for failed rows not sent on
@@ -235,13 +232,13 @@ func parseRecipientListFilter(raw string) (database.NullMailQueueStatus, bool, e
 	return status, false, nil
 }
 
-// groupsMatching is the Keycloak groups whose name or path contains search,
-// case-insensitively; every group when search is nil.
+// groupsMatching is the Keycloak groups whose name or path contains search
+// as searchFold compares them; every group when search is nil.
 func groupsMatching(groups []*gocloak.Group, search *string) []*gocloak.Group {
 	if search == nil {
 		return groups
 	}
-	needle := strings.ToLower(*search)
+	needle := searchFold(*search)
 	kept := make([]*gocloak.Group, 0, len(groups))
 	for _, g := range groups {
 		if containsFold(g.Name, needle) || containsFold(g.Path, needle) {
@@ -251,6 +248,15 @@ func groupsMatching(groups []*gocloak.Group, search *string) []*gocloak.Group {
 	return kept
 }
 
-func containsFold(value *string, lowered string) bool {
-	return value != nil && strings.Contains(strings.ToLower(*value), lowered)
+func containsFold(value *string, folded string) bool {
+	return value != nil && strings.Contains(searchFold(*value), folded)
+}
+
+// turkishFold is skymail_search_fold()'s translate (20261124200000): Turkish
+// capitals to their small letters, the four i's to i.
+var turkishFold = strings.NewReplacer("İ", "i", "I", "i", "ı", "i", "Ş", "ş", "Ğ", "ğ", "Ü", "ü", "Ö", "ö", "Ç", "ç")
+
+// searchFold is text as skymail_search_fold() compares it.
+func searchFold(value string) string {
+	return strings.ToLower(turkishFold.Replace(value))
 }

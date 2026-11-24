@@ -181,6 +181,7 @@ type Querier interface {
 	// mail_task_content_sensitive() reads it first (20261020120000).
 	// erase_after_send: a service's send that keeps no record of its recipient;
 	// its row is erased when its outcome is written (20261031230000).
+	// sent_by_service: a service or SkyMail queued it (mail_task_kind()).
 	CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error)
 	CreateTemplate(ctx context.Context, arg CreateTemplateParams) (Template, error)
 	// The database's clock: the one clock every process's send budget reads, so
@@ -241,11 +242,11 @@ type Querier interface {
 	// Account mail went to these suppressed addresses anyway.
 	FlagSuppressionsExempt(ctx context.Context, addresses []string) error
 	// A NULL search lists every list; else those whose name or description
-	// contains it, case-insensitively (as do the counts and the other lifecycles).
+	// contains it, as skymail_search_fold() compares them (as do the counts and the other lifecycles).
 	GetAllMailingLists(ctx context.Context, arg GetAllMailingListsParams) ([]MailingList, error)
 	GetAllMailingListsIncludingArchived(ctx context.Context, arg GetAllMailingListsIncludingArchivedParams) ([]MailingList, error)
 	// A NULL search lists every template; else those whose name, key or subject
-	// contains it, case-insensitively (as do the counts and the other lifecycles).
+	// contains it, as skymail_search_fold() compares them (as do the counts and the other lifecycles).
 	GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams) ([]Template, error)
 	GetAllTemplatesIncludingArchived(ctx context.Context, arg GetAllTemplatesIncludingArchivedParams) ([]Template, error)
 	GetArchivedMailingLists(ctx context.Context, arg GetArchivedMailingListsParams) ([]MailingList, error)
@@ -270,9 +271,11 @@ type Querier interface {
 	// next_attempt_at is not used: every row older than the retry migration holds
 	// that migration's timestamp in it.
 	// Days are calendar days in time_zone; the series ends on as_of's day and has
-	// one row per day, zero-filled. Each day's mail is split by stream: system (a
-	// System template's mail), duyuru (the send's purpose, or, for a send without
-	// one, a row in the bulk lane, the rule of before) and islem (any other).
+	// one row per day, zero-filled. Each day's mail is split by stream, in this
+	// order: duyuru (the send's purpose: a News send too, whose template is a
+	// System one), system (a System template's mail), duyuru again for a send
+	// without a purpose whose row is in the bulk lane (the rule of before), and
+	// islem (any other).
 	GetDailySentCounts(ctx context.Context, arg GetDailySentCountsParams) ([]GetDailySentCountsRow, error)
 	// Which of the sends of rows just taken are paused or cancelled: their rows
 	// go back parked, or are written cancelled, instead of being sent (a retry
@@ -294,7 +297,7 @@ type Querier interface {
 	// failed rows that were not sent on purpose, as mail_task_status() reads them
 	// (a reserved domain, a suppressed or unsubscribed address, a preference, a
 	// cancelled send). A NULL search lists every recipient; else those whose
-	// address or name contains it, case-insensitively.
+	// address or name contains it, as skymail_search_fold() compares them.
 	// suppressed_but_sent: account mail sent to a suppressed address, flagged.
 	// undelivered: a report said the address does not exist (a hard bounce of
 	// the row's own address) after the relay took the mail.
@@ -437,7 +440,7 @@ type Querier interface {
 	// state it is in as of as_of: one undecided past its deadline is expired,
 	// whether or not the sweep has written it yet. A NULL search keeps every
 	// request; else those whose template's name, key or subject, list's name,
-	// Forms form's title or requester's name contains it, case-insensitively.
+	// Forms form's title or requester's name contains it, as skymail_search_fold() compares them.
 	ListMailApprovals(ctx context.Context, arg ListMailApprovalsParams) ([]ListMailApprovalsRow, error)
 	// The attachments of the given queue rows as a send's report shows them:
 	// name, type and size, never the file.
@@ -458,10 +461,11 @@ type Querier interface {
 	// as mail_task_status derives it, and its recipients by status. A NULL task_id
 	// lists every send and a NULL filter keeps every send (GET /mail_tasks):
 	// search matches the template's name, key or subject, the list's name, the
-	// Forms form's title, an approved send's requester, or, on a send to people,
-	// a recipient's address or name, case-insensitively; created_from and
-	// created_before bound created_at; kind is bulk (mail_task_bulk), system (a
-	// System template's mail, not bulk) or single. Newest first, or as sort and
+	// Forms form's title, an approved send's requester, or, on a send to people
+	// (no list, no Forms source, not a News send), a recipient's address or name,
+	// as skymail_search_fold() compares them; created_from and
+	// created_before bound created_at; kind is mail_task_kind() (bulk, system,
+	// single). Newest first, or as sort and
 	// ascending say: sort open_rate orders by the share of tracked recipients
 	// who likely opened (GET /mail_tasks/{id}/tracking's
 	// unique_likely_human_opens / tracked_recipients, the retained totals once
