@@ -143,11 +143,11 @@ func recordContentSensitiveChange(ctx context.Context, q *database.Queries, temp
 //	@Param			id		path		string							true	"Template ID"
 //	@Param			body	body		requests.SetContentSensitive	true	"The new value"
 //	@Success		200		{object}	handlers.Template
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404		{object}	apperrors.AppError	"Not Found"
-//	@Failure		409		{object}	apperrors.AppError	"template.content_sensitive_locked: the template carries a credential and stays hidden; params.key"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem	"Bad Request"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404		{object}	apperrors.Problem	"Not Found"
+//	@Failure		409		{object}	apperrors.Problem	"template.content_sensitive_locked: the template carries a credential and stays hidden; params.key"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/templates/{id}/content-sensitive [put]
 func (h *templateHandlerImpl) SetContentSensitive(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -207,8 +207,8 @@ type ContentSensitiveEvent struct {
 //	@Param			_end	query		int		false	"End index"
 //	@Success		200		{array}		handlers.ContentSensitiveEvent
 //	@Header			200		{integer}	X-Total-Count		"Number of changes"
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
-//	@Failure		404		{object}	apperrors.AppError	"Not Found"
+//	@Failure		400		{object}	apperrors.Problem	"Bad Request"
+//	@Failure		404		{object}	apperrors.Problem	"Not Found"
 //	@Router			/templates/{id}/content-sensitive/events [get]
 func (h *templateHandlerImpl) ListContentSensitiveEvents(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))

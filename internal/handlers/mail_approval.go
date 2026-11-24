@@ -349,13 +349,13 @@ func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc ke
 //	@Param			send	body		requests.SubmitMailApproval	true	"The send"
 //	@Success		201		{object}	handlers.MailApproval		"The request, pending, with notification"
 //	@Success		200		{object}	handlers.MailApproval		"Same request for an exact Forms source retry"
-//	@Failure		400		{object}	apperrors.AppError			"validation.error (params.errors: [{field, code, params}]): no template_id; not exactly one of mail_list_id and recipients (mail_list_id, exactly_one_of); more than 100 people (recipients, max_length); a missing or malformed address (recipients[i].email, required or invalid_email); an address twice (recipients[i].email, duplicate, params.first naming the first; or, for an address only Postgres finds twice, recipients, duplicate). attachment.not_allowed: a request takes no attachments. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid (duyuru)"
-//	@Failure		403		{object}	apperrors.AppError			"server.forbidden: params.missing_roles names what the caller lacks of skymail:templates:read and, for a mailing list, skymail:lists:read"
-//	@Failure		404		{object}	apperrors.AppError			"No such Forms source owned by the caller"
-//	@Failure		409		{object}	apperrors.AppError			"Forms source invalidated, consumed differently or busy"
-//	@Failure		410		{object}	apperrors.AppError			"Prepare the Forms audience again"
-//	@Failure		422		{object}	apperrors.AppError			"mail_approval.template_unavailable, mail_approval.audience_unavailable, mail_approval.required_variables_missing (params.missing: [{name, source, reason}]) or mail_approval.unrenderable (params.error)"
-//	@Failure		500		{object}	apperrors.AppError			"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem			"validation.error (params.errors: [{field, code, params}]): no template_id; not exactly one of mail_list_id and recipients (mail_list_id, exactly_one_of); more than 100 people (recipients, max_length); a missing or malformed address (recipients[i].email, required or invalid_email); an address twice (recipients[i].email, duplicate, params.first naming the first; or, for an address only Postgres finds twice, recipients, duplicate). attachment.not_allowed: a request takes no attachments. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid (duyuru)"
+//	@Failure		403		{object}	apperrors.Problem			"server.forbidden: params.missing_roles names what the caller lacks of skymail:templates:read and, for a mailing list, skymail:lists:read"
+//	@Failure		404		{object}	apperrors.Problem			"No such Forms source owned by the caller"
+//	@Failure		409		{object}	apperrors.Problem			"Forms source invalidated, consumed differently or busy"
+//	@Failure		410		{object}	apperrors.Problem			"Prepare the Forms audience again"
+//	@Failure		422		{object}	apperrors.Problem			"mail_approval.template_unavailable, mail_approval.audience_unavailable, mail_approval.required_variables_missing (params.missing: [{name, source, reason}]) or mail_approval.unrenderable (params.error)"
+//	@Failure		500		{object}	apperrors.Problem			"Internal Server Error"
 //	@Router			/mail_approvals [post]
 func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 	caller, err := approvalCallerOf(c)
@@ -475,9 +475,9 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 //	@Param			_end	query		int		false	"End index"
 //	@Success		200		{array}		handlers.MailApprovalItem
 //	@Header			200		{integer}	X-Total-Count		"Number of requests matching the filter"
-//	@Failure		400		{object}	apperrors.AppError	"validation.error: an unknown state"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem	"validation.error: an unknown state"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/mail_approvals [get]
 func (h *mailApprovalHandlerImpl) List(c fiber.Ctx) error {
 	caller, err := approvalCallerOf(c)
@@ -542,9 +542,9 @@ func (h *mailApprovalHandlerImpl) List(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			id	path		string	true	"Request ID"
 //	@Success		200	{object}	handlers.MailApproval
-//	@Failure		403	{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404	{object}	apperrors.AppError	"No such request, or not the caller's to see"
-//	@Failure		500	{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		403	{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404	{object}	apperrors.Problem	"No such request, or not the caller's to see"
+//	@Failure		500	{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/mail_approvals/{id} [get]
 func (h *mailApprovalHandlerImpl) Get(c fiber.Ctx) error {
 	caller, err := approvalCallerOf(c)
@@ -584,13 +584,13 @@ func (h *mailApprovalHandlerImpl) Get(c fiber.Ctx) error {
 //	@Param			id			path		string							true	"Request ID"
 //	@Param			approval	body		requests.ApproveMailApproval	false	"An edit and a note, both optional"
 //	@Success		200			{object}	handlers.MailApproval			"The request, approved, with its task_ids and notification"
-//	@Failure		400			{object}	apperrors.AppError				"validation.error; mail_task.category_unknown: the duyuru send's team is no team (SKYMAIL_BULK_PREFERENCE)"
-//	@Failure		403			{object}	apperrors.AppError				"Not an approver"
-//	@Failure		404			{object}	apperrors.AppError				"No such request"
-//	@Failure		409			{object}	apperrors.AppError				"mail_approval.state_conflict (params.state, params.allowed), mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished (params.submitted_version_id, params.published_version_id), mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty; for Team mail mail_approval.team_leadership_lost (the submitter leads none of its Teams now: the request is rejected with that reason) or mail_approval.team_mail_off. A Team led no more, or gone from Keycloak, is dropped and recorded (an edited event) and the rest go"
-//	@Failure		422			{object}	apperrors.AppError				"The edit leaves a Required variable empty (mail_approval.required_variables_missing) or does not render (mail_approval.unrenderable)"
-//	@Failure		500			{object}	apperrors.AppError				"Internal Server Error"
-//	@Failure		503			{object}	apperrors.AppError				"mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE), core did not say whom the send may go to at the approval; nothing is queued and the request stays as it was. team_mail.leadership_unavailable (Retry-After): for Team mail, core did not say which Teams the submitter leads; the request stays as it was"
+//	@Failure		400			{object}	apperrors.Problem				"validation.error; mail_task.category_unknown: the duyuru send's team is no team (SKYMAIL_BULK_PREFERENCE)"
+//	@Failure		403			{object}	apperrors.Problem				"Not an approver"
+//	@Failure		404			{object}	apperrors.Problem				"No such request"
+//	@Failure		409			{object}	apperrors.Problem				"mail_approval.state_conflict (params.state, params.allowed), mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished (params.submitted_version_id, params.published_version_id), mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty; for Team mail mail_approval.team_leadership_lost (the submitter leads none of its Teams now: the request is rejected with that reason) or mail_approval.team_mail_off. A Team led no more, or gone from Keycloak, is dropped and recorded (an edited event) and the rest go"
+//	@Failure		422			{object}	apperrors.Problem				"The edit leaves a Required variable empty (mail_approval.required_variables_missing) or does not render (mail_approval.unrenderable)"
+//	@Failure		500			{object}	apperrors.Problem				"Internal Server Error"
+//	@Failure		503			{object}	apperrors.Problem				"mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE), core did not say whom the send may go to at the approval; nothing is queued and the request stays as it was. team_mail.leadership_unavailable (Retry-After): for Team mail, core did not say which Teams the submitter leads; the request stays as it was"
 //	@Router			/mail_approvals/{id}/approve [post]
 func (h *mailApprovalHandlerImpl) Approve(c fiber.Ctx) error {
 	var params requests.ApproveMailApproval
@@ -635,12 +635,12 @@ func (h *mailApprovalHandlerImpl) Approve(c fiber.Ctx) error {
 //	@Param			id		path		string						true	"Request ID"
 //	@Param			edit	body		requests.ReturnMailApproval	true	"The edit and a note"
 //	@Success		200		{object}	handlers.MailApproval		"The request, returned, with notification"
-//	@Failure		400		{object}	apperrors.AppError			"validation.error"
-//	@Failure		403		{object}	apperrors.AppError			"Not an approver"
-//	@Failure		404		{object}	apperrors.AppError			"No such request"
-//	@Failure		409		{object}	apperrors.AppError			"mail_approval.state_conflict, mail_approval.expired or mail_approval.busy"
-//	@Failure		422		{object}	apperrors.AppError			"mail_approval.no_edit, mail_approval.required_variables_missing or mail_approval.unrenderable"
-//	@Failure		500		{object}	apperrors.AppError			"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem			"validation.error"
+//	@Failure		403		{object}	apperrors.Problem			"Not an approver"
+//	@Failure		404		{object}	apperrors.Problem			"No such request"
+//	@Failure		409		{object}	apperrors.Problem			"mail_approval.state_conflict, mail_approval.expired or mail_approval.busy"
+//	@Failure		422		{object}	apperrors.Problem			"mail_approval.no_edit, mail_approval.required_variables_missing or mail_approval.unrenderable"
+//	@Failure		500		{object}	apperrors.Problem			"Internal Server Error"
 //	@Router			/mail_approvals/{id}/return [post]
 func (h *mailApprovalHandlerImpl) Return(c fiber.Ctx) error {
 	var params requests.ReturnMailApproval
@@ -681,11 +681,11 @@ func (h *mailApprovalHandlerImpl) Return(c fiber.Ctx) error {
 //	@Param			id			path		string						true	"Request ID"
 //	@Param			rejection	body		requests.RejectMailApproval	true	"The reason"
 //	@Success		200			{object}	handlers.MailApproval		"The request, rejected, with notification"
-//	@Failure		400			{object}	apperrors.AppError			"validation.error: no reason, or a blank one"
-//	@Failure		403			{object}	apperrors.AppError			"Not an approver"
-//	@Failure		404			{object}	apperrors.AppError			"No such request"
-//	@Failure		409			{object}	apperrors.AppError			"mail_approval.state_conflict, mail_approval.expired or mail_approval.busy"
-//	@Failure		500			{object}	apperrors.AppError			"Internal Server Error"
+//	@Failure		400			{object}	apperrors.Problem			"validation.error: no reason, or a blank one"
+//	@Failure		403			{object}	apperrors.Problem			"Not an approver"
+//	@Failure		404			{object}	apperrors.Problem			"No such request"
+//	@Failure		409			{object}	apperrors.Problem			"mail_approval.state_conflict, mail_approval.expired or mail_approval.busy"
+//	@Failure		500			{object}	apperrors.Problem			"Internal Server Error"
 //	@Router			/mail_approvals/{id}/reject [post]
 func (h *mailApprovalHandlerImpl) Reject(c fiber.Ctx) error {
 	var params requests.RejectMailApproval
@@ -718,10 +718,10 @@ func (h *mailApprovalHandlerImpl) Reject(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			id	path		string					true	"Request ID"
 //	@Success		200	{object}	handlers.MailApproval	"The request, approved, with its task_ids"
-//	@Failure		403	{object}	apperrors.AppError		"mail_approval.not_submitter; server.forbidden (params.missing_roles skymail:access) for a Leader without skymail:access accepting a request that is not Team mail"
-//	@Failure		404	{object}	apperrors.AppError		"No such request, or not the caller's to see"
-//	@Failure		409	{object}	apperrors.AppError		"mail_approval.state_conflict, mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished, mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty; for Team mail as Approve"
-//	@Failure		500	{object}	apperrors.AppError		"Internal Server Error"
+//	@Failure		403	{object}	apperrors.Problem		"mail_approval.not_submitter; server.forbidden (params.missing_roles skymail:access) for a Leader without skymail:access accepting a request that is not Team mail"
+//	@Failure		404	{object}	apperrors.Problem		"No such request, or not the caller's to see"
+//	@Failure		409	{object}	apperrors.Problem		"mail_approval.state_conflict, mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished, mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty; for Team mail as Approve"
+//	@Failure		500	{object}	apperrors.Problem		"Internal Server Error"
 //	@Router			/mail_approvals/{id}/accept [post]
 func (h *mailApprovalHandlerImpl) Accept(c fiber.Ctx) error {
 	return h.act(c, approvalAction{
@@ -750,11 +750,11 @@ func (h *mailApprovalHandlerImpl) Accept(c fiber.Ctx) error {
 //	@Param			id		path		string							true	"Request ID"
 //	@Param			decline	body		requests.DeclineMailApproval	false	"A note"
 //	@Success		200		{object}	handlers.MailApproval			"The request, declined"
-//	@Failure		400		{object}	apperrors.AppError				"validation.error"
-//	@Failure		403		{object}	apperrors.AppError				"mail_approval.not_submitter"
-//	@Failure		404		{object}	apperrors.AppError				"No such request, or not the caller's to see"
-//	@Failure		409		{object}	apperrors.AppError				"mail_approval.state_conflict, mail_approval.expired or mail_approval.busy"
-//	@Failure		500		{object}	apperrors.AppError				"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem				"validation.error"
+//	@Failure		403		{object}	apperrors.Problem				"mail_approval.not_submitter"
+//	@Failure		404		{object}	apperrors.Problem				"No such request, or not the caller's to see"
+//	@Failure		409		{object}	apperrors.Problem				"mail_approval.state_conflict, mail_approval.expired or mail_approval.busy"
+//	@Failure		500		{object}	apperrors.Problem				"Internal Server Error"
 //	@Router			/mail_approvals/{id}/decline [post]
 func (h *mailApprovalHandlerImpl) Decline(c fiber.Ctx) error {
 	var params requests.DeclineMailApproval
@@ -785,12 +785,12 @@ func (h *mailApprovalHandlerImpl) Decline(c fiber.Ctx) error {
 //	@Param			id		path		string						true	"Request ID"
 //	@Param			send	body		requests.SubmitMailApproval	true	"The send"
 //	@Success		200		{object}	handlers.MailApproval		"The request, pending, with notification"
-//	@Failure		400		{object}	apperrors.AppError			"validation.error; attachment.not_allowed; or the purpose as POST /mail_approvals checks it: mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, mail_task.purpose_not_allowed, mail_task.category_not_allowed, mail_task.transactional_statement_required, mail_task.category_required, mail_task.category_invalid"
-//	@Failure		403		{object}	apperrors.AppError			"mail_approval.not_submitter, or server.forbidden with params.missing_roles as a submission"
-//	@Failure		404		{object}	apperrors.AppError			"No such request, or not the caller's to see"
-//	@Failure		409		{object}	apperrors.AppError			"mail_approval.state_conflict or mail_approval.busy"
-//	@Failure		422		{object}	apperrors.AppError			"mail_approval.template_unavailable, mail_approval.audience_unavailable, mail_approval.required_variables_missing or mail_approval.unrenderable"
-//	@Failure		500		{object}	apperrors.AppError			"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem			"validation.error; attachment.not_allowed; or the purpose as POST /mail_approvals checks it: mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, mail_task.purpose_not_allowed, mail_task.category_not_allowed, mail_task.transactional_statement_required, mail_task.category_required, mail_task.category_invalid"
+//	@Failure		403		{object}	apperrors.Problem			"mail_approval.not_submitter, or server.forbidden with params.missing_roles as a submission"
+//	@Failure		404		{object}	apperrors.Problem			"No such request, or not the caller's to see"
+//	@Failure		409		{object}	apperrors.Problem			"mail_approval.state_conflict or mail_approval.busy"
+//	@Failure		422		{object}	apperrors.Problem			"mail_approval.template_unavailable, mail_approval.audience_unavailable, mail_approval.required_variables_missing or mail_approval.unrenderable"
+//	@Failure		500		{object}	apperrors.Problem			"Internal Server Error"
 //	@Router			/mail_approvals/{id}/resubmit [post]
 func (h *mailApprovalHandlerImpl) Resubmit(c fiber.Ctx) error {
 	caller, err := approvalCallerOf(c)

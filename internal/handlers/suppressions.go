@@ -128,9 +128,9 @@ type Suppression struct {
 //	@Param			_end	query		int		false	"End index (at most 100 rows a page)"
 //	@Success		200		{array}		handlers.Suppression
 //	@Header			200		{integer}	X-Total-Count		"Number of rows matching reason and q"
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem	"Bad Request"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/suppressions [get]
 func (h *suppressionHandlerImpl) List(c fiber.Ctx) error {
 	var search *string
@@ -181,11 +181,11 @@ func (h *suppressionHandlerImpl) List(c fiber.Ctx) error {
 //	@Tags			Suppressions
 //	@Param			id	path	string	true	"Suppression ID"
 //	@Success		204	"No Content"
-//	@Failure		400	{object}	apperrors.AppError	"Bad Request"
-//	@Failure		403	{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404	{object}	apperrors.AppError	"Not Found"
-//	@Failure		409	{object}	apperrors.AppError	"suppression.use_reactivate: an unsubscribe, not a bounce"
-//	@Failure		500	{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400	{object}	apperrors.Problem	"Bad Request"
+//	@Failure		403	{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404	{object}	apperrors.Problem	"Not Found"
+//	@Failure		409	{object}	apperrors.Problem	"suppression.use_reactivate: an unsubscribe, not a bounce"
+//	@Failure		500	{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/suppressions/{id} [delete]
 func (h *suppressionHandlerImpl) Delete(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -239,11 +239,11 @@ type ReactivateRequest struct {
 //	@Param			id		path	string						true	"Suppression ID (an unsubscribed row)"
 //	@Param			body	body	handlers.ReactivateRequest	true	"Why"
 //	@Success		204		"No Content"
-//	@Failure		400		{object}	apperrors.AppError	"suppression.reason_required, suppression.reason_has_address, or a malformed id"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404		{object}	apperrors.AppError	"Not Found"
-//	@Failure		409		{object}	apperrors.AppError	"suppression.use_delete: a bounce, not an unsubscribe"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem	"suppression.reason_required, suppression.reason_has_address, or a malformed id"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404		{object}	apperrors.Problem	"Not Found"
+//	@Failure		409		{object}	apperrors.Problem	"suppression.use_delete: a bounce, not an unsubscribe"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/suppressions/{id}/reactivate [post]
 func (h *suppressionHandlerImpl) Reactivate(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -337,8 +337,8 @@ type Reactivation struct {
 //	@Param			_end	query		int	false	"End index (at most 100 rows a page)"
 //	@Success		200		{array}		handlers.Reactivation
 //	@Header			200		{integer}	X-Total-Count		"Number of reversals"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/suppressions/reactivations [get]
 func (h *suppressionHandlerImpl) Reactivations(c fiber.Ctx) error {
 	limit, offset := getPaginationParams(c)
@@ -420,9 +420,9 @@ type BounceReaderState struct {
 //	@Produce		json
 //	@Param			days	query		int	false	"The window, in days (1 to 90)"
 //	@Success		200		{object}	handlers.BounceSummary
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem	"Bad Request"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/suppressions/bounces [get]
 func (h *suppressionHandlerImpl) Bounces(c fiber.Ctx) error {
 	days := defaultBounceDays
@@ -489,9 +489,9 @@ type SoftBounceAddress struct {
 //	@Param			_end	query		int		false	"End index (at most 100 rows a page)"
 //	@Success		200		{array}		handlers.SoftBounceAddress
 //	@Header			200		{integer}	X-Total-Count		"Number of addresses matching q"
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem	"Bad Request"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/suppressions/soft-bounces [get]
 func (h *suppressionHandlerImpl) SoftBounces(c fiber.Ctx) error {
 	var search *string
