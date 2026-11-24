@@ -23,9 +23,9 @@ const trackingReadBudget = 2 * time.Second
 // TrackingSummary has no identities or target URLs. 90 days after the last
 // mail went out (tracking.EventRetention) report is the retained aggregate,
 // or null when there is none (a send of fewer than 10 tracked recipients a
-// year after it was created). Withheld
-// says the send's counts would tell of people (see GetTracking) and the
-// caller may not read its people: report is then null. RecipientsReadable
+// year after it was created). Withheld says the send is mail the system sends
+// (see GetTracking) and the caller may not read its people: report is then
+// null. RecipientsReadable
 // says whether the caller may read the send's people (GET
 // /mail_tasks/{id}/tracking/recipients), so a screen asks for them only then.
 type TrackingSummary struct {
@@ -122,7 +122,7 @@ type TrackingRecipientLink struct {
 // GetTracking godoc
 //
 //	@Summary		Tracking counts, per-link counts and hour/day series
-//	@Description	Requires skymail:mails:read. No identities, link tokens or target URLs. After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts tell of people when it has fewer than 10 tracked recipients (tracking.TotalsMinRecipients) or is mail the system sends (the system lane): then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read; the send's own sender outside the system lane only while SKYMAIL_SENDER_SEES_RECIPIENTS=on) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4). recipients_readable says whether the caller may read the send's people.
+//	@Description	Requires skymail:mails:read. No identities, link tokens or target URLs. After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts are shown to anyone with skymail:mails:read whatever its number of tracked recipients (Yusuf, 2026-11-24, K6); only mail the system sends (the system lane) tells of people: then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read; the send's own sender outside the system lane only while SKYMAIL_SENDER_SEES_RECIPIENTS=on) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4). recipients_readable says whether the caller may read the send's people.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id	path		string	true	"Mail task ID"
@@ -147,7 +147,7 @@ func (h *mailHandlerImpl) GetTracking(c fiber.Ctx) error {
 		return err
 	}
 	people := h.mayReadTrackingPeople(c, task)
-	withheld := aggregate != nil && countsTellOfPeople(task, aggregate) && !people
+	withheld := aggregate != nil && countsTellOfPeople(task) && !people
 	if withheld {
 		aggregate = nil
 	}
@@ -180,12 +180,15 @@ func trackingReportOf(ctx context.Context, db *database.Store, task database.Tra
 	return aggregate, retained, nil
 }
 
-// countsTellOfPeople says a send's counts are as good as its people's: a
-// send to fewer than tracking.TotalsMinRecipients tracked people ("1 of 1
-// opened at 14:00" names the one whose address GET /:id/queue shows), or
-// mail the system sends, whose people only YK, DK and the admins see.
-func countsTellOfPeople(task database.TrackingTaskAccessRow, report *TrackingAggregate) bool {
-	return task.SystemLane || report.TrackedRecipients < tracking.TotalsMinRecipients
+// countsTellOfPeople says a send's counts are as good as its people's: mail
+// the system sends, whose people only YK, DK and the admins see (KVKK notice
+// s3, §4). A send's counts are shown whatever its number of tracked
+// recipients (Yusuf, 2026-11-24, K6: ADR-0074 decision 9's threshold of 10,
+// addendum 2026-11-08 m.4, no longer limits who sees them); the retention
+// run still keeps the counts of fewer than tracking.TotalsMinRecipients only
+// a year (ADR-0074 decision 10).
+func countsTellOfPeople(task database.TrackingTaskAccessRow) bool {
+	return task.SystemLane
 }
 
 // mayReadTrackingPeople is who reads a send's people (trackingPeopleReadable).

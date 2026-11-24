@@ -94,13 +94,14 @@ func TestTrackingReadRoutesEnforceRolesSenderAndNinetyDays(t *testing.T) {
 		t.Error("expired existence revealed before recipient authorization")
 	}
 	// Every send keeps its counts now (KVKK notice s6); those of fewer than
-	// 10 tracked people still go only to who may read the send's people.
+	// 10 tracked people go to anyone with mails:read too (Yusuf, 2026-11-24,
+	// K6).
 	if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_task_tracking_totals SET tracked_recipients=3 WHERE task_id=$1`, created.ID); err != nil {
 		t.Fatal(err)
 	}
 	approvalPeople["tracking_reader"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skymail:access", "skymail:mails:read", handlers.TrackingReadRole}}
 	defer delete(approvalPeople, "tracking_reader")
-	for who, wantWithheld := range map[string]bool{"baska": true, "tracking_reader": false} {
+	for who, wantWithheld := range map[string]bool{"baska": false, "tracking_reader": false} {
 		var small struct {
 			Retained bool            `json:"retained"`
 			Withheld bool            `json:"withheld"`

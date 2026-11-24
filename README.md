@@ -1858,9 +1858,7 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   okunur. Gönderen, ekip postasının Leader'ı ve Mail onayı isteyeni dahil,
   kendi gönderiminde yalnız toplu sayıları görür; kişi raporu ona `403`
   döner. `SKYMAIL_SENDER_SEES_RECIPIENTS=on` bunu geri alır: gönderen
-  sistem şeridi dışındaki kendi gönderiminin kişilerini yine okur. Anahtar
-  10 kişi eşiğini de izler: kapalıyken gönderen, takipli alıcısı 10'dan az
-  olan kendi gönderiminin sayılarını da `withheld: true` olarak alır.
+  sistem şeridi dışındaki kendi gönderiminin kişilerini yine okur.
   Kuyruk (`GET /{id}/queue`) ve içerik uçları gönderene göre değil rolle
   (`skymail:mails:read`) açılır; anahtar onlara dokunmaz.
 - `GET /v1/mail_tasks/{id}/tracking` (`skymail:mails:read`) yanıtı
@@ -1879,15 +1877,15 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
 `retained: true`:
   yalnız kişisiz toplam (10'dan az alıcılıda gönderimden 1 yıl sonra
   silinir), yoksa `report: null`; seri dönmez.
-  **Küçük gönderim ve sistem postası:** takipli alıcısı 10'dan az
-  (`tracking.TotalsMinRecipients`) ya da sistem
-  şeridindeki bir gönderimin sayıları kişiye dair bilgidir ("1/1 açıldı,
-  14:00"; alıcı `GET /{id}/queue`'da görünür). Bu sayıları yalnız kişi
-  raporunu okuyabilen (aşağıdaki kural: `skymail:mails:tracking:read`;
-  `SKYMAIL_SENDER_SEES_RECIPIENTS=on` iken sistem şeridi dışında
-  gönderimin kendi göndereni de) alır; başka bir
-  `mails:read` sahibine `withheld: true` ve `report: null` döner (KVKK
-  aydınlatma metni s3 §4).
+  **Sistem postası:** sistem şeridindeki bir gönderimin sayıları yalnız
+  kişi raporunu okuyabilene (`skymail:mails:tracking:read`) gider; başka
+  bir `mails:read` sahibine `withheld: true` ve `report: null` döner (KVKK
+  aydınlatma metni s3 §4). Kişinin gönderiminin sayıları takipli alıcı
+  sayısı ne olursa olsun `mails:read` sahibine görünür (Yusuf, 2026-11-24,
+  K6: ADR-0074 karar 9 / 2026-11-08 eki m.4'teki 10 kişi eşiği görünürlüğü
+  artık sınırlamaz). `tracking.TotalsMinRecipients` (10) yalnız saklama
+  kuralında kalır (ADR-0074 karar 10: 10'dan az takipli gönderimin
+  kişisiz toplamı 1 yıl sonra silinir).
 - **Onaylanan isteğin sonucu (hub bileti ekip-postasi 09):**
   `GET /v1/mail_approvals/{id}` onaylanıp gönderilmiş istekte `result`
   döner; isteyen `skymail:mails:read` olmadan da okur (erişim kuralı aynı:
@@ -1899,10 +1897,9 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   Takipli gönderimlerin `tracking` toplamı (`tracked_recipients`,
   `opened` = `unique_likely_human_opens`, `clicked` = `unique_clickers`)
   `GET /{id}/tracking` ile aynı kuralla gizlenir (`tracking_withheld:
-  true`, `tracking: null`): toplam takipli 10'dan az ya da sistem şeridi,
-  ve kişi raporunu okuyamayan çağıran. Ekip postasında küçük ekiplerin
-  toplamı 10'dan azken büyükleri de varsa aynı: büyüklerin sayısını okuyan
-  farkı çıkarabilirdi. Bekleyen, geri gönderilmiş, reddedilmiş ve süresi
+  true`, `tracking: null`): yalnız sistem şeridindeki bir gönderim varken
+  ve kişi raporunu okuyamayan çağırana; takipli alıcı sayısı ne olursa
+  olsun toplam görünür. Bekleyen, geri gönderilmiş, reddedilmiş ve süresi
   dolmuş istekte `result` yoktur. Sonuç okunamazsa (2 sn bütçe, DB
   hatası) istek yine `200` döner ve günlüğe yazılır: teslim toplamları
   okunamadıysa `result` hiç yoktur, yalnız takip okunamadıysa `tracking:
