@@ -507,7 +507,7 @@ func (h *mailHandlerImpl) GetTasks(c fiber.Ctx) error {
 
 	limit, offset := getPaginationParams(c)
 
-	sends, err := h.db.ListMailTaskSends(c.Context(), query.list(limit, offset))
+	sends, err := query.read(c.Context(), h.db, limit, offset)
 	if err != nil {
 		return err
 	}

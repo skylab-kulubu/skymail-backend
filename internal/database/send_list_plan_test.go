@@ -52,11 +52,16 @@ func TestSendListPlansOverFiftyThousandSends(t *testing.T) {
 	t.Logf("seeded in %s", time.Since(started).Round(time.Millisecond))
 
 	search := "kisi49999"
-	list := func(sort string, search *string) []any {
-		// ListMailTaskSends's arguments, in the order sqlc binds them.
+	// The queries' arguments, in the order sqlc binds them.
+	list := func(search *string) []any {
+		// limit, offset, task_id, status, search, created_from,
+		// created_before, kind, template_id, list_id, sent_by.
+		return []any{int32(20), int32(0), nil, nil, search, nil, nil, nil, nil, nil, nil}
+	}
+	sorted := func(sort string) []any {
 		// limit, offset, ascending, task_id, status, search, created_from,
 		// created_before, kind, template_id, list_id, sent_by, sort.
-		return []any{int32(20), int32(0), false, nil, nil, search, nil, nil, nil, nil, nil, nil, sort}
+		return []any{int32(20), int32(0), false, nil, nil, nil, nil, nil, nil, nil, nil, nil, sort}
 	}
 	count := func(search *string) []any { return []any{nil, search, nil, nil, nil, nil, nil, nil} }
 	executionTime := regexp.MustCompile(`Execution Time: ([0-9.]+ ms)`)
@@ -64,14 +69,18 @@ func TestSendListPlansOverFiftyThousandSends(t *testing.T) {
 		name, query string
 		args        []any
 		generic     bool
+		// A plan's node the query must use: the default page is read down
+		// the index, never by reading every send.
+		uses string
 	}{
-		{"default page", listMailTaskSends, list("", nil), false},
-		{"default page, generic plan", listMailTaskSends, list("", nil), true},
-		{"q (a recipient's address)", listMailTaskSends, list("", &search), false},
-		{"q count", countMailTaskSends, count(&search), false},
-		{"count, no filter", countMailTaskSends, count(nil), false},
-		{"_sort=open_rate", listMailTaskSends, list("open_rate", nil), false},
-		{"_sort=open_rate, generic plan", listMailTaskSends, list("open_rate", nil), true},
+		{"default page", listMailTaskSends, list(nil), false, "idx_mail_tasks_created_at_id"},
+		{"default page, generic plan", listMailTaskSends, list(nil), true, "idx_mail_tasks_created_at_id"},
+		{"q (a recipient's address)", listMailTaskSends, list(&search), false, ""},
+		{"q count", countMailTaskSends, count(&search), false, ""},
+		{"count, no filter", countMailTaskSends, count(nil), false, ""},
+		{"_sort=open_rate", listMailTaskSendsSorted, sorted("open_rate"), false, ""},
+		{"_sort=open_rate, generic plan", listMailTaskSendsSorted, sorted("open_rate"), true, ""},
+		{"_order=asc", listMailTaskSendsSorted, append(sorted("")[:2:2], append([]any{true}, sorted("")[3:]...)...), false, ""},
 	} {
 		conn, err := db.Conn.Acquire(ctx)
 		if err != nil {
@@ -109,5 +118,8 @@ func TestSendListPlansOverFiftyThousandSends(t *testing.T) {
 			took = m[1]
 		}
 		t.Logf("PLAN %s: %s\n%s", c.name, took, joined)
+		if c.uses != "" && !strings.Contains(joined, c.uses) {
+			t.Errorf("%s does not use %s:\n%s", c.name, c.uses, joined)
+		}
 	}
 }

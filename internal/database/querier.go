@@ -463,15 +463,22 @@ type Querier interface {
 	// search matches the template's name, key or subject, the list's name, the
 	// Forms form's title, an approved send's requester, or, on a send to people
 	// (no list, no Forms source, not a News send), a recipient's address or name,
-	// as skymail_search_fold() compares them; created_from and
-	// created_before bound created_at; kind is mail_task_kind() (bulk, system,
-	// single). Newest first, or as sort and
-	// ascending say: sort open_rate orders by the share of tracked recipients
+	// as skymail_search_fold() compares them; created_from and created_before
+	// bound created_at; kind is mail_task_kind() (bulk, system, single). Newest
+	// first, the order idx_mail_tasks_created_at_id keeps: the page is read down
+	// the index, filtered on mail_tasks alone (every other table is asked through
+	// EXISTS), and cut before anything is counted, so the first page costs as
+	// little with 50,000 sends as with 50. ListMailTaskSendsSorted is the other
+	// orders, with the same filters and columns.
+	ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error)
+	// ListMailTaskSends in another order (GET /mail_tasks _sort=open_rate or
+	// _order=asc): the same filters and the same columns, ordered as sort and
+	// ascending say. sort open_rate orders by the share of tracked recipients
 	// who likely opened (GET /mail_tasks/{id}/tracking's
 	// unique_likely_human_opens / tracked_recipients, the retained totals once
-	// its events are gone), sends with no rate last. The page is cut first so
-	// only its rows are counted.
-	ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsParams) ([]ListMailTaskSendsRow, error)
+	// its events are gone), sends with no rate last. Every matching send is
+	// read to order them; the default order uses ListMailTaskSends.
+	ListMailTaskSendsSorted(ctx context.Context, arg ListMailTaskSendsSortedParams) ([]ListMailTaskSendsSortedRow, error)
 	// The mailboxes a row of a News record was queued to go to, lower-cased:
 	// every send of the record leaves them out ("zaten aldı"). A row written
 	// failed at queueing, or cancelled, has no source_ref: not among them.

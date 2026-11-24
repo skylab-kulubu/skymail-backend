@@ -138,8 +138,12 @@ func TestSendListQuery(t *testing.T) {
 		t.Errorf("parsed %+v", query)
 	}
 	list := query.list(10, 20)
-	if list.Limit != 10 || list.Offset != 20 || list.Search != f.Search || !list.Ascending || list.TaskID != nil {
+	if list.Limit != 10 || list.Offset != 20 || list.Search != f.Search || list.Kind != f.Kind || list.TaskID != nil {
 		t.Errorf("list params %+v", list)
+	}
+	sorted := query.sorted(10, 20)
+	if sorted.Limit != 10 || sorted.Offset != 20 || sorted.Search != f.Search || !sorted.Ascending || sorted.Sort != "" || sorted.SentBy != f.SentBy {
+		t.Errorf("sorted params %+v", sorted)
 	}
 
 	// Every invalid value is named at once.

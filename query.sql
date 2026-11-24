@@ -1711,15 +1711,132 @@ ORDER BY d.day;
 -- search matches the template's name, key or subject, the list's name, the
 -- Forms form's title, an approved send's requester, or, on a send to people
 -- (no list, no Forms source, not a News send), a recipient's address or name,
--- as skymail_search_fold() compares them; created_from and
--- created_before bound created_at; kind is mail_task_kind() (bulk, system,
--- single). Newest first, or as sort and
--- ascending say: sort open_rate orders by the share of tracked recipients
+-- as skymail_search_fold() compares them; created_from and created_before
+-- bound created_at; kind is mail_task_kind() (bulk, system, single). Newest
+-- first, the order idx_mail_tasks_created_at_id keeps: the page is read down
+-- the index, filtered on mail_tasks alone (every other table is asked through
+-- EXISTS), and cut before anything is counted, so the first page costs as
+-- little with 50,000 sends as with 50. ListMailTaskSendsSorted is the other
+-- orders, with the same filters and columns.
+-- name: ListMailTaskSends :many
+WITH page AS (SELECT mt.id
+              FROM mail_tasks mt
+              WHERE (sqlc.narg(task_id)::uuid IS NULL OR mt.id = sqlc.narg(task_id)::uuid)
+                AND (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(status)::text)
+                AND (sqlc.narg(search)::text IS NULL
+                    OR EXISTS (SELECT 1
+                               FROM templates t
+                               WHERE t.id = mt.template_id
+                                 AND (strpos(skymail_search_fold(t.name), skymail_search_fold(sqlc.narg(search)::text)) > 0
+                                     OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold(sqlc.narg(search)::text)) > 0
+                                     OR strpos(skymail_search_fold(t.subject), skymail_search_fold(sqlc.narg(search)::text)) > 0))
+                    OR EXISTS (SELECT 1
+                               FROM mailing_lists ml
+                               WHERE ml.id = mt.mail_list_id
+                                 AND strpos(skymail_search_fold(ml.name), skymail_search_fold(sqlc.narg(search)::text)) > 0)
+                    OR EXISTS (SELECT 1
+                               FROM mail_form_sources fs
+                               WHERE fs.id = mt.form_source_id
+                                 AND strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold(sqlc.narg(search)::text)) > 0)
+                    OR EXISTS (SELECT 1
+                               FROM mail_approval_tasks mat
+                                        JOIN mail_approvals a ON a.id = mat.approval_id
+                               WHERE mat.task_id = mt.id
+                                 AND strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold(sqlc.narg(search)::text)) > 0)
+                    OR (mt.mail_list_id IS NULL AND mt.form_source_id IS NULL AND mt.source_kind IS NULL
+                        AND EXISTS (SELECT 1
+                                    FROM mail_queue q
+                                    WHERE q.task_id = mt.id
+                                      AND (strpos(skymail_search_fold(q.recipient_email), skymail_search_fold(sqlc.narg(search)::text)) > 0
+                                          OR strpos(skymail_search_fold(q.recipient_full_name), skymail_search_fold(sqlc.narg(search)::text)) > 0))))
+                AND (sqlc.narg(created_from)::timestamptz IS NULL OR mt.created_at >= sqlc.narg(created_from)::timestamptz)
+                AND (sqlc.narg(created_before)::timestamptz IS NULL OR mt.created_at < sqlc.narg(created_before)::timestamptz)
+                AND (sqlc.narg(kind)::text IS NULL OR mail_task_kind(mt.id) = sqlc.narg(kind)::text)
+                AND (sqlc.narg(template_id)::uuid IS NULL OR mt.template_id = sqlc.narg(template_id)::uuid)
+                AND (sqlc.narg(list_id)::uuid IS NULL OR mt.mail_list_id = sqlc.narg(list_id)::uuid)
+                AND (sqlc.narg(sent_by)::text IS NULL OR mt.sent_by = sqlc.narg(sent_by)::text)
+              ORDER BY mt.created_at DESC, mt.id DESC
+              LIMIT $1 OFFSET $2)
+SELECT mt.id,
+       mt.sent_by,
+       mt.template_id,
+       mt.mail_list_id,
+       mt.form_source_id, fs.form_id, fs.form_title, fs.prepared_at AS form_prepared_at, fs.recipient_count AS form_recipient_count,
+       mt.body_variables,
+       mt.created_at,
+       t.name                       AS template_name,
+       t.key                        AS template_key,
+       ml.name                      AS mail_list_name,
+       (ml.id IS NOT NULL)::boolean AS internal_mail_list,
+       mail_task_status(mt.id)      AS status,
+       rc.pending,
+       rc.processing,
+       rc.sent,
+       rc.failed,
+       rc.suppressed,
+       rc.opted_out,
+       rc.unsubscribed,
+       rc.inactive,
+       rc.ambiguous,
+       rc.suppressed_but_sent,
+       rc.undelivered,
+       single.recipient_full_name   AS single_recipient_full_name,
+       single.recipient_email       AS single_recipient_email,
+       mail_task_bulk(mt.id)::boolean              AS bulk,
+       mail_task_content_sensitive(mt.id)::boolean AS content_sensitive,
+       mt.content_cleared_at,
+       mt.content_masked_at,
+       mt.tracking_requested,
+       mt.purpose,
+       mt.category,
+       mt.transactional_statement,
+       mt.commercial_content_absent,
+       mt.own_event_statement,
+       mt.paused_at,
+       mt.paused_reason,
+       mt.cancelled_at,
+       rc.cancelled,
+       mail_task_kind(mt.id)        AS kind
+FROM page
+         JOIN mail_tasks mt ON mt.id = page.id
+         LEFT JOIN templates t ON mt.template_id = t.id
+         LEFT JOIN mailing_lists ml ON mt.mail_list_id = ml.id
+         LEFT JOIN mail_form_sources fs ON fs.id = mt.form_source_id
+         CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE q.status = 'pending')    AS pending,
+                                    count(*) FILTER (WHERE q.status = 'processing') AS processing,
+                                    count(*) FILTER (WHERE q.status = 'sent')       AS sent,
+                                    count(*) FILTER (WHERE q.status = 'failed')     AS failed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error LIKE 'suppressed:%') AS suppressed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: opted_out') AS opted_out,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'suppressed: unsubscribed') AS unsubscribed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: inactive') AS inactive,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: ambiguous') AS ambiguous,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'cancelled') AS cancelled,
+                                    count(*) FILTER (WHERE q.suppressed_but_sent) AS suppressed_but_sent,
+                                    count(*) FILTER (WHERE EXISTS (SELECT 1
+                                                                   FROM mail_bounces b
+                                                                   WHERE b.queue_id = q.id
+                                                                     AND b.kind = 'hard'
+                                                                     AND b.recipient_matched)) AS undelivered
+                             FROM mail_queue q
+                             WHERE q.task_id = mt.id) rc
+         LEFT JOIN mail_queue single
+                   ON single.id = (SELECT q.id
+                                   FROM mail_queue q
+                                   WHERE mt.mail_list_id IS NULL
+                                     AND q.task_id = mt.id
+                                   ORDER BY q.created_at, q.id
+                                   LIMIT 1)
+ORDER BY mt.created_at DESC, mt.id DESC;
+
+-- ListMailTaskSends in another order (GET /mail_tasks _sort=open_rate or
+-- _order=asc): the same filters and the same columns, ordered as sort and
+-- ascending say. sort open_rate orders by the share of tracked recipients
 -- who likely opened (GET /mail_tasks/{id}/tracking's
 -- unique_likely_human_opens / tracked_recipients, the retained totals once
--- its events are gone), sends with no rate last. The page is cut first so
--- only its rows are counted.
--- name: ListMailTaskSends :many
+-- its events are gone), sends with no rate last. Every matching send is
+-- read to order them; the default order uses ListMailTaskSends.
+-- name: ListMailTaskSendsSorted :many
 WITH matching AS (SELECT mt.id,
                          mt.created_at,
                          mt.tracking_requested,
@@ -1885,27 +2002,33 @@ FROM (SELECT mail_task_status(mt.id) AS status FROM mail_tasks mt) s;
 -- name: CountMailTaskSends :one
 SELECT count(*)
 FROM mail_tasks mt
-         LEFT JOIN templates t ON t.id = mt.template_id
-         LEFT JOIN mailing_lists ml ON ml.id = mt.mail_list_id
-         LEFT JOIN mail_form_sources fs ON fs.id = mt.form_source_id
 WHERE (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(status)::text)
   AND (sqlc.narg(search)::text IS NULL
-       OR strpos(skymail_search_fold(COALESCE(t.name, '')), skymail_search_fold(sqlc.narg(search)::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold(sqlc.narg(search)::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(t.subject, '')), skymail_search_fold(sqlc.narg(search)::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(ml.name, '')), skymail_search_fold(sqlc.narg(search)::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold(sqlc.narg(search)::text)) > 0
-       OR EXISTS (SELECT 1
-                  FROM mail_approval_tasks mat
-                           JOIN mail_approvals a ON a.id = mat.approval_id
-                  WHERE mat.task_id = mt.id
-                    AND strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold(sqlc.narg(search)::text)) > 0)
-       OR (mt.mail_list_id IS NULL AND mt.form_source_id IS NULL AND mt.source_kind IS NULL
-           AND EXISTS (SELECT 1
-                       FROM mail_queue q
-                       WHERE q.task_id = mt.id
-                         AND (strpos(skymail_search_fold(q.recipient_email), skymail_search_fold(sqlc.narg(search)::text)) > 0
-                              OR strpos(skymail_search_fold(q.recipient_full_name), skymail_search_fold(sqlc.narg(search)::text)) > 0))))
+      OR EXISTS (SELECT 1
+                 FROM templates t
+                 WHERE t.id = mt.template_id
+                   AND (strpos(skymail_search_fold(t.name), skymail_search_fold(sqlc.narg(search)::text)) > 0
+                       OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold(sqlc.narg(search)::text)) > 0
+                       OR strpos(skymail_search_fold(t.subject), skymail_search_fold(sqlc.narg(search)::text)) > 0))
+      OR EXISTS (SELECT 1
+                 FROM mailing_lists ml
+                 WHERE ml.id = mt.mail_list_id
+                   AND strpos(skymail_search_fold(ml.name), skymail_search_fold(sqlc.narg(search)::text)) > 0)
+      OR EXISTS (SELECT 1
+                 FROM mail_form_sources fs
+                 WHERE fs.id = mt.form_source_id
+                   AND strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold(sqlc.narg(search)::text)) > 0)
+      OR EXISTS (SELECT 1
+                 FROM mail_approval_tasks mat
+                          JOIN mail_approvals a ON a.id = mat.approval_id
+                 WHERE mat.task_id = mt.id
+                   AND strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold(sqlc.narg(search)::text)) > 0)
+      OR (mt.mail_list_id IS NULL AND mt.form_source_id IS NULL AND mt.source_kind IS NULL
+          AND EXISTS (SELECT 1
+                      FROM mail_queue q
+                      WHERE q.task_id = mt.id
+                        AND (strpos(skymail_search_fold(q.recipient_email), skymail_search_fold(sqlc.narg(search)::text)) > 0
+                            OR strpos(skymail_search_fold(q.recipient_full_name), skymail_search_fold(sqlc.narg(search)::text)) > 0))))
   AND (sqlc.narg(created_from)::timestamptz IS NULL OR mt.created_at >= sqlc.narg(created_from)::timestamptz)
   AND (sqlc.narg(created_before)::timestamptz IS NULL OR mt.created_at < sqlc.narg(created_before)::timestamptz)
   AND (sqlc.narg(kind)::text IS NULL OR mail_task_kind(mt.id) = sqlc.narg(kind)::text)

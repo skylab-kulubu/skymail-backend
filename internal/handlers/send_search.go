@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -45,9 +46,44 @@ type sendListQuery struct {
 	ascending bool
 }
 
-// list is the page of the send list the query asks for.
+// read is the page of the send list the query asks for: newest first, the
+// default, down idx_mail_tasks_created_at_id (ListMailTaskSends); any other
+// order reads every matching send to order them (ListMailTaskSendsSorted).
+func (q sendListQuery) read(ctx context.Context, db *database.Store, limit, offset int32) ([]database.ListMailTaskSendsRow, error) {
+	if q.sort == "" && !q.ascending {
+		return db.ListMailTaskSends(ctx, q.list(limit, offset))
+	}
+	rows, err := db.ListMailTaskSendsSorted(ctx, q.sorted(limit, offset))
+	if err != nil {
+		return nil, err
+	}
+	sends := make([]database.ListMailTaskSendsRow, len(rows))
+	for i, row := range rows {
+		// The two queries select the same columns.
+		sends[i] = database.ListMailTaskSendsRow(row)
+	}
+	return sends, nil
+}
+
+// list is the page of the send list newest first.
 func (q sendListQuery) list(limit, offset int32) database.ListMailTaskSendsParams {
 	return database.ListMailTaskSendsParams{
+		Limit:         limit,
+		Offset:        offset,
+		Status:        q.filter.Status,
+		Search:        q.filter.Search,
+		CreatedFrom:   q.filter.CreatedFrom,
+		CreatedBefore: q.filter.CreatedBefore,
+		Kind:          q.filter.Kind,
+		TemplateID:    q.filter.TemplateID,
+		ListID:        q.filter.ListID,
+		SentBy:        q.filter.SentBy,
+	}
+}
+
+// sorted is the page of the send list in the order the query asks for.
+func (q sendListQuery) sorted(limit, offset int32) database.ListMailTaskSendsSortedParams {
+	return database.ListMailTaskSendsSortedParams{
 		Limit:         limit,
 		Offset:        offset,
 		Ascending:     q.ascending,
