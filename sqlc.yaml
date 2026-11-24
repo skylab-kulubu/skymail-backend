@@ -30,6 +30,23 @@ sql:
           # off without signing in.
           - column: "mail_queue.list_unsubscribe_url"
             go_struct_tag: 'json:"-"'
+          # The recipient retention run's own bookkeeping: never served.
+          - column: "mail_tasks.recipient_retention_at"
+            go_struct_tag: 'json:"-"'
+          - column: "mail_approvals.recipient_retention_at"
+            go_struct_tag: 'json:"-"'
+          - column: "mail_approval_recipients.cleared_at"
+            go_struct_tag: 'json:"-"'
+          - column: "mail_approval_recipients.account_at"
+            go_struct_tag: 'json:"-"'
+          - column: "mail_form_source_recipients.cleared_at"
+            go_struct_tag: 'json:"-"'
+          - column: "mail_form_source_recipients.account_at"
+            go_struct_tag: 'json:"-"'
+          - column: "mail_queue.recipient_account_at"
+            go_struct_tag: 'json:"-"'
+          - column: "recipients.account_at"
+            go_struct_tag: 'json:"-"'
           - column: "mail_tracking_events.link_id"
             go_type:
               type: "int64"
