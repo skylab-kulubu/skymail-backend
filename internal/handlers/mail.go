@@ -143,10 +143,10 @@ func operatorTracking(ctx context.Context, m mailer.Mailer, asked bool, template
 //	@Produce		json
 //	@Param			task	body		requests.CreateMailTask	true	"Mail task details"
 //	@Success		201		{object}	handlers.CreatedMailTask
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request. attachment.not_allowed: a send to a list or a group takes no attachments. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team"
-//	@Failure		422		{object}	apperrors.AppError	"mail.audience_unavailable: the Keycloak group is unknown or gone"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
-//	@Failure		503		{object}	apperrors.AppError	"mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE; README, \"Toplu postada tercih\"), core did not say whom the send may go to; nothing is queued"
+//	@Failure		400		{object}	apperrors.Problem	"Bad Request. attachment.not_allowed: a send to a list or a group takes no attachments. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team"
+//	@Failure		422		{object}	apperrors.Problem	"mail.audience_unavailable: the Keycloak group is unknown or gone"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
+//	@Failure		503		{object}	apperrors.Problem	"mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE; README, \"Toplu postada tercih\"), core did not say whom the send may go to; nothing is queued"
 //	@Router			/mail_tasks [post]
 func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 	var params requests.CreateMailTask
@@ -259,10 +259,10 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 //	@Param			mail			body		requests.SendSingleMail	true	"Mail details"
 //	@Success		201				{object}	handlers.CreatedMailTask
 //	@Header			201				{string}	Idempotent-Replayed	"true when the answer is the first answer to this Idempotency-Key"
-//	@Failure		400				{object}	apperrors.AppError	"Bad Request. A person's purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team; mail_task.erase_after_send_not_allowed: a person's token asked for erase_after_send; mail_task.idempotency_key_invalid; mail_task.idempotency_key_not_allowed: a person's token sent an Idempotency-Key; attachment.service_only: a person's token sent attachments; attachment.too_many, attachment.type_not_allowed, attachment.content_invalid, attachment.content_type_mismatch, attachment.too_large (params.index: which file)"
-//	@Failure		422				{object}	apperrors.AppError	"mail_task.idempotency_key_reused: the key was used for a different mail"
-//	@Failure		500				{object}	apperrors.AppError	"Internal Server Error"
-//	@Failure		503				{object}	apperrors.AppError	"mail_task.preference_unavailable (Retry-After): a person's duyuru mail while every duyuru send obeys the recipient's preferences (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing is queued"
+//	@Failure		400				{object}	apperrors.Problem	"Bad Request. A person's purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team; mail_task.erase_after_send_not_allowed: a person's token asked for erase_after_send; mail_task.idempotency_key_invalid; mail_task.idempotency_key_not_allowed: a person's token sent an Idempotency-Key; attachment.service_only: a person's token sent attachments; attachment.too_many, attachment.type_not_allowed, attachment.content_invalid, attachment.content_type_mismatch, attachment.too_large (params.index: which file)"
+//	@Failure		422				{object}	apperrors.Problem	"mail_task.idempotency_key_reused: the key was used for a different mail"
+//	@Failure		500				{object}	apperrors.Problem	"Internal Server Error"
+//	@Failure		503				{object}	apperrors.Problem	"mail_task.preference_unavailable (Retry-After): a person's duyuru mail while every duyuru send obeys the recipient's preferences (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing is queued"
 //	@Router			/mail_tasks/single [post]
 func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	var params requests.SendSingleMail
@@ -483,9 +483,9 @@ type SendPurposeFields struct {
 //	@Param			status	query		string	false	"Derived send status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent)"	Enums(failed,sending,sent)
 //	@Success		200		{array}		handlers.MailTaskItem
 //	@Header			200		{integer}	X-Total-Count		"Number of sends matching the filter"
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem	"Bad Request"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/mail_tasks [get]
 func (h *mailHandlerImpl) GetTasks(c fiber.Ctx) error {
 	status, err := parseSendStatusFilter(c.Query("status"))
@@ -521,10 +521,10 @@ func (h *mailHandlerImpl) GetTasks(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			id	path		string	true	"Task ID"
 //	@Success		200	{object}	handlers.MailTaskItem
-//	@Failure		400	{object}	apperrors.AppError	"Bad Request"
-//	@Failure		403	{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404	{object}	apperrors.AppError	"Not Found"
-//	@Failure		500	{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400	{object}	apperrors.Problem	"Bad Request"
+//	@Failure		403	{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404	{object}	apperrors.Problem	"Not Found"
+//	@Failure		500	{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/mail_tasks/{id} [get]
 func (h *mailHandlerImpl) GetTask(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -558,9 +558,9 @@ func (h *mailHandlerImpl) GetTask(c fiber.Ctx) error {
 //	@Param			status	query		string	false	"Recipient queue status"	Enums(pending,processing,sent,failed)
 //	@Success		200		{array}		handlers.QueueItem
 //	@Header			200		{integer}	X-Total-Count		"Number of recipients matching the filter"
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem	"Bad Request"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/mail_tasks/{id}/queue [get]
 func (h *mailHandlerImpl) GetTaskQueueItems(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))

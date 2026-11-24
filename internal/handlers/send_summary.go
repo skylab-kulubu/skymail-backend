@@ -237,7 +237,7 @@ type TrackingMode struct {
 //	@Tags			Mail
 //	@Produce		json
 //	@Success		200	{object}	handlers.TrackingMode
-//	@Failure		403	{object}	apperrors.AppError	"Forbidden"
+//	@Failure		403	{object}	apperrors.Problem	"Forbidden"
 //	@Router			/mail_tasks/tracking-mode [get]
 func (h *mailHandlerImpl) GetTrackingMode(c fiber.Ctx) error {
 	return c.JSON(TrackingMode{TrackingAvailable: h.mailer.TrackingAvailable(), TrackingAlways: h.mailer.OperatorTrackingAlways(), PurposeAvailable: h.mailer.PurposeAvailable(), PromotionalAvailable: h.mailer.PromotionalAvailable(), ListConsentAvailable: h.mailer.ListConsentAvailable()})
@@ -252,9 +252,9 @@ func (h *mailHandlerImpl) GetTrackingMode(c fiber.Ctx) error {
 //	@Param			days	query		int	false	"Days in the daily series, ending today in Europe/Istanbul (1-90)"	default(30)
 //	@Param			recent	query		int	false	"Latest sends to list, newest first (1-20)"							default(5)
 //	@Success		200		{object}	handlers.SendSummary
-//	@Failure		400		{object}	apperrors.AppError	"Bad Request"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem	"Bad Request"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/mail_tasks/summary [get]
 func (h *mailHandlerImpl) GetSummary(c fiber.Ctx) error {
 	days, err := boundedQueryInt(c, "days", defaultSummaryDays, maxSummaryDays)
