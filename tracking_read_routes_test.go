@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v3"
@@ -277,9 +278,9 @@ func TestAClickPastTheNinetyDaysRedirectsAndRecordsNothing(t *testing.T) {
 }
 
 // The tracking reports show where each clicked link goes (Yusuf, 2026-11-24:
-// "her şeyi görelim"): the target as sent, but a one-time link or one with a
-// code only as its scheme and host (url_masked), as the masking of sensitive
-// content hides it; an emptied link has no target and says why.
+// "her şeyi görelim"): the full target as sent, a one-time link or one with a
+// code included, nothing masked and no url_masked flag (Yusuf, 2026-11-24);
+// an emptied link has no target and says why.
 func TestTrackingReportsShowWhereTheLinksGo(t *testing.T) {
 	w, _ := trackedWorld(t, true)
 	send := w.listSend()
@@ -322,16 +323,15 @@ func TestTrackingReportsShowWhereTheLinksGo(t *testing.T) {
 	type link struct {
 		Position         int     `json:"position"`
 		URL              *string `json:"url"`
-		URLMasked        bool    `json:"url_masked"`
 		URLClearedReason *string `json:"url_cleared_reason"`
 	}
 	want := map[int]link{
-		90: {90, &targets[0], false, nil},
-		91: {91, ptrTo("https://my.yildizskylab.com/••••••"), true, nil},
-		92: {92, nil, false, ptrTo("expired")},
+		90: {90, &targets[0], nil},
+		91: {91, &targets[1], nil},
+		92: {92, nil, ptrTo("expired")},
 	}
 	same := func(got, want link) bool {
-		return got.Position == want.Position && got.URLMasked == want.URLMasked &&
+		return got.Position == want.Position &&
 			(got.URL == nil) == (want.URL == nil) && (got.URL == nil || *got.URL == *want.URL) &&
 			(got.URLClearedReason == nil) == (want.URLClearedReason == nil) && (got.URLClearedReason == nil || *got.URLClearedReason == *want.URLClearedReason)
 	}
@@ -341,8 +341,12 @@ func TestTrackingReportsShowWhereTheLinksGo(t *testing.T) {
 			ClicksByLink []link `json:"clicks_by_link"`
 		} `json:"report"`
 	}
-	if status, raw := w.call("baska", "GET", base, nil, &summary); status != 200 {
+	status, raw := w.call("baska", "GET", base, nil, &summary)
+	if status != 200 {
 		t.Fatalf("summary: %d %s", status, raw)
+	}
+	if strings.Contains(string(raw), "url_masked") || strings.Contains(string(raw), "••") {
+		t.Errorf("summary still masks a link: %s", raw)
 	}
 	seen := 0
 	for _, got := range summary.Report.ClicksByLink {
@@ -362,8 +366,12 @@ func TestTrackingReportsShowWhereTheLinksGo(t *testing.T) {
 			ClickedLinks []link `json:"clicked_links"`
 		} `json:"items"`
 	}
-	if status, raw := w.call("takip_okur", "GET", base+"/recipients?filter=clicked", nil, &people); status != 200 || len(people.Items) != 1 {
+	status, raw = w.call("takip_okur", "GET", base+"/recipients?filter=clicked", nil, &people)
+	if status != 200 || len(people.Items) != 1 {
 		t.Fatalf("recipients: %d %s", status, raw)
+	}
+	if strings.Contains(string(raw), "url_masked") || strings.Contains(string(raw), "••") {
+		t.Errorf("recipients still mask a link: %s", raw)
 	}
 	if got := people.Items[0].ClickedLinks; len(got) != len(want) {
 		t.Fatalf("clicked_links = %+v, want %d links", got, len(want))

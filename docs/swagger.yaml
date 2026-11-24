@@ -1918,8 +1918,6 @@ components:
           type: string
         url_cleared_reason:
           type: string
-        url_masked:
-          type: boolean
       type: object
     handlers.TrackingMode:
       properties:
@@ -2020,8 +2018,6 @@ components:
           type: string
         url_cleared_reason:
           type: string
-        url_masked:
-          type: boolean
       type: object
     handlers.TrackingRecipientPage:
       properties:
@@ -4207,9 +4203,8 @@ paths:
   /mail_tasks/{id}/tracking:
     get:
       description: 'Requires skymail:mails:read. No identities or link tokens. Each
-        link of clicks_by_link has its target, url: as sent, or, when it carries a
-        one-time link''s or a code''s part, its scheme and host with the rest masked
-        (https://host/••••••, url_masked true); null once the link was emptied (url_cleared_reason
+        link of clicks_by_link has its full target, url: as sent, one-time links and
+        codes included (nothing masked); null once the link was emptied (url_cleared_reason
         expired or erased). After 90 days only retained totals, or null: for good
         with at least 10 tracked recipients, until a year after the send with fewer.
         tracking_available follows the current flag. A send''s counts are shown to
@@ -4260,8 +4255,8 @@ paths:
         is read with the role only: its sender is refused. First likely human opening
         falls back to a non-automated click, marked click_inferred. Returns 410 90
         days after the last mail went out, even if retention has not run. Does not
-        return tracking tokens. Each clicked link has its position and target url,
-        masked as GET /mail_tasks/{id}/tracking masks it (url_masked).'
+        return tracking tokens. Each clicked link has its position and full target
+        url, as sent (nothing masked).'
       parameters:
       - description: Mail task ID
         in: path

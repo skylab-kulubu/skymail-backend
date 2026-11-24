@@ -2288,9 +2288,6 @@
                     },
                     "url_cleared_reason": {
                         "type": "string"
-                    },
-                    "url_masked": {
-                        "type": "boolean"
                     }
                 },
                 "type": "object"
@@ -2417,9 +2414,6 @@
                     },
                     "url_cleared_reason": {
                         "type": "string"
-                    },
-                    "url_masked": {
-                        "type": "boolean"
                     }
                 },
                 "type": "object"
@@ -5495,7 +5489,7 @@
         },
         "/mail_tasks/{id}/tracking": {
             "get": {
-                "description": "Requires skymail:mails:read. No identities or link tokens. Each link of clicks_by_link has its target, url: as sent, or, when it carries a one-time link's or a code's part, its scheme and host with the rest masked (https://host/••••••, url_masked true); null once the link was emptied (url_cleared_reason expired or erased). After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts are shown to anyone with skymail:mails:read whatever its number of tracked recipients (Yusuf, 2026-11-24, K6); only mail the system sends (the system lane) tells of people: then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read; the send's own sender outside the system lane only while SKYMAIL_SENDER_SEES_RECIPIENTS=on) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4). recipients_readable says whether the caller may read the send's people.",
+                "description": "Requires skymail:mails:read. No identities or link tokens. Each link of clicks_by_link has its full target, url: as sent, one-time links and codes included (nothing masked); null once the link was emptied (url_cleared_reason expired or erased). After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts are shown to anyone with skymail:mails:read whatever its number of tracked recipients (Yusuf, 2026-11-24, K6); only mail the system sends (the system lane) tells of people: then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read; the send's own sender outside the system lane only while SKYMAIL_SENDER_SEES_RECIPIENTS=on) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4). recipients_readable says whether the caller may read the send's people.",
                 "parameters": [
                     {
                         "description": "Mail task ID",
@@ -5547,7 +5541,7 @@
         },
         "/mail_tasks/{id}/tracking/recipients": {
             "get": {
-                "description": "Requires skymail:mails:tracking:read. The send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role) reads it only while SKYMAIL_SENDER_SEES_RECIPIENTS=on; off, the default, the sender gets 403 and reads the counts (GET /mail_tasks/{id}/tracking). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 90 days after the last mail went out, even if retention has not run. Does not return tracking tokens. Each clicked link has its position and target url, masked as GET /mail_tasks/{id}/tracking masks it (url_masked).",
+                "description": "Requires skymail:mails:tracking:read. The send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role) reads it only while SKYMAIL_SENDER_SEES_RECIPIENTS=on; off, the default, the sender gets 403 and reads the counts (GET /mail_tasks/{id}/tracking). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 90 days after the last mail went out, even if retention has not run. Does not return tracking tokens. Each clicked link has its position and full target url, as sent (nothing masked).",
                 "parameters": [
                     {
                         "description": "Mail task ID",

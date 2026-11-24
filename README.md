@@ -1874,12 +1874,10 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   `likely_human_opens`, `automated_opens`, `likely_human_clicks`,
   `automated_clicks` taşır. Boş kovalar yazılmaz. Kimlik yoktur.
   `clicks_by_link`'in her bağlantısı hedefini de taşır (Yusuf, 2026-11-24:
-  "her şeyi görelim"): `url` gönderildiği gibi; tek kullanımlık ya da kod
-  taşıyan bağlantıda (sorgu adı sır gibi — token, code, key —, değeri kod,
-  belirteç, adres, IP, 4+ rakam ya da 16+ karakter; yol parçası kod ya da
-  belirteç biçimli ya da 16+ karakter; 8+ karakterlik parça) yalnız şema ve
-  alan adı, gerisi maskeli (`https://alan/••••••`, `url_masked: true`;
-  `mailer.MaskLinkURL`). Boşalmış bağlantıda `url: null` ve
+  "her şeyi görelim"): `url` gönderildiği gibi tam adrestir; tek
+  kullanımlık giriş/sıfırlama bağlantısı ya da kod taşıyan bağlantı da
+  maskelenmez (Yusuf, 2026-11-24: `mails:read` sahibi postayı tam görür).
+  Boşalmış bağlantıda `url: null` ve
   `url_cleared_reason` (`expired` 1 yıl, `erased` maske/hesap silme). Son postadan 90 gün sonra
 `retained: true`:
   yalnız kişisiz toplam (10'dan az alıcılıda gönderimden 1 yıl sonra
@@ -1924,8 +1922,8 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   `tracking_skip_reason`, `first_open_at`, `first_likely_human_open_at`,
   `likely_human_open_source` (`open|click_inferred|null`), `open_count`,
   `last_clicked_at`, `automated_only`, `source_classes`, `clicked_links`
-  (`link_id`, `position`, `clicks`, `last_clicked_at`, `url`, `url_masked`,
-  `url_cleared_reason`; hedef aynı kuralla maskeli) içerir. “opened” açılma veya
+  (`link_id`, `position`, `clicks`, `last_clicked_at`, `url`,
+  `url_cleared_reason`; hedef tam adres, maskesiz) içerir. “opened” açılma veya
   otomatik olmayan tıklama çıkarımını, “not_opened” ikisinin yokluğunu
   belirtir; “okumadı” anlamına gelmez. Token dönmez. Gönderimin
   son `sent_at`'ından (teslim yoksa `created_at`) 90 gün sonra 410 döner
