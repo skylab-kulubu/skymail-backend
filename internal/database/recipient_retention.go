@@ -510,6 +510,7 @@ func (s *Store) recipientRetentionPass(ctx context.Context, plan *recipientReten
 	args := pgx.NamedArgs{
 		"now":             now,
 		"days":            plan.days,
+		"address_pattern": addressPattern,
 		"without_account": nonNil(plan.withoutAccount),
 		"with_account":    nonNil(plan.withAccount),
 	}
@@ -615,7 +616,7 @@ var sendRecipientRules = []recipientRetentionRule{
 		// address in it masked (a row from before errors held codes only).
 		sql: `UPDATE mail_queue q
 		      SET recipient_email = '', recipient_full_name = '',
-		          error = regexp_replace(q.error, '` + addressPattern + `', '••••••', 'g')
+		          error = regexp_replace(q.error, @address_pattern::text, '••••••', 'g')
 		      WHERE q.task_id = @task AND q.recipient_sub IS NULL AND btrim(q.recipient_email) <> ''
 		        AND q.status IN ('sent', 'failed')
 		        AND lower(btrim(q.recipient_email)) = ANY (@without_account::text[])`,
