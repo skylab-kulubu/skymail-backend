@@ -526,6 +526,9 @@ type Querier interface {
 	// render. A NULL published lists every version; true only published ones,
 	// false only drafts, discarded ones included.
 	ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]TemplateVersionSummary, error)
+	// A send's links as the tracking reports show them: each link's position,
+	// its target (null once emptied) and why it was emptied.
+	ListTrackingLinks(ctx context.Context, taskID uuid.UUID) ([]ListTrackingLinksRow, error)
 	// One aggregate per recipient, then filtering and pagination. Events older
 	// than their recipient's 90-day window (tracking.EventRetentionDays) never
 	// reappear while retention is disabled or catching up. No tracking token or link target is selected.

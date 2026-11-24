@@ -6205,6 +6205,47 @@ func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVers
 	return items, nil
 }
 
+const listTrackingLinks = `-- name: ListTrackingLinks :many
+SELECT id, position, url, url_cleared_reason
+FROM mail_task_links
+WHERE task_id = $1
+ORDER BY position
+`
+
+type ListTrackingLinksRow struct {
+	ID               int64   `json:"id"`
+	Position         int16   `json:"position"`
+	Url              *string `json:"url"`
+	UrlClearedReason *string `json:"url_cleared_reason"`
+}
+
+// A send's links as the tracking reports show them: each link's position,
+// its target (null once emptied) and why it was emptied.
+func (q *Queries) ListTrackingLinks(ctx context.Context, taskID uuid.UUID) ([]ListTrackingLinksRow, error) {
+	rows, err := q.db.Query(ctx, listTrackingLinks, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTrackingLinksRow
+	for rows.Next() {
+		var i ListTrackingLinksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Position,
+			&i.Url,
+			&i.UrlClearedReason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTrackingRecipients = `-- name: ListTrackingRecipients :one
 WITH clicked AS (
  SELECT e.queue_id,e.link_id,count(*)::int AS clicks,max(e.occurred_at) AS last_clicked_at

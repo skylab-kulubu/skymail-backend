@@ -23,9 +23,9 @@ const trackingReadBudget = 2 * time.Second
 // TrackingSummary has no identities or target URLs. 90 days after the last
 // mail went out (tracking.EventRetention) report is the retained aggregate,
 // or null when there is none (a send of fewer than 10 tracked recipients a
-// year after it was created). Withheld
-// says the send's counts would tell of people (see GetTracking) and the
-// caller may not read its people: report is then null. RecipientsReadable
+// year after it was created). Withheld says the send is mail the system sends
+// (see GetTracking) and the caller may not read its people: report is then
+// null. RecipientsReadable
 // says whether the caller may read the send's people (GET
 // /mail_tasks/{id}/tracking/recipients), so a screen asks for them only then.
 type TrackingSummary struct {
@@ -88,6 +88,18 @@ type TrackingLinkCounts struct {
 	Position       int   `json:"position"`
 	Clicks         int   `json:"clicks"`
 	UniqueClickers int   `json:"unique_clickers"`
+	TrackingLinkTarget
+}
+
+// TrackingLinkTarget is where a tracked link goes (Yusuf, 2026-11-24: "her
+// şeyi görelim"). url is the full target as sent, one-time links and codes
+// included: nothing in it is masked (Yusuf, 2026-11-24: whoever holds
+// skymail:mails:read sees each mail in full). url is null once the link was
+// emptied: url_cleared_reason expired (a year on) or erased (the send masked
+// or sensitive since, or Account erasure).
+type TrackingLinkTarget struct {
+	URL              *string `json:"url"`
+	URLClearedReason *string `json:"url_cleared_reason,omitempty"`
 }
 type TrackingPoint struct {
 	At                time.Time `json:"at"`
@@ -115,14 +127,43 @@ type TrackingRecipient struct {
 }
 type TrackingRecipientLink struct {
 	LinkID        int64     `json:"link_id"`
+	Position      int       `json:"position"`
 	Clicks        int       `json:"clicks"`
 	LastClickedAt time.Time `json:"last_clicked_at"`
+	TrackingLinkTarget
+}
+
+// trackingLinks are a send's links by id, their targets as the reports show
+// them (TrackingLinkTarget).
+type trackingLinks map[int64]struct {
+	position int
+	target   TrackingLinkTarget
+}
+
+func readTrackingLinks(ctx context.Context, db *database.Store, task uuid.UUID) (trackingLinks, error) {
+	rows, err := db.ListTrackingLinks(ctx, task)
+	if err != nil {
+		return nil, err
+	}
+	links := make(trackingLinks, len(rows))
+	for _, row := range rows {
+		target := TrackingLinkTarget{URLClearedReason: row.UrlClearedReason}
+		if row.Url != nil {
+			url := *row.Url
+			target.URL = &url
+		}
+		links[row.ID] = struct {
+			position int
+			target   TrackingLinkTarget
+		}{int(row.Position), target}
+	}
+	return links, nil
 }
 
 // GetTracking godoc
 //
 //	@Summary		Tracking counts, per-link counts and hour/day series
-//	@Description	Requires skymail:mails:read. No identities, link tokens or target URLs. After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts tell of people when it has fewer than 10 tracked recipients (tracking.TotalsMinRecipients) or is mail the system sends (the system lane): then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read; the send's own sender outside the system lane only while SKYMAIL_SENDER_SEES_RECIPIENTS=on) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4). recipients_readable says whether the caller may read the send's people.
+//	@Description	Requires skymail:mails:read. No identities or link tokens. Each link of clicks_by_link has its full target, url: as sent, one-time links and codes included (nothing masked); null once the link was emptied (url_cleared_reason expired or erased). After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts are shown to anyone with skymail:mails:read whatever its number of tracked recipients (Yusuf, 2026-11-24, K6); only mail the system sends (the system lane) tells of people: then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read; the send's own sender outside the system lane only while SKYMAIL_SENDER_SEES_RECIPIENTS=on) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4). recipients_readable says whether the caller may read the send's people.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id	path		string	true	"Mail task ID"
@@ -147,9 +188,18 @@ func (h *mailHandlerImpl) GetTracking(c fiber.Ctx) error {
 		return err
 	}
 	people := h.mayReadTrackingPeople(c, task)
-	withheld := aggregate != nil && countsTellOfPeople(task, aggregate) && !people
+	withheld := aggregate != nil && countsTellOfPeople(task) && !people
 	if withheld {
 		aggregate = nil
+	}
+	if aggregate != nil && len(aggregate.ClicksByLink) > 0 {
+		links, err := readTrackingLinks(ctx, h.db, task.ID)
+		if err != nil {
+			return err
+		}
+		for i := range aggregate.ClicksByLink {
+			aggregate.ClicksByLink[i].TrackingLinkTarget = links[aggregate.ClicksByLink[i].ID].target
+		}
 	}
 	return c.JSON(TrackingSummary{TrackingAvailable: h.mailer.TrackingAvailable(), TrackingRequested: task.TrackingRequested, Retained: retained, Withheld: withheld, RecipientsReadable: people, Report: aggregate})
 }
@@ -180,12 +230,15 @@ func trackingReportOf(ctx context.Context, db *database.Store, task database.Tra
 	return aggregate, retained, nil
 }
 
-// countsTellOfPeople says a send's counts are as good as its people's: a
-// send to fewer than tracking.TotalsMinRecipients tracked people ("1 of 1
-// opened at 14:00" names the one whose address GET /:id/queue shows), or
-// mail the system sends, whose people only YK, DK and the admins see.
-func countsTellOfPeople(task database.TrackingTaskAccessRow, report *TrackingAggregate) bool {
-	return task.SystemLane || report.TrackedRecipients < tracking.TotalsMinRecipients
+// countsTellOfPeople says a send's counts are as good as its people's: mail
+// the system sends, whose people only YK, DK and the admins see (KVKK notice
+// s3, §4). A send's counts are shown whatever its number of tracked
+// recipients (Yusuf, 2026-11-24, K6: ADR-0074 decision 9's threshold of 10,
+// addendum 2026-11-08 m.4, no longer limits who sees them); the retention
+// run still keeps the counts of fewer than tracking.TotalsMinRecipients only
+// a year (ADR-0074 decision 10).
+func countsTellOfPeople(task database.TrackingTaskAccessRow) bool {
+	return task.SystemLane
 }
 
 // mayReadTrackingPeople is who reads a send's people (trackingPeopleReadable).
@@ -213,7 +266,7 @@ func trackingPeopleReadable(caller contentCaller, service bool, task database.Tr
 // GetTrackingRecipients godoc
 //
 //	@Summary		Recipient opening and click observations
-//	@Description	Requires skymail:mails:tracking:read. The send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role) reads it only while SKYMAIL_SENDER_SEES_RECIPIENTS=on; off, the default, the sender gets 403 and reads the counts (GET /mail_tasks/{id}/tracking). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 90 days after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.
+//	@Description	Requires skymail:mails:tracking:read. The send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role) reads it only while SKYMAIL_SENDER_SEES_RECIPIENTS=on; off, the default, the sender gets 403 and reads the counts (GET /mail_tasks/{id}/tracking). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 90 days after the last mail went out, even if retention has not run. Does not return tracking tokens. Each clicked link has its position and full target url, as sent (nothing masked).
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id			path		string	true	"Mail task ID"
@@ -264,6 +317,17 @@ func (h *mailHandlerImpl) GetTrackingRecipients(c fiber.Ctx) error {
 	result := TrackingRecipientPage{TrackingAvailable: h.mailer.TrackingAvailable(), Page: page, PageSize: size}
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return err
+	}
+	links, err := readTrackingLinks(ctx, h.db, id)
+	if err != nil {
+		return err
+	}
+	for i := range result.Items {
+		for j := range result.Items[i].ClickedLinks {
+			link := links[result.Items[i].ClickedLinks[j].LinkID]
+			result.Items[i].ClickedLinks[j].Position = link.position
+			result.Items[i].ClickedLinks[j].TrackingLinkTarget = link.target
+		}
 	}
 	return c.JSON(result)
 }
