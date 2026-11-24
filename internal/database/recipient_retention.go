@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/mail"
 	"regexp"
 	"slices"
 	"sort"
@@ -188,6 +189,9 @@ type RecipientRetentionCounts struct {
 	AccountRowsMarked int64 `json:"account_rows_marked"`
 	// Distinct addresses of those sends and requests with no subject.
 	Addresses int64 `json:"addresses"`
+	// Of them: the club's own (clubDomains), never a person's: kept, never
+	// asked about.
+	AddressesClub int64 `json:"addresses_club"`
 	// Of them: tied to a subject in SkyMail (another queue row, a
 	// suppression), or Account erasure's stand-in.
 	AddressesTied int64 `json:"addresses_tied"`
@@ -446,10 +450,16 @@ func (s *Store) recipientRetentionPlan(ctx context.Context, now time.Time, opts 
 		}
 	}
 	for _, address := range addresses {
-		if tied[address] {
+		switch {
+		case clubAddress(address):
+			plan.counts.AddressesClub++
+		case tied[address]:
 			plan.counts.AddressesTied++
-			plan.withAccount = append(plan.withAccount, address)
+		default:
+			continue
 		}
+		tied[address] = true
+		plan.withAccount = append(plan.withAccount, address)
 	}
 
 	// Keycloak is asked list by list, send by send, request by request, the
@@ -820,7 +830,7 @@ var sendRecipientRules = []recipientRetentionRule{
 		// holds the record's "bir kez" by it.
 		sql: `UPDATE mail_queue q
 		      SET recipient_email = '', recipient_full_name = '',
-		          error = regexp_replace(q.error, @address_pattern::text, '••••••', 'g')
+		          error = regexp_replace(q.error, @address_pattern::text, '••••••', 'gi')
 		      WHERE q.task_id = @task AND ` + undecidedQueueRow + `
 		        AND lower(btrim(q.recipient_email)) = ANY (@without_account::text[])`,
 		count: func(c *RecipientRetentionCounts, n int64) { c.QueueRowsCleared += n },
@@ -976,23 +986,81 @@ func maskApprovalJSON(ctx context.Context, tx pgx.Tx, args pgx.NamedArgs, withou
 	return changed, nil
 }
 
-// addressPattern finds an e-mail address in a row's error text.
-const addressPattern = `[^[:space:]<>"'(),;:\[\]]+@[^[:space:]<>"'(),;:\[\]]+`
+// addressPattern finds an e-mail address in a row's error text: a local
+// part without a slash, a domain with a dot, not right after a slash (a
+// link's path, as in https://www.youtube.com/@yildizskylab) and not in the
+// club's domains. A colon before it is let through here: an SMTP reply
+// writes "TO:<address>", and an error holds no links. Matched with 'gi'.
+var addressPattern = `(?<![/[:alnum:]_.%+-])[[:alnum:]_.%+-]+@` +
+	`(?!([[:alnum:]_-]+\.)*(` + strings.ReplaceAll(strings.Join(clubDomains, "|"), ".", `\.`) + `)(?![[:alnum:]_.-]))` +
+	`[[:alnum:]_-]+(\.[[:alnum:]_-]+)+`
 
-// jsonAddress finds an e-mail address in a string of a request's variables
-// or changes, as addressPattern does in an error.
-var jsonAddress = regexp.MustCompile(`[^\s<>"'(),;:\[\]]+@[^\s<>"'(),;:\[\]]+`)
+// jsonAddress finds a candidate address in a string of a request's
+// variables or changes: a local part without a slash, a domain with a dot.
+// jsonAddressesIn keeps only real ones.
+var jsonAddress = regexp.MustCompile(`[\p{L}\p{N}_.%+\-]+@[\p{L}\p{N}_\-]+(?:\.[\p{L}\p{N}_\-]+)+`)
+
+// jsonAddressesIn are the [start, end) of the addresses in s: the candidates
+// of jsonAddress that are not part of a link or a handle — right after a
+// slash, a colon (but mailto:) or an @ (a Mastodon handle, @kisi@sunucu.tld)
+// —, not followed by a path, and that the address parser SkyMail checks a
+// Forms snapshot's addresses with (net/mail) takes as they are.
+func jsonAddressesIn(s string) [][2]int {
+	var out [][2]int
+	for _, m := range jsonAddress.FindAllStringIndex(s, -1) {
+		start, end := m[0], m[1]
+		if start > 0 {
+			switch s[start-1] {
+			case '/', '@':
+				continue
+			case ':':
+				if !strings.HasSuffix(strings.ToLower(s[:start]), "mailto:") {
+					continue
+				}
+			}
+		}
+		if end < len(s) && s[end] == '/' {
+			continue
+		}
+		candidate := s[start:end]
+		if parsed, err := mail.ParseAddress(candidate); err != nil || parsed.Address != candidate {
+			continue
+		}
+		out = append(out, [2]int{start, end})
+	}
+	return out
+}
+
+// clubDomains are the club's own domains: an address in them, or in a
+// subdomain, is the club's, not a person's. The run never asks about one,
+// masks or empties it.
+var clubDomains = []string{"yildizskylab.com", "skyl.app"}
+
+// clubAddress says address (lower-cased) is in one of clubDomains.
+func clubAddress(address string) bool {
+	at := strings.LastIndexByte(address, '@')
+	if at < 0 {
+		return false
+	}
+	domain := address[at+1:]
+	for _, club := range clubDomains {
+		if domain == club || strings.HasSuffix(domain, "."+club) {
+			return true
+		}
+	}
+	return false
+}
 
 // addressMask stands for an address the run emptied.
 const addressMask = "••••••"
 
 // jsonAddresses are the addresses in the strings of a JSON document,
-// lower-cased, a sentence's full stop left out.
+// lower-cased.
 func jsonAddresses(raw []byte) ([]string, error) {
 	var found []string
 	_, _, err := walkJSONStrings(raw, func(s string) string {
-		for _, m := range jsonAddress.FindAllString(s, -1) {
-			found = append(found, strings.ToLower(strings.TrimRight(m, ".")))
+		for _, m := range jsonAddressesIn(s) {
+			found = append(found, strings.ToLower(s[m[0]:m[1]]))
 		}
 		return s
 	})
@@ -1008,13 +1076,22 @@ func maskJSONAddresses(raw []byte, mask map[string]bool) ([]byte, bool, error) {
 		return raw, false, nil
 	}
 	return walkJSONStrings(raw, func(s string) string {
-		return jsonAddress.ReplaceAllStringFunc(s, func(m string) string {
-			address := strings.TrimRight(m, ".")
-			if !mask[strings.ToLower(address)] {
-				return m
+		var out strings.Builder
+		last := 0
+		for _, m := range jsonAddressesIn(s) {
+			address := strings.ToLower(s[m[0]:m[1]])
+			if !mask[address] || clubAddress(address) {
+				continue
 			}
-			return addressMask + m[len(address):]
-		})
+			out.WriteString(s[last:m[0]])
+			out.WriteString(addressMask)
+			last = m[1]
+		}
+		if last == 0 {
+			return s
+		}
+		out.WriteString(s[last:])
+		return out.String()
 	})
 }
 

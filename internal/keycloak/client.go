@@ -301,7 +301,8 @@ type AccountFinder interface {
 var accountAddressAttributes = []string{"schoolEmail", "personalEmail"}
 
 // HasAccount says whether any user, enabled or not, verified or not, has
-// address as their primary e-mail (Keycloak's exact search) or as their
+// address as their primary e-mail or as their username (Keycloak's exact
+// searches; Keycloak's own owner lookup reads the username too) or as their
 // school or personal address (an exact attribute search, with the address
 // as given and lower-cased). Any match is an account: when in doubt a row is
 // kept, never emptied. An error is no answer.
@@ -322,6 +323,9 @@ func (c *clientImpl) HasAccount(ctx context.Context, address string) (bool, erro
 		return len(users) > 0, err
 	}
 	if found, err := one(gocloak.GetUsersParams{Email: &address}); err != nil || found {
+		return found, err
+	}
+	if found, err := one(gocloak.GetUsersParams{Username: &address}); err != nil || found {
 		return found, err
 	}
 	forms := []string{address}

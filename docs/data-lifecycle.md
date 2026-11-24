@@ -316,9 +316,13 @@ run does:
 
 Without an account means all three: the row names no subject
 (`recipient_sub`); no other queue row and no suppression ties the address to
-one; and Keycloak finds no user, enabled or not, whose primary, school or
-personal address it is. A Keycloak that does not answer leaves the row for
-the next run. A member's row is never touched by the run: Account erasure
+one; and Keycloak finds no user, enabled or not, whose primary address,
+username, school or personal address it is. A Keycloak that does not answer
+leaves the row for the next run. The club's own addresses (`yildizskylab.com`,
+`skyl.app` and their subdomains) are not a person's: never asked about,
+emptied or masked. Only a real address counts: an `@` in a link
+(`youtube.com/@…`) or a Mastodon handle (`@kisi@sunucu.tld`) does not; a
+`mailto:` link's address does. A member's row is never touched by the run: Account erasure
 takes it. A row found to be someone's is marked (`account_at`,
 `mail_queue.recipient_account_at`) and not asked about again; a `recipients`
 row forgets it when its address changes. A run asks Keycloak about at most

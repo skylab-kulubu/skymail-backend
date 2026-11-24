@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"sort"
@@ -470,6 +471,100 @@ func TestMaskJSONAddresses(t *testing.T) {
 	found, err := jsonAddresses([]byte(`{"x": "Yaz: A@B.example. ya da c@d.example", "k@e.example": 1}`))
 	if err != nil || strings.Join(found, ",") != "a@b.example,c@d.example" {
 		t.Errorf("addresses %v, %v", found, err)
+	}
+
+	// Links and handles are not addresses: found nowhere, never masked.
+	links := []string{
+		"https://www.youtube.com/@yildizskylab",
+		"https://x.com/@kisi.example",
+		"https://medium.com/@kisi@medium.example",
+		"https://mastodon.social/@kisi@sunucu.example",
+		"Bizi izleyin: @kisi@sunucu.example",
+		"https://ekip@kulup.example/yol",
+		"youtube.com/@kisi",
+	}
+	for _, link := range links {
+		raw, _ := json.Marshal(map[string]string{"v": link})
+		if found, err := jsonAddresses(raw); err != nil || len(found) != 0 {
+			t.Errorf("%q: addresses %v, %v; want none", link, found, err)
+		}
+		everything := map[string]bool{"yildizskylab@www.youtube.com": true, "kisi@sunucu.example": true,
+			"kisi@medium.example": true, "ekip@kulup.example": true, "kisi.example@x.com": true}
+		if _, changed, _ := maskJSONAddresses(raw, everything); changed {
+			t.Errorf("%q was masked", link)
+		}
+	}
+	// An address beside a link, and a mailto: link's address, are.
+	raw := []byte(`{"v": "https://youtube.com/@yildizskylab yaz: konuk@guest.example, mailto:Konuk2@guest.example"}`)
+	if found, _ := jsonAddresses(raw); strings.Join(found, ",") != "konuk@guest.example,konuk2@guest.example" {
+		t.Errorf("addresses beside a link: %v", found)
+	}
+	got, _, _ = maskJSONAddresses(raw, map[string]bool{"konuk@guest.example": true, "konuk2@guest.example": true})
+	if want := `{"v":"https://youtube.com/@yildizskylab yaz: ••••••, mailto:••••••"}`; string(got) != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+	// The club's own addresses are never masked.
+	club := []byte(`{"v": "iletisim@yildizskylab.com, ekip@mail.skyl.app"}`)
+	if _, changed, _ := maskJSONAddresses(club, map[string]bool{"iletisim@yildizskylab.com": true, "ekip@mail.skyl.app": true}); changed {
+		t.Error("a club address was masked")
+	}
+}
+
+// The error text's pattern masks addresses only: not a link's @handle, not
+// the club's own addresses.
+func TestRecipientRetentionErrorPattern(t *testing.T) {
+	s := retentionStore(t)
+	for in, want := range map[string]string{
+		"send failed: 550 <konuk@guest.example> mailbox unavailable": "send failed: 550 <••••••> mailbox unavailable",
+		"RCPT TO:Konuk@Guest.example rejected":                       "RCPT TO:•••••• rejected",
+		"see https://www.youtube.com/@yildizskylab":                  "see https://www.youtube.com/@yildizskylab",
+		"from iletisim@yildizskylab.com to konuk@guest.example":      "from iletisim@yildizskylab.com to ••••••",
+		"ekip@mail.SKYL.app and skyl.app.example@x.example":          "ekip@mail.SKYL.app and ••••••",
+		"smtp_rejected: RCPT TO 550 5.1.1":                           "smtp_rejected: RCPT TO 550 5.1.1",
+	} {
+		var got string
+		if err := s.Conn.QueryRow(context.Background(), `SELECT regexp_replace($1::text, $2::text, '••••••', 'gi')`, in, addressPattern).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("%q: got %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The club's own addresses (yildizskylab.com, skyl.app and their
+// subdomains) are never asked about, emptied or masked: they are kept as
+// someone's, and the send is decided.
+func TestRecipientRetentionKeepsTheClubsOwnAddresses(t *testing.T) {
+	s := retentionStore(t)
+	ctx := context.Background()
+	send := uuid.MustParse("79000000-0000-4000-8000-000000000001")
+	if _, err := s.Conn.Exec(ctx, `
+		INSERT INTO mail_tasks (id, sent_by, template_id, body_variables, created_at, content_cleared_at)
+		VALUES ($1, 'sender', $2, '{}', now() - interval '400 days', now() - interval '35 days')`,
+		send, uuid.MustParse(retentionTemplate)); err != nil {
+		t.Fatal(err)
+	}
+	for _, address := range []string{"Duyuru@YildizSkylab.com", "ekip@mail.skyl.app", "konuk@guest.example"} {
+		if _, err := s.Conn.Exec(ctx, `
+			INSERT INTO mail_queue (task_id, recipient_full_name, recipient_email, subject, body, status)
+			VALUES ($1, 'Kişi', $2, '', '', 'sent')`, send, address); err != nil {
+			t.Fatal(err)
+		}
+	}
+	accounts := &fakeAccounts{answers: map[string]bool{"konuk@guest.example": false}}
+	report := runRecipientRetention(t, s, RecipientRetentionOptions{Mode: RecipientRetentionApply, Accounts: accounts})
+	if got := accounts.askedSorted(); strings.Join(got, ",") != "konuk@guest.example" {
+		t.Errorf("Keycloak asked about %v, want only the guest", got)
+	}
+	if report.Counts.AddressesClub != 2 || report.Counts.QueueRowsCleared != 1 || report.Counts.SendsDecided != 1 || report.Status != "ok" {
+		t.Errorf("status %q counts %+v; want ok, 2 club addresses kept, the guest emptied, the send decided", report.Status, report.Counts)
+	}
+	if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE task_id = $1 AND recipient_email IN ('Duyuru@YildizSkylab.com', 'ekip@mail.skyl.app')`, send); n != 2 {
+		t.Errorf("%d club rows keep their address, want 2", n)
+	}
+	if !clubAddress("a@yildizskylab.com") || !clubAddress("a@x.skyl.app") || clubAddress("a@notyildizskylab.com") || clubAddress("a@skyl.app.example") {
+		t.Error("clubAddress")
 	}
 }
 

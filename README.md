@@ -1581,10 +1581,16 @@ Yusuf, 2026-11-24). Liste arşivi hesapları ve üyeleri etkilemez (Yusuf,
 - **Hesabı olan kişiye dokunulmaz** (ADR-0062: "üyede hesapla birlikte";
   hesap silme siler). Satır yalnız şu üçü birden doğruysa boşalır:
   `recipient_sub` boş; SkyMail adresi hiçbir yerde bir `sub`'a bağlamamış
-  (başka bir kuyruk satırı, bastırma kaydı); Keycloak'ta adresi birincil,
-  okul (`schoolEmail`) ya da kişisel (`personalEmail`) adresi olan
-  hiçbir kullanıcı yok (etkin olmayan ve doğrulanmamış da sayılır; şüphede
-  satır kalır). Keycloak yanıt vermezse adres o koşuda bekler
+  (başka bir kuyruk satırı, bastırma kaydı); Keycloak'ta adresi birincil
+  adresi, kullanıcı adı, okul (`schoolEmail`) ya da kişisel
+  (`personalEmail`) adresi olan hiçbir kullanıcı yok (etkin olmayan ve
+  doğrulanmamış da sayılır; şüphede satır kalır). Kulübün kendi alan
+  adlarındaki adresler (`yildizskylab.com`, `skyl.app` ve alt alanları)
+  kişi verisi değildir: hiç sorulmaz, boşalmaz, maskelenmez
+  (`addresses_club`). Adres sayılan yalnız gerçek adrestir: bağlantı içindeki
+  `@` (`youtube.com/@…`, `x.com/@…`) ve Mastodon tanıtıcısı
+  (`@kisi@sunucu.tld`) adres sayılmaz; `mailto:` bağlantısındaki adres
+  sayılır. Keycloak yanıt vermezse adres o koşuda bekler
   (`addresses_unknown`), ertesi gün yeniden sorulur. Bir koşu en çok 2000
   liste, 2000 gönderim, 2000 istek ve 2000 adres sorar; adresler liste
   liste, gönderim gönderim, istek istek, en eskiden başlayarak sorulur
@@ -1608,7 +1614,8 @@ Yusuf, 2026-11-24). Liste arşivi hesapları ve üyeleri etkilemez (Yusuf,
   `approval_recipients_cleared`, `approval_json_masked`,
   `approvals_decided`, `form_recipients_cleared`, `account_rows_marked`,
   `addresses`,
-  `addresses_tied`, `addresses_with_account`, `addresses_without_account`,
+  `addresses_club`, `addresses_tied`, `addresses_with_account`,
+  `addresses_without_account`,
   `addresses_unknown`, `addresses_deferred`, `failed`. Kişi, adres ya da ad
   yoktur. Aynı sayılar `"event":"recipient_retention_run"` günlük
   satırındadır.

@@ -13,8 +13,8 @@ import (
 )
 
 // Whether an address is someone's account (the recipient retention run): any
-// user, enabled or not, verified or not, whose primary e-mail is the address,
-// or whose school or personal address is. In doubt a row is kept.
+// user, enabled or not, verified or not, whose primary e-mail or username is
+// the address, or whose school or personal address is. In doubt a row is kept.
 func TestHasAccountFindsAnyUserWithTheAddress(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
@@ -29,7 +29,7 @@ func TestHasAccountFindsAnyUserWithTheAddress(t *testing.T) {
 			mu.Lock()
 			fail := failing
 			query := r.URL.Query()
-			searches = append(searches, query.Get("email")+"|"+query.Get("q"))
+			searches = append(searches, query.Get("email")+"|"+query.Get("username")+"|"+query.Get("q"))
 			mu.Unlock()
 			if fail {
 				http.Error(w, "down", http.StatusServiceUnavailable)
@@ -41,6 +41,7 @@ func TestHasAccountFindsAnyUserWithTheAddress(t *testing.T) {
 			found := []any{}
 			switch {
 			case query.Get("email") == "uye@skylab.example",
+				query.Get("username") == "kullanici@std.example",
 				query.Get("q") == "schoolEmail:okul@std.example",
 				query.Get("q") == "personalEmail:kisisel@example.org":
 				found = append(found, map[string]any{"id": ayseID, "enabled": false})
@@ -57,12 +58,13 @@ func TestHasAccountFindsAnyUserWithTheAddress(t *testing.T) {
 	}
 	ctx := context.Background()
 	for address, want := range map[string]bool{
-		"uye@skylab.example":  true,
-		"okul@std.example":    true,
-		"OKUL@std.example":    true, // asked as given and lower-cased
-		"kisisel@example.org": true,
-		"konuk@guest.example": false,
-		"   ":                 false,
+		"uye@skylab.example":    true,
+		"okul@std.example":      true,
+		"kullanici@std.example": true, // the username
+		"OKUL@std.example":      true, // asked as given and lower-cased
+		"kisisel@example.org":   true,
+		"konuk@guest.example":   false,
+		"   ":                   false,
 	} {
 		got, err := finder.HasAccount(ctx, address)
 		if err != nil || got != want {
