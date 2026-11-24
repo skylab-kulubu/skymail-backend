@@ -219,8 +219,8 @@ type Mailer interface {
 	// as they are, none in a sensitive mail. preferences is what
 	// ResolveSystemTracking said about the recipient (one answer for many
 	// notices: Keycloak and core asked once); nil, and it asks itself. It
-	// says whether the recipient is tracked (has a token: not no_account,
-	// not turned off, not unanswered); off, it is EnqueueSingle.
+	// says whether the recipient is tracked (has a token: everyone but whom
+	// core said no for, B9); off, it is EnqueueSingle.
 	EnqueueSystemSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *TrackingPreferences) (uuid.UUID, bool, error)
 	// EnqueueTrackedSingle queues a mail a person sends one person and asks
 	// tracking for (POST /mail_tasks/single with tracking, or any with

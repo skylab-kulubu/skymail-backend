@@ -346,7 +346,7 @@ func main() {
 		SenderSeesRecipients: senderSeesRecipients,
 	})
 	erasureHandler := handlers.NewAccountErasureHandler(db, erasuretoken.NewVerifier(erasureTokenConfig(cfg)), accountAccessGate)
-	withdrawalHandler := handlers.NewTrackingWithdrawalHandler(db, erasuretoken.NewVerifier(withdrawalTokenConfig(cfg)), accountAccessGate)
+	withdrawalHandler := handlers.NewTrackingWithdrawalHandler(erasuretoken.NewVerifier(withdrawalTokenConfig(cfg)), accountAccessGate)
 
 	app := fiber.New(newFiberConfig(vld, trustedProxies))
 

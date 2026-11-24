@@ -27,8 +27,8 @@ import (
 // to people may ask for it, as a list send does. SkyMail knows these people
 // by address; before the send's transaction it asks Keycloak for the one
 // enabled account whose verified primary e-mail is the address, and then
-// core, as for a group's members. No such account: no_account. Keycloak not
-// answering: preference_unavailable, and the send goes on. A service's
+// core, as for a group's members. No such account, or Keycloak not
+// answering: tracked all the same (B9), and the send goes on. A service's
 // single mail — account and transaction mail — is never tracked as asked
 // (only by SKYMAIL_TRACKING_SYSTEM, tracking_system_routes_test.go), nor a
 // System or sensitive template.
@@ -121,7 +121,8 @@ func (w *approvalWorld) sendSingle(send map[string]any) createdSend {
 // A person's single send takes tracking. On, it says tracking true and goes
 // in the bulk lane; the recipient's account is the one Keycloak finds for
 // the address, whatever its case, and core decides as for anyone: Elif is
-// tracked, Başka turned it off, Ayşe has no account. Keycloak and core are
+// tracked, core says no for Başka, Ayşe has no account and is tracked too
+// (B9). Keycloak and core are
 // asked with no transaction open. Off, the field is ignored and no one is
 // asked. Without the field the mail goes in the system lane, untracked.
 func TestAPersonsSingleSendTakesTracking(t *testing.T) {
@@ -134,7 +135,7 @@ func TestAPersonsSingleSendTakesTracking(t *testing.T) {
 		}{
 			{"Elif", strings.ToUpper(elif.email), elif.sub, "", true},
 			{"Başka", baska.email, baska.sub, tracking.SkipPreferenceOff, false},
-			{"Ayşe", ayseKaya.Email, "", tracking.SkipNoAccount, false},
+			{"Ayşe", ayseKaya.Email, "", "", true},
 		} {
 			created := w.sendSingle(w.singleSendTo(c.email, c.name, true))
 			requested, row := w.onlyRow(created.ID)
@@ -180,7 +181,8 @@ func TestAPersonsSingleSendTakesTracking(t *testing.T) {
 	}
 }
 
-// Only an enabled account with the address verified is the recipient's.
+// Only an enabled account with the address verified is the recipient's; an
+// address without one is tracked without an account (B9).
 func TestASingleSendsAccountMustBeEnabledAndVerified(t *testing.T) {
 	w, prefs := accountsWorld(t, true)
 	for _, c := range []struct {
@@ -189,8 +191,8 @@ func TestASingleSendsAccountMustBeEnabledAndVerified(t *testing.T) {
 	}{{"unverified", true, false}, {"disabled", false, true}} {
 		w.account(elif, c.enabled, c.verified)
 		created := w.sendSingle(w.singleSendTo(elif.email, "Elif", true))
-		if _, row := w.onlyRow(created.ID); row.sub != "" || row.token != nil || row.reason != tracking.SkipNoAccount {
-			t.Errorf("%s: row %+v; want no_account", c.name, row)
+		if _, row := w.onlyRow(created.ID); row.sub != "" || len(row.token) != tracking.RecipientTokenBytes || row.reason != "" {
+			t.Errorf("%s: row %+v; want no account and a token", c.name, row)
 		}
 	}
 	if prefs.asked != 0 {
@@ -198,15 +200,15 @@ func TestASingleSendsAccountMustBeEnabledAndVerified(t *testing.T) {
 	}
 }
 
-// Keycloak not answering: the recipient is not tracked
-// (preference_unavailable), core is not asked, the mail goes out all the same.
+// Keycloak not answering: the recipient is tracked without an account (B9),
+// core is not asked, the mail goes out all the same.
 func TestASingleSendGoesOnWhenKeycloakDoesNotAnswer(t *testing.T) {
 	w, prefs := accountsWorld(t, true)
 	w.directory.accountsErr = errors.New("keycloak down")
 	created := w.sendSingle(w.singleSendTo(elif.email, "Elif", true))
 	requested, row := w.onlyRow(created.ID)
-	if !*created.Tracking || !requested || row.sub != "" || row.token != nil || row.reason != tracking.SkipPreferenceUnavailable {
-		t.Errorf("answer %v, requested %v, row %+v; want tracked send, row preference_unavailable", *created.Tracking, requested, row)
+	if !*created.Tracking || !requested || row.sub != "" || len(row.token) != tracking.RecipientTokenBytes || row.reason != "" {
+		t.Errorf("answer %v, requested %v, row %+v; want tracked send, row tracked without an account", *created.Tracking, requested, row)
 	}
 	if prefs.asked != 0 {
 		t.Errorf("core asked %d times", prefs.asked)
@@ -246,7 +248,7 @@ func TestASingleSendThatCannotBeTrackedSaysSo(t *testing.T) {
 // A request for approval to people takes tracking as one to a list does.
 // Approved, each person's send asks for it; Keycloak (each address once)
 // and core are asked before the request is locked. Elif is tracked, Ayşe has
-// no account. A template that says nothing of its content is sensitive for
+// no account and is tracked too (B9). A template that says nothing of its content is sensitive for
 // people: the request says tracking false.
 func TestARequestToPeopleTakesTracking(t *testing.T) {
 	for _, on := range []bool{true, false} {
@@ -268,7 +270,7 @@ func TestARequestToPeopleTakesTracking(t *testing.T) {
 		}
 		want := map[string]sendRow{ayseKaya.Email: {}, elif.email: {}}
 		if on {
-			want = map[string]sendRow{ayseKaya.Email: {reason: tracking.SkipNoAccount}, elif.email: {sub: elif.sub}}
+			want = map[string]sendRow{ayseKaya.Email: {}, elif.email: {sub: elif.sub}}
 		}
 		for _, task := range answer.TaskIDs {
 			requested, rows := w.trackingOf(task)
@@ -277,7 +279,7 @@ func TestARequestToPeopleTakesTracking(t *testing.T) {
 			}
 			for email, row := range rows {
 				tracked := len(row.token) == tracking.RecipientTokenBytes
-				if row.sub != want[email].sub || row.reason != want[email].reason || tracked != (on && email == elif.email) {
+				if row.sub != want[email].sub || row.reason != want[email].reason || tracked != on {
 					t.Errorf("on=%v: %s's row %+v, want %+v", on, email, row, want[email])
 				}
 			}
@@ -306,8 +308,8 @@ func TestARequestToPeopleTakesTracking(t *testing.T) {
 	}
 }
 
-// Keycloak not answering at approval: the people are not tracked
-// (preference_unavailable), the request is sent all the same.
+// Keycloak not answering at approval: the people are tracked without an
+// account (B9), the request is sent all the same.
 func TestARequestToPeopleGoesOnWhenKeycloakDoesNotAnswer(t *testing.T) {
 	w, prefs := accountsWorld(t, true)
 	w.directory.accountsErr = errors.New("keycloak down")
@@ -319,8 +321,8 @@ func TestARequestToPeopleGoesOnWhenKeycloakDoesNotAnswer(t *testing.T) {
 		t.Fatalf("approve = %d %+v %+v", status, answer.TaskIDs, failure)
 	}
 	for _, task := range answer.TaskIDs {
-		if requested, row := w.onlyRow(task); !requested || row.sub != "" || row.token != nil || row.reason != tracking.SkipPreferenceUnavailable {
-			t.Errorf("send %s: %v %+v; want preference_unavailable", task, requested, row)
+		if requested, row := w.onlyRow(task); !requested || row.sub != "" || len(row.token) != tracking.RecipientTokenBytes || row.reason != "" {
+			t.Errorf("send %s: %v %+v; want tracked without an account", task, requested, row)
 		}
 	}
 	if prefs.asked != 0 {
