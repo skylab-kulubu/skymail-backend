@@ -4991,8 +4991,6 @@ type ListMailTaskLinkTargetsRow struct {
 	Url       string `json:"url"`
 }
 
-// The links a tracked row's mail gets its click addresses for when it goes
-// out: the send's links whose address is still kept.
 func (q *Queries) ListMailTaskLinkTargets(ctx context.Context, taskID uuid.UUID) ([]ListMailTaskLinkTargetsRow, error) {
 	rows, err := q.db.Query(ctx, listMailTaskLinkTargets, taskID)
 	if err != nil {
@@ -5925,6 +5923,49 @@ func (q *Queries) ListTemplateVersions(ctx context.Context, arg ListTemplateVers
 			&i.IsCurrent,
 			&i.DiscardedAt,
 			&i.Name,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTrackingLinks = `-- name: ListTrackingLinks :many
+SELECT id, position, url, url_cleared_reason
+FROM mail_task_links
+WHERE task_id = $1
+ORDER BY position
+`
+
+type ListTrackingLinksRow struct {
+	ID               int64   `json:"id"`
+	Position         int16   `json:"position"`
+	Url              *string `json:"url"`
+	UrlClearedReason *string `json:"url_cleared_reason"`
+}
+
+// The links a tracked row's mail gets its click addresses for when it goes
+// out: the send's links whose address is still kept.
+// A send's links as the tracking reports show them: each link's position,
+// its target (null once emptied) and why it was emptied.
+func (q *Queries) ListTrackingLinks(ctx context.Context, taskID uuid.UUID) ([]ListTrackingLinksRow, error) {
+	rows, err := q.db.Query(ctx, listTrackingLinks, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTrackingLinksRow
+	for rows.Next() {
+		var i ListTrackingLinksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Position,
+			&i.Url,
+			&i.UrlClearedReason,
 		); err != nil {
 			return nil, err
 		}

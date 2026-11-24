@@ -1202,6 +1202,14 @@ VALUES ($1, $2, $3, $4);
 
 -- The links a tracked row's mail gets its click addresses for when it goes
 -- out: the send's links whose address is still kept.
+-- A send's links as the tracking reports show them: each link's position,
+-- its target (null once emptied) and why it was emptied.
+-- name: ListTrackingLinks :many
+SELECT id, position, url, url_cleared_reason
+FROM mail_task_links
+WHERE task_id = sqlc.arg(task_id)
+ORDER BY position;
+
 -- name: ListMailTaskLinkTargets :many
 SELECT link_token, url::text AS url
 FROM mail_task_links

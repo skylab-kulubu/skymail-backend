@@ -1872,8 +1872,15 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   (`id`, `position`, `clicks`, `unique_clickers`) ve `series` vardır.
   Seri noktaları UTC'de ilk 72 saat saatlik, sonra günlük; `at`, `interval`,
   `likely_human_opens`, `automated_opens`, `likely_human_clicks`,
-  `automated_clicks` taşır. Boş kovalar yazılmaz. Kimlik ve hedef URL yoktur
-  (tek alıcılı hedef kişiyi adlandırabilir). Son postadan 90 gün sonra
+  `automated_clicks` taşır. Boş kovalar yazılmaz. Kimlik yoktur.
+  `clicks_by_link`'in her bağlantısı hedefini de taşır (Yusuf, 2026-11-24:
+  "her şeyi görelim"): `url` gönderildiği gibi; tek kullanımlık ya da kod
+  taşıyan bağlantıda (sorgu adı sır gibi — token, code, key —, değeri kod,
+  belirteç, adres, IP, 4+ rakam ya da 16+ karakter; yol parçası kod ya da
+  belirteç biçimli ya da 16+ karakter; 8+ karakterlik parça) yalnız şema ve
+  alan adı, gerisi maskeli (`https://alan/••••••`, `url_masked: true`;
+  `mailer.MaskLinkURL`). Boşalmış bağlantıda `url: null` ve
+  `url_cleared_reason` (`expired` 1 yıl, `erased` maske/hesap silme). Son postadan 90 gün sonra
 `retained: true`:
   yalnız kişisiz toplam (10'dan az alıcılıda gönderimden 1 yıl sonra
   silinir), yoksa `report: null`; seri dönmez.
@@ -1917,9 +1924,10 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   `tracking_skip_reason`, `first_open_at`, `first_likely_human_open_at`,
   `likely_human_open_source` (`open|click_inferred|null`), `open_count`,
   `last_clicked_at`, `automated_only`, `source_classes`, `clicked_links`
-  (`link_id`, `clicks`, `last_clicked_at`) içerir. “opened” açılma veya
+  (`link_id`, `position`, `clicks`, `last_clicked_at`, `url`, `url_masked`,
+  `url_cleared_reason`; hedef aynı kuralla maskeli) içerir. “opened” açılma veya
   otomatik olmayan tıklama çıkarımını, “not_opened” ikisinin yokluğunu
-  belirtir; “okumadı” anlamına gelmez. Token/hedef URL dönmez. Gönderimin
+  belirtir; “okumadı” anlamına gelmez. Token dönmez. Gönderimin
   son `sent_at`'ından (teslim yoksa `created_at`) 90 gün sonra 410 döner
   ("Kişi bazında takip kaydı 90 gün sonra silindi.");
   bu tarihten önce de her alıcının kendi 90 günlük pencere dışı olayları

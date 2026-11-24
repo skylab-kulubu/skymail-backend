@@ -437,8 +437,6 @@ type Querier interface {
 	// mailer's own rule (mailer.HasRecipientName), not SQL's idea of white space.
 	ListMailFormSourceRecipientNames(ctx context.Context, sourceID uuid.UUID) ([]string, error)
 	ListMailFormSourceRecipients(ctx context.Context, sourceID uuid.UUID) ([]MailFormSourceRecipient, error)
-	// The links a tracked row's mail gets its click addresses for when it goes
-	// out: the send's links whose address is still kept.
 	ListMailTaskLinkTargets(ctx context.Context, taskID uuid.UUID) ([]ListMailTaskLinkTargetsRow, error)
 	// A send as every screen shows it — the home screen, the send list and a
 	// send's own page: the task, the template it used, who it went to, its status
@@ -504,6 +502,11 @@ type Querier interface {
 	// render. A NULL published lists every version; true only published ones,
 	// false only drafts, discarded ones included.
 	ListTemplateVersions(ctx context.Context, arg ListTemplateVersionsParams) ([]TemplateVersionSummary, error)
+	// The links a tracked row's mail gets its click addresses for when it goes
+	// out: the send's links whose address is still kept.
+	// A send's links as the tracking reports show them: each link's position,
+	// its target (null once emptied) and why it was emptied.
+	ListTrackingLinks(ctx context.Context, taskID uuid.UUID) ([]ListTrackingLinksRow, error)
 	// One aggregate per recipient, then filtering and pagination. Events older
 	// than their recipient's 90-day window (tracking.EventRetentionDays) never
 	// reappear while retention is disabled or catching up. No tracking token or link target is selected.
