@@ -188,14 +188,17 @@ never rewritten but by Account erasure.
 
 ## Personal data
 
-These fields keep a person's identity with no end date, until Account erasure
-takes the person out of them:
+These fields keep a person's identity until Account erasure takes the person
+out of them; for someone without an account, until the recipient retention
+run does (see [Recipients without an account](#recipients-without-an-account)):
 
 - `recipients.full_name` and `email`, and their `mailing_list_recipients` —
-  the people on internal mailing lists.
+  the people on internal mailing lists. A list archived a year ago loses
+  them.
 - `mail_queue.recipient_full_name`, `recipient_email`, `recipient_sub` (the
   recipient's Keycloak subject, when the send knew it: a Keycloak group's
-  member), and `error`, which can quote the address. The mail rendered for them — `subject`, `body`,
+  member), and `error`, which can quote the address. Without an account:
+  emptied once the send's content is (the address in `error` masked). The mail rendered for them — `subject`, `body`,
   `body_html` — is kept only for a while: see
   [Sent mail content](#sent-mail-content). `list_unsubscribe_url`, the
   recipient's one-click unsubscribe link as core signed it (its token names
@@ -254,16 +257,24 @@ takes the person out of them:
   had not verified, which is not kept).
 - `mail_approval_recipients.email` and `full_name` — the people a request
   goes to. A resubmission replaces them; its `resubmitted` event keeps who they
-  were.
+  were. Without an account: emptied in place (`cleared_at`) once the request
+  is over and unchanged for `MAIL_CONTENT_RETENTION_DAYS`.
 - `mail_approvals.body_variables` — the values of the send, which may name or
-  address people.
+  address people. The addresses in it of people without an account are
+  masked once the request is over and unchanged for
+  `MAIL_CONTENT_RETENTION_DAYS`.
 - `mail_approval_events.actor_sub` and `actor_name` — who did each thing to a
   request — `note`, and `changes`, each variable's value, and who a request
-  went to, before and after an edit or a resubmission.
+  went to, before and after an edit or a resubmission. The addresses in
+  `changes` of people without an account are masked as in `body_variables`.
+- `mail_form_source_recipients.email` and `full_name` — the respondents of a
+  Forms snapshot a send or a request was made from. Without an account:
+  emptied in place (`cleared_at`) with the send's or the request's people.
 - Open and click tracking (see [Open and click tracking](#open-and-click-tracking)):
   `mail_queue.tracking_token` (a random token that stands for the row's
   recipient in their mail's pixel and links), `tracking_skip_reason` (why
-  they are not tracked: `preference_off` says they turned it off),
+  they are not tracked: since B9 only core's no or `flag_off`; rows written
+  before may say `preference_off`, they turned it off),
   `tracking_disabled_at`, `sent_at`; `mail_tracking_events` (when the
   recipient's mail was opened and which link they clicked, the client's
   class; no IP address, User-Agent or referrer); `mail_task_links.url`, which
@@ -281,6 +292,43 @@ takes the person out of them:
   through SkyMail's one-click link. `mail_unsubscribe_reactivations.actor_sub`
   and `reason` — who reversed an unsubscribe and why (the address is not
   kept).
+
+## Recipients without an account
+
+ADR-0062: a recipient's row lives with the member's account, and a guest's
+for the guest's time; a manual list's people a year after it was archived
+(hub sector audit 2026-11-24, 06 fix 3; README, "Hesapsız alıcıların
+saklaması"). A guest's time is the send's content time here,
+`MAIL_CONTENT_RETENTION_DAYS` (365 days by default; Yusuf, 2026-11-24). A
+list's archive does not touch accounts or members (Yusuf, 2026-11-24): a year
+on, only the memberships of people without an account go. The recipient retention run (`SKYMAIL_RECIPIENT_RETENTION`,
+`dry-run` by default) runs daily under an advisory lock, one transaction per
+list, send or request, with a brake and a receipt, as the tracking retention
+run does:
+
+| What | Kept | Then |
+|---|---|---|
+| `mailing_list_recipients` of a person without an account on a manual list archived ≥ 1 year ago, and their `recipients` row when no other list holds it | one year from `mailing_lists.archived_at` | deleted; a person with an account, or one Keycloak did not answer for, stays on the list |
+| `mail_queue.recipient_email`, `recipient_full_name` of a recipient without an account | while the send's content is kept (`MAIL_CONTENT_RETENTION_DAYS`) | emptied once the content sweep emptied the send (`content_cleared_at`); an address in `error` is masked, its codes stay; the row and the send's counts stay. A News send's row keeps its address: it is the record's "bir kez" guard (`idx_mail_queue_news_once`), and core's audience is accounts |
+| `mail_form_source_recipients.email`, `full_name` of a respondent without an account | as the send or the request made from the snapshot | emptied in place (`cleared_at`): the snapshot's count stays |
+| `mail_approval_recipients.email`, `full_name` of a person without an account | while the request is going or for `MAIL_CONTENT_RETENTION_DAYS` after it last changed, and while a send of it keeps its content | emptied in place (`cleared_at`): its position, and so `task_ids[i]`, stays |
+| addresses of people without an account in `mail_approvals.body_variables` and `mail_approval_events.changes` | as the request's people | masked (`••••••`); a recipient's name beside its masked address in `changes` is emptied; the request and its events stay |
+| `recipient_retention_runs` | without end: one row per run, counts and times only | — |
+
+Without an account means all three: the row names no subject
+(`recipient_sub`); no other queue row and no suppression ties the address to
+one; and Keycloak finds no user, enabled or not, whose primary address,
+username, school or personal address it is. A Keycloak that does not answer
+leaves the row for the next run. The club's own addresses (`yildizskylab.com`,
+`skyl.app` and their subdomains) are not a person's: never asked about,
+emptied or masked. Only a real address counts: an `@` in a link
+(`youtube.com/@…`) or a Mastodon handle (`@kisi@sunucu.tld`) does not; a
+`mailto:` link's address does. A member's row is never touched by the run: Account erasure
+takes it. A row found to be someone's is marked (`account_at`,
+`mail_queue.recipient_account_at`) and not asked about again; a `recipients`
+row forgets it when its address changes. A run asks Keycloak about at most
+2000 addresses, list by list, send by send and request by request, the oldest
+first; what it finds stays on the rows, so the next run reaches new ones.
 
 ## Bounces and suppression
 
@@ -351,16 +399,16 @@ Off unless `SKYMAIL_TRACKING=on` (hub ticket iletisim-servisi 14; design note
 | `mail_queue.tracking_token` | 90 days from `sent_at`, then dropped (NULL; `tracking_disabled_at` says when): nothing ties the addresses of the recipient's old mail to them, and the links still redirect by their own token | dropped by the retention run, and at once on withdrawal and Account erasure |
 | `mail_queue.tracking_skip_reason`, `tracking_disabled_at`, `sent_at` | with the row | — |
 | `mail_tracking_events` | **90 days** from the recipient's `sent_at` (`tracking.EventRetentionDays` = 90; KVKK notice s6, 2026-10-23, replacing Yusuf's 2026-10-19 year). Past it no event is written or shown, and once the run has deleted them nothing ties an opening or a click to a person (no IP address is ever read) | deleted by the retention run; withdrawal (core, my.) and Account erasure delete the person's at once |
-| `mail_task_tracking_totals` | every send's counts without people (KVKK notice s6): without end with ≥10 tracked recipients (T4); with fewer, one year from the send's `created_at`, as its content; written by the retention run, from all the send's events, before the first of them goes | the retention run deletes a send's counts of fewer than 10 a year on; the reports show them only to who may read the send's people |
+| `mail_task_tracking_totals` | every send's counts without people (KVKK notice s6): without end with ≥10 tracked recipients (T4); with fewer, one year from the send's `created_at`, as its content; written by the retention run, from all the send's events, before the first of them goes | the retention run deletes a send's counts of fewer than 10 a year on; the reports show them to anyone with `skymail:mails:read` (Yusuf, 2026-11-24, K6), a system-lane send's only to who may read its people |
 | `mail_task_links.url` | one year from the link's `created_at` (T3) | emptied by the retention run (`url_cleared_reason` `expired`); a send masked or sensitive since it went out (review D7) and Account erasure of a person it names: emptied (`erased`) |
 | `tracking_retention_runs` | without end: one row per run, counts and times only | — |
 
-**Withdrawal** (`PUT /internal/v1/tracking-withdrawals/{sub}`, core, when
-the person turns tracking off on my.): every token of mail to the subject
-is dropped (NULL, `tracking_disabled_at` set), sent or still queued, and
-their events are deleted, in one
-transaction that locks their tracked queue rows first. Links stay and still
-redirect; counts without people already kept stay. Idempotent, `204`.
+**Withdrawal** (`PUT /internal/v1/tracking-withdrawals/{sub}`): since B9
+(ADR-0074 addendum of 2026-11-24, every mail is tracked) the route answers
+`204` for one release and changes nothing. Before B9, core called it when
+the person turned tracking off on my.: every token of mail to the subject
+was dropped (NULL, `tracking_disabled_at` set), sent or still queued, and
+their events were deleted. Rows closed that way stay as they are.
 
 **Retention** (`SKYMAIL_TRACKING_RETENTION` = `off` | `dry-run` | `apply` |
 `purge`; README, "Saklama"): daily, under an advisory lock, one transaction

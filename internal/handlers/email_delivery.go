@@ -50,8 +50,8 @@ func NewEmailDeliveryHandler(db *database.Store) EmailDeliveryHandler {
 //	@Tags			Inbox
 //	@Produce		json
 //	@Success		200	{object}	handlers.EmailDelivery
-//	@Failure		401	{object}	apperrors.AppError	"server.unauthorized: no live token, or one not issued for SkyMail"
-//	@Failure		403	{object}	apperrors.AppError	"auth.person_required: a service's token"
+//	@Failure		401	{object}	apperrors.Problem	"server.unauthorized: no live token, or one not issued for SkyMail"
+//	@Failure		403	{object}	apperrors.Problem	"auth.person_required: a service's token"
 //	@Router			/me/email-delivery [get]
 func (h *emailDeliveryHandlerImpl) Get(c fiber.Ctx) error {
 	me, err := owner(c)

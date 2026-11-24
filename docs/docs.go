@@ -8,9 +8,17 @@ const docTemplate = `{
     "schemes": {{ marshal .Schemes }},
     "components": {
         "schemas": {
-            "apperrors.AppError": {
+            "apperrors.Problem": {
                 "properties": {
                     "code": {
+                        "type": "string"
+                    },
+                    "detail": {
+                        "description": "Detail is the message, for a person.",
+                        "type": "string"
+                    },
+                    "instance": {
+                        "description": "Instance is the request's path, without its query.",
                         "type": "string"
                     },
                     "message": {
@@ -19,6 +27,17 @@ const docTemplate = `{
                     "params": {
                         "additionalProperties": {},
                         "type": "object"
+                    },
+                    "status": {
+                        "type": "integer"
+                    },
+                    "title": {
+                        "description": "Title is the status's reason phrase (§4.2.1).",
+                        "type": "string"
+                    },
+                    "type": {
+                        "description": "Type is about:blank: the problem is what the status says (§4.2.1);\nwhat SkyMail means is code.",
+                        "type": "string"
                     }
                 },
                 "type": "object"
@@ -938,7 +957,7 @@ const docTemplate = `{
                         "$ref": "#/components/schemas/handlers.MailApprovalTracking"
                     },
                     "tracking_withheld": {
-                        "description": "Its sends were tracked, but their counts tell of people (fewer than 10 tracked recipients, or the system lane) and the caller may not read the sends' people: tracking is null.",
+                        "description": "Its sends were tracked, but their counts tell of people (the system lane) and the caller may not read the sends' people: tracking is null.",
                         "type": "boolean"
                     }
                 },
@@ -2289,6 +2308,12 @@ const docTemplate = `{
                     },
                     "unique_clickers": {
                         "type": "integer"
+                    },
+                    "url": {
+                        "type": "string"
+                    },
+                    "url_cleared_reason": {
+                        "type": "string"
                     }
                 },
                 "type": "object"
@@ -2406,6 +2431,15 @@ const docTemplate = `{
                     },
                     "link_id": {
                         "type": "integer"
+                    },
+                    "position": {
+                        "type": "integer"
+                    },
+                    "url": {
+                        "type": "string"
+                    },
+                    "url_cleared_reason": {
+                        "type": "string"
                     }
                 },
                 "type": "object"
@@ -2638,7 +2672,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Open and click tracking: each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links. Ignored (and answered false) while SkyMail's tracking is off and for a System or sensitive template, which are never tracked; a mailing list's address-only recipients are not tracked (no_account).",
+                        "description": "Open and click tracking: each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links. Ignored (and answered false) while SkyMail's tracking is off and for a System or sensitive template, which are never tracked; a mailing list's address-only recipients are tracked too.",
                         "type": "boolean"
                     },
                     "transactional_statement": {
@@ -3188,7 +3222,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Open and click tracking for a mail a person sends (the compose form's people). Ignored (and answered false) while SkyMail's tracking is off, and for a System template or a sensitive one (a template that says nothing counts as sensitive for one person). A service's token (account and transaction mail) does not ask: the field is ignored, and its mail is tracked only while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM), in the system lane, with no click address on a link a variable fills and none at all in a sensitive mail. The recipient's account is looked up in Keycloak by address before the send is queued: the one enabled user whose primary e-mail equals it (case-insensitively) and is verified; none such is no_account, Keycloak not answering is preference_unavailable, and core decides for the account found.",
+                        "description": "Open and click tracking for a mail a person sends (the compose form's people). Ignored (and answered false) while SkyMail's tracking is off, and for a System template or a sensitive one (a template that says nothing counts as sensitive for one person). A service's token (account and transaction mail) does not ask: the field is ignored, and its mail is tracked only while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM), in the system lane, with no click address on a link a variable fills and none at all in a sensitive mail. The recipient's account is looked up in Keycloak by address before the send is queued: the one enabled user whose primary e-mail equals it (case-insensitively) and is verified; none such, or Keycloak not answering, is tracked without an account, and core decides for the account found (it says no only for an inactive account or while its brake is on).",
                         "type": "boolean"
                     },
                     "transactional_statement": {
@@ -3270,7 +3304,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Open and click tracking for the send once approved (as POST /mail_tasks takes it). Ignored (and kept false) while SkyMail's tracking is off, for a System or sensitive template (to people, a template that says nothing counts as sensitive) and for a Forms source. People named here are looked up in Keycloak by address when the request is sent, as POST /mail_tasks/single does: one enabled account with that verified primary e-mail, or no_account.",
+                        "description": "Open and click tracking for the send once approved (as POST /mail_tasks takes it). Ignored (and kept false) while SkyMail's tracking is off, for a System or sensitive template (to people, a template that says nothing counts as sensitive) and for a Forms source. People named here are looked up in Keycloak by address when the request is sent, as POST /mail_tasks/single does: one enabled account with that verified primary e-mail; an address without one is tracked too.",
                         "type": "boolean"
                     },
                     "transactional_statement": {
@@ -3441,7 +3475,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3451,7 +3485,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3471,7 +3505,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3513,7 +3547,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3523,7 +3557,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3533,7 +3567,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3617,7 +3651,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3627,7 +3661,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3637,7 +3671,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3696,7 +3730,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3706,7 +3740,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3716,7 +3750,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3726,7 +3760,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3736,7 +3770,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3746,7 +3780,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3756,7 +3790,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3771,7 +3805,7 @@ const docTemplate = `{
         },
         "/mail_approvals/{id}": {
             "get": {
-                "description": "A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. An approved request has result: how its sends went, in totals only (sent, skipped, failed, pending; tracking, the opens and clicks of its tracked sends summed, null and tracking_withheld true when the sum, or the sends of fewer than 10 tracked recipients among others, would tell of people and the caller may not read the sends' people, by GET /mail_tasks/{id}/tracking's rule), with no person in it and one total for a request to people, never a row per send; it needs no skymail:mails:read. Any other request has none. Reading the result never fails the read: totals not read in time leave the answer without result, opens and clicks not read in time leave tracking null with tracking_withheld false. preview_recipient is whose mail the preview is: the first of its people, or for a list the submitter, as if they were on it; it is given also when the preview does not render. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.",
+                "description": "A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. An approved request has result: how its sends went, in totals only (sent, skipped, failed, pending; tracking, the opens and clicks of its tracked sends summed, null and tracking_withheld true when a send is mail the system sends and the caller may not read the sends' people, by GET /mail_tasks/{id}/tracking's rule; shown whatever the number of tracked recipients), with no person in it and one total for a request to people, never a row per send; it needs no skymail:mails:read. Any other request has none. Reading the result never fails the read: totals not read in time leave the answer without result, opens and clicks not read in time leave tracking null with tracking_withheld false. preview_recipient is whose mail the preview is: the first of its people, or for a list the submitter, as if they were on it; it is given also when the preview does not render. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.",
                 "parameters": [
                     {
                         "description": "Request ID",
@@ -3798,7 +3832,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3808,7 +3842,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3818,7 +3852,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3860,7 +3894,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3870,7 +3904,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3880,7 +3914,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3890,7 +3924,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3951,7 +3985,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3961,7 +3995,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3971,7 +4005,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3981,7 +4015,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -3991,7 +4025,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4001,7 +4035,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4011,7 +4045,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4072,7 +4106,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4082,7 +4116,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4092,7 +4126,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4102,7 +4136,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4112,7 +4146,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4174,7 +4208,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4184,7 +4218,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4194,7 +4228,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4204,7 +4238,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4214,7 +4248,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4276,7 +4310,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4286,7 +4320,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4296,7 +4330,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4306,7 +4340,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4316,7 +4350,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4326,7 +4360,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4388,7 +4422,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4398,7 +4432,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4408,7 +4442,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4418,7 +4452,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4428,7 +4462,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4438,7 +4472,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4511,7 +4545,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4521,7 +4555,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4531,7 +4565,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4580,7 +4614,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4590,7 +4624,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4600,7 +4634,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4610,7 +4644,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4625,7 +4659,7 @@ const docTemplate = `{
         },
         "/mail_tasks/form-source": {
             "post": {
-                "description": "The source owner holding current skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is no_account) and core deciding, and the answer says tracking true. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, \"Gönderim amacı ve kategori\"): duyuru with a category by default; islem with transactional_statement true when the mail is about each respondent's own application: tracked as any Forms source send, queued in the bulk lane, sent from bilgi@ without List-Unsubscribe. The purpose is part of an exact retry.",
+                "description": "The source owner holding current skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is tracked without an account) and core deciding, and the answer says tracking true. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, \"Gönderim amacı ve kategori\"): duyuru with a category by default; islem with transactional_statement true when the mail is about each respondent's own application: tracked as any Forms source send, queued in the bulk lane, sent from bilgi@ without List-Unsubscribe. The purpose is part of an exact retry.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -4664,7 +4698,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4674,7 +4708,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4684,7 +4718,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4694,7 +4728,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4704,7 +4738,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4714,7 +4748,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4724,7 +4758,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4739,7 +4773,7 @@ const docTemplate = `{
         },
         "/mail_tasks/single": {
             "post": {
-                "description": "Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is no_account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, \"Gönderim amacı ve kategori\"): a person's send may be islem (with transactional_statement true; bilgi@; tracked as any person's send, in the bulk lane then, else the system lane) or duyuru with a category (the bulk lane, duyuru@); without a purpose, duyuru, club:duyuru, tracked or not. A service's token is always islem; its fields are ignored. A service's mail with erase_after_send keeps no record of its recipient: never tracked, in the system lane, its row erased when its outcome is written (recipient Silinmiş kullanıcı, no address, no content, no variables); the answer says erase_after_send true. A service may send an Idempotency-Key (optional; a person's token may not): the same key from the same service answers the first answer again (Idempotent-Replayed: true) and queues nothing, for 72 hours; a different request with it is 422. Without it a retry queues the mail again. A service's mail may carry Mail attachments (ADR 0082; README \"Posta eki\"): at most 2, application/pdf or image/png, 512 KB decoded in all, standard base64; the file name is reduced to [A-Za-z0-9._-], at most 100 characters, with the type's extension. The files go with the e-mail (SMTP multipart/mixed; Graph fileAttachment) and are kept only until the row's outcome is written; the queue then shows their name, type and size. They are not part of the Idempotency-Key's digest: a retry with a file drawn again answers the first answer and writes no file. The answer's attachments says how many went with the mail.",
+                "description": "Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is tracked without an account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, \"Gönderim amacı ve kategori\"): a person's send may be islem (with transactional_statement true; bilgi@; tracked as any person's send, in the bulk lane then, else the system lane) or duyuru with a category (the bulk lane, duyuru@); without a purpose, duyuru, club:duyuru, tracked or not. A service's token is always islem; its fields are ignored. A service's mail with erase_after_send keeps no record of its recipient: never tracked, in the system lane, its row erased when its outcome is written (recipient Silinmiş kullanıcı, no address, no content, no variables); the answer says erase_after_send true. A service may send an Idempotency-Key (optional; a person's token may not): the same key from the same service answers the first answer again (Idempotent-Replayed: true) and queues nothing, for 72 hours; a different request with it is 422. Without it a retry queues the mail again. A service's mail may carry Mail attachments (ADR 0082; README \"Posta eki\"): at most 2, application/pdf or image/png, 512 KB decoded in all, standard base64; the file name is reduced to [A-Za-z0-9._-], at most 100 characters, with the type's extension. The files go with the e-mail (SMTP multipart/mixed; Graph fileAttachment) and are kept only until the row's outcome is written; the queue then shows their name, type and size. They are not part of the Idempotency-Key's digest: a retry with a file drawn again answers the first answer and writes no file. The answer's attachments says how many went with the mail.",
                 "parameters": [
                     {
                         "description": "A service's own key for this mail: 1 to 255 visible ASCII characters, the same on every retry; it names the record (a ticket, a response), never an address, a name or a person's subject",
@@ -4793,7 +4827,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4803,7 +4837,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4813,7 +4847,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4823,7 +4857,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4874,7 +4908,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4884,7 +4918,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4894,7 +4928,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4925,7 +4959,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4967,7 +5001,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4977,7 +5011,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4987,7 +5021,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -4997,7 +5031,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5039,7 +5073,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5049,7 +5083,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5059,7 +5093,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5128,7 +5162,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5138,7 +5172,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5148,7 +5182,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5158,7 +5192,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5200,7 +5234,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5210,7 +5244,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5220,7 +5254,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5303,7 +5337,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5313,7 +5347,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5323,7 +5357,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5374,7 +5408,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5384,7 +5418,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5394,7 +5428,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5404,7 +5438,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5446,7 +5480,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5456,7 +5490,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5466,7 +5500,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5481,7 +5515,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/tracking": {
             "get": {
-                "description": "Requires skymail:mails:read. No identities, link tokens or target URLs. After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts tell of people when it has fewer than 10 tracked recipients (tracking.TotalsMinRecipients) or is mail the system sends (the system lane): then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read; the send's own sender outside the system lane only while SKYMAIL_SENDER_SEES_RECIPIENTS=on) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4). recipients_readable says whether the caller may read the send's people.",
+                "description": "Requires skymail:mails:read. No identities or link tokens. Each link of clicks_by_link has its full target, url: as sent, one-time links and codes included (nothing masked); null once the link was emptied (url_cleared_reason expired or erased). After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts are shown to anyone with skymail:mails:read whatever its number of tracked recipients (Yusuf, 2026-11-24, K6); only mail the system sends (the system lane) tells of people: then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read; the send's own sender outside the system lane only while SKYMAIL_SENDER_SEES_RECIPIENTS=on) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4). recipients_readable says whether the caller may read the send's people.",
                 "parameters": [
                     {
                         "description": "Mail task ID",
@@ -5508,7 +5542,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5518,7 +5552,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5533,7 +5567,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/tracking/recipients": {
             "get": {
-                "description": "Requires skymail:mails:tracking:read. The send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role) reads it only while SKYMAIL_SENDER_SEES_RECIPIENTS=on; off, the default, the sender gets 403 and reads the counts (GET /mail_tasks/{id}/tracking). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 90 days after the last mail went out, even if retention has not run. Does not return tracking tokens or target URLs.",
+                "description": "Requires skymail:mails:tracking:read. The send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role) reads it only while SKYMAIL_SENDER_SEES_RECIPIENTS=on; off, the default, the sender gets 403 and reads the counts (GET /mail_tasks/{id}/tracking). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 90 days after the last mail went out, even if retention has not run. Does not return tracking tokens. Each clicked link has its position and full target url, as sent (nothing masked).",
                 "parameters": [
                     {
                         "description": "Mail task ID",
@@ -5584,7 +5618,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5594,7 +5628,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5604,7 +5638,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5670,7 +5704,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5680,7 +5714,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5729,7 +5763,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5739,7 +5773,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5774,7 +5808,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5784,7 +5818,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5794,7 +5828,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5834,7 +5868,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5844,7 +5878,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5854,7 +5888,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5914,7 +5948,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5924,7 +5958,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5934,7 +5968,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -5995,7 +6029,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6005,7 +6039,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6015,7 +6049,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6075,7 +6109,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6085,7 +6119,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6129,7 +6163,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6139,7 +6173,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6181,7 +6215,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6191,7 +6225,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6222,7 +6256,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6232,7 +6266,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6291,7 +6325,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6301,7 +6335,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6311,7 +6345,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6342,7 +6376,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6352,7 +6386,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6383,7 +6417,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6393,7 +6427,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6424,7 +6458,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6434,7 +6468,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6476,7 +6510,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6486,7 +6520,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6496,7 +6530,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6538,7 +6572,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6548,7 +6582,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6558,7 +6592,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6600,7 +6634,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6610,7 +6644,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6620,7 +6654,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6662,7 +6696,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6672,7 +6706,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6682,7 +6716,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6713,7 +6747,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6723,7 +6757,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6733,7 +6767,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6743,7 +6777,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6794,7 +6828,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6804,7 +6838,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6814,7 +6848,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6824,7 +6858,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6834,7 +6868,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6844,7 +6878,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6875,7 +6909,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6926,7 +6960,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6936,7 +6970,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6946,7 +6980,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6956,7 +6990,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -6966,7 +7000,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7017,7 +7051,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7027,7 +7061,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7037,7 +7071,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7047,7 +7081,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7057,7 +7091,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7108,7 +7142,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7118,7 +7152,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7128,7 +7162,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7138,7 +7172,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7148,7 +7182,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7158,7 +7192,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7192,7 +7226,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7233,7 +7267,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7243,7 +7277,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7303,7 +7337,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7313,7 +7347,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7383,7 +7417,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7393,7 +7427,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7403,7 +7437,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7413,7 +7447,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7423,7 +7457,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7503,7 +7537,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7513,7 +7547,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7523,7 +7557,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7564,7 +7598,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7574,7 +7608,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7584,7 +7618,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7644,7 +7678,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7654,7 +7688,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7722,7 +7756,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7732,7 +7766,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7742,7 +7776,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7777,7 +7811,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7787,7 +7821,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7797,7 +7831,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7807,7 +7841,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7817,7 +7851,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7872,7 +7906,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7882,7 +7916,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7892,7 +7926,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7902,7 +7936,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7912,7 +7946,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7978,7 +8012,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -7988,7 +8022,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8037,7 +8071,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8047,7 +8081,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8057,7 +8091,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8099,7 +8133,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8167,7 +8201,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8177,7 +8211,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8187,7 +8221,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8197,7 +8231,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8207,7 +8241,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8242,7 +8276,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8252,7 +8286,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8262,7 +8296,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8302,7 +8336,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8312,7 +8346,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8322,7 +8356,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8382,7 +8416,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8392,7 +8426,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8402,7 +8436,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8412,7 +8446,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8422,7 +8456,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8484,7 +8518,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8494,7 +8528,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8504,7 +8538,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8514,7 +8548,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8524,7 +8558,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8593,7 +8627,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8603,7 +8637,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8675,7 +8709,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8685,7 +8719,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8695,7 +8729,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8705,7 +8739,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8715,7 +8749,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8777,7 +8811,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8787,7 +8821,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8797,7 +8831,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8807,7 +8841,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8817,7 +8851,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8868,7 +8902,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8878,7 +8912,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8888,7 +8922,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8898,7 +8932,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8908,7 +8942,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8950,7 +8984,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -8960,7 +8994,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9043,7 +9077,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9053,7 +9087,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9063,7 +9097,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9073,7 +9107,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9124,7 +9158,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9134,7 +9168,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9144,7 +9178,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9195,7 +9229,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9205,7 +9239,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9215,7 +9249,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9225,7 +9259,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9295,7 +9329,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9305,7 +9339,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9315,7 +9349,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9325,7 +9359,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9335,7 +9369,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9345,7 +9379,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9406,7 +9440,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9416,7 +9450,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9426,7 +9460,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },
@@ -9436,7 +9470,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/apperrors.AppError"
+                                    "$ref": "#/components/schemas/apperrors.Problem"
                                 }
                             }
                         },

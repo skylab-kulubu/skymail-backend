@@ -17,9 +17,9 @@ import (
 // without skymail:mails:read (hub ticket ekip-postasi 09): sent, skipped,
 // failed and pending over every send, one total for a request to people, and
 // no person in it. Opens and clicks follow GET /mail_tasks/{id}/tracking's
-// rule (ADR-0074 decision 9, addendum 2026-11-08): fewer than 10 tracked are
-// withheld from the submitter and an approver alike, not from the tracking
-// role. A request that went nowhere has no result; who may read a request is
+// rule (ADR-0074 decision 9, addendum 2026-11-08): shown whatever the number
+// of tracked recipients (Yusuf, 2026-11-24, K6), to the submitter, an approver
+// and the tracking role alike. A request that went nowhere has no result; who may read a request is
 // unchanged.
 func TestAnApprovedRequestTellsHowItWentInTotalsOnly(t *testing.T) {
 	w := newApprovalWorld(t)
@@ -112,15 +112,15 @@ func TestAnApprovedRequestTellsHowItWentInTotalsOnly(t *testing.T) {
 		t.Errorf("another member reads the request: %d, want 404", status)
 	}
 
-	// Tracked, four people: their counts tell of them. The submitter and an
-	// approver without the tracking role get them withheld; the role reads them.
+	// Tracked, four people: the submitter, an approver without the tracking
+	// role and the role all read the counts.
 	if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_tasks SET tracking_requested = true WHERE id = ANY($1)`, approved.TaskIDs); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_queue SET tracking_token = decode(md5(id::text), 'hex'), sent_at = now() WHERE task_id = ANY($1)`, approved.TaskIDs); err != nil {
 		t.Fatal(err)
 	}
-	for who, withheld := range map[string]bool{"elif": true, "fatih": true, "takip_onayci": false} {
+	for who, withheld := range map[string]bool{"elif": false, "fatih": false, "takip_onayci": false} {
 		raw, got := read(who, request.ID)
 		if got == nil || got.TrackingWithheld != withheld || (got.Tracking == nil) != withheld ||
 			(!withheld && got.Tracking.TrackedRecipients != len(people)) {

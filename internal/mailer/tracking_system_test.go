@@ -200,8 +200,8 @@ func TestSystemTrackingIsOffUnlessBothFlagsAreOn(t *testing.T) {
 // On, a service's single mail stays in the system lane and is tracked like a
 // person's: the recipient's account is the one Keycloak finds for the
 // address, core decides, and both are asked before the send's transaction.
-// Ayşe is tracked, Mehmet turned it off, an address with no account is
-// no_account. A System template, and one whose key is locked sensitive, are
+// Ayşe is tracked, core says no for Mehmet, an address with no account is
+// tracked too (B9). A System template, and one whose key is locked sensitive, are
 // tracked as well. EnqueueSystemSingle says tracked only for the recipient
 // who got a token: the send is tracked (tracking_requested) for all three.
 func TestAServicesSingleMailIsTrackedWithSystemTrackingOn(t *testing.T) {
@@ -220,7 +220,7 @@ func TestAServicesSingleMailIsTrackedWithSystemTrackingOn(t *testing.T) {
 	}{
 		{"AYSE@example.com", "", &ayse, true},
 		{"mehmet@example.com", tracking.SkipPreferenceOff, &mehmet, false},
-		{"hesapsiz@example.com", tracking.SkipNoAccount, nil, false},
+		{"hesapsiz@example.com", "", nil, true},
 	} {
 		for _, template := range []uuid.UUID{formsReplyTemplate, resetPasswordTemplate} {
 			variables := formsVariables()
@@ -397,10 +397,12 @@ func TestASystemSendToManyTracksAsCoreSays(t *testing.T) {
 		if len(rows["ayse@example.com"].token) != tracking.RecipientTokenBytes {
 			t.Errorf("lane %d: Ayşe not tracked: %+v", lane, rows["ayse@example.com"])
 		}
+		if len(rows["adres@example.com"].token) != tracking.RecipientTokenBytes {
+			t.Errorf("lane %d: the member without an id not tracked: %+v", lane, rows["adres@example.com"])
+		}
 		for email, reason := range map[string]string{
 			"mehmet@example.com": tracking.SkipPreferenceOff,
 			"zeynep@example.com": tracking.SkipNotMember,
-			"adres@example.com":  tracking.SkipNoAccount,
 		} {
 			if rows[email].token != nil || rows[email].reason != reason {
 				t.Errorf("lane %d, %s: token %x, reason %q; want %q", lane, email, rows[email].token, rows[email].reason, reason)
@@ -430,7 +432,7 @@ func TestASystemSendToManyTracksAsCoreSays(t *testing.T) {
 
 // Someone waits for a login code: Keycloak and core together get 2 seconds.
 // A Keycloak or a core that does not answer in time leaves the person
-// untracked (preference_unavailable), and the mail goes out.
+// tracked (B9), and the mail goes out.
 func TestAServicesMailGivesTrackingTwoSeconds(t *testing.T) {
 	captureMailerLogs(t)
 	db := systemQueue(t)
@@ -453,8 +455,8 @@ func TestAServicesMailGivesTrackingTwoSeconds(t *testing.T) {
 			t.Errorf("%s: the mail waited %v to be queued", c.name, waited)
 		}
 		row := trackedRows(t, db, task)["ayse@example.com"]
-		if tracked || !trackingRequested(t, db, task) || row.token != nil || row.reason != tracking.SkipPreferenceUnavailable || row.status != "pending" {
-			t.Errorf("%s: tracked %v, %s, token %x, reason %q; want pending, untracked, preference_unavailable", c.name, tracked, row.status, row.token, row.reason)
+		if !tracked || !trackingRequested(t, db, task) || len(row.token) != tracking.RecipientTokenBytes || row.reason != "" || row.status != "pending" {
+			t.Errorf("%s: tracked %v, %s, token %x, reason %q; want pending, tracked", c.name, tracked, row.status, row.token, row.reason)
 		}
 		if core, ok := c.core.(*slowCore); ok && (!core.deadline || core.budget > 2*time.Second) {
 			t.Errorf("core was given %s, want at most 2 seconds", core.budget)

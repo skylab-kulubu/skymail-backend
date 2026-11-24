@@ -15,7 +15,11 @@ import (
 )
 
 // Why a row of a send that asked for tracking is not tracked
-// (mail_queue.tracking_skip_reason).
+// (mail_queue.tracking_skip_reason). Since B9 (ADR-0074 addendum of
+// 2026-11-24, every mail is tracked) only flag_off and core's no are
+// written: no_account and preference_unavailable stay for the rows written
+// before, and core no longer says preference_off or not_member (its brake,
+// tracking_off, is not_allowed here).
 const (
 	// SkipFlagOff: the row was queued tracked, and SKYMAIL_TRACKING was off
 	// when it went out; it went out clean and its token is closed.
@@ -82,9 +86,9 @@ const (
 	maxResolveAnswer = 1 << 20
 )
 
-// CoreClient asks core's tracking:resolve whom it lets be tracked: its
-// account is enabled, it is a Member, and its communication preference (the
-// account center's setting, opt-out by default, T1) does not say no. It sends
+// CoreClient asks core's tracking:resolve whom it lets be tracked: since B9
+// every active account unless core's brake is on (core's
+// COMMUNICATION_TRACKING_MODE=opt_in). It sends
 // SkyMail's service account token; core checks its audience and its core
 // client role communication-preferences:read (ticket 17).
 type CoreClient struct {
