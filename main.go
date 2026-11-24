@@ -181,6 +181,17 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid open and click tracking retention configuration")
 	}
+	// The retention of recipients without an account: dry-run unless
+	// SKYMAIL_RECIPIENT_RETENTION says off or apply (README, "Hesapsız
+	// alıcıların saklaması").
+	recipientRetention, err := database.RecipientRetentionModeFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid recipient retention configuration")
+	}
+	recipientRetentionMaxRows, err := database.RecipientRetentionMaxRowsFromEnv(config.Value)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid recipient retention configuration")
+	}
 	// SkyMail's own one-click unsubscribe link: off unless
 	// SKYMAIL_UNSUBSCRIBE_LINK=on; its key ring (README, "Tek tık çıkış ucu").
 	unsubscribeConfig, err := unsubscribe.ConfigFromEnv(config.Value)
@@ -270,6 +281,8 @@ func main() {
 		Msg("a send's own sender reads its people (SKYMAIL_SENDER_SEES_RECIPIENTS; off: the counts only)")
 	log.Info().Str("mode", string(trackingRetention)).Int("event_retention_days", tracking.EventRetentionDays).Int64("max_rows", trackingRetentionMaxRows).
 		Msg("open and click tracking retention (SKYMAIL_TRACKING_RETENTION)")
+	log.Info().Str("mode", string(recipientRetention)).Int("content_retention_days", contentRetentionDays).Int64("max_rows", recipientRetentionMaxRows).
+		Msg("recipient retention (SKYMAIL_RECIPIENT_RETENTION)")
 	logSendLanes(sendLanes)
 	logBounceReader(bounceReaderConfig)
 	logUnsubscribeLink(unsubscribeConfig)
@@ -415,6 +428,15 @@ func main() {
 		defer close(trackingRetentionStopped)
 		runTrackingRetention(workers, db, database.TrackingRetentionOptions{Mode: trackingRetention, BrakeMaxRows: trackingRetentionMaxRows, OnlyIfDue: true}, trackingRetentionCheckInterval)
 	}()
+	recipientRetentionStopped := make(chan struct{})
+	go func() {
+		defer close(recipientRetentionStopped)
+		accounts, _ := kcClient.(keycloak.AccountFinder)
+		runRecipientRetention(workers, db, database.RecipientRetentionOptions{
+			Mode: recipientRetention, ContentRetentionDays: contentRetentionDays, Accounts: accounts,
+			BrakeMaxRows: recipientRetentionMaxRows, OnlyIfDue: true,
+		}, recipientRetentionCheckInterval)
+	}()
 
 	addr := fmt.Sprintf(":%d", 3000)
 	if cfg.AppPort != 0 {
@@ -443,6 +465,7 @@ func main() {
 			{name: "the inbox sweep", done: inboxSweepStopped},
 			{name: "the bounce reader", done: bounceReaderStopped},
 			{name: "the tracking retention run", done: trackingRetentionStopped},
+			{name: "the recipient retention run", done: recipientRetentionStopped},
 			{name: "the mailer's sends", done: mailerService.Stopped()},
 		},
 		Close: closers,
@@ -832,6 +855,63 @@ func trackingRetentionOnce(ctx context.Context, db *database.Store, opts databas
 		Msg("tracking retention run (receipt in tracking_retention_runs)")
 }
 
+// recipientRetentionCheckInterval is how often the recipient retention run
+// checks whether it is due; it runs at most once a day (the receipts say).
+const recipientRetentionCheckInterval = time.Hour
+
+// runRecipientRetention runs the retention of recipients without an account
+// (database.RunRecipientRetention) at startup and whenever a run of its mode
+// is due, checking every interval. Off, it does nothing. Each run writes its
+// receipt (recipient_retention_runs) and one log line of counts; the brake
+// and a failure log at error level. Nothing it logs names a person or an
+// address.
+func runRecipientRetention(ctx context.Context, db *database.Store, opts database.RecipientRetentionOptions, interval time.Duration) {
+	if opts.Mode == database.RecipientRetentionOff {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		recipientRetentionOnce(ctx, db, opts)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// recipientRetentionOnce runs when due: the run checks that itself, holding
+// the lock, so two replicas never run it twice in a day.
+func recipientRetentionOnce(ctx context.Context, db *database.Store, opts database.RecipientRetentionOptions) {
+	report, err := db.RunRecipientRetention(ctx, opts)
+	if errors.Is(err, database.ErrRecipientRetentionNotDue) {
+		return
+	}
+	if errors.Is(err, database.ErrRecipientRetentionLocked) {
+		log.Info().Str("event", "recipient_retention_locked").Msg("recipient retention: another replica is running it")
+		return
+	}
+	if report == nil {
+		if ctx.Err() == nil {
+			log.Error().Err(err).Str("event", "recipient_retention_failed").Msg("recipient retention could not start")
+		}
+		return
+	}
+	line := log.Info()
+	switch {
+	case err != nil || report.Status == "failed":
+		line = log.Error().Err(err)
+	case report.Status == "refused_large" || report.Status == "would_refuse_large":
+		line = log.Error().Str("alarm", "recipient_retention_brake")
+	case report.Status == "partial":
+		line = log.Warn()
+	}
+	line.Str("event", "recipient_retention_run").Int64("run_id", report.RunID).Str("mode", string(report.Mode)).
+		Str("status", report.Status).Interface("counts", report.Counts).
+		Msg("recipient retention run (receipt in recipient_retention_runs)")
+}
+
 // registerMailApprovalRoutes serves Mail onayı. Anyone who can use SkyMail —
 // the /v1 gate is skymail:access — follows their own requests. Submitting one
 // takes reading what it submits, skymail:templates:read and for a list
@@ -1185,10 +1265,9 @@ func clientClass(raw string) string {
 func errorHandler(ctx fiber.Ctx, err error) error {
 	var validationErrors validator.ValidationErrors
 	if errors.As(err, &validationErrors) {
-		return ctx.Status(fiber.StatusBadRequest).
-			JSON(apperrors.ErrValidation.WithParams(map[string]interface{}{
-				"errors": validator.ParseValidationErrors(validationErrors),
-			}))
+		return apperrors.WriteProblem(ctx, fiber.StatusBadRequest, apperrors.ErrValidation.WithParams(map[string]interface{}{
+			"errors": validator.ParseValidationErrors(validationErrors),
+		}))
 	}
 
 	var appError *apperrors.AppError
@@ -1196,7 +1275,7 @@ func errorHandler(ctx fiber.Ctx, err error) error {
 		if appError.RetryAfter > 0 {
 			ctx.Set(fiber.HeaderRetryAfter, strconv.Itoa(appError.RetryAfter))
 		}
-		return ctx.Status(appError.Status).JSON(appError)
+		return apperrors.WriteProblem(ctx, appError.Status, appError)
 	}
 
 	if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows) {
@@ -1208,12 +1287,12 @@ func errorHandler(ctx fiber.Ctx, err error) error {
 			Str("client", clientClass(ctx.IP())).
 			Err(err).
 			Msg("Resource not found in database (404)")
-		return ctx.Status(apperrors.ErrStatusNotFound.Status).JSON(apperrors.ErrStatusNotFound)
+		return apperrors.WriteProblem(ctx, apperrors.ErrStatusNotFound.Status, apperrors.ErrStatusNotFound)
 	}
 
 	var pgError *pgconn.PgError
 	if errors.As(err, &pgError) && pgError.Code == "23505" {
-		return ctx.Status(apperrors.ErrConflict.Status).JSON(apperrors.ErrConflict)
+		return apperrors.WriteProblem(ctx, apperrors.ErrConflict.Status, apperrors.ErrConflict)
 	}
 
 	var e *fiber.Error
@@ -1231,5 +1310,5 @@ func errorHandler(ctx fiber.Ctx, err error) error {
 			Send()
 	}
 
-	return ctx.Status(appError.Status).JSON(appError)
+	return apperrors.WriteProblem(ctx, appError.Status, appError)
 }

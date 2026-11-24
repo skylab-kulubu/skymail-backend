@@ -42,9 +42,9 @@ const (
 //	@Produce		json
 //	@Param			id	path		string	true	"Task ID"
 //	@Success		200	{object}	handlers.MailTaskItem
-//	@Failure		403	{object}	apperrors.AppError	"Forbidden: neither skymail:announcements:send nor the send's sender"
-//	@Failure		404	{object}	apperrors.AppError	"Not Found"
-//	@Failure		409	{object}	apperrors.AppError	"mail_task.not_bulk, mail_task.cancelled or mail_task.finished"
+//	@Failure		403	{object}	apperrors.Problem	"Forbidden: neither skymail:announcements:send nor the send's sender"
+//	@Failure		404	{object}	apperrors.Problem	"Not Found"
+//	@Failure		409	{object}	apperrors.Problem	"mail_task.not_bulk, mail_task.cancelled or mail_task.finished"
 //	@Router			/mail_tasks/{id}/pause [post]
 func (h *mailHandlerImpl) PauseTask(c fiber.Ctx) error { return h.controlTask(c, pauseTask) }
 
@@ -56,9 +56,9 @@ func (h *mailHandlerImpl) PauseTask(c fiber.Ctx) error { return h.controlTask(c,
 //	@Produce		json
 //	@Param			id	path		string	true	"Task ID"
 //	@Success		200	{object}	handlers.MailTaskItem
-//	@Failure		403	{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404	{object}	apperrors.AppError	"Not Found"
-//	@Failure		409	{object}	apperrors.AppError	"mail_task.not_bulk or mail_task.cancelled"
+//	@Failure		403	{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404	{object}	apperrors.Problem	"Not Found"
+//	@Failure		409	{object}	apperrors.Problem	"mail_task.not_bulk or mail_task.cancelled"
 //	@Router			/mail_tasks/{id}/resume [post]
 func (h *mailHandlerImpl) ResumeTask(c fiber.Ctx) error { return h.controlTask(c, resumeTask) }
 
@@ -70,9 +70,9 @@ func (h *mailHandlerImpl) ResumeTask(c fiber.Ctx) error { return h.controlTask(c
 //	@Produce		json
 //	@Param			id	path		string	true	"Task ID"
 //	@Success		200	{object}	handlers.MailTaskItem
-//	@Failure		403	{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404	{object}	apperrors.AppError	"Not Found"
-//	@Failure		409	{object}	apperrors.AppError	"mail_task.not_bulk or mail_task.finished"
+//	@Failure		403	{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404	{object}	apperrors.Problem	"Not Found"
+//	@Failure		409	{object}	apperrors.Problem	"mail_task.not_bulk or mail_task.finished"
 //	@Router			/mail_tasks/{id}/cancel [post]
 func (h *mailHandlerImpl) CancelTask(c fiber.Ctx) error { return h.controlTask(c, cancelTask) }
 
