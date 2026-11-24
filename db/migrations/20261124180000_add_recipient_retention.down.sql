@@ -7,6 +7,9 @@ SET lock_timeout = '5s';
 UPDATE mail_approval_recipients
 SET email = 'saklama-suresi-doldu-' || position || '@invalid'
 WHERE cleared_at IS NOT NULL;
+-- The update queued check_mail_approval's deferred events; they run now, or
+-- the index below cannot be made in this transaction.
+SET CONSTRAINTS ALL IMMEDIATE;
 
 DROP INDEX mail_approval_recipients_email_once;
 CREATE UNIQUE INDEX mail_approval_recipients_email_once ON mail_approval_recipients (approval_id, lower(email));
