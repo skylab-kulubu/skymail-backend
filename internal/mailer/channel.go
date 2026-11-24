@@ -331,8 +331,9 @@ func (s *emailSender) sendSMTP(ctx context.Context, job database.MailQueue, clie
 		// The relay took the mail with the 250 after DATA; what failed is
 		// the RSET go-mail says after it (the relay hung up, or the
 		// shutdown cut the connection). Retrying would mail the person
-		// twice.
-		s.logger.Warn().Err(err).Str("job_id", job.ID.String()).
+		// twice. The relay's text may echo the address: what is logged is
+		// what a failed row records (smtpFailure), its codes only.
+		s.logger.Warn().Err(smtpFailure(err)).Str("job_id", job.ID.String()).
 			Msg("The relay took the mail; the SMTP exchange after it failed: counted as sent")
 	}
 	// Nor is a QUIT that fails or is cut off a failed send (go-mail's

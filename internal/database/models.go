@@ -286,6 +286,8 @@ type MailApproval struct {
 	OwnEventStatement       *bool   `json:"own_event_statement"`
 	// Team mail: the picked Teams (Keycloak group ids) in path order, each its own send with category team:<id>:duyuru; mail_list_id is the first. NULL: not team mail.
 	TeamIds []uuid.UUID `json:"team_ids"`
+	// When the recipient retention run decided every person of the request: address and name emptied, or an account found. Looked at again once updated_at is later.
+	RecipientRetentionAt *time.Time `json:"-"`
 }
 
 type MailApprovalEvent struct {
@@ -306,6 +308,10 @@ type MailApprovalRecipient struct {
 	Position   int       `json:"position"`
 	Email      string    `json:"email"`
 	FullName   string    `json:"full_name"`
+	// When the recipient retention run emptied the address and name of this person without an account; null otherwise.
+	ClearedAt *time.Time `json:"-"`
+	// When the recipient retention run found the address to be someone's account: kept, not asked about again.
+	AccountAt *time.Time `json:"-"`
 }
 
 type MailApprovalTask struct {
@@ -395,6 +401,10 @@ type MailFormSourceRecipient struct {
 	Position int       `json:"position"`
 	Email    string    `json:"email"`
 	FullName string    `json:"full_name"`
+	// When the recipient retention run emptied the address and name of this respondent without an account; null otherwise.
+	ClearedAt *time.Time `json:"-"`
+	// When the recipient retention run found the address to be someone's account: kept, not asked about again.
+	AccountAt *time.Time `json:"-"`
 }
 
 type MailQueue struct {
@@ -435,6 +445,8 @@ type MailQueue struct {
 	PreferenceCheckedAt *time.Time `json:"preference_checked_at"`
 	// Throttling replies the row had with no attempt counted; past a few its attempts count.
 	Throttles int `json:"throttles"`
+	// When the recipient retention run found the row's address, with no subject, to be someone's account: kept, not asked about again.
+	RecipientAccountAt *time.Time `json:"-"`
 }
 
 type MailSendWindow struct {
@@ -528,6 +540,8 @@ type MailTask struct {
 	CancelledBy *string    `json:"cancelled_by"`
 	// A send that keeps no record of its recipient (POST /mail_tasks/single erase_after_send, a service's only): each row is erased when its outcome is written, and the send's variables with it.
 	EraseAfterSend bool `json:"erase_after_send"`
+	// When the recipient retention run decided every recipient of the send whose content is gone: address and name emptied, or an account found. Null until then.
+	RecipientRetentionAt *time.Time `json:"-"`
 }
 
 // A service's Idempotency-Key on POST /mail_tasks/single: the request's digest, the send it queued and its answer, replayed to a retry. No address. Kept 72 hours.
@@ -655,6 +669,18 @@ type Recipient struct {
 	Email     string    `json:"email"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// When the recipient retention run found the address to be someone's account: their memberships of a list archived a year ago stay. Null again once the address changes.
+	AccountAt *time.Time `json:"-"`
+}
+
+// Receipts of the recipient retention run: mode, times, status, counts. No person, address or name.
+type RecipientRetentionRun struct {
+	ID         int64      `json:"id"`
+	Mode       string     `json:"mode"`
+	Status     string     `json:"status"`
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at"`
+	Counts     []byte     `json:"counts"`
 }
 
 // Each opening of a sensitive send's masked content: who, which send and queue row, when. Account erasure replaces the actor.
