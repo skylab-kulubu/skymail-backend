@@ -1544,29 +1544,40 @@ docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | 
 ADR-0062'nin iki satırı (hub sektör denetimi 2026-11-24, 06 düzeltme 3):
 "arşivlenmiş elle listenin alıcıları: arşivden 1 yıl sonra" ve "alıcı başına
 gövdesiz durum kaydı: üyede hesapla birlikte, konukta konuk süresince".
-Hesabı olmayan kişinin süresi burada gönderimin içerik süresidir
-(`MAIL_CONTENT_RETENTION_DAYS`, varsayılan 365).
+ADR'den sapma: "konukta konuk süresince" yerine hesabı olmayan kişinin süresi
+gönderimin içerik süresidir (`MAIL_CONTENT_RETENTION_DAYS`, varsayılan 365;
+Yusuf, 2026-11-24). Liste arşivi hesapları ve üyeleri etkilemez (Yusuf,
+2026-11-24): 1 yıl sonra yalnız hesapsız kişilerin üyelikleri gider.
 
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
 | `SKYMAIL_RECIPIENT_RETENTION` | `dry-run` | `off`, `dry-run` ya da `apply`; başka değer açılışı durdurur |
-| `SKYMAIL_RECIPIENT_RETENTION_MAX_ROWS` | `50000` | fren: bir apply'da silinecek liste üyeliği ya da alıcı, boşalacak kuyruk satırı ya da onay kişisi sınırı (1–10.000.000); başka değer açılışı durdurur |
+| `SKYMAIL_RECIPIENT_RETENTION_MAX_ROWS` | `50000` | fren: bir apply'da silinecek liste üyeliği ya da alıcı, boşalacak kuyruk satırı, onay kişisi ya da Forms yanıtlayanı, maskelenecek değişken ya da değişiklik kaydı sınırı (1–10.000.000); başka değer açılışı durdurur |
 
 - **Kurallar** (her liste, gönderim ve onay isteği kendi işleminde):
-  1. 1 yıldan önce arşivlenmiş elle listenin üyelikleri
-     (`mailing_list_recipients`) silinir; başka hiçbir listede olmayan
-     `recipients` satırı da silinir. Herkes için: arşivlenmiş listenin
-     üyeliği hesap verisi değildir. 1 yıldan sonra geri alınan liste boş
-     döner.
+  1. 1 yıldan önce arşivlenmiş elle listede hesabı olmayan kişinin
+     üyeliği (`mailing_list_recipients`) silinir; başka hiçbir listede
+     olmayan `recipients` satırı da silinir. Hesabı olan kişinin ve
+     Keycloak'ın yanıt vermediği adresin üyeliği kalır. 1 yıldan sonra geri
+     alınan listede yalnız onlar vardır.
   2. İçeriği süpürücünün boşalttığı gönderimin (`content_cleared_at`)
      hesapsız alıcı satırlarında `recipient_email` ve `recipient_full_name`
      boşalır; `error`'daki adres `••••••` olur, kodlar kalır. Satır kalır,
-     gönderimin sayıları değişmez.
+     gönderimin sayıları değişmez. Gönderim bir Forms anlık görüntüsünden
+     yapıldıysa hesapsız yanıtlayanlar (`mail_form_source_recipients`) da
+     yerinde boşalır (`cleared_at`). Haberden gönderimin satırı
+     (`source_ref`) adresini korur: kaydın "bir kez" indeksi
+     (`idx_mail_queue_news_once`) ona dayanır; core'un kitlesi zaten
+     hesaplardır.
   3. Bitmiş (onaylanmış, reddedilmiş, geri çevrilmiş, süresi geçmiş),
      `MAIL_CONTENT_RETENTION_DAYS` boyunca değişmemiş ve gönderimlerinin
      içeriği boşalmış Mail onayı isteğinin hesapsız kişileri
-     (`mail_approval_recipients`) yerinde boşalır (`cleared_at`): sırası
-     kalır, `task_ids[i]` yine `recipients[i]`'nin gönderimidir.
+     (`mail_approval_recipients`, isteğin Forms anlık görüntüsünün
+     yanıtlayanları) yerinde boşalır (`cleared_at`): sırası kalır,
+     `task_ids[i]` yine `recipients[i]`'nin gönderimidir. Bu kişilerin
+     `body_variables` ve olayların `changes` alanındaki adresleri `••••••`
+     olur (`changes`'te maskelenen adresin yanındaki ad da boşalır); istek
+     ve olayları silinmez.
 - **Hesabı olan kişiye dokunulmaz** (ADR-0062: "üyede hesapla birlikte";
   hesap silme siler). Satır yalnız şu üçü birden doğruysa boşalır:
   `recipient_sub` boş; SkyMail adresi hiçbir yerde bir `sub`'a bağlamamış
@@ -1575,10 +1586,14 @@ Hesabı olmayan kişinin süresi burada gönderimin içerik süresidir
   hiçbir kullanıcı yok (etkin olmayan ve doğrulanmamış da sayılır; şüphede
   satır kalır). Keycloak yanıt vermezse adres o koşuda bekler
   (`addresses_unknown`), ertesi gün yeniden sorulur. Bir koşu en çok 2000
-  gönderim, 2000 istek ve 2000 adres sorar; artanı ertesi güne kalır
-  (`addresses_deferred`). Bir gönderimin ya da isteğin bütün kişileri
-  kararlaşınca (`recipient_retention_at`) bir daha sorulmaz; istek sonradan
-  değişirse yeniden bakılır.
+  liste, 2000 gönderim, 2000 istek ve 2000 adres sorar; adresler liste
+  liste, gönderim gönderim, istek istek, en eskiden başlayarak sorulur
+  (sığmayan birim ertesi güne kalır: `addresses_deferred`). Hesabı olduğu
+  bulunan satır işaretlenir (`account_at`, `mail_queue.recipient_account_at`)
+  ve bir daha sorulmaz; böylece hesaplı adresler her koşuyu doldurmaz.
+  `recipients` satırının adresi değişirse işaret silinir. Bir gönderimin ya
+  da isteğin bütün kişileri kararlaşınca (`recipient_retention_at`) bir daha
+  bakılmaz; istek sonradan değişirse yeniden bakılır.
 - **Zamanlama, kilit, dry-run, fren, makbuz:** takip saklamasının kalıbı
   (aşağıda, "Saklama"): açılışta ve saatte bir "zamanı geldi mi" denetlenir,
   aynı kipte son 23 saatte bitmiş bir koşu yoksa koşar; oturum advisory
@@ -1590,7 +1605,9 @@ Hesabı olmayan kişinin süresi burada gönderimin içerik süresidir
   Keycloak'ın yanıtlamadığı adres ya da başarısız işlem `partial`) ve
   sayılar yazar: `lists`, `list_memberships_deleted`, `recipients_deleted`,
   `sends`, `queue_rows_cleared`, `sends_decided`, `approvals`,
-  `approval_recipients_cleared`, `approvals_decided`, `addresses`,
+  `approval_recipients_cleared`, `approval_json_masked`,
+  `approvals_decided`, `form_recipients_cleared`, `account_rows_marked`,
+  `addresses`,
   `addresses_tied`, `addresses_with_account`, `addresses_without_account`,
   `addresses_unknown`, `addresses_deferred`, `failed`. Kişi, adres ya da ad
   yoktur. Aynı sayılar `"event":"recipient_retention_run"` günlük
@@ -1600,9 +1617,9 @@ Hesabı olmayan kişinin süresi burada gönderimin içerik süresidir
   hiçbir gönderime ve bitmemiş hiçbir isteğe dokunulmaz.
 - **Geri dönüş:** imajı eskiye döndürmek yeterli (eski imaj yeni sütunları
   okumaz). Boşalan ve silinen satırlar hiçbir geri dönüşte geri gelmez.
-  `20261124180000` down migration'ı boşalmış onay kişilerine yer tutucu
-  adres (`saklama-suresi-doldu-<sıra>@invalid`) yazar, sonra eski kısıtları
-  geri koyar.
+  `20261124180000` down migration'ı boşalmış onay kişilerine ve Forms
+  yanıtlayanlarına yer tutucu adres (`saklama-suresi-doldu-<sıra>@invalid`)
+  yazar, sonra eski kısıtları geri koyar.
 
 Makbuzlar (production sunucusunda, salt okunur):
 

@@ -260,10 +260,16 @@ run does (see [Recipients without an account](#recipients-without-an-account)):
   were. Without an account: emptied in place (`cleared_at`) once the request
   is over and unchanged for `MAIL_CONTENT_RETENTION_DAYS`.
 - `mail_approvals.body_variables` — the values of the send, which may name or
-  address people.
+  address people. The addresses in it of people without an account are
+  masked once the request is over and unchanged for
+  `MAIL_CONTENT_RETENTION_DAYS`.
 - `mail_approval_events.actor_sub` and `actor_name` — who did each thing to a
   request — `note`, and `changes`, each variable's value, and who a request
-  went to, before and after an edit or a resubmission.
+  went to, before and after an edit or a resubmission. The addresses in
+  `changes` of people without an account are masked as in `body_variables`.
+- `mail_form_source_recipients.email` and `full_name` — the respondents of a
+  Forms snapshot a send or a request was made from. Without an account:
+  emptied in place (`cleared_at`) with the send's or the request's people.
 - Open and click tracking (see [Open and click tracking](#open-and-click-tracking)):
   `mail_queue.tracking_token` (a random token that stands for the row's
   recipient in their mail's pixel and links), `tracking_skip_reason` (why
@@ -291,16 +297,21 @@ run does (see [Recipients without an account](#recipients-without-an-account)):
 ADR-0062: a recipient's row lives with the member's account, and a guest's
 for the guest's time; a manual list's people a year after it was archived
 (hub sector audit 2026-11-24, 06 fix 3; README, "Hesapsız alıcıların
-saklaması"). The recipient retention run (`SKYMAIL_RECIPIENT_RETENTION`,
+saklaması"). A guest's time is the send's content time here,
+`MAIL_CONTENT_RETENTION_DAYS` (365 days by default; Yusuf, 2026-11-24). A
+list's archive does not touch accounts or members (Yusuf, 2026-11-24): a year
+on, only the memberships of people without an account go. The recipient retention run (`SKYMAIL_RECIPIENT_RETENTION`,
 `dry-run` by default) runs daily under an advisory lock, one transaction per
 list, send or request, with a brake and a receipt, as the tracking retention
 run does:
 
 | What | Kept | Then |
 |---|---|---|
-| `mailing_list_recipients` of a manual list archived ≥ 1 year ago, and a `recipients` row no other list holds | one year from `mailing_lists.archived_at` | deleted, for everyone |
-| `mail_queue.recipient_email`, `recipient_full_name` of a recipient without an account | while the send's content is kept (`MAIL_CONTENT_RETENTION_DAYS`) | emptied once the content sweep emptied the send (`content_cleared_at`); an address in `error` is masked, its codes stay; the row and the send's counts stay |
+| `mailing_list_recipients` of a person without an account on a manual list archived ≥ 1 year ago, and their `recipients` row when no other list holds it | one year from `mailing_lists.archived_at` | deleted; a person with an account, or one Keycloak did not answer for, stays on the list |
+| `mail_queue.recipient_email`, `recipient_full_name` of a recipient without an account | while the send's content is kept (`MAIL_CONTENT_RETENTION_DAYS`) | emptied once the content sweep emptied the send (`content_cleared_at`); an address in `error` is masked, its codes stay; the row and the send's counts stay. A News send's row keeps its address: it is the record's "bir kez" guard (`idx_mail_queue_news_once`), and core's audience is accounts |
+| `mail_form_source_recipients.email`, `full_name` of a respondent without an account | as the send or the request made from the snapshot | emptied in place (`cleared_at`): the snapshot's count stays |
 | `mail_approval_recipients.email`, `full_name` of a person without an account | while the request is going or for `MAIL_CONTENT_RETENTION_DAYS` after it last changed, and while a send of it keeps its content | emptied in place (`cleared_at`): its position, and so `task_ids[i]`, stays |
+| addresses of people without an account in `mail_approvals.body_variables` and `mail_approval_events.changes` | as the request's people | masked (`••••••`); a recipient's name beside its masked address in `changes` is emptied; the request and its events stay |
 | `recipient_retention_runs` | without end: one row per run, counts and times only | — |
 
 Without an account means all three: the row names no subject
@@ -308,9 +319,11 @@ Without an account means all three: the row names no subject
 one; and Keycloak finds no user, enabled or not, whose primary, school or
 personal address it is. A Keycloak that does not answer leaves the row for
 the next run. A member's row is never touched by the run: Account erasure
-takes it. Not covered: `mail_approval_events.changes` (who a request went to,
-before and after an edit) and `mail_approvals.body_variables` keep what they
-kept.
+takes it. A row found to be someone's is marked (`account_at`,
+`mail_queue.recipient_account_at`) and not asked about again; a `recipients`
+row forgets it when its address changes. A run asks Keycloak about at most
+2000 addresses, list by list, send by send and request by request, the oldest
+first; what it finds stays on the rows, so the next run reaches new ones.
 
 ## Bounces and suppression
 

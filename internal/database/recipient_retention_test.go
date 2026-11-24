@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -48,6 +49,9 @@ const (
 	rrOldApproval  = "72000000-0000-4000-8000-000000000001"
 	rrNewApproval  = "72000000-0000-4000-8000-000000000002"
 	rrOpenApproval = "72000000-0000-4000-8000-000000000003"
+	rrFormApproval = "72000000-0000-4000-8000-000000000004"
+	rrSendForm     = "76000000-0000-4000-8000-000000000001"
+	rrRequestForm  = "76000000-0000-4000-8000-000000000002"
 	rrOldList      = "73000000-0000-4000-8000-000000000001"
 	rrRecentList   = "73000000-0000-4000-8000-000000000002"
 	rrActiveList   = "73000000-0000-4000-8000-000000000003"
@@ -61,12 +65,18 @@ const (
 //     account), a guest whose error quotes their address, a member known by
 //     address only (Keycloak has them), a member known by subject, an address
 //     another row ties to a subject, and an address Keycloak does not answer
-//     for;
+//     for; two rows of a News record to the two guests (the record's "bir
+//     kez" index holds them); sent from a Forms snapshot of a guest and the
+//     member;
 //   - a send whose content is still kept, to the guest;
 //   - a rejected Mail onayı request untouched for 400 days, to two guests
-//     and the member; one untouched for 10 days; a pending one;
+//     and the member, whose variables hold a guest's and the member's
+//     address and whose edit changed a third guest into the member; one
+//     untouched for 10 days; a pending one; a rejected one made from a Forms
+//     snapshot of a guest, untouched for 400 days;
 //   - a manual list archived 400 days ago (a person only it holds, a person
-//     the active list holds too), one archived 100 days ago, an active one.
+//     the active list holds too, the member), one archived 100 days ago, an
+//     active one.
 func recipientRetentionStore(t *testing.T) *Store {
 	t.Helper()
 	s := retentionStore(t)
@@ -76,14 +86,28 @@ func recipientRetentionStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	// The requests' template versions are left out: their foreign keys and
-	// deferred checks are off while seeding only.
+	// The requests' deferred checks are off while seeding only.
 	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(ctx, `
+		INSERT INTO template_versions (id, template_id, seq, name, subject, html_source, main_mode, html_content,
+		                               plain_text_content, author_kind, created_at)
+		VALUES ('78000000-0000-4000-8000-000000000001', '`+retentionTemplate+`', 1, 'Duyuru', 'Duyuru', '<p>x</p>', 'html', '<p>x</p>',
+		        'x', 'operator', now() - interval '500 days');
+		INSERT INTO mail_form_sources (id, owner_sub, form_id, form_title, prepared_at, expires_at, response_count, recipient_count,
+		                               skipped_count, duplicate_count, snapshot_hash, consumed_at, consumed_task_id, consumed_approval_id, consume_request_hash) VALUES
+		    ('`+rrSendForm+`', 'sub', gen_random_uuid(), 'Etkinlik', now() - interval '401 days', now() - interval '400 days', 2, 2, 0, 0,
+		     decode(repeat('00', 32), 'hex'), now() - interval '400 days', '`+rrClearedSend+`', NULL, decode(repeat('00', 32), 'hex')),
+		    ('`+rrRequestForm+`', 'sub', gen_random_uuid(), 'Başvuru', now() - interval '411 days', now() - interval '410 days', 1, 1, 0, 0,
+		     decode(repeat('00', 32), 'hex'), now() - interval '410 days', NULL, '`+rrFormApproval+`', decode(repeat('00', 32), 'hex'));
+		INSERT INTO mail_form_source_recipients (source_id, position, email, full_name) VALUES
+		    ('`+rrSendForm+`', 1, 'form1@guest.example', 'Form Bir'),
+		    ('`+rrSendForm+`', 2, 'uye@member.example', 'Üye Formda'),
+		    ('`+rrRequestForm+`', 1, 'form2@guest.example', 'Form İki');
+		INSERT INTO mail_tasks (id, sent_by, template_id, body_variables, created_at, content_cleared_at, form_source_id) VALUES
+		    ('`+rrClearedSend+`', 'sender', '`+retentionTemplate+`', '{}', now() - interval '400 days', now() - interval '35 days', '`+rrSendForm+`');
 		INSERT INTO mail_tasks (id, sent_by, template_id, body_variables, created_at, content_cleared_at) VALUES
-		    ('`+rrClearedSend+`', 'sender', '`+retentionTemplate+`', '{}', now() - interval '400 days', now() - interval '35 days'),
 		    ('`+rrFreshSend+`', 'sender', '`+retentionTemplate+`', '{}', now() - interval '20 days', NULL),
 		    ('`+rrMemberSend+`', 'sender', '`+retentionTemplate+`', '{}', now() - interval '20 days', NULL);
 		INSERT INTO mail_queue (task_id, recipient_full_name, recipient_email, recipient_sub, subject, body, status, error) VALUES
@@ -96,13 +120,21 @@ func recipientRetentionStore(t *testing.T) *Store {
 		    ('`+rrClearedSend+`', 'Bilinmeyen', 'bilinmeyen@guest.example', NULL, '', '', 'sent', NULL),
 		    ('`+rrFreshSend+`', 'Konuk Bir', 'konuk1@guest.example', NULL, 'Duyuru', 'x', 'sent', NULL),
 		    ('`+rrMemberSend+`', 'Bağlı', 'bagli@member.example', '`+rrTiedSub+`', 'Duyuru', 'x', 'sent', NULL);
+		INSERT INTO mail_queue (task_id, recipient_full_name, recipient_email, recipient_sub, subject, body, status, source_ref) VALUES
+		    ('`+rrClearedSend+`', 'Haber Bir', 'konuk1@guest.example', NULL, '', '', 'sent', 'news:duyuru'),
+		    ('`+rrClearedSend+`', 'Haber İki', 'konuk2@guest.example', NULL, '', '', 'sent', 'news:duyuru');
+		INSERT INTO mail_approvals (id, submitter_sub, template_id, template_version_id, body_variables,
+		                            created_at, submitted_at, deadline_at, updated_at, state, form_source_id) VALUES
+		    ('`+rrFormApproval+`', 'sub', '`+retentionTemplate+`', '78000000-0000-4000-8000-000000000001', '{}',
+		     now() - interval '410 days', now() - interval '410 days', now() - interval '403 days', now() - interval '400 days', 'rejected', '`+rrRequestForm+`');
 		INSERT INTO mail_approvals (id, submitter_sub, template_id, template_version_id, body_variables,
 		                            created_at, submitted_at, deadline_at, updated_at, state) VALUES
-		    ('`+rrOldApproval+`', 'sub', '`+retentionTemplate+`', gen_random_uuid(), '{}',
+		    ('`+rrOldApproval+`', 'sub', '`+retentionTemplate+`', '78000000-0000-4000-8000-000000000001',
+		     '{"iletisim": "Yazın: Konuk3@guest.example.", "kulup": "uye@member.example"}',
 		     now() - interval '410 days', now() - interval '410 days', now() - interval '403 days', now() - interval '400 days', 'rejected'),
-		    ('`+rrNewApproval+`', 'sub', '`+retentionTemplate+`', gen_random_uuid(), '{}',
+		    ('`+rrNewApproval+`', 'sub', '`+retentionTemplate+`', '78000000-0000-4000-8000-000000000001', '{}',
 		     now() - interval '20 days', now() - interval '20 days', now() - interval '13 days', now() - interval '10 days', 'rejected'),
-		    ('`+rrOpenApproval+`', 'sub', '`+retentionTemplate+`', gen_random_uuid(), '{}',
+		    ('`+rrOpenApproval+`', 'sub', '`+retentionTemplate+`', '78000000-0000-4000-8000-000000000001', '{}',
 		     now() - interval '500 days', now() - interval '500 days', now() + interval '1 day', now() - interval '500 days', 'pending');
 		INSERT INTO mail_approval_recipients (approval_id, position, email, full_name) VALUES
 		    ('`+rrOldApproval+`', 1, 'konuk1@guest.example', 'Konuk Bir'),
@@ -110,6 +142,10 @@ func recipientRetentionStore(t *testing.T) *Store {
 		    ('`+rrOldApproval+`', 3, 'konuk3@guest.example', 'Konuk Üç'),
 		    ('`+rrNewApproval+`', 1, 'konuk1@guest.example', 'Konuk Bir'),
 		    ('`+rrOpenApproval+`', 1, 'konuk1@guest.example', 'Konuk Bir');
+		INSERT INTO mail_approval_events (approval_id, seq, kind, actor_sub, actor_name, changes, created_at) VALUES
+		    ('`+rrOldApproval+`', 1, 'edited', 'approver', 'Onaylayan',
+		     '[{"field": "recipients", "name": "Alıcılar", "before": [{"email": "eski@guest.example", "full_name": "Eski Konuk"}],
+		        "after": [{"email": "uye@member.example", "full_name": "Üye Adresle"}]}]', now() - interval '401 days');
 		INSERT INTO mailing_lists (id, name, archived_at) VALUES
 		    ('`+rrOldList+`', 'Eski etkinlik', now() - interval '400 days'),
 		    ('`+rrRecentList+`', 'Yakın etkinlik', now() - interval '100 days'),
@@ -117,10 +153,12 @@ func recipientRetentionStore(t *testing.T) *Store {
 		INSERT INTO recipients (id, full_name, email) VALUES
 		    ('75000000-0000-4000-8000-000000000001', 'Yalnız Eski', 'yalniz@guest.example'),
 		    ('75000000-0000-4000-8000-000000000002', 'İki Listede', 'iki@guest.example'),
-		    ('75000000-0000-4000-8000-000000000003', 'Yakın', 'yakin@guest.example');
+		    ('75000000-0000-4000-8000-000000000003', 'Yakın', 'yakin@guest.example'),
+		    ('75000000-0000-4000-8000-000000000004', 'Üye Listede', 'uye@member.example');
 		INSERT INTO mailing_list_recipients (mail_list_id, recipient_id) VALUES
 		    ('`+rrOldList+`', '75000000-0000-4000-8000-000000000001'),
 		    ('`+rrOldList+`', '75000000-0000-4000-8000-000000000002'),
+		    ('`+rrOldList+`', '75000000-0000-4000-8000-000000000004'),
 		    ('`+rrActiveList+`', '75000000-0000-4000-8000-000000000002'),
 		    ('`+rrRecentList+`', '75000000-0000-4000-8000-000000000003');`); err != nil {
 		t.Fatal(err)
@@ -137,6 +175,11 @@ func newRecipientAccounts() *fakeAccounts {
 		"konuk2@guest.example": false,
 		"konuk3@guest.example": false,
 		"uye@member.example":   true,
+		"yalniz@guest.example": false,
+		"iki@guest.example":    false,
+		"form1@guest.example":  false,
+		"form2@guest.example":  false,
+		"eski@guest.example":   false,
 		// bilinmeyen@guest.example: Keycloak fails for it.
 	}}
 }
@@ -151,7 +194,10 @@ func recipientState(t *testing.T, s *Store) []string {
 		`SELECT 'approval ' || approval_id || ' ' || position || ' ' || full_name || ' <' || email || '> ' || (cleared_at IS NOT NULL)::text FROM mail_approval_recipients`,
 		`SELECT 'request ' || id || ' ' || (recipient_retention_at IS NOT NULL)::text FROM mail_approvals`,
 		`SELECT 'member ' || mail_list_id || ' ' || recipient_id FROM mailing_list_recipients`,
-		`SELECT 'recipient ' || id || ' ' || email FROM recipients`,
+		`SELECT 'recipient ' || id || ' ' || email || ' ' || (account_at IS NOT NULL)::text FROM recipients`,
+		`SELECT 'form ' || source_id || ' ' || position || ' ' || full_name || ' <' || email || '> ' || (cleared_at IS NOT NULL)::text FROM mail_form_source_recipients`,
+		`SELECT 'vars ' || id || ' ' || body_variables::text FROM mail_approvals`,
+		`SELECT 'changes ' || approval_id || ' ' || changes::text FROM mail_approval_events WHERE changes IS NOT NULL`,
 	} {
 		rows, err := s.Conn.Query(context.Background(), sql)
 		if err != nil {
@@ -197,8 +243,9 @@ func TestRecipientRetentionEmptiesOnlyRowsOfPeopleWithoutAnAccount(t *testing.T)
 	want := RecipientRetentionCounts{
 		Lists: 1, ListMembershipsDeleted: 2, RecipientsDeleted: 1,
 		Sends: 1, QueueRowsCleared: 2, SendsDecided: 0,
-		Approvals: 1, ApprovalRecipientsCleared: 2, ApprovalsDecided: 1,
-		Addresses: 6, AddressesTied: 1, AddressesWithAccount: 1, AddressesWithoutAccount: 3, AddressesUnknown: 1,
+		Approvals: 2, ApprovalRecipientsCleared: 2, ApprovalJSONMasked: 2, ApprovalsDecided: 2,
+		FormRecipientsCleared: 2, AccountRowsMarked: 5,
+		Addresses: 11, AddressesTied: 1, AddressesWithAccount: 1, AddressesWithoutAccount: 8, AddressesUnknown: 1,
 	}
 	if dry.Counts != want {
 		t.Errorf("dry run counts\n got %+v\nwant %+v", dry.Counts, want)
@@ -208,7 +255,9 @@ func TestRecipientRetentionEmptiesOnlyRowsOfPeopleWithoutAnAccount(t *testing.T)
 	}
 	// Keycloak is asked only about addresses SkyMail does not tie to a
 	// subject, each once.
-	wantAsked := []string{"bilinmeyen@guest.example", "konuk1@guest.example", "konuk2@guest.example", "konuk3@guest.example", "uye@member.example"}
+	wantAsked := []string{"bilinmeyen@guest.example", "eski@guest.example", "form1@guest.example", "form2@guest.example",
+		"iki@guest.example", "konuk1@guest.example", "konuk2@guest.example", "konuk3@guest.example", "uye@member.example",
+		"yalniz@guest.example"}
 	if got := accounts.askedSorted(); strings.Join(got, ",") != strings.Join(wantAsked, ",") {
 		t.Errorf("Keycloak asked about %v, want %v", got, wantAsked)
 	}
@@ -234,8 +283,23 @@ func TestRecipientRetentionEmptiesOnlyRowsOfPeopleWithoutAnAccount(t *testing.T)
 		"queue " + rrClearedSend + " Üye Kimlikle <kimlikli@member.example> -",
 		"queue " + rrClearedSend + " Bağlı <bagli@member.example> smtp_rejected: RCPT TO 550 5.1.1",
 		"queue " + rrClearedSend + " Bilinmeyen <bilinmeyen@guest.example> -",
+		// A News record's rows keep their addresses: the record's "bir
+		// kez" index holds them (emptied, the two would be one).
+		"queue " + rrClearedSend + " Haber Bir <konuk1@guest.example> -",
+		"queue " + rrClearedSend + " Haber İki <konuk2@guest.example> -",
 		// A send whose content is kept keeps its people.
 		"queue " + rrFreshSend + " Konuk Bir <konuk1@guest.example> -",
+		// The Forms snapshot of the send: the guest emptied in place, the
+		// member kept.
+		"form " + rrSendForm + " 1  <> true",
+		"form " + rrSendForm + " 2 Üye Formda <uye@member.example> false",
+		// The request made from a Forms snapshot: its guest emptied.
+		"form " + rrRequestForm + " 1  <> true",
+		"request " + rrFormApproval + " true",
+		// The old request's variables and changes: the guests' addresses
+		// masked (a changed recipient's name with them), the member's kept.
+		`vars ` + rrOldApproval + ` {"kulup": "uye@member.example", "iletisim": "Yazın: ••••••."}`,
+		`changes ` + rrOldApproval + ` [{"name": "Alıcılar", "after": [{"email": "uye@member.example", "full_name": "Üye Adresle"}], "field": "recipients", "before": [{"email": "••••••", "full_name": ""}]}]`,
 		// Not decided while Keycloak owes an answer: looked at again.
 		"task " + rrClearedSend + " false",
 		// The request over for a year: its guests emptied in place, the
@@ -247,21 +311,29 @@ func TestRecipientRetentionEmptiesOnlyRowsOfPeopleWithoutAnAccount(t *testing.T)
 		// A request over for 10 days, and a pending one: as they were.
 		"approval " + rrNewApproval + " 1 Konuk Bir <konuk1@guest.example> false",
 		"approval " + rrOpenApproval + " 1 Konuk Bir <konuk1@guest.example> false",
-		// The list archived a year ago keeps no one; the person the active
-		// list holds stays there. The list archived 100 days ago keeps its.
+		// The list archived a year ago keeps only the member (Yusuf,
+		// 2026-11-24: a list's archive does not touch accounts); the person
+		// the active list holds stays there. The list archived 100 days ago
+		// keeps its.
+		"member " + rrOldList + " 75000000-0000-4000-8000-000000000004",
+		"recipient 75000000-0000-4000-8000-000000000004 uye@member.example true",
 		"member " + rrActiveList + " 75000000-0000-4000-8000-000000000002",
 		"member " + rrRecentList + " 75000000-0000-4000-8000-000000000003",
-		"recipient 75000000-0000-4000-8000-000000000002 iki@guest.example",
-		"recipient 75000000-0000-4000-8000-000000000003 yakin@guest.example",
+		"recipient 75000000-0000-4000-8000-000000000002 iki@guest.example false",
+		"recipient 75000000-0000-4000-8000-000000000003 yakin@guest.example false",
 	} {
 		if !strings.Contains(got, line) {
 			t.Errorf("missing %q in\n%s", line, got)
 		}
 	}
-	if strings.Contains(got, "yalniz@guest.example") || strings.Contains(got, "member "+rrOldList) {
-		t.Errorf("the list archived a year ago still keeps people:\n%s", got)
+	if strings.Contains(got, "yalniz@guest.example") || strings.Contains(got, "member "+rrOldList+" 75000000-0000-4000-8000-000000000001") ||
+		strings.Contains(got, "member "+rrOldList+" 75000000-0000-4000-8000-000000000002") {
+		t.Errorf("the list archived a year ago still keeps people without an account:\n%s", got)
 	}
-	if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE task_id = $1 AND recipient_email ILIKE 'konuk%'`, uuid.MustParse(rrClearedSend)); n != 0 {
+	if strings.Contains(got, "eski@guest.example") || strings.Contains(got, "Eski Konuk") || strings.Contains(got, "form1@") || strings.Contains(got, "form2@") {
+		t.Errorf("a guest's address or name is left:\n%s", got)
+	}
+	if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE task_id = $1 AND recipient_email ILIKE 'konuk%' AND source_ref IS NULL`, uuid.MustParse(rrClearedSend)); n != 0 {
 		t.Errorf("%d guest rows of the emptied send still hold an address", n)
 	}
 
@@ -280,24 +352,124 @@ func TestRecipientRetentionEmptiesOnlyRowsOfPeopleWithoutAnAccount(t *testing.T)
 	answered := newRecipientAccounts()
 	answered.answers["bilinmeyen@guest.example"] = true
 	again := runRecipientRetention(t, s, RecipientRetentionOptions{Mode: RecipientRetentionApply, Accounts: answered})
-	if again.Status != "ok" || again.Counts.QueueRowsCleared != 0 || again.Counts.ApprovalRecipientsCleared != 0 ||
-		again.Counts.ListMembershipsDeleted != 0 || again.Counts.SendsDecided != 1 || again.Counts.Approvals != 0 {
-		t.Errorf("repeat: status %q counts %+v; want ok, only the send decided", again.Status, again.Counts)
+	// Only the address it did not answer for is asked about again: what
+	// the run found is kept on the rows.
+	againWant := RecipientRetentionCounts{Sends: 1, SendsDecided: 1, AccountRowsMarked: 1, Addresses: 1, AddressesWithAccount: 1}
+	if again.Status != "ok" || again.Counts != againWant {
+		t.Errorf("repeat: status %q counts\n got %+v\nwant %+v", again.Status, again.Counts, againWant)
+	}
+	if got := answered.askedSorted(); strings.Join(got, ",") != "bilinmeyen@guest.example" {
+		t.Errorf("repeat asked Keycloak about %v, want only bilinmeyen@guest.example", got)
 	}
 	last := runRecipientRetention(t, s, RecipientRetentionOptions{Mode: RecipientRetentionApply, Accounts: answered})
 	if last.Counts != (RecipientRetentionCounts{}) {
 		t.Errorf("a decided run still found %+v", last.Counts)
 	}
+
+	// A list person whose address changes forgets what the run found.
+	if _, err := s.Conn.Exec(ctx, `UPDATE recipients SET email = 'yeni@member.example' WHERE id = '75000000-0000-4000-8000-000000000004'`); err != nil {
+		t.Fatal(err)
+	}
+	if n := queryCount(t, s, `SELECT count(*) FROM recipients WHERE id = '75000000-0000-4000-8000-000000000004' AND account_at IS NULL`); n != 1 {
+		t.Errorf("a changed address kept account_at")
+	}
 }
 
-// Without Keycloak no address of a send or a request is emptied; the
-// archived list's people still go a year on.
+// Without Keycloak no address is emptied and no list person goes: in doubt
+// the row stays.
 func TestRecipientRetentionWithoutKeycloakKeepsEveryAddress(t *testing.T) {
 	s := recipientRetentionStore(t)
+	before := recipientState(t, s)
 	report := runRecipientRetention(t, s, RecipientRetentionOptions{Mode: RecipientRetentionApply})
-	if report.Counts.QueueRowsCleared != 0 || report.Counts.ApprovalRecipientsCleared != 0 ||
-		report.Counts.AddressesUnknown != 5 || report.Counts.ListMembershipsDeleted != 2 || report.Status != "partial" {
-		t.Errorf("status %q counts %+v; want partial, 5 unknown, nothing emptied, 2 memberships deleted", report.Status, report.Counts)
+	if report.Counts.QueueRowsCleared != 0 || report.Counts.ApprovalRecipientsCleared != 0 || report.Counts.FormRecipientsCleared != 0 ||
+		report.Counts.ApprovalJSONMasked != 0 || report.Counts.AddressesUnknown != 10 || report.Counts.ListMembershipsDeleted != 0 ||
+		report.Status != "partial" {
+		t.Errorf("status %q counts %+v; want partial, 10 unknown, nothing emptied or deleted", report.Status, report.Counts)
+	}
+	// Only the address SkyMail ties to a subject is marked.
+	if report.Counts.AccountRowsMarked != 1 {
+		t.Errorf("%d rows marked, want 1 (the tied address)", report.Counts.AccountRowsMarked)
+	}
+	after := recipientState(t, s)
+	if len(after) != len(before) {
+		t.Errorf("rows went: before %d, after %d", len(before), len(after))
+	}
+}
+
+// A run asks Keycloak about a bounded number of addresses, send by send, and
+// keeps what it found on the rows: with sends at the head whose people all
+// have an account, the queue still moves on, one send a run, and no address
+// is asked about twice. The oldest send, larger than the limit, is asked
+// about in part and finished the next run.
+func TestRecipientRetentionMovesOnPastAccountsWithASmallLookupLimit(t *testing.T) {
+	s := retentionStore(t)
+	ctx := context.Background()
+	sends := []struct {
+		id     string
+		people []string
+	}{
+		{"77000000-0000-4000-8000-000000000001", []string{"a1@member.example", "a2@member.example", "g1@guest.example"}},
+		{"77000000-0000-4000-8000-000000000002", []string{"a3@member.example", "g2@guest.example"}},
+		{"77000000-0000-4000-8000-000000000003", []string{"a4@member.example", "g3@guest.example"}},
+	}
+	accounts := &fakeAccounts{answers: map[string]bool{}}
+	for i, send := range sends {
+		if _, err := s.Conn.Exec(ctx, `
+			INSERT INTO mail_tasks (id, sent_by, template_id, body_variables, created_at, content_cleared_at)
+			VALUES ($1, 'sender', $2, '{}', now() - interval '400 days', now() - make_interval(days => 40 - $3::int))`,
+			uuid.MustParse(send.id), uuid.MustParse(retentionTemplate), i); err != nil {
+			t.Fatal(err)
+		}
+		for _, address := range send.people {
+			accounts.answers[address] = strings.HasPrefix(address, "a")
+			if _, err := s.Conn.Exec(ctx, `
+				INSERT INTO mail_queue (task_id, recipient_full_name, recipient_email, subject, body, status)
+				VALUES ($1, 'Kişi', $2, '', '', 'sent')`, uuid.MustParse(send.id), address); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	decided := func() int {
+		return queryCount(t, s, `SELECT count(*) FROM mail_tasks WHERE recipient_retention_at IS NOT NULL`)
+	}
+	opts := RecipientRetentionOptions{Mode: RecipientRetentionApply, Accounts: accounts, LookupLimit: 2}
+	for run, want := range []int{0, 1, 2, 3} {
+		report := runRecipientRetention(t, s, opts)
+		if got := decided(); got != want {
+			t.Fatalf("run %d: %d sends decided, want %d (counts %+v)", run+1, got, want, report.Counts)
+		}
+		if len(accounts.asked) > 2*(run+1) {
+			t.Fatalf("run %d asked about %d addresses in all, more than the limit allows", run+1, len(accounts.asked))
+		}
+	}
+	asked := accounts.askedSorted()
+	if len(asked) != 7 || len(slices.Compact(asked)) != 7 {
+		t.Errorf("Keycloak asked about %v; want each of the 7 addresses once", asked)
+	}
+	if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE recipient_email LIKE 'g%'`); n != 0 {
+		t.Errorf("%d guests keep their address", n)
+	}
+	if n := queryCount(t, s, `SELECT count(*) FROM mail_queue WHERE recipient_email LIKE 'a%' AND recipient_account_at IS NOT NULL`); n != 4 {
+		t.Errorf("%d members marked, want 4", n)
+	}
+}
+
+func TestMaskJSONAddresses(t *testing.T) {
+	mask := map[string]bool{"konuk@guest.example": true}
+	got, changed, err := maskJSONAddresses([]byte(`{"a": "Konuk@Guest.example.", "b": ["uye@member.example", 3.50, {"email": "konuk@guest.example", "full_name": "Konuk"}], "c": "<b>x</b>"}`), mask)
+	if err != nil || !changed {
+		t.Fatalf("changed %v, err %v", changed, err)
+	}
+	want := `{"a":"••••••.","b":["uye@member.example",3.50,{"email":"••••••","full_name":""}],"c":"<b>x</b>"}`
+	if string(got) != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+	if _, changed, _ := maskJSONAddresses([]byte(`{"a": "uye@member.example"}`), mask); changed {
+		t.Error("a document without a masked address changed")
+	}
+	found, err := jsonAddresses([]byte(`{"x": "Yaz: A@B.example. ya da c@d.example", "k@e.example": 1}`))
+	if err != nil || strings.Join(found, ",") != "a@b.example,c@d.example" {
+		t.Errorf("addresses %v, %v", found, err)
 	}
 }
 

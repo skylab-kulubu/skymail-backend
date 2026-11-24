@@ -3431,7 +3431,7 @@ func (q *Queries) GetPreferenceGateClaimedRows(ctx context.Context, arg GetPrefe
 }
 
 const getRecipientByEmail = `-- name: GetRecipientByEmail :one
-SELECT id, full_name, email, created_at, updated_at
+SELECT id, full_name, email, created_at, updated_at, account_at
 FROM recipients
 WHERE email = $1
 `
@@ -3445,12 +3445,13 @@ func (q *Queries) GetRecipientByEmail(ctx context.Context, email string) (Recipi
 		&i.Email,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AccountAt,
 	)
 	return i, err
 }
 
 const getRecipients = `-- name: GetRecipients :many
-SELECT id, full_name, email, created_at, updated_at
+SELECT id, full_name, email, created_at, updated_at, account_at
 FROM recipients
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
@@ -3476,6 +3477,7 @@ func (q *Queries) GetRecipients(ctx context.Context, arg GetRecipientsParams) ([
 			&i.Email,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AccountAt,
 		); err != nil {
 			return nil, err
 		}
@@ -3488,7 +3490,7 @@ func (q *Queries) GetRecipients(ctx context.Context, arg GetRecipientsParams) ([
 }
 
 const getRecipientsByMailingListId = `-- name: GetRecipientsByMailingListId :many
-SELECT r.id, r.full_name, r.email, r.created_at, r.updated_at
+SELECT r.id, r.full_name, r.email, r.created_at, r.updated_at, r.account_at
 FROM recipients r
          JOIN mailing_list_recipients mlr ON r.id = mlr.recipient_id
          JOIN mailing_lists ml ON ml.id = mlr.mail_list_id
@@ -3519,6 +3521,7 @@ func (q *Queries) GetRecipientsByMailingListId(ctx context.Context, arg GetRecip
 			&i.Email,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AccountAt,
 		); err != nil {
 			return nil, err
 		}
@@ -4955,7 +4958,7 @@ func (q *Queries) ListMailFormSourceRecipientNames(ctx context.Context, sourceID
 }
 
 const listMailFormSourceRecipients = `-- name: ListMailFormSourceRecipients :many
-SELECT source_id, position, email, full_name FROM mail_form_source_recipients WHERE source_id=$1 ORDER BY position
+SELECT source_id, position, email, full_name, cleared_at, account_at FROM mail_form_source_recipients WHERE source_id=$1 ORDER BY position
 `
 
 func (q *Queries) ListMailFormSourceRecipients(ctx context.Context, sourceID uuid.UUID) ([]MailFormSourceRecipient, error) {
@@ -4972,6 +4975,8 @@ func (q *Queries) ListMailFormSourceRecipients(ctx context.Context, sourceID uui
 			&i.Position,
 			&i.Email,
 			&i.FullName,
+			&i.ClearedAt,
+			&i.AccountAt,
 		); err != nil {
 			return nil, err
 		}
@@ -6645,7 +6650,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref, preference_checked_at, throttles
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref, preference_checked_at, throttles, recipient_account_at
 `
 
 type ProcessBulkQueueItemsParams struct {
@@ -6695,6 +6700,7 @@ func (q *Queries) ProcessBulkQueueItems(ctx context.Context, arg ProcessBulkQueu
 			&i.SourceRef,
 			&i.PreferenceCheckedAt,
 			&i.Throttles,
+			&i.RecipientAccountAt,
 		); err != nil {
 			return nil, err
 		}
@@ -6718,7 +6724,7 @@ WHERE id IN (SELECT id
                AND next_attempt_at <= NOW()
              ORDER BY next_attempt_at, created_at
              LIMIT $2::int FOR UPDATE SKIP LOCKED)
-RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref, preference_checked_at, throttles
+RETURNING id, task_id, recipient_full_name, recipient_email, subject, body, body_html, status, error, created_at, attempts, next_attempt_at, claimed_at, claimed_by, priority, channel, recipient_sub, tracking_token, tracking_disabled_at, tracking_skip_reason, sent_at, suppressed_but_sent, list_unsubscribe_url, source_ref, preference_checked_at, throttles, recipient_account_at
 `
 
 type ProcessSystemQueueItemsParams struct {
@@ -6769,6 +6775,7 @@ func (q *Queries) ProcessSystemQueueItems(ctx context.Context, arg ProcessSystem
 			&i.SourceRef,
 			&i.PreferenceCheckedAt,
 			&i.Throttles,
+			&i.RecipientAccountAt,
 		); err != nil {
 			return nil, err
 		}
@@ -8468,7 +8475,7 @@ SET full_name  = $2,
     email      = $3,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, full_name, email, created_at, updated_at
+RETURNING id, full_name, email, created_at, updated_at, account_at
 `
 
 type UpdateRecipientParams struct {
@@ -8486,6 +8493,7 @@ func (q *Queries) UpdateRecipient(ctx context.Context, arg UpdateRecipientParams
 		&i.Email,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AccountAt,
 	)
 	return i, err
 }

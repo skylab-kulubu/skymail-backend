@@ -310,6 +310,8 @@ type MailApprovalRecipient struct {
 	FullName   string    `json:"full_name"`
 	// When the recipient retention run emptied the address and name of this person without an account; null otherwise.
 	ClearedAt *time.Time `json:"-"`
+	// When the recipient retention run found the address to be someone's account: kept, not asked about again.
+	AccountAt *time.Time `json:"-"`
 }
 
 type MailApprovalTask struct {
@@ -399,6 +401,10 @@ type MailFormSourceRecipient struct {
 	Position int       `json:"position"`
 	Email    string    `json:"email"`
 	FullName string    `json:"full_name"`
+	// When the recipient retention run emptied the address and name of this respondent without an account; null otherwise.
+	ClearedAt *time.Time `json:"-"`
+	// When the recipient retention run found the address to be someone's account: kept, not asked about again.
+	AccountAt *time.Time `json:"-"`
 }
 
 type MailQueue struct {
@@ -439,6 +445,8 @@ type MailQueue struct {
 	PreferenceCheckedAt *time.Time `json:"preference_checked_at"`
 	// Throttling replies the row had with no attempt counted; past a few its attempts count.
 	Throttles int `json:"throttles"`
+	// When the recipient retention run found the row's address, with no subject, to be someone's account: kept, not asked about again.
+	RecipientAccountAt *time.Time `json:"-"`
 }
 
 type MailSendWindow struct {
@@ -661,6 +669,8 @@ type Recipient struct {
 	Email     string    `json:"email"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// When the recipient retention run found the address to be someone's account: their memberships of a list archived a year ago stay. Null again once the address changes.
+	AccountAt *time.Time `json:"-"`
 }
 
 // Receipts of the recipient retention run: mode, times, status, counts. No person, address or name.
