@@ -28,10 +28,15 @@ HTTP adı: `Conflict`, `Not Found`), `status`, `detail` (insan için ileti),
 uzantı üyesi olarak aynen durur (RFC 9457 §3.2): `code` (makinenin okuduğu
 hata kodu, örn. `mail_approval.state_conflict`), `message` (`detail` ile
 aynı), varsa `params`. İstemciler `code` ve `params` okumaya devam eder.
+`code` ve `message` başta yazılır: gövdenin yalnız başını basan bir
+istemci (Template seed günlüğü, core'un 2 KiB tanı okuması) onları yine
+görür. Dikkat: `status` artık hata gövdesinde HTTP durumu (sayı); başarılı
+yanıtında `status` adında başka bir alan taşıyan bir uç (ör. gönderim
+denetimi) için hata ve başarı gövdesini aynı tipe açan istemci kırılır.
 
 ```json
-{"type":"about:blank","title":"Conflict","status":409,"detail":"…","instance":"/v1/mail_approvals/…/approve",
- "code":"mail_approval.state_conflict","message":"…","params":{"state":"approved"}}
+{"code":"mail_approval.state_conflict","message":"…","type":"about:blank","title":"Conflict","status":409,
+ "detail":"…","instance":"/v1/mail_approvals/…/approve","params":{"state":"approved"}}
 ```
 
 Hesap silme (`/internal/v1/account-erasures`) ve takip geri alma uçları
