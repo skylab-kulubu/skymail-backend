@@ -932,33 +932,27 @@ func (q *Queries) CountMailTaskRows(ctx context.Context, taskID uuid.UUID) (Coun
 const countMailTaskSends = `-- name: CountMailTaskSends :one
 SELECT count(*)
 FROM mail_tasks mt
+         LEFT JOIN templates t ON t.id = mt.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = mt.mail_list_id
+         LEFT JOIN mail_form_sources fs ON fs.id = mt.form_source_id
 WHERE ($1::text IS NULL OR mail_task_status(mt.id) = $1::text)
   AND ($2::text IS NULL
-      OR EXISTS (SELECT 1
-                 FROM templates t
-                 WHERE t.id = mt.template_id
-                   AND (strpos(skymail_search_fold(t.name), skymail_search_fold($2::text)) > 0
-                       OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold($2::text)) > 0
-                       OR strpos(skymail_search_fold(t.subject), skymail_search_fold($2::text)) > 0))
-      OR EXISTS (SELECT 1
-                 FROM mailing_lists ml
-                 WHERE ml.id = mt.mail_list_id
-                   AND strpos(skymail_search_fold(ml.name), skymail_search_fold($2::text)) > 0)
-      OR EXISTS (SELECT 1
-                 FROM mail_form_sources fs
-                 WHERE fs.id = mt.form_source_id
-                   AND strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold($2::text)) > 0)
-      OR EXISTS (SELECT 1
-                 FROM mail_approval_tasks mat
-                          JOIN mail_approvals a ON a.id = mat.approval_id
-                 WHERE mat.task_id = mt.id
-                   AND strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold($2::text)) > 0)
-      OR (mt.mail_list_id IS NULL AND mt.form_source_id IS NULL AND mt.source_kind IS NULL
-          AND EXISTS (SELECT 1
-                      FROM mail_queue q
-                      WHERE q.task_id = mt.id
-                        AND (strpos(skymail_search_fold(q.recipient_email), skymail_search_fold($2::text)) > 0
-                            OR strpos(skymail_search_fold(q.recipient_full_name), skymail_search_fold($2::text)) > 0))))
+       OR strpos(skymail_search_fold(COALESCE(t.name, '')), skymail_search_fold($2::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold($2::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(t.subject, '')), skymail_search_fold($2::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(ml.name, '')), skymail_search_fold($2::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold($2::text)) > 0
+       OR EXISTS (SELECT 1
+                  FROM mail_approval_tasks mat
+                           JOIN mail_approvals a ON a.id = mat.approval_id
+                  WHERE mat.task_id = mt.id
+                    AND strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold($2::text)) > 0)
+       OR (mt.mail_list_id IS NULL AND mt.form_source_id IS NULL AND mt.source_kind IS NULL
+           AND EXISTS (SELECT 1
+                       FROM mail_queue q
+                       WHERE q.task_id = mt.id
+                         AND (strpos(skymail_search_fold(q.recipient_email), skymail_search_fold($2::text)) > 0
+                              OR strpos(skymail_search_fold(q.recipient_full_name), skymail_search_fold($2::text)) > 0))))
   AND ($3::timestamptz IS NULL OR mt.created_at >= $3::timestamptz)
   AND ($4::timestamptz IS NULL OR mt.created_at < $4::timestamptz)
   AND ($5::text IS NULL OR mail_task_kind(mt.id) = $5::text)
@@ -978,7 +972,10 @@ type CountMailTaskSendsParams struct {
 	SentBy        *string    `json:"sent_by"`
 }
 
-// The sends ListMailTaskSends lists under the same filters, every page.
+// The sends ListMailTaskSends lists under the same filters, every page. It
+// joins the other tables rather than asking them through EXISTS, as the page
+// does: with no LIMIT to stop early, per-send subqueries cost the planner
+// past jit_above_cost, and JIT compiling took longer than the count.
 func (q *Queries) CountMailTaskSends(ctx context.Context, arg CountMailTaskSendsParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countMailTaskSends,
 		arg.Status,

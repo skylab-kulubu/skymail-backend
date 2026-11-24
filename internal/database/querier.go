@@ -96,7 +96,10 @@ type Querier interface {
 	// A send's queue rows as POST /v1/notifications answers them: queued (any row
 	// not failed) and failed (a recipient whose mail did not render).
 	CountMailTaskRows(ctx context.Context, taskID uuid.UUID) (CountMailTaskRowsRow, error)
-	// The sends ListMailTaskSends lists under the same filters, every page.
+	// The sends ListMailTaskSends lists under the same filters, every page. It
+	// joins the other tables rather than asking them through EXISTS, as the page
+	// does: with no LIMIT to stop early, per-send subqueries cost the planner
+	// past jit_above_cost, and JIT compiling took longer than the count.
 	CountMailTaskSends(ctx context.Context, arg CountMailTaskSendsParams) (int64, error)
 	CountMailTasks(ctx context.Context) (int64, error)
 	// Sends by the status mail_task_status derives, over every send: the same
