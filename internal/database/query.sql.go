@@ -4991,6 +4991,8 @@ type ListMailTaskLinkTargetsRow struct {
 	Url       string `json:"url"`
 }
 
+// The links a tracked row's mail gets its click addresses for when it goes
+// out: the send's links whose address is still kept.
 func (q *Queries) ListMailTaskLinkTargets(ctx context.Context, taskID uuid.UUID) ([]ListMailTaskLinkTargetsRow, error) {
 	rows, err := q.db.Query(ctx, listMailTaskLinkTargets, taskID)
 	if err != nil {
@@ -5948,8 +5950,6 @@ type ListTrackingLinksRow struct {
 	UrlClearedReason *string `json:"url_cleared_reason"`
 }
 
-// The links a tracked row's mail gets its click addresses for when it goes
-// out: the send's links whose address is still kept.
 // A send's links as the tracking reports show them: each link's position,
 // its target (null once emptied) and why it was emptied.
 func (q *Queries) ListTrackingLinks(ctx context.Context, taskID uuid.UUID) ([]ListTrackingLinksRow, error) {
