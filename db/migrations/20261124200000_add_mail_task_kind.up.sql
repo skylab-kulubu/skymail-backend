@@ -10,14 +10,19 @@
 --     notification).
 --   mail_task_kind(): bulk (mail_task_bulk(), or a News send), system (a core
 --     notification, or a send a service queued; one from before
---     sent_by_service by its lane: a row in the system lane, as
---     TrackingTaskAccess's system_lane reads it), single (any other). The
---     lane alone is not the rule: until every send is tracked, a person's
---     untracked single mail goes in the system lane too.
+--     sent_by_service by erase_after_send, a service's only, or by its lane:
+--     a row in the system lane, as TrackingTaskAccess's system_lane reads it;
+--     an erased send's rows are gone), single (any other). The lane alone is
+--     not the rule: until every send is tracked, a person's untracked single
+--     mail goes in the system lane too.
 --   skymail_search_fold(): text as the list searches compare it: Turkish
 --     capitals to their own small letters (İ, Ş, Ğ, Ü, Ö, Ç), whatever the
 --     database's collation, and the four i's (I, ı, İ, i) as one, so IŞIK
---     finds ışık and Işık; then lower().
+--     finds ışık and Işık; then lower(). It sets no search_path, unlike every
+--     other function here (20260925120000): a SQL function with a SET is
+--     never inlined, and this one runs on every row a search reads. It
+--     names its two functions with their schema instead, so a restore with
+--     an empty search_path finds them all the same.
 --
 -- Expand only (docs/database-migrations.md): a nullable column is added
 -- without a rewrite, an image from before names its columns and never reads
@@ -41,7 +46,8 @@ SELECT CASE
                THEN 'bulk'
            WHEN mt.notification_id IS NOT NULL
                OR COALESCE(mt.sent_by_service,
-                           EXISTS (SELECT 1 FROM mail_queue q WHERE q.task_id = mt.id AND q.priority > 0))
+                           mt.erase_after_send
+                               OR EXISTS (SELECT 1 FROM mail_queue q WHERE q.task_id = mt.id AND q.priority > 0))
                THEN 'system'
            ELSE 'single'
            END
@@ -53,10 +59,9 @@ CREATE FUNCTION skymail_search_fold(value TEXT) RETURNS TEXT
     LANGUAGE sql
     IMMUTABLE
     PARALLEL SAFE
-    SET search_path = pg_catalog, public
 AS
 $$
-SELECT lower(translate(value, 'İIıŞĞÜÖÇ', 'iiişğüöç'))
+SELECT pg_catalog.lower(pg_catalog.translate(value, 'İIıŞĞÜÖÇ', 'iiişğüöç'))
 $$;
 
 RESET lock_timeout;

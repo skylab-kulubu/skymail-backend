@@ -2,8 +2,10 @@ package migrations_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
 )
 
@@ -44,6 +46,35 @@ func TestMailTaskKindMigrationGoesUpAndDown(t *testing.T) {
 	}
 	if lane, bulkLane := kinds(); lane != "system" || bulkLane != "single" {
 		t.Errorf("sends from before: %s, %s; want system (its lane), single", lane, bulkLane)
+	}
+	// An erased send from before (erase_after_send, a service's only) has no
+	// rows left to tell its lane: it is system all the same.
+	if _, err := database.Pool.Exec(ctx, `INSERT INTO mail_tasks (id, sent_by, body_variables, erase_after_send)
+		VALUES ('77000000-0000-4000-8000-000000000003', 'c', '{}', true)`); err != nil {
+		t.Fatal(err)
+	}
+	var erased string
+	if err := database.Pool.QueryRow(ctx, `SELECT mail_task_kind('77000000-0000-4000-8000-000000000003')`).Scan(&erased); err != nil || erased != "system" {
+		t.Errorf("an erased send from before: %s %v; want system", erased, err)
+	}
+	// skymail_search_fold() is inlined: a SQL function with a SET is not.
+	var config []string
+	if err := database.Pool.QueryRow(ctx, `SELECT COALESCE(proconfig, '{}') FROM pg_proc WHERE proname = 'skymail_search_fold'`).Scan(&config); err != nil || len(config) != 0 {
+		t.Errorf("skymail_search_fold settings = %v %v; want none", config, err)
+	}
+	rows, err := database.Pool.Query(ctx, `EXPLAIN (VERBOSE, COSTS OFF) SELECT skymail_search_fold(name) FROM templates`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan := strings.Join(lines, "\n"); strings.Contains(plan, "skymail_search_fold") || !strings.Contains(plan, "translate") {
+		t.Errorf("not inlined:\n%s", plan)
+	}
+	if _, err := database.Pool.Exec(ctx, `DELETE FROM mail_tasks WHERE id = '77000000-0000-4000-8000-000000000003'`); err != nil {
+		t.Fatal(err)
 	}
 	// Written by this image, the column decides over the lane.
 	if _, err := database.Pool.Exec(ctx, `UPDATE mail_tasks SET sent_by_service = (id = '77000000-0000-4000-8000-000000000002')`); err != nil {
