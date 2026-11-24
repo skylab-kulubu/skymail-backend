@@ -2226,7 +2226,7 @@ components:
             core lets be tracked gets a pixel and tracked links. Ignored (and answered
             false) while SkyMail''s tracking is off and for a System or sensitive
             template, which are never tracked; a mailing list''s address-only recipients
-            are not tracked (no_account).'
+            are tracked too.'
           type: boolean
         transactional_statement:
           description: 'With islem, required and true: the sender''s statement that
@@ -2751,8 +2751,9 @@ components:
             none at all in a sensitive mail. The recipient''s account is looked up
             in Keycloak by address before the send is queued: the one enabled user
             whose primary e-mail equals it (case-insensitively) and is verified; none
-            such is no_account, Keycloak not answering is preference_unavailable,
-            and core decides for the account found.'
+            such, or Keycloak not answering, is tracked without an account, and core
+            decides for the account found (it says no only for an inactive account
+            or while its brake is on).'
           type: boolean
         transactional_statement:
           description: 'With islem, required and true: the sender''s statement that
@@ -2858,7 +2859,7 @@ components:
             says nothing counts as sensitive) and for a Forms source. People named
             here are looked up in Keycloak by address when the request is sent, as
             POST /mail_tasks/single does: one enabled account with that verified primary
-            e-mail, or no_account.'
+            e-mail; an address without one is tracked too.'
           type: boolean
         transactional_statement:
           description: 'With islem, required and true: the sender''s statement that
@@ -4333,14 +4334,14 @@ paths:
         TTL; changed payload or target is refused. The send is untracked, and the
         answer says tracking false, unless SkyMail tracks every person''s send (SKYMAIL_TRACKING_OPERATOR;
         summary tracking_always): then it is tracked whatever it asks, each respondent''s
-        account looked up in Keycloak by address before the transaction (none is no_account)
-        and core deciding, and the answer says tracking true. Purposes (SKYMAIL_MAIL_PURPOSE;
-        tracking-mode purpose_available): while they are on the send is written with
-        purpose and category (README, "Gönderim amacı ve kategori"): duyuru with a
-        category by default; islem with transactional_statement true when the mail
-        is about each respondent''s own application: tracked as any Forms source send,
-        queued in the bulk lane, sent from bilgi@ without List-Unsubscribe. The purpose
-        is part of an exact retry.'
+        account looked up in Keycloak by address before the transaction (none is tracked
+        without an account) and core deciding, and the answer says tracking true.
+        Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they
+        are on the send is written with purpose and category (README, "Gönderim amacı
+        ve kategori"): duyuru with a category by default; islem with transactional_statement
+        true when the mail is about each respondent''s own application: tracked as
+        any Forms source send, queued in the bulk lane, sent from bilgi@ without List-Unsubscribe.
+        The purpose is part of an exact retry.'
       requestBody:
         content:
           application/json:
@@ -4433,24 +4434,24 @@ paths:
         the recipient (.Email, .FullName), though it goes to one person (none at all
         in a sensitive mail). The recipient''s account is found in Keycloak by address
         before the send is queued (exact primary e-mail, enabled, verified; none is
-        no_account), and core decides for it. A service''s token (account and transaction
-        mail) does not ask: its mail stays in the system lane, and while SkyMail tracks
-        system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the
-        pixel and a click address only on the links the template writes out as they
-        are (never on a link a variable fills, such as a reset or verification link;
-        none at all in a sensitive mail); the answer says tracking true when its recipient
-        is tracked. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available):
-        while they are on the send is written with purpose and category (README, "Gönderim
-        amacı ve kategori"): a person''s send may be islem (with transactional_statement
-        true; bilgi@; tracked as any person''s send, in the bulk lane then, else the
-        system lane) or duyuru with a category (the bulk lane, duyuru@); without a
-        purpose, duyuru, club:duyuru, tracked or not. A service''s token is always
-        islem; its fields are ignored. A service''s mail with erase_after_send keeps
-        no record of its recipient: never tracked, in the system lane, its row erased
-        when its outcome is written (recipient Silinmiş kullanıcı, no address, no
-        content, no variables); the answer says erase_after_send true. A service may
-        send an Idempotency-Key (optional; a person''s token may not): the same key
-        from the same service answers the first answer again (Idempotent-Replayed:
+        tracked without an account), and core decides for it. A service''s token (account
+        and transaction mail) does not ask: its mail stays in the system lane, and
+        while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the
+        same way, with the pixel and a click address only on the links the template
+        writes out as they are (never on a link a variable fills, such as a reset
+        or verification link; none at all in a sensitive mail); the answer says tracking
+        true when its recipient is tracked. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode
+        purpose_available): while they are on the send is written with purpose and
+        category (README, "Gönderim amacı ve kategori"): a person''s send may be islem
+        (with transactional_statement true; bilgi@; tracked as any person''s send,
+        in the bulk lane then, else the system lane) or duyuru with a category (the
+        bulk lane, duyuru@); without a purpose, duyuru, club:duyuru, tracked or not.
+        A service''s token is always islem; its fields are ignored. A service''s mail
+        with erase_after_send keeps no record of its recipient: never tracked, in
+        the system lane, its row erased when its outcome is written (recipient Silinmiş
+        kullanıcı, no address, no content, no variables); the answer says erase_after_send
+        true. A service may send an Idempotency-Key (optional; a person''s token may
+        not): the same key from the same service answers the first answer again (Idempotent-Replayed:
         true) and queues nothing, for 72 hours; a different request with it is 422.
         Without it a retry queues the mail again. A service''s mail may carry Mail
         attachments (ADR 0082; README "Posta eki"): at most 2, application/pdf or

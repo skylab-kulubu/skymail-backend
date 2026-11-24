@@ -216,7 +216,7 @@ func TestEveryPersonsSendIsTrackedWithOperatorTracking(t *testing.T) {
 	}
 	rows := trackedRows(t, db, task)
 	if !trackingRequested(t, db, task) || len(rows["ayse@example.com"].token) != tracking.RecipientTokenBytes ||
-		rows["mehmet@example.com"].reason != tracking.SkipPreferenceOff || rows["adres@example.com"].reason != tracking.SkipNoAccount {
+		rows["mehmet@example.com"].reason != tracking.SkipPreferenceOff || len(rows["adres@example.com"].token) != tracking.RecipientTokenBytes {
 		t.Errorf("group send of a System template: requested %v, rows %+v", trackingRequested(t, db, task), rows)
 	}
 	if got := linkURLs(linksOf(t, db, task)); strings.Join(got, " ") != "https://skylab.example/etkinlik?gun=1&saat=2" {
@@ -224,7 +224,7 @@ func TestEveryPersonsSendIsTrackedWithOperatorTracking(t *testing.T) {
 	}
 
 	// An internal list's addresses are not looked up: the send is tracked,
-	// its recipients no_account.
+	// and so is each recipient (B9).
 	task, err = m.Enqueue(ctx, database.CreateMailTaskParams{
 		SentBy: "operator-sub", TemplateID: &announcementTemplate, MailListID: &announcementList, BodyVariables: []byte(`{}`), TrackingRequested: true,
 	})
@@ -235,8 +235,8 @@ func TestEveryPersonsSendIsTrackedWithOperatorTracking(t *testing.T) {
 		t.Error("a list send is not tracked with operator tracking on")
 	}
 	for email, row := range trackedRows(t, db, task) {
-		if row.token != nil || row.reason != tracking.SkipNoAccount {
-			t.Errorf("list send, %s: token %x, reason %q; want no_account", email, row.token, row.reason)
+		if len(row.token) != tracking.RecipientTokenBytes || row.reason != "" {
+			t.Errorf("list send, %s: token %x, reason %q; want a token", email, row.token, row.reason)
 		}
 	}
 

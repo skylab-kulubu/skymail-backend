@@ -273,7 +273,8 @@ run does (see [Recipients without an account](#recipients-without-an-account)):
 - Open and click tracking (see [Open and click tracking](#open-and-click-tracking)):
   `mail_queue.tracking_token` (a random token that stands for the row's
   recipient in their mail's pixel and links), `tracking_skip_reason` (why
-  they are not tracked: `preference_off` says they turned it off),
+  they are not tracked: since B9 only core's no or `flag_off`; rows written
+  before may say `preference_off`, they turned it off),
   `tracking_disabled_at`, `sent_at`; `mail_tracking_events` (when the
   recipient's mail was opened and which link they clicked, the client's
   class; no IP address, User-Agent or referrer); `mail_task_links.url`, which
@@ -402,12 +403,12 @@ Off unless `SKYMAIL_TRACKING=on` (hub ticket iletisim-servisi 14; design note
 | `mail_task_links.url` | one year from the link's `created_at` (T3) | emptied by the retention run (`url_cleared_reason` `expired`); a send masked or sensitive since it went out (review D7) and Account erasure of a person it names: emptied (`erased`) |
 | `tracking_retention_runs` | without end: one row per run, counts and times only | — |
 
-**Withdrawal** (`PUT /internal/v1/tracking-withdrawals/{sub}`, core, when
-the person turns tracking off on my.): every token of mail to the subject
-is dropped (NULL, `tracking_disabled_at` set), sent or still queued, and
-their events are deleted, in one
-transaction that locks their tracked queue rows first. Links stay and still
-redirect; counts without people already kept stay. Idempotent, `204`.
+**Withdrawal** (`PUT /internal/v1/tracking-withdrawals/{sub}`): since B9
+(ADR-0074 addendum of 2026-11-24, every mail is tracked) the route answers
+`204` for one release and changes nothing. Before B9, core called it when
+the person turned tracking off on my.: every token of mail to the subject
+was dropped (NULL, `tracking_disabled_at` set), sent or still queued, and
+their events were deleted. Rows closed that way stay as they are.
 
 **Retention** (`SKYMAIL_TRACKING_RETENTION` = `off` | `dry-run` | `apply` |
 `purge`; README, "Saklama"): daily, under an advisory lock, one transaction
