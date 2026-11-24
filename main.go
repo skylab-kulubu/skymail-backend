@@ -1265,10 +1265,9 @@ func clientClass(raw string) string {
 func errorHandler(ctx fiber.Ctx, err error) error {
 	var validationErrors validator.ValidationErrors
 	if errors.As(err, &validationErrors) {
-		return ctx.Status(fiber.StatusBadRequest).
-			JSON(apperrors.ErrValidation.WithParams(map[string]interface{}{
-				"errors": validator.ParseValidationErrors(validationErrors),
-			}))
+		return apperrors.WriteProblem(ctx, fiber.StatusBadRequest, apperrors.ErrValidation.WithParams(map[string]interface{}{
+			"errors": validator.ParseValidationErrors(validationErrors),
+		}))
 	}
 
 	var appError *apperrors.AppError
@@ -1276,7 +1275,7 @@ func errorHandler(ctx fiber.Ctx, err error) error {
 		if appError.RetryAfter > 0 {
 			ctx.Set(fiber.HeaderRetryAfter, strconv.Itoa(appError.RetryAfter))
 		}
-		return ctx.Status(appError.Status).JSON(appError)
+		return apperrors.WriteProblem(ctx, appError.Status, appError)
 	}
 
 	if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows) {
@@ -1288,12 +1287,12 @@ func errorHandler(ctx fiber.Ctx, err error) error {
 			Str("client", clientClass(ctx.IP())).
 			Err(err).
 			Msg("Resource not found in database (404)")
-		return ctx.Status(apperrors.ErrStatusNotFound.Status).JSON(apperrors.ErrStatusNotFound)
+		return apperrors.WriteProblem(ctx, apperrors.ErrStatusNotFound.Status, apperrors.ErrStatusNotFound)
 	}
 
 	var pgError *pgconn.PgError
 	if errors.As(err, &pgError) && pgError.Code == "23505" {
-		return ctx.Status(apperrors.ErrConflict.Status).JSON(apperrors.ErrConflict)
+		return apperrors.WriteProblem(ctx, apperrors.ErrConflict.Status, apperrors.ErrConflict)
 	}
 
 	var e *fiber.Error
@@ -1311,5 +1310,5 @@ func errorHandler(ctx fiber.Ctx, err error) error {
 			Send()
 	}
 
-	return ctx.Status(appError.Status).JSON(appError)
+	return apperrors.WriteProblem(ctx, appError.Status, appError)
 }

@@ -127,8 +127,8 @@ type TrackingRecipientLink struct {
 //	@Produce		json
 //	@Param			id	path		string	true	"Mail task ID"
 //	@Success		200	{object}	handlers.TrackingSummary
-//	@Failure		403	{object}	apperrors.AppError
-//	@Failure		404	{object}	apperrors.AppError
+//	@Failure		403	{object}	apperrors.Problem
+//	@Failure		404	{object}	apperrors.Problem
 //	@Router			/mail_tasks/{id}/tracking [get]
 func (h *mailHandlerImpl) GetTracking(c fiber.Ctx) error {
 	c.Set(fiber.HeaderCacheControl, "no-store")
@@ -221,9 +221,9 @@ func trackingPeopleReadable(caller contentCaller, service bool, task database.Tr
 //	@Param			page		query		int		false	"Page (1–1000000)"
 //	@Param			page_size	query		int		false	"Rows per page (1–100, default 25)"
 //	@Success		200			{object}	handlers.TrackingRecipientPage
-//	@Failure		403			{object}	apperrors.AppError
-//	@Failure		404			{object}	apperrors.AppError
-//	@Failure		410			{object}	apperrors.AppError
+//	@Failure		403			{object}	apperrors.Problem
+//	@Failure		404			{object}	apperrors.Problem
+//	@Failure		410			{object}	apperrors.Problem
 //	@Router			/mail_tasks/{id}/tracking/recipients [get]
 func (h *mailHandlerImpl) GetTrackingRecipients(c fiber.Ctx) error {
 	c.Set(fiber.HeaderCacheControl, "no-store")

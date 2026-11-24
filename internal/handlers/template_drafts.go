@@ -65,11 +65,11 @@ var errStaleBase = apperrors.New(
 //	@Param			draft	body		requests.SaveTemplateDraft	true	"The draft"
 //	@Success		201		{object}	handlers.TemplateVersion	"The draft, written"
 //	@Success		200		{object}	handlers.TemplateVersion	"Nothing changed: the version the save would have repeated"
-//	@Failure		400		{object}	apperrors.AppError			"validation.error (params.errors, sorted by field), template.invalid_base or template.main_source_missing"
-//	@Failure		403		{object}	apperrors.AppError			"Forbidden"
-//	@Failure		404		{object}	apperrors.AppError			"Not Found: no such template, or it is archived"
-//	@Failure		422		{object}	apperrors.AppError			"template.unparseable: params.part (subject, plain_text or html) does not parse, params.error is the parser's message; or template.required_variables_missing: params.missing names each Required variable the HTML drops, with its source (contract or operator) and reason"
-//	@Failure		500		{object}	apperrors.AppError			"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem			"validation.error (params.errors, sorted by field), template.invalid_base or template.main_source_missing"
+//	@Failure		403		{object}	apperrors.Problem			"Forbidden"
+//	@Failure		404		{object}	apperrors.Problem			"Not Found: no such template, or it is archived"
+//	@Failure		422		{object}	apperrors.Problem			"template.unparseable: params.part (subject, plain_text or html) does not parse, params.error is the parser's message; or template.required_variables_missing: params.missing names each Required variable the HTML drops, with its source (contract or operator) and reason"
+//	@Failure		500		{object}	apperrors.Problem			"Internal Server Error"
 //	@Router			/templates/{id}/drafts [post]
 func (h *templateHandlerImpl) SaveTemplateDraft(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -113,12 +113,12 @@ func (h *templateHandlerImpl) SaveTemplateDraft(c fiber.Ctx) error {
 //	@Param			versionId	path		string							true	"Version ID of the draft"
 //	@Param			publish		body		requests.PublishTemplateVersion	false	"The version a stale draft is published over"
 //	@Success		200			{object}	handlers.Template
-//	@Failure		400			{object}	apperrors.AppError	"validation.error"
-//	@Failure		403			{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404			{object}	apperrors.AppError	"Not Found: no such template or version, or the template is archived"
-//	@Failure		409			{object}	apperrors.AppError	"template.stale_base, template.not_a_draft or template.draft_discarded"
-//	@Failure		422			{object}	apperrors.AppError	"template.unparseable (params.part: subject, plain_text or html), or template.required_variables_missing: the draft drops a Required variable the template has now, a variable marked since it was saved included (params.missing: [{name, source, reason}])"
-//	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400			{object}	apperrors.Problem	"validation.error"
+//	@Failure		403			{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404			{object}	apperrors.Problem	"Not Found: no such template or version, or the template is archived"
+//	@Failure		409			{object}	apperrors.Problem	"template.stale_base, template.not_a_draft or template.draft_discarded"
+//	@Failure		422			{object}	apperrors.Problem	"template.unparseable (params.part: subject, plain_text or html), or template.required_variables_missing: the draft drops a Required variable the template has now, a variable marked since it was saved included (params.missing: [{name, source, reason}])"
+//	@Failure		500			{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/templates/{id}/versions/{versionId}/publish [post]
 func (h *templateHandlerImpl) PublishTemplateVersion(c fiber.Ctx) error {
 	templateID, versionID, err := versionPath(c)
@@ -159,10 +159,10 @@ func (h *templateHandlerImpl) PublishTemplateVersion(c fiber.Ctx) error {
 //	@Param			versionId	path		string						true	"Version ID"
 //	@Success		201			{object}	handlers.TemplateVersion	"The draft, written"
 //	@Success		200			{object}	handlers.TemplateVersion	"Nothing changed: the version the copy would have repeated"
-//	@Failure		403			{object}	apperrors.AppError			"Forbidden"
-//	@Failure		404			{object}	apperrors.AppError			"Not Found: no such template or version, or the template is archived"
-//	@Failure		422			{object}	apperrors.AppError			"template.unparseable: the copy would not parse; or template.required_variables_missing: it drops a Required variable the template has now (params.missing: [{name, source, reason}]) — checked as a saved draft is"
-//	@Failure		500			{object}	apperrors.AppError			"Internal Server Error"
+//	@Failure		403			{object}	apperrors.Problem			"Forbidden"
+//	@Failure		404			{object}	apperrors.Problem			"Not Found: no such template or version, or the template is archived"
+//	@Failure		422			{object}	apperrors.Problem			"template.unparseable: the copy would not parse; or template.required_variables_missing: it drops a Required variable the template has now (params.missing: [{name, source, reason}]) — checked as a saved draft is"
+//	@Failure		500			{object}	apperrors.Problem			"Internal Server Error"
 //	@Router			/templates/{id}/versions/{versionId}/restore [post]
 func (h *templateHandlerImpl) RestoreTemplateVersion(c fiber.Ctx) error {
 	templateID, versionID, err := versionPath(c)
@@ -321,10 +321,10 @@ func jsonValue(raw json.RawMessage) []byte {
 //	@Param			id			path		string	true	"Template ID"
 //	@Param			versionId	path		string	true	"Version ID of the draft"
 //	@Success		200			{object}	handlers.TemplateVersion
-//	@Failure		403			{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404			{object}	apperrors.AppError	"Not Found: no such template or version, or the template is archived"
-//	@Failure		409			{object}	apperrors.AppError	"template.not_a_draft: the version is published"
-//	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		403			{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404			{object}	apperrors.Problem	"Not Found: no such template or version, or the template is archived"
+//	@Failure		409			{object}	apperrors.Problem	"template.not_a_draft: the version is published"
+//	@Failure		500			{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/templates/{id}/versions/{versionId}/discard [post]
 func (h *templateHandlerImpl) DiscardTemplateVersion(c fiber.Ctx) error {
 	templateID, versionID, err := versionPath(c)

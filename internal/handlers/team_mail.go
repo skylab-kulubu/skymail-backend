@@ -533,10 +533,10 @@ const teamCountWorkers = 4
 //	@Tags			Team mail
 //	@Produce		json
 //	@Success		200	{object}	handlers.TeamAudiences
-//	@Failure		401	{object}	apperrors.AppError	"A token without skymail:access whose aud does not name SkyMail"
-//	@Failure		403	{object}	apperrors.AppError	"Neither skymail:access nor a Team the caller leads; auth.person_required for a service account's token without skymail:access"
-//	@Failure		404	{object}	apperrors.AppError	"team_mail.off: SKYMAIL_TEAM_SEND is off"
-//	@Failure		503	{object}	apperrors.AppError	"team_mail.leadership_unavailable (Retry-After): core did not say which Teams the caller leads"
+//	@Failure		401	{object}	apperrors.Problem	"A token without skymail:access whose aud does not name SkyMail"
+//	@Failure		403	{object}	apperrors.Problem	"Neither skymail:access nor a Team the caller leads; auth.person_required for a service account's token without skymail:access"
+//	@Failure		404	{object}	apperrors.Problem	"team_mail.off: SKYMAIL_TEAM_SEND is off"
+//	@Failure		503	{object}	apperrors.Problem	"team_mail.leadership_unavailable (Retry-After): core did not say which Teams the caller leads"
 //	@Router			/me/team_audiences [get]
 func (h *teamMailHandlerImpl) Audiences(c fiber.Ctx) error {
 	sub, _ := c.Locals("user_id").(string)
