@@ -16,8 +16,9 @@ const ProblemContentType = "application/problem+json"
 // that reads code reads it as before.
 //
 // The members are written code and message first: a caller that prints only
-// the head of a refusal (a Template seed's log line, core's 2 KiB diagnostic
-// read) still finds them. RFC 9457 gives the order no meaning.
+// the head of a refusal (a Template seed's log line) still finds them. Core's
+// diagnostic read cuts the body at 2 KiB and cannot parse a cut JSON; on a
+// whole body it reads message, which stays. RFC 9457 gives the order no meaning.
 type Problem struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`

@@ -29,8 +29,9 @@ uzantı üyesi olarak aynen durur (RFC 9457 §3.2): `code` (makinenin okuduğu
 hata kodu, örn. `mail_approval.state_conflict`), `message` (`detail` ile
 aynı), varsa `params`. İstemciler `code` ve `params` okumaya devam eder.
 `code` ve `message` başta yazılır: gövdenin yalnız başını basan bir
-istemci (Template seed günlüğü, core'un 2 KiB tanı okuması) onları yine
-görür. Dikkat: `status` artık hata gövdesinde HTTP durumu (sayı); başarılı
+istemci (Template seed günlüğü) onları yine görür. Core'un tanı okuması
+gövdeyi 2 KiB'ta keser ve kesik JSON'u ayrıştıramaz; tam gövdede `message`
+okur, o da yerinde durur. Dikkat: `status` artık hata gövdesinde HTTP durumu (sayı); başarılı
 yanıtında `status` adında başka bir alan taşıyan bir uç (ör. gönderim
 denetimi) için hata ve başarı gövdesini aynı tipe açan istemci kırılır.
 
