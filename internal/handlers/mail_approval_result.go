@@ -16,8 +16,9 @@ import (
 // to people, one send each, has one total, never a row per send: a row each
 // would tell each person's delivery. Opens and clicks are summed by the rule
 // GET /mail_tasks/{id}/tracking reads a send's by (ADR-0074 decision 9,
-// addendum 2026-11-08): withheld below 10 tracked recipients and in the
-// system lane from one who may not read the sends' people. tracking, those
+// addendum 2026-11-08; Yusuf, 2026-11-24, K6): withheld only in the system
+// lane from one who may not read the sends' people, whatever the number of
+// tracked recipients. tracking, those
 // opens and clicks, is null when none was tracked, when tracking_withheld,
 // when no totals are kept (a year after a send to fewer than 10), or when they
 // could not be read in time (tracking_withheld false then); it has no
@@ -33,7 +34,7 @@ type MailApprovalResult struct {
 	// Recipients still queued or being sent.
 	Pending  int64                 `json:"pending"`
 	Tracking *MailApprovalTracking `json:"tracking"`
-	// Its sends were tracked, but their counts tell of people (fewer than 10 tracked recipients, or the system lane) and the caller may not read the sends' people: tracking is null.
+	// Its sends were tracked, but their counts tell of people (the system lane) and the caller may not read the sends' people: tracking is null.
 	TrackingWithheld bool `json:"tracking_withheld"`
 }
 
@@ -105,17 +106,15 @@ func (h *mailApprovalHandlerImpl) trackedSends(ctx context.Context, taskIDs []uu
 
 // approvalTracking sums a request's tracked sends' opens and clicks, and says
 // whether they are withheld from the caller: by countsTellOfPeople over the
-// sum, and over the sends whose own counts tell of people when others' do
-// not — one who reads the others' (GET /mail_tasks/{id}/tracking) would
-// subtract them from the sum — unless the caller may read every send's people
-// (trackingPeopleReadable). A send whose totals are gone leaves no sum.
+// sends (one in the system lane), unless the caller may read every send's
+// people (trackingPeopleReadable). A send whose totals are gone leaves no
+// sum.
 func approvalTracking(caller contentCaller, service bool, sends []trackedSend, senderSees bool) (*MailApprovalTracking, bool) {
 	if len(sends) == 0 {
 		return nil, false
 	}
-	var all, small TrackingAggregate
-	var allTask, smallTask database.TrackingTaskAccessRow
-	smallSends := 0
+	var all TrackingAggregate
+	var allTask database.TrackingTaskAccessRow
 	people := true
 	for _, send := range sends {
 		if send.report == nil {
@@ -123,14 +122,8 @@ func approvalTracking(caller contentCaller, service bool, sends []trackedSend, s
 		}
 		people = people && trackingPeopleReadable(caller, service, send.task, senderSees)
 		addTracking(&all, &allTask, send)
-		if countsTellOfPeople(send.task, send.report) {
-			addTracking(&small, &smallTask, send)
-			smallSends++
-		}
 	}
-	tells := countsTellOfPeople(allTask, &all) ||
-		(smallSends > 0 && smallSends < len(sends) && countsTellOfPeople(smallTask, &small))
-	if tells && !people {
+	if countsTellOfPeople(allTask) && !people {
 		return nil, true
 	}
 	return &MailApprovalTracking{TrackedRecipients: all.TrackedRecipients, Opened: all.UniqueLikelyHumanOpens, Clicked: all.UniqueClickers}, false
