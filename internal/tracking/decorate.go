@@ -27,7 +27,7 @@ func PixelHTML(pixelURL string) string {
 // Decorate is a tracked mail as it goes out: body with the pixel right after
 // the <body> tag (Gmail clips the end of a long mail, never its start), and
 // each <a> whose href is a key of clicks
-// pointing at its value instead. An <a> marked data-skymail-notrack keeps its
+// pointing at its value instead. An <a> marked data-skynotify-notrack keeps its
 // href. Nothing else changes: every other byte of body is copied as it is,
 // so markup the tokenizer cannot read, conditional comments, styles and
 // text that looks like a link come out as they went in. No sentence, footer
@@ -105,7 +105,7 @@ func Decorate(body, pixelURL string, clicks map[string]string) string {
 
 // rewriteAnchor writes the current <a> anew with its href pointing at its
 // click address, when its href is a key of clicks and it is not marked
-// data-skymail-notrack. Its other attributes keep their order and values.
+// data-skynotify-notrack. Its other attributes keep their order and values.
 func rewriteAnchor(z *html.Tokenizer, selfClosing bool, clicks map[string]string) (string, bool) {
 	type attribute struct{ key, value string }
 	var attributes []attribute

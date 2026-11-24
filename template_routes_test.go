@@ -12,12 +12,12 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 // templateRoutesApp serves the template routes as production registers them —
@@ -57,7 +57,7 @@ func templateRoutesApp(t *testing.T, roles ...string) (*fiber.App, database.Temp
 		}
 		return c.Next()
 	})
-	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
 	registerTemplateRoutes(api, auth, handlers.NewTemplateHandler(store))
 	return app, template
 }
@@ -68,9 +68,9 @@ func TestTemplateVersionsRequireTemplatesRead(t *testing.T) {
 		roles []string
 		want  int
 	}{
-		{[]string{"skymail:access"}, fiber.StatusForbidden},
-		{[]string{"skymail:access", "skymail:templates:write", "skymail:mails:read", "skymail:mails:send", "skymail:lists:read"}, fiber.StatusForbidden},
-		{[]string{"skymail:access", "skymail:templates:read"}, fiber.StatusOK},
+		{[]string{"skynotify:access"}, fiber.StatusForbidden},
+		{[]string{"skynotify:access", "skynotify:templates:write", "skynotify:mails:read", "skynotify:mails:send", "skynotify:lists:read"}, fiber.StatusForbidden},
+		{[]string{"skynotify:access", "skynotify:templates:read"}, fiber.StatusOK},
 	} {
 		app, template := templateRoutesApp(t, tc.roles...)
 
@@ -106,7 +106,7 @@ func TestTemplateVersionsRequireTemplatesRead(t *testing.T) {
 // A version route never turns into a template route: /:id/versions sits
 // beside /:id, and the unknown ids below get the API's 404 shape.
 func TestTemplateVersionRoutesAnswerInTheAPIsErrorShape(t *testing.T) {
-	app, template := templateRoutesApp(t, "skymail:access", "skymail:templates:read")
+	app, template := templateRoutesApp(t, "skynotify:access", "skynotify:templates:read")
 
 	for _, path := range []string{
 		"/v1/templates/" + template.ID.String() + "/versions/" + template.ID.String(),
@@ -146,7 +146,7 @@ func sendJSON(t *testing.T, app *fiber.App, method, path string, body any) (int,
 }
 
 // Saving a draft, publishing, restoring a version and discarding a draft are
-// template writes: they take skymail:templates:write, as every other template
+// template writes: they take skynotify:templates:write, as every other template
 // write does, and no other role stands in for it.
 func TestTemplateDraftWritesRequireTemplatesWrite(t *testing.T) {
 	type check struct {
@@ -157,10 +157,10 @@ func TestTemplateDraftWritesRequireTemplatesWrite(t *testing.T) {
 		roles   []string
 		allowed bool
 	}{
-		{[]string{"skymail:access"}, false},
-		{[]string{"skymail:access", "skymail:templates:read"}, false},
-		{[]string{"skymail:access", "skymail:templates:read", "skymail:mails:write", "skymail:mails:send", "skymail:lists:write"}, false},
-		{[]string{"skymail:access", "skymail:templates:write"}, true},
+		{[]string{"skynotify:access"}, false},
+		{[]string{"skynotify:access", "skynotify:templates:read"}, false},
+		{[]string{"skynotify:access", "skynotify:templates:read", "skynotify:mails:write", "skynotify:mails:send", "skynotify:lists:write"}, false},
+		{[]string{"skynotify:access", "skynotify:templates:write"}, true},
 	} {
 		app, template := templateRoutesApp(t, tc.roles...)
 		versions := "/v1/templates/" + template.ID.String() + "/versions/"
@@ -206,7 +206,7 @@ func TestTemplateDraftWritesRequireTemplatesWrite(t *testing.T) {
 // handler production uses: a stale publish names the versions involved, an
 // archived template is not found, and an invalid body names its fields.
 func TestTemplateDraftRefusalsAnswerInTheAPIsErrorShape(t *testing.T) {
-	app, template := templateRoutesApp(t, "skymail:access", "skymail:templates:read", "skymail:templates:write")
+	app, template := templateRoutesApp(t, "skynotify:access", "skynotify:templates:read", "skynotify:templates:write")
 	id := template.ID.String()
 	type apiError struct {
 		Code    string         `json:"code"`
@@ -284,9 +284,9 @@ func TestRequiredVariableRoutesRequireTemplatesWrite(t *testing.T) {
 		roles []string
 		want  int
 	}{
-		{[]string{"skymail:access"}, fiber.StatusForbidden},
-		{[]string{"skymail:access", "skymail:templates:read", "skymail:mails:write", "skymail:mails:send", "skymail:lists:write"}, fiber.StatusForbidden},
-		{[]string{"skymail:access", "skymail:templates:write"}, fiber.StatusOK},
+		{[]string{"skynotify:access"}, fiber.StatusForbidden},
+		{[]string{"skynotify:access", "skynotify:templates:read", "skynotify:mails:write", "skynotify:mails:send", "skynotify:lists:write"}, fiber.StatusForbidden},
+		{[]string{"skynotify:access", "skynotify:templates:write"}, fiber.StatusOK},
 	} {
 		app, template := templateRoutesApp(t, tc.roles...)
 		path := "/v1/templates/" + template.ID.String() + "/required-variables"
@@ -303,7 +303,7 @@ func TestRequiredVariableRoutesRequireTemplatesWrite(t *testing.T) {
 // A name that is not one a body could reach is the caller's mistake: a 400 in
 // the API's error shape, from the body's validation or from the path.
 func TestMalformedRequiredVariableNamesAreRefused(t *testing.T) {
-	app, template := templateRoutesApp(t, "skymail:access", "skymail:templates:write")
+	app, template := templateRoutesApp(t, "skynotify:access", "skynotify:templates:write")
 	path := "/v1/templates/" + template.ID.String() + "/required-variables"
 
 	type fieldError struct {
@@ -357,12 +357,12 @@ func TestMalformedRequiredVariableNamesAreRefused(t *testing.T) {
 	}
 }
 
-// seedRoles are the skymail roles of the Template seed's service account
-// (skymail-seed): the template roles and skymail:templates:system.
-var seedRoles = []string{"skymail:access", "skymail:templates:read", "skymail:templates:write", handlers.TemplatesSystemRole}
+// seedRoles are the skynotify roles of the Template seed's service account
+// (skynotify-seed): the template roles and skynotify:templates:system.
+var seedRoles = []string{"skynotify:access", "skynotify:templates:read", "skynotify:templates:write", handlers.TemplatesSystemRole}
 
 // operatorRoles are an operator's who writes templates: no system mark.
-const operatorRoles = "skymail:access,skymail:templates:read,skymail:templates:write"
+const operatorRoles = "skynotify:access,skynotify:templates:read,skynotify:templates:write"
 
 // sendJSONWithRoles is sendJSON with another caller's roles.
 func sendJSONWithRoles(t *testing.T, app *fiber.App, roles, method, path string, body any) (int, []byte) {
@@ -383,7 +383,7 @@ func sendJSONWithRoles(t *testing.T, app *fiber.App, roles, method, path string,
 }
 
 // Being a system template is a privilege: an account.* or keycloak.* one goes
-// past the suppression list. So only skymail:templates:system — the seed's —
+// past the suppression list. So only skynotify:templates:system — the seed's —
 // makes a template one or takes it away, through the by-key upsert. Without
 // it the upsert still rewrites a system template's content, as the operator
 // could before, sending the mark it has; any other mark is refused 403
@@ -528,7 +528,7 @@ func TestARefusedSeedAnswersInTheAPIsErrorShape(t *testing.T) {
 	seed := func(html string) map[string]any {
 		return map[string]any{
 			"name": "Hoş Geldin", "subject": "Hoş geldin", "html_content": html, "plain_text_content": "Hoş geldin",
-			"react_email_content": "// Kaynak: skymail-frontend/emails/core.welcome.tsx — burada düzenlersen repodaki kaynakla ayrışır.\n",
+			"react_email_content": "// Kaynak: skynotify-frontend/emails/core.welcome.tsx — burada düzenlersen repodaki kaynakla ayrışır.\n",
 			"system":              true,
 		}
 	}
@@ -576,16 +576,16 @@ func TestARefusedSeedAnswersInTheAPIsErrorShape(t *testing.T) {
 	}
 }
 
-// The panel's content_sensitive switch takes skymail:templates:write; its
-// history, skymail:templates:read.
+// The panel's content_sensitive switch takes skynotify:templates:write; its
+// history, skynotify:templates:read.
 func TestContentSensitiveRoutesFollowTheTemplateRoles(t *testing.T) {
 	for _, tc := range []struct {
 		roles       []string
 		write, read int
 	}{
-		{[]string{"skymail:access"}, fiber.StatusForbidden, fiber.StatusForbidden},
-		{[]string{"skymail:access", "skymail:templates:read", "skymail:mails:write", "skymail:system-mails:read"}, fiber.StatusForbidden, fiber.StatusOK},
-		{[]string{"skymail:access", "skymail:templates:write", "skymail:templates:read"}, fiber.StatusOK, fiber.StatusOK},
+		{[]string{"skynotify:access"}, fiber.StatusForbidden, fiber.StatusForbidden},
+		{[]string{"skynotify:access", "skynotify:templates:read", "skynotify:mails:write", "skynotify:system-mails:read"}, fiber.StatusForbidden, fiber.StatusOK},
+		{[]string{"skynotify:access", "skynotify:templates:write", "skynotify:templates:read"}, fiber.StatusOK, fiber.StatusOK},
 	} {
 		app, template := templateRoutesApp(t, tc.roles...)
 		path := "/v1/templates/" + template.ID.String() + "/content-sensitive"

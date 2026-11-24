@@ -254,7 +254,7 @@ func TestRecipientRetentionEmptiesOnlyRowsOfPeopleWithoutAnAccount(t *testing.T)
 	if dry.Status != "partial" {
 		t.Errorf("dry run status %q, want partial (Keycloak did not answer for one address)", dry.Status)
 	}
-	// Keycloak is asked only about addresses SkyMail does not tie to a
+	// Keycloak is asked only about addresses SkyNotify does not tie to a
 	// subject, each once.
 	wantAsked := []string{"bilinmeyen@guest.example", "eski@guest.example", "form1@guest.example", "form2@guest.example",
 		"iki@guest.example", "konuk1@guest.example", "konuk2@guest.example", "konuk3@guest.example", "uye@member.example",
@@ -387,7 +387,7 @@ func TestRecipientRetentionWithoutKeycloakKeepsEveryAddress(t *testing.T) {
 		report.Status != "partial" {
 		t.Errorf("status %q counts %+v; want partial, 10 unknown, nothing emptied or deleted", report.Status, report.Counts)
 	}
-	// Only the address SkyMail ties to a subject is marked.
+	// Only the address SkyNotify ties to a subject is marked.
 	if report.Counts.AccountRowsMarked != 1 {
 		t.Errorf("%d rows marked, want 1 (the tied address)", report.Counts.AccountRowsMarked)
 	}

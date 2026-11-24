@@ -13,7 +13,7 @@ import (
 )
 
 // Silinmiş kullanıcı (CONTEXT.md; ADR-0051): the one stand-in every erased
-// person becomes wherever SkyMail keeps a record that names an actor. It is
+// person becomes wherever SkyNotify keeps a record that names an actor. It is
 // the same for everyone, so it links nothing, and nobody can sign in as it.
 const (
 	DeletedUserSubject = "00000000-0000-4000-8000-000000000000"
@@ -124,14 +124,14 @@ func scanAccountErasureReceipt(row pgx.Row) (*AccountErasureReceipt, error) {
 	return &receipt, nil
 }
 
-// EraseAccount erases one person from SkyMail (ADR-0051; account erasure
+// EraseAccount erases one person from SkyNotify (ADR-0051; account erasure
 // spec §3.1), in one transaction under an advisory lock on the request id,
 // and writes the receipt in it. A request that already has a receipt is not
 // done again: its receipt is returned. Two calls for one request at once do
 // the work once and return the same receipt.
 //
 // Rows are found by the subject (S), by the addresses (E, compared whole and
-// case-insensitively) and, in free text, by E and by the full names SkyMail
+// case-insensitively) and, in free text, by E and by the full names SkyNotify
 // holds for the person (N): the names on S's actor rows and on E's recipient
 // rows. A single-word name is never searched for; a namesake's text naming
 // the same full name is cleared too, which is the accepted cost. A text,
@@ -148,7 +148,7 @@ func (s *Store) EraseAccount(ctx context.Context, erasure AccountErasure) (*Acco
 	var receipt *AccountErasureReceipt
 	inProgress := false
 	err := pgx.BeginFunc(ctx, s.Conn, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('skymail:account-erasure:' || $1::text, 0))`,
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('skynotify:account-erasure:' || $1::text, 0))`,
 			erasure.RequestID); err != nil {
 			return fmt.Errorf("lock: %w", err)
 		}

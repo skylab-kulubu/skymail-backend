@@ -18,7 +18,7 @@ type Database struct {
 	URL  string
 	// Container is the Docker container the server runs in, for the tools
 	// that ship inside it (pg_dump, pg_restore) through docker exec. The
-	// database is skymailtest and its superuser postgres.
+	// database is skynotifytest and its superuser postgres.
 	Container string
 }
 
@@ -36,12 +36,12 @@ func StartDatabase(t testing.TB) Database {
 		t.Skip("docker not available")
 	}
 
-	name := fmt.Sprintf("skymail-postgres-test-%d", time.Now().UnixNano())
+	name := fmt.Sprintf("skynotify-postgres-test-%d", time.Now().UnixNano())
 	out, err := exec.Command(
 		"docker", "run", "-d", "--rm", "--name", name,
 		"--memory", "512m", "--tmpfs", "/var/lib/postgresql/data:rw,size=256m",
 		"-e", "POSTGRES_PASSWORD=postgres",
-		"-e", "POSTGRES_DB=skymailtest",
+		"-e", "POSTGRES_DB=skynotifytest",
 		"-p", "127.0.0.1::5432",
 		"postgres:17-alpine",
 	).CombinedOutput()
@@ -63,7 +63,7 @@ func StartDatabase(t testing.TB) Database {
 		t.Fatal(err)
 	}
 
-	databaseURL := fmt.Sprintf("postgres://postgres:postgres@%s/skymailtest?sslmode=disable", hostport)
+	databaseURL := fmt.Sprintf("postgres://postgres:postgres@%s/skynotifytest?sslmode=disable", hostport)
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		pool, poolErr := pgxpool.New(context.Background(), databaseURL)

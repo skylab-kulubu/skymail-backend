@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
+	"github.com/skylab-kulubu/skynotify-backend/internal/accessgate"
 )
 
 func TestEnforceConfigurationRequiresExactIssuerAndExplicitTLSAuthentication(t *testing.T) {
@@ -14,13 +14,13 @@ func TestEnforceConfigurationRequiresExactIssuerAndExplicitTLSAuthentication(t *
 	valid := map[string]string{
 		"ACCOUNT_ACCESS_GATE_MODE":               "enforce",
 		"ACCOUNT_ACCESS_REDIS_ADDR":              "access-gate.internal:6379",
-		"ACCOUNT_ACCESS_REDIS_USERNAME":          "skymail-reader",
+		"ACCOUNT_ACCESS_REDIS_USERNAME":          "skynotify-reader",
 		"ACCOUNT_ACCESS_REDIS_PASSWORD":          "secret",
 		"ACCOUNT_ACCESS_REDIS_DB":                "0",
 		"ACCOUNT_ACCESS_REDIS_TLS":               "true",
 		"ACCOUNT_ACCESS_REDIS_TLS_SERVER_NAME":   "access-gate.internal",
-		"ACCOUNT_ACCESS_REDIS_TLS_CERT_FILE":     "/run/secrets/skymail-reader.crt",
-		"ACCOUNT_ACCESS_REDIS_TLS_KEY_FILE":      "/run/secrets/skymail-reader.key",
+		"ACCOUNT_ACCESS_REDIS_TLS_CERT_FILE":     "/run/secrets/skynotify-reader.crt",
+		"ACCOUNT_ACCESS_REDIS_TLS_KEY_FILE":      "/run/secrets/skynotify-reader.key",
 		"ACCOUNT_ACCESS_REDIS_CA_CERT_FILE":      "/run/secrets/ca.crt",
 		"ACCOUNT_ACCESS_REDIS_OPERATION_TIMEOUT": "200ms",
 	}

@@ -16,16 +16,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 // NotificationsSendRole lets a service send POST /v1/notifications (hub
 // ticket iletisim-servisi 04 gives it to core's service account).
-const NotificationsSendRole = "skymail:notifications:send"
+const NotificationsSendRole = "skynotify:notifications:send"
 
 // IdempotencyKeyHeader names the header every POST /v1/notifications carries.
 const IdempotencyKeyHeader = "Idempotency-Key"
@@ -93,7 +93,7 @@ var (
 	)
 	errUnsubscribeURLRequired = apperrors.New(
 		"notification.unsubscribe_url_required",
-		"While every duyuru mail must carry a one-click way out (SKYMAIL_BULK_PREFERENCE), each e-mail recipient of an optional notification type of the bulk lane needs core's unsubscribe_url.",
+		"While every duyuru mail must carry a one-click way out (SKYNOTIFY_BULK_PREFERENCE), each e-mail recipient of an optional notification type of the bulk lane needs core's unsubscribe_url.",
 		fiber.StatusBadRequest,
 	)
 	errUnsubscribeURLInvalid = apperrors.New(
@@ -272,7 +272,7 @@ var errNotificationReplay = errors.New("idempotency key already used")
 // Send godoc
 //
 //	@Summary		Send a notification to people
-//	@Description	core says what happened (type) and to whom (recipients, by Keycloak sub); SkyMail picks each person's channels: the type's default channels, for an optional type only those in the person's allowed_channels (a required type ignores them), and only where the person has an address. E-mail goes to the request's address or, without one, to the person's primary e-mail in Keycloak; a person Keycloak does not know, a disabled account and an unverified address are skipped and counted. The e-mail is the template of the type's key, queued in the type's lane. The inbox does not look at allowed_channels: every recipient gets an item, the type's inbox text rendered with the variables, kept 90 days or until expires_at. An optional type of the bulk lane may give a recipient core's unsubscribe_url: the e-mail renders it as .UnsubscribeUrl and, while SKYMAIL_LIST_UNSUBSCRIBE is on, carries it in List-Unsubscribe and List-Unsubscribe-Post (RFC 8058) from the duyuru mailbox; any other type refuses it. The Idempotency-Key header is required: the same key from the same caller answers the first answer again (Idempotent-Replayed: true) and queues nothing; a different request with it is 422. A notification to exactly one recipient may carry Mail attachments (ADR 0082), by the rules of POST /mail_tasks/single: only its e-mail carries them, the inbox ignores them; they are not part of the Idempotency-Key's digest. Only a service account's token with skymail:notifications:send may call it.
+//	@Description	core says what happened (type) and to whom (recipients, by Keycloak sub); SkyNotify picks each person's channels: the type's default channels, for an optional type only those in the person's allowed_channels (a required type ignores them), and only where the person has an address. E-mail goes to the request's address or, without one, to the person's primary e-mail in Keycloak; a person Keycloak does not know, a disabled account and an unverified address are skipped and counted. The e-mail is the template of the type's key, queued in the type's lane. The inbox does not look at allowed_channels: every recipient gets an item, the type's inbox text rendered with the variables, kept 90 days or until expires_at. An optional type of the bulk lane may give a recipient core's unsubscribe_url: the e-mail renders it as .UnsubscribeUrl and, while SKYNOTIFY_LIST_UNSUBSCRIBE is on, carries it in List-Unsubscribe and List-Unsubscribe-Post (RFC 8058) from the duyuru mailbox; any other type refuses it. The Idempotency-Key header is required: the same key from the same caller answers the first answer again (Idempotent-Replayed: true) and queues nothing; a different request with it is 422. A notification to exactly one recipient may carry Mail attachments (ADR 0082), by the rules of POST /mail_tasks/single: only its e-mail carries them, the inbox ignores them; they are not part of the Idempotency-Key's digest. Only a service account's token with skynotify:notifications:send may call it.
 //	@Tags			Notifications
 //	@Accept			json
 //	@Produce		json
@@ -280,8 +280,8 @@ var errNotificationReplay = errors.New("idempotency key already used")
 //	@Param			notification	body		requests.SendNotification	true	"The notification"
 //	@Success		201				{object}	handlers.NotificationResult
 //	@Header			201				{string}	Idempotent-Replayed	"true when the answer is the first answer to this Idempotency-Key"
-//	@Failure		400				{object}	apperrors.Problem	"validation.error; notification.idempotency_key_required; notification.allowed_channels_required, notification.unsubscribe_url_not_allowed, notification.unsubscribe_url_invalid, notification.unsubscribe_url_required (an optional bulk-lane type's e-mail recipient without one while SKYMAIL_BULK_PREFERENCE is on) (params.recipient: its index); notification.expires_at_past; attachment.single_recipient_only, attachment.too_many, attachment.type_not_allowed, attachment.content_invalid, attachment.content_type_mismatch, attachment.too_large (params.index: which file)"
-//	@Failure		403				{object}	apperrors.Problem	"server.forbidden: no skymail:notifications:send; auth.service_account_required: a person's token"
+//	@Failure		400				{object}	apperrors.Problem	"validation.error; notification.idempotency_key_required; notification.allowed_channels_required, notification.unsubscribe_url_not_allowed, notification.unsubscribe_url_invalid, notification.unsubscribe_url_required (an optional bulk-lane type's e-mail recipient without one while SKYNOTIFY_BULK_PREFERENCE is on) (params.recipient: its index); notification.expires_at_past; attachment.single_recipient_only, attachment.too_many, attachment.type_not_allowed, attachment.content_invalid, attachment.content_type_mismatch, attachment.too_large (params.index: which file)"
+//	@Failure		403				{object}	apperrors.Problem	"server.forbidden: no skynotify:notifications:send; auth.service_account_required: a person's token"
 //	@Failure		409				{object}	apperrors.Problem	"notification.email_variant_missing: the type goes by e-mail and has no template of its key; notification.inbox_variant_missing"
 //	@Failure		422				{object}	apperrors.Problem	"notification.type_unknown; notification.idempotency_key_reused"
 //	@Failure		503				{object}	apperrors.Problem	"notification.directory_unavailable: Keycloak did not answer; nothing was queued"
@@ -462,7 +462,7 @@ func (h *notificationHandlerImpl) Send(c fiber.Ctx) error {
 		}
 	}
 
-	// core's notification is a service's mail: with SKYMAIL_TRACKING_SYSTEM
+	// core's notification is a service's mail: with SKYNOTIFY_TRACKING_SYSTEM
 	// on it is tracked, Keycloak and core asked before the transaction.
 	system := len(emails) > 0 && h.mailer.SystemTrackingAvailable()
 	var preferences *mailer.TrackingPreferences

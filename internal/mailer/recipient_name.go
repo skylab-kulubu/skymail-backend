@@ -17,7 +17,7 @@ import (
 // the recipient's name, the merge tag every mail tool has (Mailchimp's
 // *|FNAME|*, SendGrid's {{first_name}}, HubSpot's personalisation token), so
 // a free announcement can greet each person by name (hub ticket
-// skymail-serbest-duyuru-alici-adi 01, AlgoLab 2026-10-27).
+// skynotify-serbest-duyuru-alici-adi 01, AlgoLab 2026-10-27).
 //
 // Exactly two tags are filled, written as they are here and nothing else:
 //

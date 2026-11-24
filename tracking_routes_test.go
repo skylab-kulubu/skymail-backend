@@ -8,10 +8,10 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
 // routePreferences is core's answer in the route tests: Elif may be tracked,
@@ -65,7 +65,7 @@ func trackedWorldWith(t *testing.T, on bool, handlerOpts ...handlers.MailHandler
 	}
 	accounts := &laterAccounts{}
 	w := newApprovalWorldWith(t, 0, handlerOpts, mailer.WithTracking(mailer.Tracking{
-		Config:      tracking.Config{Mode: mode, BaseURL: "https://api.example.test/api/skymail", CoreURL: "http://core.invalid"},
+		Config:      tracking.Config{Mode: mode, BaseURL: "https://api.example.test/api/skynotify", CoreURL: "http://core.invalid"},
 		Preferences: prefs,
 		Accounts:    accounts,
 	}))

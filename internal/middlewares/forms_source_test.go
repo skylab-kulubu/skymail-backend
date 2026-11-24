@@ -11,19 +11,19 @@ import (
 )
 
 func TestFormsSourceConfigIsDisabledUntilIdentityAndLimitAreConfigured(t *testing.T) {
-	for _, values := range []map[string]string{{}, {"SKYMAIL_FORMS_SOURCE_SERVICE_SUB": uuid.NewString()}, {"SKYMAIL_FORMS_SOURCE_MAX_RECIPIENTS": "101"}} {
-		cfg, err := FormsSourceConfigFromEnv(func(k string) string { return values[k] }, "realm", "skymail")
+	for _, values := range []map[string]string{{}, {"SKYNOTIFY_FORMS_SOURCE_SERVICE_SUB": uuid.NewString()}, {"SKYNOTIFY_FORMS_SOURCE_MAX_RECIPIENTS": "101"}} {
+		cfg, err := FormsSourceConfigFromEnv(func(k string) string { return values[k] }, "realm", "skynotify")
 		if err != nil || cfg.Enabled() {
 			t.Fatalf("incomplete config enabled source creation: enabled=%v error=%v", cfg.Enabled(), err)
 		}
 	}
 	for _, value := range []string{"0", "-1", "many"} {
 		_, err := FormsSourceConfigFromEnv(func(k string) string {
-			if k == "SKYMAIL_FORMS_SOURCE_MAX_RECIPIENTS" {
+			if k == "SKYNOTIFY_FORMS_SOURCE_MAX_RECIPIENTS" {
 				return value
 			}
 			return ""
-		}, "realm", "skymail")
+		}, "realm", "skynotify")
 		if err == nil {
 			t.Fatal("invalid configured limit accepted")
 		}
@@ -34,9 +34,9 @@ func TestFormsSourceIdentityRequiresTheAcceptedServiceSubjectAndAllClaims(t *tes
 	service := uuid.NewString()
 	for _, mutation := range []string{"none", "public client", "human subject", "userinfo mismatch", "wrong issuer", "wrong audience", "missing client id", "disabled"} {
 		t.Run(mutation, func(t *testing.T) {
-			realm := userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, `{"sub":"`+service+`","resource_access":{"skymail":{"roles":["skymail:access","skymail:mails:send"]}}}`)
-			claims := jwt.MapClaims{"sub": service, "azp": "forms", "client_id": "forms", "iss": realm, "aud": []string{"skymail"}}
-			cfg := FormsSourceConfig{ServiceSub: service, ClientID: "forms", Issuer: realm, Audience: "skymail", MaxRecipients: 101}
+			realm := userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, `{"sub":"`+service+`","resource_access":{"skynotify":{"roles":["skynotify:access","skynotify:mails:send"]}}}`)
+			claims := jwt.MapClaims{"sub": service, "azp": "forms", "client_id": "forms", "iss": realm, "aud": []string{"skynotify"}}
+			cfg := FormsSourceConfig{ServiceSub: service, ClientID: "forms", Issuer: realm, Audience: "skynotify", MaxRecipients: 101}
 			switch mutation {
 			case "public client":
 				claims["azp"] = "skyforms"
@@ -59,7 +59,7 @@ func TestFormsSourceIdentityRequiresTheAcceptedServiceSubjectAndAllClaims(t *tes
 				t.Fatal(err)
 			}
 			app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-			app.Use(NewAuthMiddleware("skymail", realm, AudienceOff).Authenticate)
+			app.Use(NewAuthMiddleware("skynotify", realm, AudienceOff).Authenticate)
 			app.Post("/source", RequireFormsSourceService(cfg), func(c fiber.Ctx) error { return c.SendStatus(fiber.StatusNoContent) })
 			req := httptest.NewRequest(http.MethodPost, "/source", nil)
 			req.Header.Set("Authorization", "Bearer "+token)

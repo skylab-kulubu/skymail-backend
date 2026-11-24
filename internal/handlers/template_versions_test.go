@@ -16,10 +16,10 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 // The operator every request in these tests comes from: the Keycloak subject
@@ -44,7 +44,7 @@ export default function Email() {
 `
 
 func seedPointerComment(key string) string {
-	return "// Kaynak: skymail-frontend/emails/" + key + ".tsx — burada düzenlersen repodaki kaynakla ayrışır.\n"
+	return "// Kaynak: skynotify-frontend/emails/" + key + ".tsx — burada düzenlersen repodaki kaynakla ayrışır.\n"
 }
 
 // templateVersionsApp serves the template routes and a single send the way

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
 )
 
 var (
@@ -27,7 +27,7 @@ func codeOf(err error) string {
 	return ""
 }
 
-// What SkyMail takes: a PDF or a PNG whose file begins as its type does, at
+// What SkyNotify takes: a PDF or a PNG whose file begins as its type does, at
 // most two, 512 KB decoded together; the type may carry parameters and any
 // case.
 func TestParseAttachments(t *testing.T) {

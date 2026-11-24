@@ -4,15 +4,15 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
 )
 
-// Who opened a masked mail (hub ticket skymail-frontend-rewrite 32; Yusuf,
+// Who opened a masked mail (hub ticket skynotify-frontend-rewrite 32; Yusuf,
 // 2026-11-22): GET /v1/mail_tasks/{id}/content-views takes the audit role
 // alone. The roles that open the content — system-mails:read, mails:write —
 // and mails:read and the tracking role do not read it: those audited do not
 // read their own record (Purview's Audit Reader, NIST SP 800-53 AU-9(4)).
-// (skymail:access, /v1's own gate, is protectedAPI's: this world does not
+// (skynotify:access, /v1's own gate, is protectedAPI's: this world does not
 // mount it.)
 func TestContentViewsTakeTheAuditRoleAlone(t *testing.T) {
 	w := newApprovalWorld(t)
@@ -23,9 +23,9 @@ func TestContentViewsTakeTheAuditRoleAlone(t *testing.T) {
 	if status, raw := w.call("yusuf", "POST", "/v1/mail_tasks", send, &created); status != 201 {
 		t.Fatalf("create: %d %s", status, raw)
 	}
-	approvalPeople["denetci"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skymail:access", handlers.AuditReadRole}}
-	approvalPeople["icerik_acan"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skymail:access", "skymail:mails:read",
-		"skymail:mails:write", handlers.SystemMailsReadRole, handlers.TrackingReadRole}}
+	approvalPeople["denetci"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skynotify:access", handlers.AuditReadRole}}
+	approvalPeople["icerik_acan"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skynotify:access", "skynotify:mails:read",
+		"skynotify:mails:write", handlers.SystemMailsReadRole, handlers.TrackingReadRole}}
 	defer delete(approvalPeople, "denetci")
 	defer delete(approvalPeople, "icerik_acan")
 	path := "/v1/mail_tasks/" + created.ID.String() + "/content-views"

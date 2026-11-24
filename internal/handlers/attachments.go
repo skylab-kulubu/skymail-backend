@@ -8,9 +8,9 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
 )
 
 // Mail attachments (ADR 0082 decision 6, CONTEXT "Mail attachment"; hub
@@ -29,14 +29,14 @@ const (
 	maxAttachmentFilename = 100
 )
 
-// attachmentType is a media type SkyMail takes: the extension its file name
+// attachmentType is a media type SkyNotify takes: the extension its file name
 // ends with and the bytes its file begins with.
 type attachmentType struct {
 	extension string
 	magic     []byte
 }
 
-// attachmentTypes are the media types SkyMail takes. A type joins here with
+// attachmentTypes are the media types SkyNotify takes. A type joins here with
 // its extension and its signature.
 var attachmentTypes = map[string]attachmentType{
 	"application/pdf": {".pdf", []byte("%PDF-")},

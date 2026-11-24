@@ -10,11 +10,11 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 const (
@@ -60,7 +60,7 @@ func suppressionApp(t *testing.T, roles ...string) (*fiber.App, *database.Store)
 		c.Locals("roles", roles)
 		return c.Next()
 	})
-	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
 	registerSuppressionRoutes(api, auth, handlers.NewSuppressionHandler(store))
 	registerMailTaskRoutes(api, auth, handlers.NewMailHandler(store, idleMailer{}, noGroups{}))
 	return app, store
@@ -79,9 +79,9 @@ func call(t *testing.T, app *fiber.App, method, target string) (*http.Response, 
 	return response, string(body)
 }
 
-// Only skymail:suppressions:manage reads or changes the list.
+// Only skynotify:suppressions:manage reads or changes the list.
 func TestTheSuppressionListNeedsItsRole(t *testing.T) {
-	app, _ := suppressionApp(t, "skymail:access", "skymail:mails:read", "skymail:mails:write")
+	app, _ := suppressionApp(t, "skynotify:access", "skynotify:mails:read", "skynotify:mails:write")
 	for _, request := range [][2]string{
 		{fiber.MethodGet, "/v1/suppressions"},
 		{fiber.MethodDelete, "/v1/suppressions/60000000-0000-4000-8000-000000000001"},
@@ -93,7 +93,7 @@ func TestTheSuppressionListNeedsItsRole(t *testing.T) {
 }
 
 func TestTheSuppressionListIsListedAndSearched(t *testing.T) {
-	app, _ := suppressionApp(t, "skymail:access", handlers.SuppressionsManageRole)
+	app, _ := suppressionApp(t, "skynotify:access", handlers.SuppressionsManageRole)
 	response, body := call(t, app, fiber.MethodGet, "/v1/suppressions?_start=0&_end=2")
 	if response.StatusCode != fiber.StatusOK || response.Header.Get("X-Total-Count") != "3" {
 		t.Fatalf("GET = %d, total %q: %s", response.StatusCode, response.Header.Get("X-Total-Count"), body)
@@ -123,7 +123,7 @@ func TestTheSuppressionListIsListedAndSearched(t *testing.T) {
 // Removing names the row by its id, never the address; the removal is
 // recorded without the address. A second removal is 404, a malformed id 400.
 func TestRemovingASuppressionRecordsWhoWithoutTheAddress(t *testing.T) {
-	app, store := suppressionApp(t, "skymail:access", handlers.SuppressionsManageRole)
+	app, store := suppressionApp(t, "skynotify:access", handlers.SuppressionsManageRole)
 	ctx := context.Background()
 	var id string
 	if err := store.Conn.QueryRow(ctx, `SELECT id::text FROM mail_suppressions WHERE address = 'mehmet@uzak.example.net'`).Scan(&id); err != nil {
@@ -160,7 +160,7 @@ func TestRemovingASuppressionRecordsWhoWithoutTheAddress(t *testing.T) {
 // mail sent anyway) and undelivered (sent, then reported not to exist). The
 // suppressed recipient is skipped in the send's status.
 func TestASendCountsItsSuppressedAndUndeliveredRecipients(t *testing.T) {
-	app, _ := suppressionApp(t, "skymail:access", "skymail:mails:read")
+	app, _ := suppressionApp(t, "skynotify:access", "skynotify:mails:read")
 	response, body := call(t, app, fiber.MethodGet, "/v1/mail_tasks/"+suppressionTask)
 	if response.StatusCode != fiber.StatusOK {
 		t.Fatalf("GET send = %d: %s", response.StatusCode, body)
@@ -210,7 +210,7 @@ func TestASendCountsItsSuppressedAndUndeliveredRecipients(t *testing.T) {
 }
 
 // The bounce rate (login-ux spec §8's "bounce > 5%" threshold) and the NDR
-// reader's state are read with skymail:suppressions:manage: of the e-mails
+// reader's state are read with skynotify:suppressions:manage: of the e-mails
 // sent in the last days, how many a report said did not reach their address,
 // and each mailbox's last poll and counts, without its delta link.
 func TestTheBounceRateAndTheReadersStateNeedTheRole(t *testing.T) {
@@ -260,6 +260,6 @@ func TestTheBounceRateAndTheReadersStateNeedTheRole(t *testing.T) {
 
 	other, _ := suppressionApp(t, handlers.UnsubscribesReactivateRole)
 	if response, _ := call(t, other, http.MethodGet, "/v1/suppressions/bounces"); response.StatusCode != http.StatusForbidden {
-		t.Errorf("without skymail:suppressions:manage: status = %d, want 403", response.StatusCode)
+		t.Errorf("without skynotify:suppressions:manage: status = %d, want 403", response.StatusCode)
 	}
 }

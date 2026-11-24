@@ -9,8 +9,8 @@ import (
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
 // maxSearch is the longest q a list takes, in characters: longer than any
@@ -19,7 +19,7 @@ const maxSearch = 200
 
 // Send kinds, as GET /mail_tasks filters and returns them; mail_task_kind()
 // (20261124200000) is the rule: bulk (a list, a group, a Forms source, an
-// approved send, a News send), system (mail a service or SkyMail sent) and
+// approved send, a News send), system (mail a service or SkyNotify sent) and
 // single (a person's single mail).
 const (
 	SendKindBulk   = "bulk"
@@ -37,7 +37,7 @@ const (
 // read every send's tracking counts: the order would tell the counts GET
 // /mail_tasks/{id}/tracking withholds from them.
 var errOpenRateSortForbidden = apperrors.New("mail_task.sort_forbidden",
-	"Sorting by open rate needs skymail:mails:tracking:read.", fiber.StatusForbidden)
+	"Sorting by open rate needs skynotify:mails:tracking:read.", fiber.StatusForbidden)
 
 // sendListQuery is GET /mail_tasks's filters and order, read from the query.
 type sendListQuery struct {
@@ -101,7 +101,7 @@ func (q sendListQuery) sorted(limit, offset int32) database.ListMailTaskSendsSor
 
 // parseSendListQuery reads status, q, from, to, kind, template_id, list_id,
 // sent_by, _sort and _order. Every invalid value is named in one validation
-// error; open_rate needs skymail:mails:tracking:read.
+// error; open_rate needs skynotify:mails:tracking:read.
 func parseSendListQuery(c fiber.Ctx) (sendListQuery, error) {
 	var out sendListQuery
 	invalid := map[string]interface{}{}
@@ -288,11 +288,11 @@ func containsFold(value *string, folded string) bool {
 	return value != nil && strings.Contains(searchFold(*value), folded)
 }
 
-// turkishFold is skymail_search_fold()'s translate (20261124200000): Turkish
+// turkishFold is skynotify_search_fold()'s translate (20261124200000): Turkish
 // capitals to their small letters, the four i's to i.
 var turkishFold = strings.NewReplacer("İ", "i", "I", "i", "ı", "i", "Ş", "ş", "Ğ", "ğ", "Ü", "ü", "Ö", "ö", "Ç", "ç")
 
-// searchFold is text as skymail_search_fold() compares it.
+// searchFold is text as skynotify_search_fold() compares it.
 func searchFold(value string) string {
 	return strings.ToLower(turkishFold.Replace(value))
 }

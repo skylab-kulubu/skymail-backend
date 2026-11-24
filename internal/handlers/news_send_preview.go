@@ -9,11 +9,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/news"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/news"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
 )
 
 // NewsTestsPerMinute bounds a person's test mails (hub ticket duyuru-haber
@@ -32,7 +32,7 @@ var (
 
 // NewsSendAvailability answers GET /v1/news_sends/availability.
 type NewsSendAvailability struct {
-	// True while SKYMAIL_NEWS_SEND=on: a News record may be previewed, tested and sent.
+	// True while SKYNOTIFY_NEWS_SEND=on: a News record may be previewed, tested and sent.
 	Available bool `json:"available"`
 	// Where the mail's "Sitede oku" opens: home (the site's home page) or pages (the record's own page).
 	ReadMore string `json:"read_more" enums:"home,pages"`
@@ -41,7 +41,7 @@ type NewsSendAvailability struct {
 // Availability godoc
 //
 //	@Summary		Whether News records may be mailed
-//	@Description	available while SKYMAIL_NEWS_SEND=on; the send form shows "Haberden gönder" only then. A setting of SkyMail, not of any send.
+//	@Description	available while SKYNOTIFY_NEWS_SEND=on; the send form shows "Haberden gönder" only then. A setting of SkyNotify, not of any send.
 //	@Tags			News sends
 //	@Produce		json
 //	@Success		200	{object}	handlers.NewsSendAvailability
@@ -131,7 +131,7 @@ func (h *newsSendHandlerImpl) Preview(c fiber.Ctx) error {
 //	@Param			send	body		requests.SendNews	true	"The record and the mail, as POST /news_sends takes them"
 //	@Success		201		{object}	handlers.CreatedMailTask
 //	@Failure		400		{object}	apperrors.Problem	"validation.error; news_send.teams_invalid"
-//	@Failure		403		{object}	apperrors.Problem	"server.forbidden: no skymail:announcements:send or skymail:mails:write"
+//	@Failure		403		{object}	apperrors.Problem	"server.forbidden: no skynotify:announcements:send or skynotify:mails:write"
 //	@Failure		404		{object}	apperrors.Problem	"news_send.not_found"
 //	@Failure		409		{object}	apperrors.Problem	"news_send.no_test_address; news_send.private_record; news_send.template_missing"
 //	@Failure		429		{object}	apperrors.Problem	"news_send.test_rate_limited"

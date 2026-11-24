@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
 )
 
 // softBounce records one report about a new mail to address: kind, its codes,
@@ -43,7 +43,7 @@ func report(t *testing.T, store *database.Store, row, kind, status string, smtp 
 	}
 }
 
-// GET /v1/suppressions/soft-bounces (hub ticket skymail-bounce-isleme 13):
+// GET /v1/suppressions/soft-bounces (hub ticket skynotify-bounce-isleme 13):
 // the addresses with 3 or more softly refused mails in the last 30 days, not
 // suppressed, newest first, with the last one's codes and no text.
 func TestTheAddressesWithRepeatedSoftBouncesAreListed(t *testing.T) {
@@ -127,10 +127,10 @@ func TestTheAddressesWithRepeatedSoftBouncesAreListed(t *testing.T) {
 	}
 }
 
-// Only skymail:suppressions:manage reads it.
+// Only skynotify:suppressions:manage reads it.
 func TestTheSoftBounceListNeedsItsRole(t *testing.T) {
-	app, _ := suppressionApp(t, "skymail:access", handlers.UnsubscribesReactivateRole, "skymail:mails:read")
+	app, _ := suppressionApp(t, "skynotify:access", handlers.UnsubscribesReactivateRole, "skynotify:mails:read")
 	if response, _ := call(t, app, http.MethodGet, "/v1/suppressions/soft-bounces"); response.StatusCode != http.StatusForbidden {
-		t.Errorf("without skymail:suppressions:manage: status = %d, want 403", response.StatusCode)
+		t.Errorf("without skynotify:suppressions:manage: status = %d, want 403", response.StatusCode)
 	}
 }

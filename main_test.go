@@ -14,9 +14,9 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
-	"github.com/skylab-kulubu/skymail-backend/internal/health"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/accessgate"
+	"github.com/skylab-kulubu/skynotify-backend/internal/health"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
 )
 
 func TestErrorHandlerMapsUniqueConflict(t *testing.T) {
@@ -164,7 +164,7 @@ func TestProtectedAPIAllowsOnlyAfterAuthenticateGateAndPermission(t *testing.T) 
 	t.Parallel()
 
 	order := []string{}
-	auth := &routeTestAuth{subject: "service-account-skymail-backend", order: &order}
+	auth := &routeTestAuth{subject: "service-account-skynotify-backend", order: &order}
 	gate := &routeTestGate{decision: accessgate.Allowed, order: &order}
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
 	api := protectedAPI(app, auth, gate)
@@ -187,7 +187,7 @@ func TestProtectedAPIUsesUserInfoSubjectForHumanAndClientCredentials(t *testing.
 
 	for _, subject := range []string{
 		"3babe8e3-4d2b-4d10-ba5f-95bfaf35c0dc",
-		"service-account-skymail-backend",
+		"service-account-skynotify-backend",
 	} {
 		subject := subject
 		t.Run(subject, func(t *testing.T) {
@@ -200,7 +200,7 @@ func TestProtectedAPIUsesUserInfoSubjectForHumanAndClientCredentials(t *testing.
 				_ = json.NewEncoder(w).Encode(map[string]any{
 					"sub": subject,
 					"resource_access": map[string]any{
-						"skymail": map[string]any{"roles": []string{"skymail:access"}},
+						"skynotify": map[string]any{"roles": []string{"skynotify:access"}},
 					},
 				})
 			}))
@@ -209,7 +209,7 @@ func TestProtectedAPIUsesUserInfoSubjectForHumanAndClientCredentials(t *testing.
 			order := []string{}
 			gate := &routeTestGate{decision: accessgate.Allowed, order: &order}
 			app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
-			api := protectedAPI(app, middlewares.NewAuthMiddleware("skymail", userinfo.URL, middlewares.AudienceOff), gate)
+			api := protectedAPI(app, middlewares.NewAuthMiddleware("skynotify", userinfo.URL, middlewares.AudienceOff), gate)
 			api.Get("/probe", func(c fiber.Ctx) error { return c.SendStatus(fiber.StatusNoContent) })
 			request := httptest.NewRequest(fiber.MethodGet, "/v1/probe", nil)
 			request.Header.Set(fiber.HeaderAuthorization, "Bearer valid-token")
@@ -230,7 +230,7 @@ func TestProtectedAPIDoesNotQueryGateBeforeAuthenticationSucceeds(t *testing.T) 
 
 	gate := &routeTestGate{decision: accessgate.Allowed}
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
-	api := protectedAPI(app, middlewares.NewAuthMiddleware("skymail", "http://userinfo.invalid", middlewares.AudienceOff), gate)
+	api := protectedAPI(app, middlewares.NewAuthMiddleware("skynotify", "http://userinfo.invalid", middlewares.AudienceOff), gate)
 	api.Get("/probe", func(c fiber.Ctx) error { return c.SendStatus(fiber.StatusNoContent) })
 
 	response, err := app.Test(httptest.NewRequest(fiber.MethodGet, "/v1/probe", nil))

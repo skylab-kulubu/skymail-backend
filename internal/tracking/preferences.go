@@ -21,10 +21,10 @@ import (
 // before, and core no longer says preference_off or not_member (its brake,
 // tracking_off, is not_allowed here).
 const (
-	// SkipFlagOff: the row was queued tracked, and SKYMAIL_TRACKING was off
+	// SkipFlagOff: the row was queued tracked, and SKYNOTIFY_TRACKING was off
 	// when it went out; it went out clean and its token is closed.
 	SkipFlagOff = "flag_off"
-	// SkipNoAccount: SkyMail knows only the address (a mailing list's
+	// SkipNoAccount: SkyNotify knows only the address (a mailing list's
 	// recipient, a person named by address): no Keycloak account to ask
 	// about.
 	SkipNoAccount = "no_account"
@@ -35,7 +35,7 @@ const (
 	// SkipPreferenceUnavailable: core did not answer in time, or not as the
 	// contract says, so no one in the send is tracked.
 	SkipPreferenceUnavailable = "preference_unavailable"
-	// SkipNotAllowed: core said no with a reason SkyMail does not know.
+	// SkipNotAllowed: core said no with a reason SkyNotify does not know.
 	SkipNotAllowed = "not_allowed"
 )
 
@@ -61,7 +61,7 @@ type Preferences interface {
 	Resolve(ctx context.Context, subs []uuid.UUID) (map[uuid.UUID]Decision, error)
 }
 
-// Accounts finds the Keycloak account of a recipient SkyMail knows only by
+// Accounts finds the Keycloak account of a recipient SkyNotify knows only by
 // address (a person a send names one by one; Yusuf, 2026-10-20): the one
 // enabled account whose primary e-mail is the address, compared whole and
 // case-insensitively, and verified. No such account, or more than one, is
@@ -71,7 +71,7 @@ type Accounts interface {
 	VerifiedAccountByEmail(ctx context.Context, address string) (*uuid.UUID, error)
 }
 
-// TokenSource is SkyMail's service account token (KEYCLOAK_SERVICE_CLIENT_ID).
+// TokenSource is SkyNotify's service account token (KEYCLOAK_SERVICE_CLIENT_ID).
 type TokenSource interface {
 	ServiceToken(ctx context.Context) (string, error)
 }
@@ -89,7 +89,7 @@ const (
 // CoreClient asks core's tracking:resolve whom it lets be tracked: since B9
 // every active account unless core's brake is on (core's
 // COMMUNICATION_TRACKING_MODE=opt_in). It sends
-// SkyMail's service account token; core checks its audience and its core
+// SkyNotify's service account token; core checks its audience and its core
 // client role communication-preferences:read (ticket 17).
 type CoreClient struct {
 	endpoint string

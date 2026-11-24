@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
 // Open and click tracking in the mailer (hub ticket iletisim-servisi 14;
@@ -21,7 +21,7 @@ import (
 // touched: the content panel shows it without a pixel, so looking at a
 // recipient's mail never counts as their opening it.
 
-// Tracking is SKYMAIL_TRACKING and what it needs.
+// Tracking is SKYNOTIFY_TRACKING and what it needs.
 type Tracking struct {
 	Config tracking.Config
 	// Preferences says whom core lets be tracked.
@@ -36,19 +36,19 @@ func WithTracking(t Tracking) Option {
 	return func(m *mailerImpl) { m.tracking = t }
 }
 
-// TrackingAvailable reports whether SKYMAIL_TRACKING is on: whether a send
+// TrackingAvailable reports whether SKYNOTIFY_TRACKING is on: whether a send
 // that asks for tracking gets it.
 func (m *mailerImpl) TrackingAvailable() bool { return m.tracking.Config.On() }
 
 func (m *mailerImpl) PurposeAvailable() bool { return m.lanes.Purpose }
 
-// SystemTrackingAvailable reports whether SKYMAIL_TRACKING_SYSTEM is on with
-// SKYMAIL_TRACKING: whether the mail services send without asking is
+// SystemTrackingAvailable reports whether SKYNOTIFY_TRACKING_SYSTEM is on with
+// SKYNOTIFY_TRACKING: whether the mail services send without asking is
 // tracked (EnqueueSystemSingle, EnqueueWithRecipientsParams.System).
 func (m *mailerImpl) SystemTrackingAvailable() bool { return m.tracking.Config.SystemOn() }
 
-// OperatorTrackingAlways reports whether SKYMAIL_TRACKING_OPERATOR is on with
-// SKYMAIL_TRACKING: whether every send a person queues is tracked, whether it
+// OperatorTrackingAlways reports whether SKYNOTIFY_TRACKING_OPERATOR is on with
+// SKYNOTIFY_TRACKING: whether every send a person queues is tracked, whether it
 // asked or not (the send form offers no box then).
 func (m *mailerImpl) OperatorTrackingAlways() bool { return m.tracking.Config.OperatorOn() }
 
@@ -59,15 +59,15 @@ const (
 	// trackNone: not at all.
 	trackNone trackingKind = iota
 	// trackRequested: a person's send that asked for it (the compose form's
-	// box), with SKYMAIL_TRACKING on: the bulk lane, a template that is
+	// box), with SKYNOTIFY_TRACKING on: the bulk lane, a template that is
 	// neither System nor sensitive, the links every recipient has.
 	trackRequested
-	// trackSystem: a service's mail, with SKYMAIL_TRACKING_SYSTEM on
+	// trackSystem: a service's mail, with SKYNOTIFY_TRACKING_SYSTEM on
 	// (Yusuf, 2026-10-21): whatever its lane and template; the pixel always,
 	// a click only on the links its template writes out as they are
 	// (tracking.CommonLiteralLinks), none at all in a sensitive mail.
 	trackSystem
-	// trackOperator: a person's send, with SKYMAIL_TRACKING_OPERATOR on
+	// trackOperator: a person's send, with SKYNOTIFY_TRACKING_OPERATOR on
 	// (Yusuf, 2026-10-21: the panel's mail is always tracked; the callers
 	// then ask for every one): whatever its template, in the bulk lane only;
 	// the pixel always, a click on the links the send gives every recipient
@@ -76,9 +76,9 @@ const (
 )
 
 // trackingOf is how a send is tracked: a service's mail (system) as the
-// system when SKYMAIL_TRACKING_SYSTEM is on, and never otherwise; any other
-// send as it asked, when SKYMAIL_TRACKING is on, and under the system's link
-// rule when SKYMAIL_TRACKING_OPERATOR is on too.
+// system when SKYNOTIFY_TRACKING_SYSTEM is on, and never otherwise; any other
+// send as it asked, when SKYNOTIFY_TRACKING is on, and under the system's link
+// rule when SKYNOTIFY_TRACKING_OPERATOR is on too.
 func (c Tracking) trackingOf(requested, system bool) trackingKind {
 	switch {
 	case system && c.Config.SystemOn():
@@ -105,7 +105,7 @@ const systemTrackingBudget = 2 * time.Second
 // counts as sensitive, as it does for single mail everywhere. It says false
 // when that cannot be read. The send's transaction decides again
 // (GetMailTaskTrackingExclusion) and, should the template have changed in
-// between, says not tracked. With SKYMAIL_TRACKING_OPERATOR on every
+// between, says not tracked. With SKYNOTIFY_TRACKING_OPERATOR on every
 // template is tracked (a sensitive one with the pixel only): true.
 func (m *mailerImpl) TrackingApplies(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID) bool {
 	if m.OperatorTrackingAlways() {
@@ -178,7 +178,7 @@ func (p *TrackingPreferences) accountOf(address string) (*uuid.UUID, bool) {
 // templateID to mailListID may track. A recipient known only by address is
 // not looked up and is tracked (B9). No one is asked when tracking is off or
 // the template is never tracked (System or sensitive, unless
-// SKYMAIL_TRACKING_OPERATOR tracks every template; the send's transaction
+// SKYNOTIFY_TRACKING_OPERATOR tracks every template; the send's transaction
 // decides that again, and its answer stands). Core failing is an answer
 // too: the send tracks everyone and goes out.
 func (m *mailerImpl) ResolveTracking(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID, recipients []RecipientInfo) *TrackingPreferences {
@@ -197,7 +197,7 @@ func (m *mailerImpl) ResolvePeopleTracking(ctx context.Context, templateID uuid.
 }
 
 // ResolveSystemTracking is ResolveTracking for a service's mail
-// (SKYMAIL_TRACKING_SYSTEM, Yusuf 2026-10-21): no template is left out, a
+// (SKYNOTIFY_TRACKING_SYSTEM, Yusuf 2026-10-21): no template is left out, a
 // recipient known only by address is looked up in Keycloak as for people
 // named one by one, and Keycloak and core together get systemTrackingBudget.
 // Nil when system tracking is off. Call it before the send's transaction.
@@ -346,7 +346,7 @@ const (
 	// body an operator wrote in free.basic, an address typed once for all —
 	// but never one that changes with the recipient (.Email, .FullName,
 	// .UnsubscribeUrl, in whole or in part). A person's send with
-	// SKYMAIL_TRACKING_OPERATOR on (orchestrator, 2026-10-21, as Mailchimp,
+	// SKYNOTIFY_TRACKING_OPERATOR on (orchestrator, 2026-10-21, as Mailchimp,
 	// HubSpot and Dynamics count every link of a campaign's body but the
 	// ones marked). It is read by rendering the mail again for two made-up
 	// recipients (operatorProbes): a link both renders and every real
@@ -371,19 +371,19 @@ const (
 //     masking hides, and retention empties a sensitive send's links (D7).
 //     Any other gets one only on the links its template writes out as they
 //     are (linksLiteral);
-//   - a person's send with SKYMAIL_TRACKING_OPERATOR on (trackOperator):
+//   - a person's send with SKYNOTIFY_TRACKING_OPERATOR on (trackOperator):
 //     of any template, the pixel only when it is sensitive, otherwise a click
 //     on the links every recipient gets alike (linksSendLevel); in the bulk
 //     lane only: in the system lane it is not tracked at all, as a send that
 //     asked is not.
 //     So a tracked mail in the system lane is always one the system sends
-//     (a service's, or SkyMail's own approval notice), which the person
+//     (a service's, or SkyNotify's own approval notice), which the person
 //     report reads with the role only (GetTrackingRecipients);
 //   - every recipient is tracked (B9, ADR-0074 addendum of 2026-11-24) but
 //     one core said no for before the transaction (preferences): an
 //     inactive account, or everyone while core's brake is on; core's no
 //     stands whatever its reason, so a core from before B9 is still obeyed.
-//     A recipient SkyMail knows only by address (an internal list's, or a
+//     A recipient SkyNotify knows only by address (an internal list's, or a
 //     person Keycloak found no account for), one Keycloak or core did not
 //     answer for, and everyone when core was not asked or failed (the
 //     recipients changed since, core down or too slow): tracked. Core is
@@ -470,7 +470,7 @@ func (q *queue) planTracking(ctx context.Context, taskID uuid.UUID, items []data
 // (hub review T8). FullName B is not ASCII: its byte and rune counts differ.
 var probeRecipients = [2]RecipientInfo{
 	{FullName: "Sonda", Email: "a@sonda.invalid", UnsubscribeURL: "https://a.invalid/u"},
-	{FullName: "Örnek Yoklama Alıcısı B Ç", Email: "zz.yoklama-bbbbbbbbbbbb@skymail-probe-b.example", UnsubscribeURL: "https://skymail-probe-b.example/abonelik/bbbbbbbbbbbb?x=1"},
+	{FullName: "Örnek Yoklama Alıcısı B Ç", Email: "zz.yoklama-bbbbbbbbbbbb@skynotify-probe-b.example", UnsubscribeURL: "https://skynotify-probe-b.example/abonelik/bbbbbbbbbbbb?x=1"},
 }
 
 // operatorProbes is a send's HTML rendered with its variables for each of
@@ -494,7 +494,7 @@ func (t mailTemplates) operatorProbes(vars map[string]interface{}) []string {
 // personal differs between recipients and is never registered, so it is
 // never rewritten); for a service's mail only those of them templateHTML
 // writes out as they are (tracking.CommonLiteralLinks); for a person's send
-// with SKYMAIL_TRACKING_OPERATOR on those the probes carry too (probes, from
+// with SKYNOTIFY_TRACKING_OPERATOR on those the probes carry too (probes, from
 // operatorProbes), or, without probes, the template's own.
 func (q *queue) registerLinks(ctx context.Context, taskID uuid.UUID, items []database.CreateMailQueueItemsParams, rule linkRule, templateHTML string, probes []string) error {
 	if rule == linksNone {

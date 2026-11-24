@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/skylab-kulubu/skymail-backend/internal/health"
+	"github.com/skylab-kulubu/skynotify-backend/internal/health"
 )
 
 type lines struct {

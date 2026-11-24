@@ -8,13 +8,13 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/erasuretoken"
+	"github.com/skylab-kulubu/skynotify-backend/internal/accessgate"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/erasuretoken"
 )
 
 // TrackingWithdrawalHandler serves PUT /internal/v1/tracking-withdrawals/{sub}:
-// core telling SkyMail that a person turned open and click tracking off on
+// core telling SkyNotify that a person turned open and click tracking off on
 // my. (hub ticket iletisim-servisi 14c and 16; design note 07 §4.6, §4.7).
 // Since B9 (ADR-0074 addendum of 2026-11-24: every mail is tracked, an
 // objection no longer stops it) the route is kept for one release only, so
@@ -28,7 +28,7 @@ type TrackingWithdrawalHandler struct {
 }
 
 // NewTrackingWithdrawalHandler builds the handler. tokens must take core's
-// token with SkyMail's withdraw role (erasuretoken.WithdrawCallerClientID,
+// token with SkyNotify's withdraw role (erasuretoken.WithdrawCallerClientID,
 // erasuretoken.WithdrawRole), never core-erasure's.
 func NewTrackingWithdrawalHandler(tokens ErasureTokenVerifier, gate accessgate.Reader) TrackingWithdrawalHandler {
 	return TrackingWithdrawalHandler{tokens: tokens, gate: gate}

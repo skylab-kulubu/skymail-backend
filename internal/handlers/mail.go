@@ -13,12 +13,12 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/keycloak"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
 )
 
 type MailHandler interface {
@@ -49,7 +49,7 @@ type mailHandlerImpl struct {
 	// How many days a send's content is shown; 0 is DefaultContentRetentionDays.
 	contentRetentionDays int
 	formSourceLimit      int
-	// SKYMAIL_SENDER_SEES_RECIPIENTS: a send's own sender reads its people.
+	// SKYNOTIFY_SENDER_SEES_RECIPIENTS: a send's own sender reads its people.
 	senderSeesRecipients bool
 }
 
@@ -76,7 +76,7 @@ var errTemplateTargetMissing = apperrors.New(
 )
 
 // resolveTemplate turns whichever handle the caller used into a template id.
-// core passes the uuid it holds in SKYMAIL_WELCOME_TEMPLATE_ID; the Keycloak
+// core passes the uuid it holds in SKYNOTIFY_WELCOME_TEMPLATE_ID; the Keycloak
 // mail provider passes a key so a reseed cannot strand it (ADR-0045).
 func (h *mailHandlerImpl) resolveTemplate(c fiber.Ctx, params requests.SendSingleMail) (uuid.UUID, error) {
 	if params.TemplateID != uuid.Nil {
@@ -99,9 +99,9 @@ func (h *mailHandlerImpl) resolveTemplate(c fiber.Ctx, params requests.SendSingl
 // CreatedMailTask is a send just queued.
 type CreatedMailTask struct {
 	ID uuid.UUID `json:"id"`
-	// Whether the send is tracked. A person's send: it asked for open and click tracking and got it — false when it did not ask, when SkyMail's tracking is off (GET /mail_tasks/summary tracking_available), or when its template is a System template or sensitive — or SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then true whatever it asked and whatever its template. A service's single mail does not ask: true only when SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) and its recipient is tracked (has an account core lets be tracked).
+	// Whether the send is tracked. A person's send: it asked for open and click tracking and got it — false when it did not ask, when SkyNotify's tracking is off (GET /mail_tasks/summary tracking_available), or when its template is a System template or sensitive — or SkyNotify tracks every person's send (SKYNOTIFY_TRACKING_OPERATOR; summary tracking_always): then true whatever it asked and whatever its template. A service's single mail does not ask: true only when SkyNotify tracks system mail (SKYNOTIFY_TRACKING_SYSTEM) and its recipient is tracked (has an account core lets be tracked).
 	Tracking bool `json:"tracking"`
-	// The send's purpose (ADR 0072 decision 2): islem or duyuru, as written on the send; null while SkyMail's purposes are off (GET /mail_tasks/tracking-mode purpose_available false).
+	// The send's purpose (ADR 0072 decision 2): islem or duyuru, as written on the send; null while SkyNotify's purposes are off (GET /mail_tasks/tracking-mode purpose_available false).
 	Purpose *string `json:"purpose" enums:"islem,duyuru"`
 	// core's category of a duyuru send; null for any other.
 	Category *string `json:"category"`
@@ -123,7 +123,7 @@ var errEraseAfterSendNotAllowed = apperrors.New("mail_task.erase_after_send_not_
 
 // operatorTracking is whether a person's send (an operator's mail) of
 // templateID to mailListID (nil: to people) is tracked: every one while
-// SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR, Yusuf
+// SkyNotify tracks every person's send (SKYNOTIFY_TRACKING_OPERATOR, Yusuf
 // 2026-10-21: no box, no opting out per send), whatever it asked and
 // whatever its template; otherwise only one that asked, when its template
 // may be tracked.
@@ -137,16 +137,16 @@ func operatorTracking(ctx context.Context, m mailer.Mailer, asked bool, template
 // CreateTask godoc
 //
 //	@Summary		Create a new mail task
-//	@Description	Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyMail's tracking is off, or for a System or sensitive template (never tracked), the field is ignored and the answer says tracking false. While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored too and every send is tracked, of any template: a sensitive one with the pixel only, any other with a click address on the links every recipient gets alike (written in the template or in the send's own variables, such as a free body), never on one made from the recipient (.Email, .FullName). Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"); a list or a Keycloak group is always duyuru with core's category (club:duyuru by default), islem is refused with 400 mail_task.purpose_not_allowed.
+//	@Description	Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyNotify's tracking is off, or for a System or sensitive template (never tracked), the field is ignored and the answer says tracking false. While SkyNotify tracks every person's send (SKYNOTIFY_TRACKING_OPERATOR; summary tracking_always) the field is ignored too and every send is tracked, of any template: a sensitive one with the pixel only, any other with a click address on the links every recipient gets alike (written in the template or in the send's own variables, such as a free body), never on one made from the recipient (.Email, .FullName). Purposes (SKYNOTIFY_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"); a list or a Keycloak group is always duyuru with core's category (club:duyuru by default), islem is refused with 400 mail_task.purpose_not_allowed.
 //	@Tags			Mail
 //	@Accept			json
 //	@Produce		json
 //	@Param			task	body		requests.CreateMailTask	true	"Mail task details"
 //	@Success		201		{object}	handlers.CreatedMailTask
-//	@Failure		400		{object}	apperrors.Problem	"Bad Request. attachment.not_allowed: a send to a list or a group takes no attachments. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team"
+//	@Failure		400		{object}	apperrors.Problem	"Bad Request. attachment.not_allowed: a send to a list or a group takes no attachments. Purpose, checked in this order, while purposes are on (SKYNOTIFY_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (SKYNOTIFY_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team"
 //	@Failure		422		{object}	apperrors.Problem	"mail.audience_unavailable: the Keycloak group is unknown or gone"
 //	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
-//	@Failure		503		{object}	apperrors.Problem	"mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE; README, \"Toplu postada tercih\"), core did not say whom the send may go to; nothing is queued"
+//	@Failure		503		{object}	apperrors.Problem	"mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYNOTIFY_BULK_PREFERENCE; README, \"Toplu postada tercih\"), core did not say whom the send may go to; nothing is queued"
 //	@Router			/mail_tasks [post]
 func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 	var params requests.CreateMailTask
@@ -251,7 +251,7 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 // SendSingle godoc
 //
 //	@Summary		Send a single email
-//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is tracked without an account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): a person's send may be islem (with transactional_statement true; bilgi@; tracked as any person's send, in the bulk lane then, else the system lane) or duyuru with a category (the bulk lane, duyuru@); without a purpose, duyuru, club:duyuru, tracked or not. A service's token is always islem; its fields are ignored. A service's mail with erase_after_send keeps no record of its recipient: never tracked, in the system lane, its row erased when its outcome is written (recipient Silinmiş kullanıcı, no address, no content, no variables); the answer says erase_after_send true. A service may send an Idempotency-Key (optional; a person's token may not): the same key from the same service answers the first answer again (Idempotent-Replayed: true) and queues nothing, for 72 hours; a different request with it is 422. Without it a retry queues the mail again. A service's mail may carry Mail attachments (ADR 0082; README "Posta eki"): at most 2, application/pdf or image/png, 512 KB decoded in all, standard base64; the file name is reduced to [A-Za-z0-9._-], at most 100 characters, with the type's extension. The files go with the e-mail (SMTP multipart/mixed; Graph fileAttachment) and are kept only until the row's outcome is written; the queue then shows their name, type and size. They are not part of the Idempotency-Key's digest: a retry with a file drawn again answers the first answer and writes no file. The answer's attachments says how many went with the mail.
+//	@Description	Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyNotify's tracking is off, or for a System or sensitive template). While SkyNotify tracks every person's send (SKYNOTIFY_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is tracked without an account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyNotify tracks system mail (SKYNOTIFY_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked. Purposes (SKYNOTIFY_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): a person's send may be islem (with transactional_statement true; bilgi@; tracked as any person's send, in the bulk lane then, else the system lane) or duyuru with a category (the bulk lane, duyuru@); without a purpose, duyuru, club:duyuru, tracked or not. A service's token is always islem; its fields are ignored. A service's mail with erase_after_send keeps no record of its recipient: never tracked, in the system lane, its row erased when its outcome is written (recipient Silinmiş kullanıcı, no address, no content, no variables); the answer says erase_after_send true. A service may send an Idempotency-Key (optional; a person's token may not): the same key from the same service answers the first answer again (Idempotent-Replayed: true) and queues nothing, for 72 hours; a different request with it is 422. Without it a retry queues the mail again. A service's mail may carry Mail attachments (ADR 0082; README "Posta eki"): at most 2, application/pdf or image/png, 512 KB decoded in all, standard base64; the file name is reduced to [A-Za-z0-9._-], at most 100 characters, with the type's extension. The files go with the e-mail (SMTP multipart/mixed; Graph fileAttachment) and are kept only until the row's outcome is written; the queue then shows their name, type and size. They are not part of the Idempotency-Key's digest: a retry with a file drawn again answers the first answer and writes no file. The answer's attachments says how many went with the mail.
 //	@Tags			Mail
 //	@Accept			json
 //	@Produce		json
@@ -259,10 +259,10 @@ func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 //	@Param			mail			body		requests.SendSingleMail	true	"Mail details"
 //	@Success		201				{object}	handlers.CreatedMailTask
 //	@Header			201				{string}	Idempotent-Replayed	"true when the answer is the first answer to this Idempotency-Key"
-//	@Failure		400				{object}	apperrors.Problem	"Bad Request. A person's purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team; mail_task.erase_after_send_not_allowed: a person's token asked for erase_after_send; mail_task.idempotency_key_invalid; mail_task.idempotency_key_not_allowed: a person's token sent an Idempotency-Key; attachment.service_only: a person's token sent attachments; attachment.too_many, attachment.type_not_allowed, attachment.content_invalid, attachment.content_type_mismatch, attachment.too_large (params.index: which file)"
+//	@Failure		400				{object}	apperrors.Problem	"Bad Request. A person's purpose, checked in this order, while purposes are on (SKYNOTIFY_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYNOTIFY_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team; mail_task.erase_after_send_not_allowed: a person's token asked for erase_after_send; mail_task.idempotency_key_invalid; mail_task.idempotency_key_not_allowed: a person's token sent an Idempotency-Key; attachment.service_only: a person's token sent attachments; attachment.too_many, attachment.type_not_allowed, attachment.content_invalid, attachment.content_type_mismatch, attachment.too_large (params.index: which file)"
 //	@Failure		422				{object}	apperrors.Problem	"mail_task.idempotency_key_reused: the key was used for a different mail"
 //	@Failure		500				{object}	apperrors.Problem	"Internal Server Error"
-//	@Failure		503				{object}	apperrors.Problem	"mail_task.preference_unavailable (Retry-After): a person's duyuru mail while every duyuru send obeys the recipient's preferences (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing is queued"
+//	@Failure		503				{object}	apperrors.Problem	"mail_task.preference_unavailable (Retry-After): a person's duyuru mail while every duyuru send obeys the recipient's preferences (SKYNOTIFY_BULK_PREFERENCE), and core did not answer; nothing is queued"
 //	@Router			/mail_tasks/single [post]
 func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	var params requests.SendSingleMail
@@ -277,9 +277,9 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 
 	// Account and transaction mail, which services send here, never asks for
 	// tracking: only a person's own send may (every one, with
-	// SKYMAIL_TRACKING_OPERATOR on), and it then goes in the bulk lane, an
+	// SKYNOTIFY_TRACKING_OPERATOR on), and it then goes in the bulk lane, an
 	// operator's mail. A service's mail stays in the system lane and is
-	// tracked only while SKYMAIL_TRACKING_SYSTEM says so.
+	// tracked only while SKYNOTIFY_TRACKING_SYSTEM says so.
 	service := middlewares.IsServiceAccount(c)
 
 	// A service's retry under its Idempotency-Key answers before anything
@@ -351,7 +351,7 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 		SentByService:           &service,
 	}
 	// The answer to the send: tracked is what the mailer says of a service's
-	// mail while SKYMAIL_TRACKING_SYSTEM is on, else what was decided above.
+	// mail while SKYNOTIFY_TRACKING_SYSTEM is on, else what was decided above.
 	// stored is how many attachments went with the row, once written.
 	stored := 0
 	answer := func(taskID uuid.UUID, tracked bool) CreatedMailTask {
@@ -393,7 +393,7 @@ func (h *mailHandlerImpl) SendSingle(c fiber.Ctx) error {
 	switch {
 	case params.EraseAfterSend:
 		// A mail that keeps no record is never tracked, whatever
-		// SKYMAIL_TRACKING_SYSTEM says: its row is erased once sent, and an
+		// SKYNOTIFY_TRACKING_SYSTEM says: its row is erased once sent, and an
 		// opening recorded after that would name no one or bring the row
 		// back. The system lane, as any service's mail.
 		taskID, err = h.mailer.EnqueueSingle(ctx, arg)
@@ -442,19 +442,19 @@ type MailTaskItem struct {
 	Status          SendStatus   `json:"status"`
 	RecipientCounts QueueTotals  `json:"recipient_counts"`
 	Audience        SendAudience `json:"audience"`
-	// bulk (a list, a group, a Forms source, an approved send, a News send), system (mail a service or SkyMail sent: a core notification, a service's single mail such as a login code, a ticket or a Forms confirmation, a Mail onayı notice; a single send from before 2026-11-24 by its lane) or single (a person's single mail); the kind filter of GET /mail_tasks.
+	// bulk (a list, a group, a Forms source, an approved send, a News send), system (mail a service or SkyNotify sent: a core notification, a service's single mail such as a login code, a ticket or a Forms confirmation, a Mail onayı notice; a single send from before 2026-11-24 by its lane) or single (a person's single mail); the kind filter of GET /mail_tasks.
 	Kind string `json:"kind" enums:"bulk,single,system"`
 	// Whether the caller may open the send's content (GET /mail_tasks/{id}/queue/{itemId}/content), and if not why.
 	// masked: a sensitive send, kept with its codes and one-time links masked; pending: a sensitive send not masked yet, not shown; not_kept: a sensitive send emptied (before sensitive content was kept, or not masked for certain).
 	ContentAccess ContentAccess `json:"content_access" enums:"available,masked,pending,restricted,expired,not_kept"`
 	// When the content sweep empties the send's content; null unless content_access is available or masked.
 	ContentExpiresAt *time.Time `json:"content_expires_at"`
-	// Whether the send is tracked: it asked for open and click tracking, SkyMail's tracking was on when it was queued and its template may be tracked (not System, not sensitive); or it is a person's send queued while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); or it is a service's mail queued while SkyMail tracked system mail (SKYMAIL_TRACKING_SYSTEM).
+	// Whether the send is tracked: it asked for open and click tracking, SkyNotify's tracking was on when it was queued and its template may be tracked (not System, not sensitive); or it is a person's send queued while SkyNotify tracked every person's send (SKYNOTIFY_TRACKING_OPERATOR); or it is a service's mail queued while SkyNotify tracked system mail (SKYNOTIFY_TRACKING_SYSTEM).
 	Tracking bool `json:"tracking"`
 	SendPurposeFields
 	// While set, the bulk lane takes none of the send's rows (POST /mail_tasks/{id}/pause, or its failure rate); null otherwise.
 	PausedAt *time.Time `json:"paused_at"`
-	// operator (paused by hand) or failure_rate (its recipients failed past SKYMAIL_FAILURE_PAUSE_COUNT and SKYMAIL_FAILURE_PAUSE_PERCENT); null when not paused.
+	// operator (paused by hand) or failure_rate (its recipients failed past SKYNOTIFY_FAILURE_PAUSE_COUNT and SKYNOTIFY_FAILURE_PAUSE_PERCENT); null when not paused.
 	PausedReason *string `json:"paused_reason" enums:"operator,failure_rate"`
 	// When the send was cancelled (POST /mail_tasks/{id}/cancel): its pending recipients were skipped; null otherwise.
 	CancelledAt *time.Time `json:"cancelled_at"`
@@ -463,7 +463,7 @@ type MailTaskItem struct {
 // SendPurposeFields is a send's purpose as it was written (ADR 0072 decision
 // 2), the same on a send and on a Mail onayı request.
 type SendPurposeFields struct {
-	// islem or duyuru. Null for a send queued while SkyMail's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).
+	// islem or duyuru. Null for a send queued while SkyNotify's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).
 	Purpose *string `json:"purpose" enums:"islem,duyuru"`
 	// core's category of a duyuru send (club:duyuru, club:haber, team:<group id>:duyuru|haber); null for any other.
 	Category *string `json:"category"`
@@ -478,7 +478,7 @@ type SendPurposeFields struct {
 // GetTasks godoc
 //
 //	@Summary		List all mail tasks
-//	@Description	Get a list of all mail tasks with pagination, newest first, each with its derived status, recipients by status and audience. Every filter given keeps only the sends that match it, and X-Total-Count counts them. q (valid UTF-8, no NUL, at most 200 characters) matches the template's name, key or subject, the list's name, the Forms form's title, an approved send's requester or, on a send to people (no list, no Forms source, not a News send), a recipient's address or name; in any case, Turkish capitals included, with I, ı, İ and i read as one letter. kind: bulk (a list, a group, a Forms source, an approved send, a News send), system (mail a service or SkyMail sent: a core notification, a service account's single mail, a Mail onayı notice; a single send queued before 2026-11-24 counts as system when it went in the system lane), single (a person's single mail). _sort=open_rate orders by the share of tracked recipients who likely opened (unique_likely_human_opens / tracked_recipients, as GET /mail_tasks/{id}/tracking reads them), sends with no rate last; it needs skymail:mails:tracking:read (403 mail_task.sort_forbidden), since the order tells counts that endpoint may withhold. Keycloak group names are looked up within 2 seconds for the whole page and are null past that.
+//	@Description	Get a list of all mail tasks with pagination, newest first, each with its derived status, recipients by status and audience. Every filter given keeps only the sends that match it, and X-Total-Count counts them. q (valid UTF-8, no NUL, at most 200 characters) matches the template's name, key or subject, the list's name, the Forms form's title, an approved send's requester or, on a send to people (no list, no Forms source, not a News send), a recipient's address or name; in any case, Turkish capitals included, with I, ı, İ and i read as one letter. kind: bulk (a list, a group, a Forms source, an approved send, a News send), system (mail a service or SkyNotify sent: a core notification, a service account's single mail, a Mail onayı notice; a single send queued before 2026-11-24 counts as system when it went in the system lane), single (a person's single mail). _sort=open_rate orders by the share of tracked recipients who likely opened (unique_likely_human_opens / tracked_recipients, as GET /mail_tasks/{id}/tracking reads them), sends with no rate last; it needs skynotify:mails:tracking:read (403 mail_task.sort_forbidden), since the order tells counts that endpoint may withhold. Keycloak group names are looked up within 2 seconds for the whole page and are null past that.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			_start		query		int		false	"Start index"
@@ -487,7 +487,7 @@ type SendPurposeFields struct {
 //	@Param			q			query		string	false	"Text to find (at most 200 characters)"
 //	@Param			from		query		string	false	"Sends created on or after this date (YYYY-MM-DD, Europe/Istanbul) or RFC 3339 time (encode + as %2B; a space where + was is read as +)"
 //	@Param			to			query		string	false	"Sends created on or before this date (YYYY-MM-DD, Europe/Istanbul, the whole day) or RFC 3339 time (encode + as %2B)"
-//	@Param			kind		query		string	false	"bulk (a list, a group, a Forms source, an approved send, a News send), system (mail a service or SkyMail sent), single (a person's single mail)"	Enums(bulk,single,system)
+//	@Param			kind		query		string	false	"bulk (a list, a group, a Forms source, an approved send, a News send), system (mail a service or SkyNotify sent), single (a person's single mail)"	Enums(bulk,single,system)
 //	@Param			template_id	query		string	false	"Sends of this template"																									format(uuid)
 //	@Param			list_id		query		string	false	"Sends to this list or Keycloak group (mail_list_id)"																								format(uuid)
 //	@Param			sent_by		query		string	false	"Sends by this sender (the sender's sub, as sent_by returns it)"

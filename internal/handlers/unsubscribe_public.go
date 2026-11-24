@@ -13,11 +13,11 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/unsubscribe"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/unsubscribe"
 )
 
-// SkyMail's own one-click unsubscribe (RFC 8058; ADR 0072 decision 4; hub
+// SkyNotify's own one-click unsubscribe (RFC 8058; ADR 0072 decision 4; hub
 // ticket abonelik-cikisi 02; README, "Tek tık çıkış ucu"): the link an
 // address without an account leaves the duyuru stream by.
 //

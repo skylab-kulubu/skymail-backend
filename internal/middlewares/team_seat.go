@@ -6,8 +6,8 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/teams"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/teams"
 )
 
 // TeamLeaders says which Teams a person leads (teams.Core.Led: what core said
@@ -16,15 +16,15 @@ type TeamLeaders interface {
 	Led(ctx context.Context, sub string) ([]teams.Team, error)
 }
 
-const teamSeatKey = "skymail.team_seat"
+const teamSeatKey = "skynotify.team_seat"
 
 // RequireAccessOrTeamLeader is the seat of Team mail's routes (ADR-0067
-// addendum of 2026-11-08): a caller with skymail:access goes on as on /v1;
+// addendum of 2026-11-08): a caller with skynotify:access goes on as on /v1;
 // one without it goes on only when core says they lead at least one Team,
 // and then TeamSeat is true for the handler, which keeps them to Team mail.
 // Core not answering refuses only these callers, 503
 // team_mail.leadership_unavailable with Retry-After; anyone with
-// skymail:access never waits for core here. It follows
+// skynotify:access never waits for core here. It follows
 // AuthenticateTeamSender and the account access gate.
 func RequireAccessOrTeamLeader(leaders TeamLeaders) fiber.Handler {
 	return func(c fiber.Ctx) error {
@@ -50,7 +50,7 @@ func RequireAccessOrTeamLeader(leaders TeamLeaders) fiber.Handler {
 	}
 }
 
-// TeamSeat says the caller reached a Team mail route without skymail:access,
+// TeamSeat says the caller reached a Team mail route without skynotify:access,
 // as a Leader core named: they may do Team mail and nothing else.
 func TeamSeat(c fiber.Ctx) bool {
 	seat, _ := c.Locals(teamSeatKey).(bool)

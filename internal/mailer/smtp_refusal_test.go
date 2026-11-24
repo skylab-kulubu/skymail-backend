@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // sendThrough sends one mail to the address through a relay that answers verb
@@ -90,8 +90,8 @@ func TestARelaysTransientRefusalIsTriedAgain(t *testing.T) {
 		{"mail system at end of DATA", ".", "554 5.3.4 message too big", "smtp_deferred: DATA 554 5.3.4"},
 		{"policy at end of DATA", ".", "554 5.7.1 message refused", "smtp_deferred: DATA 554 5.7.1"},
 		{"no enhanced code at end of DATA", ".", "554 transaction failed", "smtp_deferred: DATA 554"},
-		{"sender syntax at RCPT", "RCPT", "553 5.1.7 <skymail@example.com>: Sender address rejected: bad syntax", "smtp_deferred: RCPT TO 553 5.1.7"},
-		{"sender domain at RCPT (Postfix smtpd_delay_reject)", "RCPT", "550 5.1.8 <skymail@example.com>: Sender address rejected: Domain not found", "smtp_deferred: RCPT TO 550 5.1.8"},
+		{"sender syntax at RCPT", "RCPT", "553 5.1.7 <skynotify@example.com>: Sender address rejected: bad syntax", "smtp_deferred: RCPT TO 553 5.1.7"},
+		{"sender domain at RCPT (Postfix smtpd_delay_reject)", "RCPT", "550 5.1.8 <skynotify@example.com>: Sender address rejected: Domain not found", "smtp_deferred: RCPT TO 550 5.1.8"},
 		{"bad outbound sender at end of DATA", ".", "550 5.1.8 Access denied, bad outbound sender", "smtp_deferred: DATA 550 5.1.8"},
 		{"non-compliant mailer at RCPT", "RCPT", "550 5.1.9 message relayed to non-compliant mailer", "smtp_deferred: RCPT TO 550 5.1.9"},
 		{"daily recipient limit at RCPT", "RCPT", "550 5.1.90 Your message can't be sent because you've reached your daily limit for message recipients", "smtp_deferred: RCPT TO 550 5.1.90"},
@@ -120,7 +120,7 @@ func TestAnUnreachableRelayIsTriedAgain(t *testing.T) {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
-	m := mailer.NewMailer(nil, mailer.SMTPConfig{FromEmail: "skymail@example.com", Host: "127.0.0.1", Port: port, FQDN: "example.com"}, mailer.SenderOn)
+	m := mailer.NewMailer(nil, mailer.SMTPConfig{FromEmail: "skynotify@example.com", Host: "127.0.0.1", Port: port, FQDN: "example.com"}, mailer.SenderOn)
 	plainSMTP(m)
 	err = mailer.SendOnce(context.Background(), m, database.MailQueue{
 		ID: uuid.New(), Channel: mailer.ChannelEmail, RecipientFullName: "Alıcı", RecipientEmail: "alici@yildizskylab.com",
@@ -169,7 +169,7 @@ const invalidRecipientError = "invalid_recipient: not sent, the recipient's name
 // A recipient go-mail cannot parse into a To header fails for good with the
 // class alone: go-mail's own error quotes the name and the address.
 func TestAnUnparsableRecipientFailsWithItsClassOnly(t *testing.T) {
-	m := mailer.NewMailer(nil, mailer.SMTPConfig{FromEmail: "skymail@example.com", Host: "127.0.0.1", Port: 1, FQDN: "example.com"}, mailer.SenderOn)
+	m := mailer.NewMailer(nil, mailer.SMTPConfig{FromEmail: "skynotify@example.com", Host: "127.0.0.1", Port: 1, FQDN: "example.com"}, mailer.SenderOn)
 	err := mailer.SendOnce(context.Background(), m, database.MailQueue{
 		ID: uuid.New(), Channel: mailer.ChannelEmail, RecipientFullName: "Ayşe Kaya", RecipientEmail: "ayse.kaya",
 		Subject: "Konu", Body: "Gövde",

@@ -1,17 +1,17 @@
 <div align="center">
-  <a href="https://github.com/skylab-kulubu/skymail-backend">
+  <a href="https://github.com/skylab-kulubu/skynotify-backend">
     <img src="https://avatars.githubusercontent.com/u/96308083?s=200&v=4" alt="Repo Logo" height="100">
   </a>
 </div>
 
-<h2 align="center">Skymail</h3>
+<h2 align="center">SkyNotify</h3>
 
 <div align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue.svg?labelColor=003694&color=ffffff" alt="License">
-  <img src="https://img.shields.io/github/contributors/skylab-kulubu/skymail-backend?labelColor=003694&color=ffffff" alt="GitHub contributors" >
-  <img src="https://img.shields.io/github/stars/skylab-kulubu/skymail-backend.svg?labelColor=003694&color=ffffff" alt="Stars">
-  <img src="https://img.shields.io/github/forks/skylab-kulubu/skymail-backend.svg?labelColor=003694&color=ffffff" alt="Forks">
-  <img src="https://img.shields.io/github/issues/skylab-kulubu/skymail-backend.svg?labelColor=003694&color=ffffff" alt="Issues">
+  <img src="https://img.shields.io/github/contributors/skylab-kulubu/skynotify-backend?labelColor=003694&color=ffffff" alt="GitHub contributors" >
+  <img src="https://img.shields.io/github/stars/skylab-kulubu/skynotify-backend.svg?labelColor=003694&color=ffffff" alt="Stars">
+  <img src="https://img.shields.io/github/forks/skylab-kulubu/skynotify-backend.svg?labelColor=003694&color=ffffff" alt="Forks">
+  <img src="https://img.shields.io/github/issues/skylab-kulubu/skynotify-backend.svg?labelColor=003694&color=ffffff" alt="Issues">
 </div>
 
 ## Özellikler ✨
@@ -24,7 +24,7 @@
 Her hata `application/problem+json` döner (ADR-0010; RFC 9457, RFC 7807'nin
 yerine; core-backend'in biçimi): `type` (`about:blank`), `title` (durumun
 HTTP adı: `Conflict`, `Not Found`), `status`, `detail` (insan için ileti),
-`instance` (isteğin yolu, sorgu dizesi olmadan). SkyMail'in önceki gövdesi
+`instance` (isteğin yolu, sorgu dizesi olmadan). SkyNotify'ın önceki gövdesi
 uzantı üyesi olarak aynen durur (RFC 9457 §3.2): `code` (makinenin okuduğu
 hata kodu, örn. `mail_approval.state_conflict`), `message` (`detail` ile
 aynı), varsa `params`. İstemciler `code` ve `params` okumaya devam eder.
@@ -49,7 +49,7 @@ zaten problem+json dönüyordu; biçimleri değişmedi.
 `503` while the task is shutting down or its database does not answer, and
 additionally verifies the exact shared account-access contract when the access
 gate is in `enforce` mode; `GET /ready?gate=skip` leaves the gate out and is
-what the container's health check (`skymail-backend healthcheck`, the image's
+what the container's health check (`skynotify-backend healthcheck`, the image's
 `HEALTHCHECK`) asks. On SIGTERM the service drains HTTP, gives back the queue
 rows it took and has not begun, lets the sends in progress finish and exits
 within 25 s: run it with a stop grace period of 30 s. Details and the Swarm
@@ -60,7 +60,7 @@ contract and required configuration.
 
 ## Ters proxy ve istemci IP'si
 
-Skymail bir ters proxy'nin arkasında çalışır. Proxy, çağıranın gönderdiği
+SkyNotify bir ters proxy'nin arkasında çalışır. Proxy, çağıranın gönderdiği
 `X-Forwarded-For` başlığını atar ve kendi başlığını yazar; bu yüzden başlık
 yalnızca bağlantı o proxy'lerden birinden geldiğinde okunur. Diğer tüm
 çağıranlar için `ctx.IP()` soket adresini döndürür.
@@ -81,28 +81,28 @@ bir adres yazılmaz, paylaşılan ağın aralığı yazılır.
 
 ## Keycloak
 
-SkyMail'in izinleri `KEYCLOAK_CLIENT_ID` istemcisinin (varsayılan `skymail`)
-rolleridir: `skymail:access` giriş kapısı, `templates:*`, `lists:*`,
-`mails:*` kaynak rolleri, `skymail:mails:approve` mail onayı. Mail onayına
-sunmak, sunulanı okumayı ister: `skymail:templates:read`, listeye sunmak için
-ayrıca `skymail:lists:read`. Eksik olana 403 döner ve `params.missing_roles`
+SkyNotify'ın izinleri `KEYCLOAK_CLIENT_ID` istemcisinin (varsayılan `skynotify`)
+rolleridir: `skynotify:access` giriş kapısı, `templates:*`, `lists:*`,
+`mails:*` kaynak rolleri, `skynotify:mails:approve` mail onayı. Mail onayına
+sunmak, sunulanı okumayı ister: `skynotify:templates:read`, listeye sunmak için
+ayrıca `skynotify:lists:read`. Eksik olana 403 döner ve `params.missing_roles`
 eksik rolleri sayar.
 
 Bir şablonu **sistem şablonu** yapmak ya da bu işareti kaldırmak (`PUT
 /v1/templates/by-key/{key}` gövdesindeki `system`) ayrı bir rol ister:
-`skymail:templates:system`. Onu yalnız Template seed'in servis hesabı
-(`skymail-seed`) taşır, hiçbir kişi ya da grup taşımaz; çünkü `account.*` ya
+`skynotify:templates:system`. Onu yalnız Template seed'in servis hesabı
+(`skynotify-seed`) taşır, hiçbir kişi ya da grup taşımaz; çünkü `account.*` ya
 da `keycloak.*` sistem şablonu bastırma listesini atlar ve hesap şeridinden
-gider. Rolü olmayan (`skymail:templates:write` sahibi operatör) aynı uçla
+gider. Rolü olmayan (`skynotify:templates:write` sahibi operatör) aynı uçla
 sistem şablonunun içeriğini yine yeniden yazabilir, ama `system` şablonda ne
 ise onu göndermelidir (yeni anahtar için `false`); başkasını gönderirse
 `403 server.forbidden` döner (`params.missing_roles:
-["skymail:templates:system"]`, `params.field: "system"`, `params.system`
+["skynotify:templates:system"]`, `params.field: "system"`, `params.system`
 şablonun bugünkü işareti) ve hiçbir şey yazılmaz.
 
-`KEYCLOAK_SERVICE_CLIENT_ID` (`skymail-backend`) istemcisinin service
+`KEYCLOAK_SERVICE_CLIENT_ID` (`skynotify-backend`) istemcisinin service
 account'u Keycloak'tan okur: gönderim ve listeler için grupları ve üyelerini,
-mail onayında da `skymail:mails:approve` rolünü kimin taşıdığını (doğrudan ya
+mail onayında da `skynotify:mails:approve` rolünü kimin taşıdığını (doğrudan ya
 da bir grup üzerinden). Bunun için `realm-management` istemcisinin şu rolleri
 gerekir:
 
@@ -127,7 +127,7 @@ token'ı hangi adresten verirse versin `iss`'e public adını (`KC_HOSTNAME`)
 yazar. Amaç, Keycloak'ın public adında `/admin`'i kenarda kapatabilmek
 (Keycloak'ın reverse proxy kılavuzu `/admin/`'i dışarı açmaz).
 
-Mail onayı bildirimlerindeki linkler `SKYMAIL_UI_URL` altına kurulur
+Mail onayı bildirimlerindeki linkler `SKYNOTIFY_UI_URL` altına kurulur
 (varsayılan `https://notify.yildizskylab.com`, iletişim konsolunun adresi;
 ADR-0090). Eski `iletisim.` ve `mail.` adları yönlendirme olarak tutulmaz;
 geçişle birlikte silinir, daha önce gönderilmiş postalardaki konsol
@@ -137,7 +137,7 @@ linkleri çalışmaz.
 
 `/v1` token'ı Keycloak `userinfo`'suna sorar. `userinfo` token'ın canlı
 olduğunu kanıtlar ama kimin için verildiğini söylemez. Bu değişken `aud`'unda
-`KEYCLOAK_CLIENT_ID` (varsayılan `skymail`) olmayan token'a ne yapılacağını
+`KEYCLOAK_CLIENT_ID` (varsayılan `skynotify`) olmayan token'a ne yapılacağını
 seçer (RFC 9068 §4):
 
 - `off` (varsayılan, yoksa da): `aud` okunmaz, davranış öncekiyle aynı.
@@ -157,18 +157,20 @@ modu yazar. `aud`, `userinfo` kabul ettikten sonra token'dan okunur: imzayı,
 issuer'ı ve süreyi Keycloak denetlemiştir. Silme ucu (`/internal`) bundan
 etkilenmez, kendi yerel JWKS denetimiyle `aud`'u zaten şart koşar.
 
-Bir haftalık sayım (production sunucusunda, salt okunur):
+Bir haftalık sayım (production sunucusunda, salt okunur). Bu belgedeki komutlarda
+`SERVIS`, production SkyNotify uygulamasının Swarm servis adıdır (Dokploy
+appName; `docker service ls` gösterir):
 
 ```bash
-docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | grep -F '"event":"v1_token_audience_missing"' | grep -o '"azp":"[^"]*","mode":"[^"]*"' | sort | uniq -c | sort -rn
+docker service logs --raw --since 168h "$SERVIS" 2>&1 | grep -F '"event":"v1_token_audience_missing"' | grep -o '"azp":"[^"]*","mode":"[^"]*"' | sort | uniq -c | sort -rn
 ```
 
 ## Hesap silme (Account erasure)
 
 `PUT /internal/v1/account-erasures/{request_id}` core'un silme komutudur
 (ADR-0051). `/v1` dışındadır ve `userinfo`'dan geçmez: token realm'in JWKS'i
-ile yerelde doğrulanır ve `azp` = `core-erasure`, `aud` ∋ `skymail`,
-`resource_access.skymail.roles` ∋ `skymail:account:erase` ister. Yalnız iç
+ile yerelde doğrulanır ve `azp` = `core-erasure`, `aud` ∋ `skynotify`,
+`resource_access.skynotify.roles` ∋ `skynotify:account:erase` ister. Yalnız iç
 Docker ağından çağrılır; `X-Forwarded-*`, `Forwarded` ya da `X-Real-Ip`
 taşıyan istek `404` alır. Silinecek kişinin marker'ı account-access
 Redis'te olmalıdır; kapı `off` iken uç `503` döner. Ayrıntı:
@@ -177,13 +179,13 @@ Redis'te olmalıdır; kapı `off` iken uç `503` döner. Ayrıntı:
 ### Kayıt bırakmayan posta (`erase_after_send`)
 
 core, silinen kişiye iki posta atar: "talebin alındı" ve "hesabın silindi".
-İkisi de kişinin silme komutu SkyMail'de koştuktan sonra gelir, yani artık
+İkisi de kişinin silme komutu SkyNotify'da koştuktan sonra gelir, yani artık
 onları silecek bir komut yoktur. Bu yüzden `POST /v1/mail_tasks/single`
 gövdesinde `erase_after_send: true` taşırlar:
 
 - Yalnız servis token'ı ister; kişinin token'ı `400
   mail_task.erase_after_send_not_allowed` alır ve hiçbir şey kuyruğa girmez.
-- Takip edilmez: `SKYMAIL_TRACKING_SYSTEM` açık olsa da piksel, tıklama
+- Takip edilmez: `SKYNOTIFY_TRACKING_SYSTEM` açık olsa da piksel, tıklama
   adresi ya da Keycloak hesap sorgusu yoktur. Sistem şeridinden gider.
 - Satır sonucu yazıldığı anda (gönderildi, kalıcı hata, kuyruğa girerken
   atlandı, iptal) kendiliğinden silinir: alıcı `Silinmiş kullanıcı`, adres,
@@ -307,7 +309,7 @@ değer başlatmayı durdurur. `paused` iken mail kuyruğa yazılır ama gönderi
 dağıtıcı ve işçiler başlamaz, açılışta bir uyarı logu çıkar, API ve `/ready`
 normal çalışır. `GET /v1/mail_tasks/summary` `sender_paused: true` döner.
 Yedekten geri yükleme bu değerle başlar. Sonra dump'ın getirdiği kuyruk
-göndermeden kapatılır: `skymail-backend queue-close-restored --before <RFC3339>`
+göndermeden kapatılır: `skynotify-backend queue-close-restored --before <RFC3339>`
 önce kuru çalışır, `--apply` ile geri yükleme anından önceki `pending` ve
 `processing` satırları `failed` (`restore: gönderilmedi`) yapar. `--apply`
 yalnız `MAIL_SENDER=paused` iken çalışır. Prosedür ve `docker exec` satırları:
@@ -378,13 +380,13 @@ boştur. Hesap silme kişinin satırlarını adresleriyle ve `sub`'ıyla bulur;
 silinen satırda `recipient_sub` da boşalır. `GET /v1/mail_tasks/{id}/queue`
 her satırın `channel`'ını döner.
 
-## Gönderen şeritleri (`SKYMAIL_SEND_HESAP`, `SKYMAIL_SEND_BILGI`, `SKYMAIL_SEND_DUYURU`, `SKYMAIL_LIST_UNSUBSCRIBE`)
+## Gönderen şeritleri (`SKYNOTIFY_SEND_HESAP`, `SKYNOTIFY_SEND_BILGI`, `SKYNOTIFY_SEND_DUYURU`, `SKYNOTIFY_LIST_UNSUBSCRIBE`)
 
 Her posta türüne göre üç paylaşılan kutudan birinden çıkar (hub bileti
-skymail-bounce-isleme 10; Yusuf, 2026-10-20). Kural `internal/mailer/lanes.go`
+skynotify-bounce-isleme 10; Yusuf, 2026-10-20). Kural `internal/mailer/lanes.go`
 `LaneOf`'tadır, gönderimin şablonuna, gönderimin **amacına**
 (`mail_tasks.purpose`, ADR 0072 karar 2; aşağıda "Gönderim amacı ve
-kategori") ve satırın şeridine bakar. Amaç yalnız `SKYMAIL_MAIL_PURPOSE=on`
+kategori") ve satırın şeridine bakar. Amaç yalnız `SKYNOTIFY_MAIL_PURPOSE=on`
 iken okunur; kapalıyken ve amacı olmayan eski satırda kural bugünkü gibidir
 (toplu şerit `duyuru`, sistem şeridi `bilgi`):
 
@@ -402,17 +404,17 @@ Her şeridin kendi anahtarı vardır; üçü de varsayılan olarak `off`'tur:
 
 | Değer | Nasıl gider |
 |---|---|
-| `off` (ya da boş) | bugünkü gibi: `SMTP_FROM`'dan, `SMTP_USER`/`SMTP_PASS` ile SMTP AUTH (LOGIN, `SMTP_PLAIN=true` ise PLAIN). Gönderimin şablonu okunmaz, `X-SkyMail-Queue-Id` yazılmaz |
+| `off` (ya da boş) | bugünkü gibi: `SMTP_FROM`'dan, `SMTP_USER`/`SMTP_PASS` ile SMTP AUTH (LOGIN, `SMTP_PLAIN=true` ise PLAIN). Gönderimin şablonu okunmaz, `X-SkyNotify-Queue-Id` yazılmaz |
 | `graph` | Microsoft Graph `POST /users/{kutu}/sendMail`, `saveToSentItems: false`: kutunun Gönderilmiş Öğeler'ine kopya düşmez |
 | `xoauth2` | `SMTP_HOST:SMTP_PORT` (`smtp.office365.com:587`, STARTTLS), `AUTH XOAUTH2` kutu adına, uygulamanın token'ıyla. Exchange kopyayı Gönderilmiş Öğeler'e koyar (duyuru kutusunda MRM 1 gün) |
 
 Başka bir değer açılışı durdurur. Şerit açıkken:
 
-- `SKYMAIL_FROM_<ŞERİT>` zorunlu: görünen ad ve kutu, ör.
+- `SKYNOTIFY_FROM_<ŞERİT>` zorunlu: görünen ad ve kutu, ör.
   `SKY LAB Hesap <hesap@bildirim.yildizskylab.com>`. Graph'ta `from` bu
   kutudur (gönderim de bu kutunun adına yapılır), SMTP'de `From` ve zarf
   göndericisi.
-- Uygulamanın (Entra `skymail-posta`, yalnız sertifika) kimliği zorunlu:
+- Uygulamanın (Entra `skynotify-posta`, yalnız sertifika) kimliği zorunlu:
   `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_KEY` (özel anahtar,
   PKCS#8 PEM'in tek satır base64'ü; OpenBao'da, Dokploy'da `${{vault…}}`) ve
   `GRAPH_CLIENT_CERT` (açık sertifika; PEM ya da `.cer`'in base64'ü, sır değil).
@@ -439,13 +441,13 @@ Başka bir değer açılışı durdurur. Şerit açıkken:
 `SMTP_REPLY_TO` (isteğe bağlı, ör. `info@yildizskylab.com`) her postaya,
 kapalı şeritlerinkine de, `Reply-To` koyar; yoksa `Reply-To` yazılmaz.
 
-**Bounce eşlemesi.** Şeritler her postaya `X-SkyMail-Queue-Id:
+**Bounce eşlemesi.** Şeritler her postaya `X-SkyNotify-Queue-Id:
 <kuyruk id@SMTP_FQDN>` yazar (`Message-ID` ile aynı değer). Graph `sendMail`
 `202` döner, gövdesi yoktur: postanın kimliğini ya da `Message-ID`'sini
 vermez. `internetMessageId` yalnız taslakta yazılabilir, taslak gönderilince
 Gönderilmiş Öğeler'e düşer; bu yüzden Graph'la giden postanın `Message-ID`'si
 Exchange'in kendisinindir. NDR geri dönen başlıkları ekler; `internal/dsn`
-önce onların `Message-ID`'sine, sonra `X-SkyMail-Queue-Id`'sine bakar
+önce onların `Message-ID`'sine, sonra `X-SkyNotify-Queue-Id`'sine bakar
 (aynı `<uuid@SMTP_FQDN>` kuralı). Graph yanıtının `request-id`'si satırın
 kimliğiyle debug loguna yazılır (Microsoft desteği için); istek
 `client-request-id` olarak satırın kimliğini taşır.
@@ -468,23 +470,23 @@ HTML gider (düz metin alternatifini Exchange kendisi üretir), olmayan düz
 metin. Takip pikseli ve bağlantıları SMTP'deki gibi yerleştirilir. HTML
 JSON'da kaçırılmaz (`<` olduğu gibi). Exchange `from`'un görünen adını
 kutunun dizindeki adıyla ezebilir: kutuların `DisplayName`'i
-`SKYMAIL_FROM_*` adlarıyla aynı tutulur.
+`SKYNOTIFY_FROM_*` adlarıyla aynı tutulur.
 
-**Tek tık çıkış (`SKYMAIL_LIST_UNSUBSCRIBE`, RFC 8058; hub bileti
-skymail-bounce-isleme 11).** Çıkış bağlantısı core'undur: tercih core'da
+**Tek tık çıkış (`SKYNOTIFY_LIST_UNSUBSCRIBE`, RFC 8058; hub bileti
+skynotify-bounce-isleme 11).** Çıkış bağlantısı core'undur: tercih core'da
 (`communication_preferences`, ekranı Hesap Merkezi'nde), belirteci core imzalar
 (`GET|POST /v1/communication-preferences/unsubscribe?t=…`; GET yalnız sayfa,
-POST `List-Unsubscribe=One-Click` bağlantının kategorilerini kapatır). SkyMail
+POST `List-Unsubscribe=One-Click` bağlantının kategorilerini kapatır). SkyNotify
 anahtarı tutmaz, kendi tercih kaydı yoktur; core'un verdiği bağlantıyı satırda
 (`mail_queue.list_unsubscribe_url`) taşır. Bağlantı iki yoldan gelir:
 `POST /v1/notifications` alıcısının `unsubscribe_url`'i (yalnız isteğe bağlı
 ve `bulk` şeritli türde; [`docs/notifications.md`](docs/notifications.md)) ve
-`SKYMAIL_BULK_PREFERENCE=on` iken liste, grup, Forms, kişi ve onaylı duyuru
+`SKYNOTIFY_BULK_PREFERENCE=on` iken liste, grup, Forms, kişi ve onaylı duyuru
 gönderiminde core'un `recipients:resolve` cevabı ("Toplu postada tercih");
-hesabı olmayan adres SkyMail'in kendi bağlantısını alır. Bayrak kapalıyken bu
+hesabı olmayan adres SkyNotify'ın kendi bağlantısını alır. Bayrak kapalıyken bu
 gönderimlerin satırında bağlantı yoktur.
 
-| `SKYMAIL_LIST_UNSUBSCRIBE` | |
+| `SKYNOTIFY_LIST_UNSUBSCRIBE` | |
 |---|---|
 | `off` (ya da boş, varsayılan) | hiçbir postada başlık yok; her şey bugünkü gibi |
 | `on` | şeridi `duyuru` olan, duyuru kutusundan (`graph` ya da `xoauth2`) giden ve satırında bağlantı olan posta `List-Unsubscribe: <bağlantı>` ve `List-Unsubscribe-Post: List-Unsubscribe=One-Click` taşır |
@@ -495,7 +497,7 @@ başlık yazmaz, `off` yolu (eski `SMTP_FROM`) da yazmaz.
 
 - **Graph'ta MIME.** Graph JSON'u yalnız `X-` önekli başlık taşır. Bağlantılı
   duyuru postası aynı `sendMail`'e MIME olarak gider: SMTP yolunun kurduğu
-  ileti (Reply-To, `Message-ID`, `X-SkyMail-Queue-Id`, düz metin ve HTML),
+  ileti (Reply-To, `Message-ID`, `X-SkyNotify-Queue-Id`, düz metin ve HTML),
   base64, `Content-Type: text/plain`; 4 MB sınırı kodlanmış gövdeye uygulanır.
   MIME'da `saveToSentItems` yoktur: Exchange kopyayı Gönderilmiş Öğeler'e
   koyar (duyuru kutusunda MRM 1 gün). Bağlantısız posta bugünkü gibi JSON,
@@ -517,7 +519,7 @@ başlık yazmaz, `off` yolu (eski `SMTP_FROM`) da yazmaz.
   belgelenmemiştir; açılışta gelen postanın `DKIM-Signature: h=` satırı okunur
   (hub bileti 11'in açılış runbook'u).
 
-Gönderim bütçesi (`SKYMAIL_RATE_PER_MINUTE`) şeritlerden bağımsız, hepsi için
+Gönderim bütçesi (`SKYNOTIFY_RATE_PER_MINUTE`) şeritlerden bağımsız, hepsi için
 ortaktır; Exchange'in dakikada 30 ileti sınırı kutu başınadır.
 
 ## Geri dönen posta ve bastırma listesi (`mail_bounces`, `mail_suppressions`)
@@ -526,12 +528,12 @@ Exchange Online dış alıcıyı `RCPT TO`'da reddetmez, postayı alır ve sonra
 gönderen kutusuna bir teslim raporu (NDR, RFC 3464) yollar. Bu raporları
 okuyan `internal/bounce` (`Process`) bir raporu kuyruk satırına bağlar ve
 kaydeder; raporları kutudan okuyucu çeker (`internal/bouncereader`,
-`SKYMAIL_BOUNCE_READER`, aşağıda; hub bileti skymail-bounce-isleme 04, ADR
+`SKYNOTIFY_BOUNCE_READER`, aşağıda; hub bileti skynotify-bounce-isleme 04, ADR
 0073). Okuyucu kapalıyken listeyi dolduran yol relay'in senkron kalıcı
 reddidir (aşağıda).
 
-- **Okuyucu** (`SKYMAIL_BOUNCE_READER`, varsayılan `off`): her 5 dakikada
-  gönderen kutularının (`SKYMAIL_BOUNCE_MAILBOXES`) Gelen Kutusu'nu Graph'ın
+- **Okuyucu** (`SKYNOTIFY_BOUNCE_READER`, varsayılan `off`): her 5 dakikada
+  gönderen kutularının (`SKYNOTIFY_BOUNCE_MAILBOXES`) Gelen Kutusu'nu Graph'ın
   delta sorgusuyla okur (`mailFolders/inbox/messages/delta`, yalnız
   `internetMessageId` ve `receivedDateTime`); her yeni öğenin MIME'ını
   (`$value`, en çok 10 MB) bellekte `internal/bounce`'a verir, saklamaz.
@@ -546,8 +548,8 @@ reddidir (aşağıda).
 
   | Değişken | Değer |
   |---|---|
-  | `SKYMAIL_BOUNCE_READER` | `off` (ya da boş, varsayılan): hiçbir kutu okunmaz, başka değişken okunmaz. `dry-run`: okur, her raporun ne yapacağını sayar (`bounce.Evaluate`: aynı sorgular, geri alınan işlem), ret ve bastırma yazmaz. `on`: kaydeder ve bastırır. Başka değer açılışı durdurur |
-  | `SKYMAIL_BOUNCE_MAILBOXES` | `dry-run`/`on` için zorunlu: gönderen kutuları, virgülle ayrılmış yalın adresler (ör. `hesap@bildirim.yildizskylab.com,bilgi@bildirim.yildizskylab.com,skylab@duyuru.yildizskylab.com`); en çok 10 |
+  | `SKYNOTIFY_BOUNCE_READER` | `off` (ya da boş, varsayılan): hiçbir kutu okunmaz, başka değişken okunmaz. `dry-run`: okur, her raporun ne yapacağını sayar (`bounce.Evaluate`: aynı sorgular, geri alınan işlem), ret ve bastırma yazmaz. `on`: kaydeder ve bastırır. Başka değer açılışı durdurur |
+  | `SKYNOTIFY_BOUNCE_MAILBOXES` | `dry-run`/`on` için zorunlu: gönderen kutuları, virgülle ayrılmış yalın adresler (ör. `hesap@bildirim.yildizskylab.com,bilgi@bildirim.yildizskylab.com,skylab@duyuru.yildizskylab.com`); en çok 10 |
   | `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_KEY`, `GRAPH_CLIENT_CERT` | `dry-run`/`on` için zorunlu; gönderen şeritlerininkiyle aynı değerler |
 
   Okuyucunun kutudaki yeri (delta bağlantısı) ve sayıları
@@ -561,15 +563,15 @@ reddidir (aşağıda).
   `bounce reader: read the mailbox` satırına kutu ve sayıları yazar
   (`kalici`, `yumusak`, `gecikme`, `eslesmedi`, `dsn_degil`, `alici_farkli`,
   `tekrar`, `diger`, `okunamadi`); adres ve rapor metni yazılmaz. Açılış
-  satırı `bounce reader (SKYMAIL_BOUNCE_READER, SKYMAIL_BOUNCE_MAILBOXES)`.
+  satırı `bounce reader (SKYNOTIFY_BOUNCE_READER, SKYNOTIFY_BOUNCE_MAILBOXES)`.
 - **Bounce oranı** (`GET /v1/suppressions/bounces?days=7`,
-  `skymail:suppressions:manage`; giriş akışının "bounce %5'i aşarsa"
+  `skynotify:suppressions:manage`; giriş akışının "bounce %5'i aşarsa"
   eşiği için): son `days` günde (1–90) gönderilen e-postalardan kaçının
   sonradan kalıcı (`hard`), yumuşak (`soft`) ya da gecikme (`delay`) raporu
   aldığı ve `hard_rate = hard / sent`; `reader` her kutunun son okuması,
   hatası (Graph'ın durumu ve kodu) ve sayılarıdır, delta bağlantısı olmadan.
 - **Tekrarlayan yumuşak ret** (`GET /v1/suppressions/soft-bounces`,
-  `skymail:suppressions:manage`; hub bileti skymail-bounce-isleme 13, ADR 0073
+  `skynotify:suppressions:manage`; hub bileti skynotify-bounce-isleme 13, ADR 0073
   karar 5): son 30 günde 3 ya da daha çok postası yumuşak retle dönen
   adresler, son ret önce, sayfalı (`_start`, `_end`, en çok 100; `q` adres
   parçası; `X-Total-Count`). Satır: adres, posta sayısı (aynı postaya gelen
@@ -586,7 +588,7 @@ reddidir (aşağıda).
   otomatik yanıt `dsn_degil` sayılır. `Diagnostic-Code`'dan yalnız yanıt kodu,
   ek kod ve Exchange'in `AS(…)` belirteci alınır, metin saklanmaz.
 - **Eşleme** (beşi birden; sahte rapora karşı): geri dönen başlıklardaki
-  `Message-ID`, o değilse `X-SkyMail-Queue-Id` (Graph'la giden posta;
+  `Message-ID`, o değilse `X-SkyNotify-Queue-Id` (Graph'la giden posta;
   Gönderen şeritleri) (geri dönen başlık yoksa raporun `In-Reply-To`'su, sonra
   `References`) `<kuyruk id@SMTP_FQDN>` olmalı; satır var, `email`, `sent` ve rapor
   `sent_at`'ten sonra gelmiş olmalı (iki saat arasındaki fark için 2 dakika
@@ -631,8 +633,8 @@ reddidir (aşağıda).
   olan gönderim (giriş/kayıt kodu, e-posta doğrulama, şifre sıfırlama)
   bastırılmış adrese yine gider; anahtar tek başına yetmez (önekler ayrılmış
   değil, sistem olmayan bir `account.x` şablonu bastırılır); sistem işaretini
-  de yalnız `skymail:templates:system` (seed'in servis hesabı) koyar ya da
-  kaldırır, `skymail:templates:write` yetmez (bkz. Keycloak); satır `suppressed_but_sent = true`,
+  de yalnız `skynotify:templates:system` (seed'in servis hesabı) koyar ya da
+  kaldırır, `skynotify:templates:write` yetmez (bkz. Keycloak); satır `suppressed_but_sent = true`,
   bastırma satırı `exempt_flagged_at` alır. Forms, Mail onayı, listeler ve
   öteki her şey bastırılır. Muafiyet şeritle değil anahtarla: sistem
   şeridinde Forms ve Mail onayı bildirimleri de var.
@@ -642,14 +644,14 @@ reddidir (aşağıda).
   olmadığını söyledi; `sent` içinde de) döner. `GET
   /v1/mail_tasks/{id}/queue` her satırda `suppressed_but_sent` ve
   `undelivered` döner.
-- **Operatör uçları** (`skymail:suppressions:manage`, `skymail` istemci
+- **Operatör uçları** (`skynotify:suppressions:manage`, `skynotify` istemci
   rolü, gruba verilir): `GET /v1/suppressions?reason=&q=&_start=&_end=` (en
   yeni önce, `q` adresin bir parçası, sayfa en çok 100, `X-Total-Count`)
   ve `DELETE /v1/suppressions/{id}` (`204`; yoksa `404`). Liste bastırma
-  listesiyle [çıkış kaydını](#tek-tık-çıkış-ucu-skymail_unsubscribe_link-mail_unsubscribes)
+  listesiyle [çıkış kaydını](#tek-tık-çıkış-ucu-skynotify_unsubscribe_link-mail_unsubscribes)
   birlikte döner: her satırda `reason` (`bounce` | `unsubscribed`) ve `stream`
   (`all` | `duyuru`); `?reason=` biriyle süzer; liste
-  `skymail:unsubscribes:reactivate` ile de okunur. Satır listenin opak
+  `skynotify:unsubscribes:reactivate` ile de okunur. Satır listenin opak
   `id`'siyle adlandırılır, adres hiçbir URL'de olmaz (hata logu yolu yazar).
   `DELETE` yalnız bounce satırını kaldırır; çıkış satırında
   `409 suppression.use_reactivate` döner. Kaldırma
@@ -659,7 +661,7 @@ reddidir (aşağıda).
   2026-10-27; süre sabit, env yok). Kaldırılan adrese yeniden gönderilir.
   Kendiliğinden düşme yoktur.
 - **Kişi ucu** (`GET /v1/me/email-delivery`, rol yok; kutu ile aynı zincir:
-  token `aud`'unda `skymail`, kişi token'ı, erişim kapısı): kişi kendi
+  token `aud`'unda `skynotify`, kişi token'ı, erişim kapısı): kişi kendi
   adreslerinden hangisine posta ulaşmadığını kendi token'ıyla okur. Yalnız
   `recipient_sub` = token `sub`'ı olan satırlar ve adresi token'ın kişiye ait
   adreslerinden biri olan satırlar döner: userinfo `email` (yalnız `email_verified`
@@ -674,18 +676,18 @@ reddidir (aşağıda).
 - **Loglar**: adres ve rapor metni yazılmaz; kuyruk id'si, kaynak ve kod
   yazılır.
 
-## Gönderim amacı ve kategori (`SKYMAIL_MAIL_PURPOSE`)
+## Gönderim amacı ve kategori (`SKYNOTIFY_MAIL_PURPOSE`)
 
 Her posta bir gönderim akışındadır ve akışı gönderimin **amacı** belirler,
 kuyruk önceliği belirlemez (ADR 0072 karar 2 ve 8; hub bileti abonelik-cikisi
 03). `islem` akışı `hesap@` ve `bilgi@`'dır: tercihe ve çıkış kaydına bakmaz,
 `List-Unsubscribe` taşımaz. Takip amaca bağlı değildir, takip kurallarına
-tabidir (`SKYMAIL_TRACKING`, `_OPERATOR`, `_SYSTEM`; Yusuf: bütün postalar
+tabidir (`SKYNOTIFY_TRACKING`, `_OPERATOR`, `_SYSTEM`; Yusuf: bütün postalar
 takipli). `duyuru` akışı duyuru kutusudur:
 her posta core'un bir kategorisini taşır, tercihe (bilet 09) ve çıkış kaydına
 uyar, tek tık başlığını ve gövdede görünür bağlantıyı taşır.
 
-| `SKYMAIL_MAIL_PURPOSE` | |
+| `SKYNOTIFY_MAIL_PURPOSE` | |
 |---|---|
 | `off` (ya da boş, varsayılan) | alanlar yok sayılır, hiçbir gönderime amaç yazılmaz, akışı bugünkü gibi öncelik belirler, künye satırı eklenmez |
 | `on` | kişinin her gönderimi ve onay isteği amaçla yazılır; akışı amaç belirler; künye satırı eklenir |
@@ -702,8 +704,8 @@ Arayüz bayrağı `GET /v1/mail_tasks/tracking-mode` ve `/summary`'nin
 | `purpose` | `islem` ya da `duyuru` |
 | `category` | `duyuru`'da zorunlu, `islem`'de yasak: `club:duyuru`, `club:haber`, `team:<Keycloak grup id>:duyuru`, `team:<id>:haber`. Grup id'si UUID'dir, küçük harfle yazılır. Grubun gerçekten ekip olup olmadığını core söyler (bilet 09) |
 | `transactional_statement` | `islem`'de zorunlu ve `true`: "bu posta alıcının kendi başvurusu ya da işlemi hakkındadır". `duyuru`'da yok sayılır |
-| `commercial_content_absent` | "Postanın asıl amacı tanıtım değildir" beyanı (KVKK aydınlatma metni s6 §5.10; ADR 0072 karar 9): kısa sponsor teşekkürü ve logo serbesttir; indirim kodu, şirket iş ilanı, satış ya da çekiliş postayı tanıtım yapar. `false` postayı tanıtım postası yapar: `SKYMAIL_PROMOTIONAL=on` iken `duyuru`'da kabul edilir ve posta yalnız tanıtım izni verene gider ("Tanıtım postası ve hesapsız liste alıcısı"); bayrak kapalıyken ve `islem`'de her zaman reddedilir. `duyuru`'da `true` saklanır; `SKYMAIL_BULK_PREFERENCE=on` iken amacını `duyuru` diye adlandıran gönderimde zorunludur (`400 mail_task.commercial_statement_required`; amaç adlandırmayan eski istemci varsayılanını alır). `islem`'de `true` yok sayılır |
-| `own_event_statement` | Liste ya da Keycloak grubuna `duyuru`'da, `SKYMAIL_LIST_CONSENT=on` iken: "Bu posta listenin oluşturulduğu etkinlik ya da çalışmayla ilgilidir" beyanı (s6 satır 15, Yusuf'un T3 kararı 2026-10-24). Gönderimle, göndereni ve zamanıyla saklanır (`mail_tasks`, `mail_approvals`). Beyanlı posta listenin hesapsız adresine duyuru rızası aranmadan, yine `duyuru` akışında çıkış bağlantısıyla gider. Bayrak kapalıyken, kişiye, Forms kaynağına ve `islem`'de yok sayılır |
+| `commercial_content_absent` | "Postanın asıl amacı tanıtım değildir" beyanı (KVKK aydınlatma metni s6 §5.10; ADR 0072 karar 9): kısa sponsor teşekkürü ve logo serbesttir; indirim kodu, şirket iş ilanı, satış ya da çekiliş postayı tanıtım yapar. `false` postayı tanıtım postası yapar: `SKYNOTIFY_PROMOTIONAL=on` iken `duyuru`'da kabul edilir ve posta yalnız tanıtım izni verene gider ("Tanıtım postası ve hesapsız liste alıcısı"); bayrak kapalıyken ve `islem`'de her zaman reddedilir. `duyuru`'da `true` saklanır; `SKYNOTIFY_BULK_PREFERENCE=on` iken amacını `duyuru` diye adlandıran gönderimde zorunludur (`400 mail_task.commercial_statement_required`; amaç adlandırmayan eski istemci varsayılanını alır). `islem`'de `true` yok sayılır |
+| `own_event_statement` | Liste ya da Keycloak grubuna `duyuru`'da, `SKYNOTIFY_LIST_CONSENT=on` iken: "Bu posta listenin oluşturulduğu etkinlik ya da çalışmayla ilgilidir" beyanı (s6 satır 15, Yusuf'un T3 kararı 2026-10-24). Gönderimle, göndereni ve zamanıyla saklanır (`mail_tasks`, `mail_approvals`). Beyanlı posta listenin hesapsız adresine duyuru rızası aranmadan, yine `duyuru` akışında çıkış bağlantısıyla gider. Bayrak kapalıyken, kişiye, Forms kaynağına ve `islem`'de yok sayılır |
 
 **Kurallar** (Yusuf, 2026-10-21; hepsi `400`, hiçbir şey kuyruğa girmez):
 
@@ -711,17 +713,17 @@ Arayüz bayrağı `GET /v1/mail_tasks/tracking-mode` ve `/summary`'nin
 |---|---|
 | liste ya da Keycloak grubuna (doğrudan ya da onay isteğiyle) `islem` | `mail_task.purpose_not_allowed` |
 | `islem` ama `transactional_statement` yok ya da `false` | `mail_task.transactional_statement_required` |
-| `commercial_content_absent: false`, `islem`'de ya da `SKYMAIL_PROMOTIONAL` kapalıyken | `mail_task.commercial_content_not_allowed` |
+| `commercial_content_absent: false`, `islem`'de ya da `SKYNOTIFY_PROMOTIONAL` kapalıyken | `mail_task.commercial_content_not_allowed` |
 | `islem` + `category` | `mail_task.category_not_allowed` |
 | `duyuru` ama `category` yok | `mail_task.category_required` |
 | `category` core'un biçiminde değil | `mail_task.category_invalid` |
 | `purpose` olmadan `category` ya da bir beyan | `mail_task.purpose_required` |
-| `SKYMAIL_BULK_PREFERENCE=on` iken `duyuru` ama `commercial_content_absent` yok | `mail_task.commercial_statement_required` |
+| `SKYNOTIFY_BULK_PREFERENCE=on` iken `duyuru` ama `commercial_content_absent` yok | `mail_task.commercial_statement_required` |
 | `purpose` `islem`/`duyuru` dışında | `mail_task.purpose_invalid` |
 
 Denetim sırası: önce `purpose_required`, sonra `commercial_content_not_allowed`,
 sonra `purpose_invalid`, en son amacın kendi kuralları (`islem`: hedef,
-kategori, beyan; `duyuru`: kategori, sonra beyan). `SKYMAIL_BULK_PREFERENCE=on`
+kategori, beyan; `duyuru`: kategori, sonra beyan). `SKYNOTIFY_BULK_PREFERENCE=on`
 iken kategorinin core'da gerçekten bir ekip olduğunu core söyler; olmayan ekip
 `400 mail_task.category_unknown` döner ("Toplu postada tercih"). Forms kaynağının birebir tekrarı aynı amacı taşımalıdır: amacı
 değişen tekrar başka bir istektir, `409 form_source.consumed` döner. Liste ya
@@ -731,9 +733,9 @@ da gruba giden onay isteği onaylanırken saklı amaç yeniden denetlenir:
 `islem` yalnız iki hedefte seçilebilir: kişilere tek tek (`/single`, kişilere
 onay isteği) ve Forms yanıtlayanlarına (`/form-source`, Forms kaynaklı onay
 isteği). `islem` gönderim de öteki operatör gönderimleri gibi takip edilir
-(`SKYMAIL_TRACKING_OPERATOR=on` iken her zaman; gizli/hassas şablon ve
+(`SKYNOTIFY_TRACKING_OPERATOR=on` iken her zaman; gizli/hassas şablon ve
 alıcıdan yapılan bağlantı kuralları aynı). Servisin `islem` postası
-`SKYMAIL_TRACKING_SYSTEM` kuralıyla kalır.
+`SKYNOTIFY_TRACKING_SYSTEM` kuralıyla kalır.
 
 **Varsayılanlar.** Alanları göndermeyen kişi gönderimi `duyuru` +
 `club:duyuru` yazılır (ADR 0072 karar 2: "Seçmezse posta duyurudur"): liste,
@@ -767,7 +769,7 @@ Her parça ayrı denetlenir; şablon `{{.UnsubscribeUrl}}`'yi kendisi yazıyorsa
 (bilet 05'in künyesi) eklenmez. Satır kuyruktaki satıra ve gönderilen içerik
 ekranına yazılmaz, bağlantısı tıklama adresi almaz. Bağlantıyı bu bayrak
 üretmez: `POST /v1/notifications`'ın `unsubscribe_url`'i ve
-`SKYMAIL_BULK_PREFERENCE=on` iken her duyuru satırı ("Toplu postada tercih")
+`SKYNOTIFY_BULK_PREFERENCE=on` iken her duyuru satırı ("Toplu postada tercih")
 taşır.
 
 **Göç** (`20261023100000`, yalnız ekleme): `mail_tasks` ve `mail_approvals`'a
@@ -776,11 +778,11 @@ taşır.
 kendi amacına ait olması ve (yalnız `mail_tasks`) listeye/gruba giden
 gönderimin `islem` olmaması. Eski imaj bu sütunları okumaz, yazmaz.
 
-**Geri dönüş.** `SKYMAIL_MAIL_PURPOSE=off` + yeniden dağıtım: amaç okunmaz,
+**Geri dönüş.** `SKYNOTIFY_MAIL_PURPOSE=off` + yeniden dağıtım: amaç okunmaz,
 kuyrukta bekleyen işlem amaçlı toplu satır da yeniden `duyuru@`'dan gider,
 künye satırı eklenmez. İmajı geri almak da güvenlidir; sütunlar kalır.
 
-## Tanıtım postası ve hesapsız liste alıcısı (`SKYMAIL_PROMOTIONAL`, `SKYMAIL_LIST_CONSENT`)
+## Tanıtım postası ve hesapsız liste alıcısı (`SKYNOTIFY_PROMOTIONAL`, `SKYNOTIFY_LIST_CONSENT`)
 
 KVKK aydınlatma metni s6 §5.8, §5.10, §5.14 ve tablo satır 13–15 (hub
 biletleri kvkk-s6-yayin-oncesi 11 ve 12). İki tür `duyuru` postası yalnız
@@ -796,7 +798,7 @@ izni olan kişiye gider:
   ("Tanıtım içerikli e-postaları almak istemiyorsan: İzni geri al"): tek tık
   tanıtım iznini kapatır. Şablon `{{.UnsubscribeUrl}}` yazıyorsa orada duyuru
   bağlantısı (bilet 09'dan sonra) kalır.
-- **Hesapsız alıcıya duyuru** (`SKYMAIL_LIST_CONSENT=on`; bayrağın adı ilk
+- **Hesapsız alıcıya duyuru** (`SKYNOTIFY_LIST_CONSENT=on`; bayrağın adı ilk
   kapsamı olan listeden kalır). Her `duyuru` postasında (iç liste, Forms
   kaynağının yanıtlayanları, kişiye tek posta, onaylı gönderim; s6 §5.14,
   hub bileti kvkk-s6-yayin-oncesi 23), core'un `recipients:resolve`'ünün
@@ -841,23 +843,23 @@ hesap şablonuyla (`keycloak.*`, `account.*`) gönderilen tanıtım da izin arar
 
 | Değişken | |
 |---|---|
-| `SKYMAIL_PROMOTIONAL` | `off` (ya da boş, varsayılan): `commercial_content_absent: false` reddedilir. `on`: `duyuru`'da kabul edilir; `GET /v1/mail_tasks/tracking-mode` `promotional_available: true` döner |
-| `SKYMAIL_LIST_CONSENT` | `off` (ya da boş, varsayılan): duyuru postası bugünkü gibi, `own_event_statement` yok sayılır. `on`: hesapsız alıcıya her `duyuru`da (liste, Forms kaynağı, kişiye tek posta, onaylı gönderim) duyuru rızası aranır, beyanlı liste ya da grup postası hariç; `islem` etkilenmez; `tracking-mode` `list_consent_available: true` döner |
+| `SKYNOTIFY_PROMOTIONAL` | `off` (ya da boş, varsayılan): `commercial_content_absent: false` reddedilir. `on`: `duyuru`'da kabul edilir; `GET /v1/mail_tasks/tracking-mode` `promotional_available: true` döner |
+| `SKYNOTIFY_LIST_CONSENT` | `off` (ya da boş, varsayılan): duyuru postası bugünkü gibi, `own_event_statement` yok sayılır. `on`: hesapsız alıcıya her `duyuru`da (liste, Forms kaynağı, kişiye tek posta, onaylı gönderim) duyuru rızası aranır, beyanlı liste ya da grup postası hariç; `islem` etkilenmez; `tracking-mode` `list_consent_available: true` döner |
 
 Başka değer açılışı durdurur; ikisinden biri `on` iken `CORE_URL` gerekir.
-`SKYMAIL_PROMOTIONAL=on` ayrıca `SKYMAIL_MAIL_PURPOSE=on`,
-`SKYMAIL_LIST_UNSUBSCRIBE=on` ve kapalı olmayan bir duyuru şeridi
-(`SKYMAIL_SEND_DUYURU=graph|xoauth2`) ister: tanıtım postası izni geri alma
+`SKYNOTIFY_PROMOTIONAL=on` ayrıca `SKYNOTIFY_MAIL_PURPOSE=on`,
+`SKYNOTIFY_LIST_UNSUBSCRIBE=on` ve kapalı olmayan bir duyuru şeridi
+(`SKYNOTIFY_SEND_DUYURU=graph|xoauth2`) ister: tanıtım postası izni geri alma
 bağlantısını hem künyede hem tek tık başlığında taşımalıdır. Biri eksikse
 açılış durur (yarım yapılandırmayla "tanıtım açık" denmez).
-`SKYMAIL_LIST_CONSENT=on` da `SKYMAIL_MAIL_PURPOSE=on` ister: amaç yokken
+`SKYNOTIFY_LIST_CONSENT=on` da `SKYNOTIFY_MAIL_PURPOSE=on` ister: amaç yokken
 "listenin kendi etkinliği" beyanı verilemez ve kapı her misafir postasını
 tutardı. Hesap şablonuyla (`keycloak.*`, `account.*`) tanıtım gönderimi
 `400 mail_task.promotional_account_template` döner: hesap postası ne tek tık
 başlığını ne künye satırını taşır.
 Açılış logu `promotional`, `list_consent` ve `core` alanlarını yazar.
 
-**core sözleşmesi.** SkyMail'in servis hesabı token'ıyla:
+**core sözleşmesi.** SkyNotify'ın servis hesabı token'ıyla:
 `GET /v1/consents/audience?purpose=promotional|event_invitations` (core
 istemcisi rolü `consent:audience:read`; sayfa 1000) ve
 `POST /internal/v1/audiences/recipients:resolve` (rol `audience:read`;
@@ -865,31 +867,31 @@ tur başına en çok 1000 adres). Rıza kaydı core'da `CONTACT_CONSENT_KEY` ile
 açılır; anahtar yokken kitle `503` döner. Bu yüzden production'da iki bayrak
 da rıza kaydı açılana (data-lifecycle 10) kadar kapalı kalır.
 
-**Açılış sırası.** core rıza kaydı canlı + SkyMail servis hesabına iki rol →
-`SKYMAIL_PROMOTIONAL=on` → arayüz (skymail-frontend: "Bu posta tanıtım
-içeriyor" seçimi) → `SKYMAIL_LIST_CONSENT=on`. Geri dönüş: bayrak `off` +
+**Açılış sırası.** core rıza kaydı canlı + SkyNotify servis hesabına iki rol →
+`SKYNOTIFY_PROMOTIONAL=on` → arayüz (skynotify-frontend: "Bu posta tanıtım
+içeriyor" seçimi) → `SKYNOTIFY_LIST_CONSENT=on`. Geri dönüş: bayrak `off` +
 yeniden dağıtım; kuyruktaki tanıtım postası yine yalnız izinliye gider.
 
-## Toplu postada tercih (`SKYMAIL_BULK_PREFERENCE`)
+## Toplu postada tercih (`SKYNOTIFY_BULK_PREFERENCE`)
 
 ADR 0072 karar 3 ve 6; hub bileti abonelik-cikisi 09
 (`internal/mailer/preference_gate.go`). Bayrak açıkken panelin her `duyuru`
 gönderimi (liste, Keycloak grubu, Forms yanıtlayanları, kişiye `duyuru`, onaylı
 gönderim) gönderim anında core'daki tercihe uyar ve her postası tek tık çıkış
-bağlantısı taşır. Tek kontrol noktası SkyMail'dedir: kuyruğa alma ve dağıtıcı.
+bağlantısı taşır. Tek kontrol noktası SkyNotify'dadır: kuyruğa alma ve dağıtıcı.
 
 **Kuyruğa alırken.** Gönderimin veritabanı işlemi başlamadan önce (Mail
 onayında onay anında, isteğin kilidinden önce; sunulduğu an değil) core'a
 `POST /internal/v1/audiences/recipients:resolve` ile sorulur: gönderimin
 kategorisiyle, en çok 1000'lik sayfalarla, `sub` biliniyorsa (Keycloak grubu
 üyeleri) `sub`, yoksa adres. Sayfa başına 10 saniye, gönderim başına toplam 30
-saniye. SkyMail core'u işlem ya da kilit tutarken beklemez.
+saniye. SkyNotify core'u işlem ya da kilit tutarken beklemez.
 
 | core'un cevabı | Satır |
 |---|---|
 | `allowed` | kişinin core bağlantısı `list_unsubscribe_url` olur, `preference_checked_at` yazılır |
 | `allowed: false` | `failed`, deneme 0, `error = preference: opted_out`, `preference: inactive` ya da `preference: ambiguous`; atlanmış sayılır (`mail_task_status()` gönderimi "Başarısız" yapmaz) |
-| `matched: false` | SkyMail'in kendi bağlantısı (`/u/…`, "Tek tık çıkış ucu"); `preference_checked_at` boş |
+| `matched: false` | SkyNotify'ın kendi bağlantısı (`/u/…`, "Tek tık çıkış ucu"); `preference_checked_at` boş |
 
 - **core yanıt vermezse** (zaman aşımı, `5xx`, sözleşme dışı cevap) hiçbir şey
   yazılmaz: `503 mail_task.preference_unavailable`, `Retry-After: 30`. Onay
@@ -899,7 +901,7 @@ saniye. SkyMail core'u işlem ya da kilit tutarken beklemez.
 - **İç liste.** Listenin adresleri işlemden önce okunur ve sorulur; işlem listeyi
   yeniden okur. Arada eklenen adres sorulmamış olur: bağlantısız kalır ve
   güvenlik ağı onu göndermez.
-- SkyMail'in çıkış kaydı ve bastırma listesi bugünkü gibi ayrıca uygulanır.
+- SkyNotify'ın çıkış kaydı ve bastırma listesi bugünkü gibi ayrıca uygulanır.
 - Bildirimler (`POST /v1/notifications`) kuyruğa alırken sorulmaz: bağlantıyı
   core verir.
 
@@ -920,9 +922,9 @@ kapısının kalıbı). Kuyruğa alırken alınan hüküm ilk turlarda kullanıl
 | `preference: unavailable` | core başarısızken satır 48 saati geçti: `failed`, belirsiz (atlanmış sayılmaz) |
 | `preference: category_unknown` | ekip kuyruğa alındıktan sonra silinmiş: `failed` (atlanmış sayılmaz) |
 
-Hesapsız satır (SkyMail bağlantılı) core'u beklemez. Tur başına bir log
+Hesapsız satır (SkyNotify bağlantılı) core'u beklemez. Tur başına bir log
 satırı yazılır (`"event":"bulk_preference_recheck"`, `asked`, `took`, `ok`);
-SkyMail'de metrik ucu yok, `skymail_bulk_preference_recheck_seconds` metrik
+SkyNotify'da metrik ucu yok, `skynotify_bulk_preference_recheck_seconds` metrik
 ucu geldiğinde eklenir.
 
 **Güvenlik ağı.** Bayrak açıkken dağıtıcı `duyuru` şeridindeki bir satırı
@@ -943,36 +945,36 @@ gönderimi kişi token'ıyla Forms kaynağından, core'unki `/v1/notifications`'
 gider.
 
 **Rapor.** `GET /v1/mail_tasks` ve `/{id}` `recipient_counts`'ta `opted_out`,
-`unsubscribed` (SkyMail'in çıkış kaydı), `inactive` ve `ambiguous` döner;
+`unsubscribed` (SkyNotify'ın çıkış kaydı), `inactive` ve `ambiguous` döner;
 hepsi `failed` içindedir, `unsubscribed` `suppressed` içinde de.
 `GET /v1/mail_tasks/{id}/queue` satırın `error`'unda nedeni döner. Loglarda
 adres ve `sub` yok, yalnız sayılar.
 
 | Değişken | |
 |---|---|
-| `SKYMAIL_BULK_PREFERENCE` | `off` (ya da boş, varsayılan): hiçbir şey sorulmaz, bugünkü gibi. `on`: yukarıdaki her şey |
+| `SKYNOTIFY_BULK_PREFERENCE` | `off` (ya da boş, varsayılan): hiçbir şey sorulmaz, bugünkü gibi. `on`: yukarıdaki her şey |
 
 Başka değer açılışı durdurur. `on` şunları ister, eksikse açılış durur:
-`SKYMAIL_MAIL_PURPOSE=on`, `SKYMAIL_LIST_UNSUBSCRIBE=on`, kapalı olmayan duyuru
-şeridi, `SKYMAIL_UNSUBSCRIBE_LINK=on` ve halkada bir anahtar, `CORE_URL`
+`SKYNOTIFY_MAIL_PURPOSE=on`, `SKYNOTIFY_LIST_UNSUBSCRIBE=on`, kapalı olmayan duyuru
+şeridi, `SKYNOTIFY_UNSUBSCRIBE_LINK=on` ve halkada bir anahtar, `CORE_URL`
 (takibin kullandığı iç adres). Açılış logu `bulk_preference` alanını yazar.
-SkyMail'in servis hesabında core'un `audience:read` rolü zaten var.
+SkyNotify'ın servis hesabında core'un `audience:read` rolü zaten var.
 
 **Göç** (`20261025200000`, yalnız ekleme): `mail_queue.preference_checked_at`
 (nullable), `mail_tasks.self_test` (`NOT NULL DEFAULT false`, yeniden yazmaz)
 ve `mail_task_status()`'ın üç `preference:` nedenini atlanmış sayması. Eski imaj sütunu okumaz, yazmaz.
 
-**Geri dönüş.** `SKYMAIL_BULK_PREFERENCE=off` + yeniden dağıtım: core'a
+**Geri dönüş.** `SKYNOTIFY_BULK_PREFERENCE=off` + yeniden dağıtım: core'a
 sorulmaz, bağlantısız satır başlıksız gider; çıkış kaydı uygulanmaya devam
 eder. İmajı geri almak da güvenlidir; sütun kalır.
 
-## Tek tık çıkış ucu (`SKYMAIL_UNSUBSCRIBE_LINK`, `mail_unsubscribes`)
+## Tek tık çıkış ucu (`SKYNOTIFY_UNSUBSCRIBE_LINK`, `mail_unsubscribes`)
 
 Hesabı olmayan adresin duyuru akışından çıktığı yer (ADR 0072 karar 4–7; hub
 bileti abonelik-cikisi 02). Postmark'ın broadcast stream suppression'ı gibi:
 kayıt **akış başınadır** ve yalnız `duyuru` akışını durdurur; tercih değildir,
 kategori ya da ekip taşımaz. Kimliği olan kişinin tercihi core'dadır ve
-SkyMail'e kopyalanmaz. Satırlara bağlantıyı koymak ve core'a sormak bilet
+SkyNotify'a kopyalanmaz. Satırlara bağlantıyı koymak ve core'a sormak bilet
 09'undur; bu bölüm kaydı, ucu ve bağlantının üreticisini anlatır
 (`unsubscribe.Config.Link`).
 
@@ -987,7 +989,7 @@ olana, panel kişinin isteğiyle geri alana ya da hesap silinene kadar durur.
 **Uygulama.** Kayıt bayraktan bağımsız her zaman uygulanır: bayrağı kapatmak
 çıkmış adrese posta göndermez.
 - **Kuyruğa alırken**: gönderen şeridi `duyuru` olan gönderimde (`LaneOf`:
-  `SKYMAIL_MAIL_PURPOSE=on` iken amaç, kapalıyken öncelik) kayıttaki alıcı `failed` yazılır,
+  `SKYNOTIFY_MAIL_PURPOSE=on` iken amaç, kapalıyken öncelik) kayıttaki alıcı `failed` yazılır,
   `error = suppressed: unsubscribed`, deneme 0; relay'e ve bütçeye gitmez.
   Bounce gibi atlanmış sayılır, gönderimi "Başarısız" yapmaz
   (`mail_task_status()`).
@@ -1000,12 +1002,12 @@ olana, panel kişinin isteğiyle geri alana ya da hesap silinene kadar durur.
   birden olan adreste ikisi de geçerlidir.
 
 **Uç.** `GET|HEAD|POST /u/{belirteç}`, herkese açık kökte
-(`https://api.yildizskylab.com/api/skymail/u/…`), `/t/` ile aynı katman
+(`https://api.yildizskylab.com/api/skynotify/u/…`), `/t/` ile aynı katman
 (OpenAPI: [unsubscribe-public.openapi.yaml](docs/unsubscribe-public.openapi.yaml)).
 - `GET` hiçbir şey yazmaz (tarayıcılar ve posta tarayıcıları açar): "Bu adres
   SKY LAB duyuru postalarından çıkarılsın mı?", maskeli adres (`a…@example.com`),
   tek düğme; kayıt varsa "Çıkarıldı" ve "Yeniden abone ol". Hesap Merkezi'nin
-  iletişim tercihleri bağlantısı (`SKYMAIL_UNSUBSCRIBE_ACCOUNT_URL`, varsayılan
+  iletişim tercihleri bağlantısı (`SKYNOTIFY_UNSUBSCRIBE_ACCOUNT_URL`, varsayılan
   `https://my.yildizskylab.com/communication-preferences`).
 - `POST` gövdesi `List-Unsubscribe=One-Click` (form-encoded ya da multipart):
   kaydı yazar (`source = link`), `200 ok`. Sayfa düğmesi `eylem=cikis` ile
@@ -1023,7 +1025,7 @@ olana, panel kişinin isteğiyle geri alana ya da hesap silinene kadar durur.
   `Retry-After: 60`); IP yazılmaz.
 - Log istek başına tek satırdır: yöntem ve sonuç. Yol, belirteç, adres ve IP
   yazılmaz; `/u` önekinin tamamı genel hata işleyicisine (yolu yazar) hiç
-  ulaşmaz. Kenarın erişim logu `/api/skymail/u/` yolunu tutmamalıdır (bilet 06).
+  ulaşmaz. Kenarın erişim logu `/api/skynotify/u/` yolunu tutmamalıdır (bilet 06).
 
 **Belirteç ve anahtar halkası.** Belirteç sürüm baytı (anahtar kimliği), 24
 baytlık rastgele nonce ve XChaCha20-Poly1305 ile şifrelenmiş (akış etiketi,
@@ -1043,11 +1045,11 @@ Döndürme (orkestratör kararı, 2026-10-21; core bilet 13 ile aynı):
 
 | Değişken | |
 |---|---|
-| `SKYMAIL_UNSUBSCRIBE_LINK` | `off` (ya da boş, varsayılan): `/u/` `404`, üretici bağlantı vermez, kayıt yine uygulanır. `on`: uç açık. Başka değer açılışı durdurur |
-| `SKYMAIL_UNSUBSCRIBE_BASE_URL` | `/u/`'nun herkese açık kökü, `https` (ör. `https://api.yildizskylab.com/api/skymail`); `on` bunu ister |
-| `SKYMAIL_UNSUBSCRIBE_ACCOUNT_URL` | sayfanın Hesap Merkezi bağlantısı (isteğe bağlı) |
-| `SKYMAIL_UNSUBSCRIBE_KEY_CURRENT` | yeni bağlantının sürümü (1–255) |
-| `SKYMAIL_UNSUBSCRIBE_KEY_V<n>` | `n` sürümünün anahtarı: 32 rastgele bayt, base64 ya da base64url; her biri ayrı OpenBao referansı (ADR-0049) |
+| `SKYNOTIFY_UNSUBSCRIBE_LINK` | `off` (ya da boş, varsayılan): `/u/` `404`, üretici bağlantı vermez, kayıt yine uygulanır. `on`: uç açık. Başka değer açılışı durdurur |
+| `SKYNOTIFY_UNSUBSCRIBE_BASE_URL` | `/u/`'nun herkese açık kökü, `https` (ör. `https://api.yildizskylab.com/api/skynotify`); `on` bunu ister |
+| `SKYNOTIFY_UNSUBSCRIBE_ACCOUNT_URL` | sayfanın Hesap Merkezi bağlantısı (isteğe bağlı) |
+| `SKYNOTIFY_UNSUBSCRIBE_KEY_CURRENT` | yeni bağlantının sürümü (1–255) |
+| `SKYNOTIFY_UNSUBSCRIBE_KEY_V<n>` | `n` sürümünün anahtarı: 32 rastgele bayt, base64 ya da base64url; her biri ayrı OpenBao referansı (ADR-0049) |
 
 Anahtar varken `CURRENT` yoksa, `CURRENT` var olmayan bir sürümü gösteriyorsa
 (ör. sızıntıda kaldırılan sürüm), anahtar 32 bayt
@@ -1059,7 +1061,7 @@ sürümü halkaya wizard koyar (bilet 06).
 
 **Panel.** `POST /v1/suppressions/{id}/reactivate`, gövde `{"reason": "…"}`:
 kişinin çıkışını yalnız kişi isteyince ya da bir hata olunca geri alır.
-- Yalnız `skymail:unsubscribes:reactivate` (`skymail` istemci rolü, gruba
+- Yalnız `skynotify:unsubscribes:reactivate` (`skynotify` istemci rolü, gruba
   verilir; Keycloak'ta bilet 10). Rol yoksa `403`; canlıda rol verilene kadar
   kimseye açık değildir.
 - Gerekçe zorunlu: 10–500 karakter yazdırılabilir metin, satır sonu yok
@@ -1087,14 +1089,14 @@ production'da **kullanılmaz**.
 
 ## Bildirimler (`POST /v1/notifications`)
 
-core kişiye (Keycloak `sub`) bir Bildirim türüyle yazar; SkyMail kişi başına
+core kişiye (Keycloak `sub`) bir Bildirim türüyle yazar; SkyNotify kişi başına
 kanalı seçer (tür varsayılanı ∩ core'un izin verdiği kanallar ∩ adres) ve
 kuyruğa alır. `Idempotency-Key` zorunlu; yalnız servis hesabı ve
-`skymail:notifications:send`. Türleri Template seed yazar
+`skynotify:notifications:send`. Türleri Template seed yazar
 (`PUT /v1/notification_types/{key}`). Kanallar e-posta ve uygulama içi kutu.
 Sözleşme: [`docs/notifications.md`](docs/notifications.md).
 
-## Haberden gönderim (`POST /v1/news_sends`, `SKYMAIL_NEWS_SEND`)
+## Haberden gönderim (`POST /v1/news_sends`, `SKYNOTIFY_NEWS_SEND`)
 
 Yayımlanmış bir News kaydını (inscribed `news`) bir kitleye postalar (hub
 bileti duyuru-haber 06; ADR 0067). Varsayılan kapalı; kapalıyken uç
@@ -1102,12 +1104,12 @@ bileti duyuru-haber 06; ADR 0067). Varsayılan kapalı; kapalıyken uç
 
 | Değişken | Anlamı |
 |---|---|
-| `SKYMAIL_NEWS_SEND` | `off` (varsayılan) ya da `on`. `on` iken `SKYMAIL_NEWS_CMS_URL`, `CORE_URL`, `SKYMAIL_LIST_UNSUBSCRIBE=on` ve `SKYMAIL_MAIL_PURPOSE=on` zorunlu; biri eksikse açılış durur (haber postası tek tık çıkış başlığı ya da amacı, kategorisi ve beyanı olmadan gitmez) |
-| `SKYMAIL_NEWS_CMS_URL` | inscribed'ın adresi, `/cms` yolu olmadan (`http://inscribed:8080` ya da `https://api.yildizskylab.com/api`) |
-| `SKYMAIL_NEWS_IMAGE_HOSTS` | kapak görselinin gelebileceği hostlar, virgülle; her biri alt alan adlarını da kapsar. Varsayılan `yildizskylab.com`. Kapak yalnız `https` ve bu hostlardan gösterilir, öteki atlanır (üçüncü taraf görseli fiilen bir açılma pikseli olur) |
-| `SKYMAIL_NEWS_READ_MORE` | "Devamını oku" nereye gider: `home` (varsayılan, sitenin ana sayfası; sitenin haber sayfaları gelene kadar, bilet 11) ya da `pages` (`/haberler/<slug>`, `/duyurular/<slug>`) |
+| `SKYNOTIFY_NEWS_SEND` | `off` (varsayılan) ya da `on`. `on` iken `SKYNOTIFY_NEWS_CMS_URL`, `CORE_URL`, `SKYNOTIFY_LIST_UNSUBSCRIBE=on` ve `SKYNOTIFY_MAIL_PURPOSE=on` zorunlu; biri eksikse açılış durur (haber postası tek tık çıkış başlığı ya da amacı, kategorisi ve beyanı olmadan gitmez) |
+| `SKYNOTIFY_NEWS_CMS_URL` | inscribed'ın adresi, `/cms` yolu olmadan (`http://inscribed:8080` ya da `https://api.yildizskylab.com/api`) |
+| `SKYNOTIFY_NEWS_IMAGE_HOSTS` | kapak görselinin gelebileceği hostlar, virgülle; her biri alt alan adlarını da kapsar. Varsayılan `yildizskylab.com`. Kapak yalnız `https` ve bu hostlardan gösterilir, öteki atlanır (üçüncü taraf görseli fiilen bir açılma pikseli olur) |
+| `SKYNOTIFY_NEWS_READ_MORE` | "Devamını oku" nereye gider: `home` (varsayılan, sitenin ana sayfası; sitenin haber sayfaları gelene kadar, bilet 11) ya da `pages` (`/haberler/<slug>`, `/duyurular/<slug>`) |
 
-- **Yetki.** Yalnız `skymail:announcements:send` (ADMIN, YK; Karar D4)
+- **Yetki.** Yalnız `skynotify:announcements:send` (ADMIN, YK; Karar D4)
   doğrudan gönderir. Öteki kişilerin Mail onayına sunması sonraki dilimde.
 - **Kayıt.** inscribed'dan anonim okunur (`GET /cms/collections/news/{slug}`).
   Bilinmeyen ya da arşivli kayıt `404 news_send.not_found`. Faz 1'de yalnız
@@ -1118,7 +1120,7 @@ bileti duyuru-haber 06; ADR 0067). Varsayılan kapalı; kapalıyken uç
   yazılır, sürümüyle (`source_version`). Sonraki düzenleme web'i değiştirir,
   postayı ve raporu değiştirmez.
 - **Kitle core'dan.** `POST /v1/audiences/resolve` (core `docs/news-audience.md`),
-  SkyMail'in servis hesabıyla, 500'lük sayfalarla. core tercihi kapalı,
+  SkyNotify'ın servis hesabıyla, 500'lük sayfalarla. core tercihi kapalı,
   devre dışı, doğrulanmamış ve adressiz hesabı dışarıda bırakır, kişiye
   kendi çıkış bağlantısını ve "neden aldın" metnini verir. Bağlantısız kişi
   kuyruğa alınmaz (`skipped.no_unsubscribe_url`). core cevap vermezse hiçbir
@@ -1132,13 +1134,13 @@ bileti duyuru-haber 06; ADR 0067). Varsayılan kapalı; kapalıyken uç
   "Kısma ve görev düzeyinde işlemler"). Kuyruğa alırken
   başarısız yazılan satır (bastırılmış ya da çıkmış adres, render hatası)
   `source_ref` taşımaz.
-- **Posta.** System template `club.news` (skymail-frontend, Template seed);
+- **Posta.** System template `club.news` (skynotify-frontend, Template seed);
   yoksa `409 news_send.template_missing`. Kanonik slug 200 karakteri aşarsa
   `400 news_send.slug_too_long`. Birden çok ekipli gönderimde görevin
   kategorisi core'un ilk `team:` kategorisidir (rapor sütunu); çıkış
   bağlantısı her kişide kendi kategorilerini kapatır. Toplu şerit, `duyuru` amacı ve
-  core'un kategorisi (`SKYMAIL_MAIL_PURPOSE` açıkken), List-Unsubscribe
-  satırın core bağlantısından (`SKYMAIL_LIST_UNSUBSCRIBE` açıkken). Gövde
+  core'un kategorisi (`SKYNOTIFY_MAIL_PURPOSE` açıkken), List-Unsubscribe
+  satırın core bağlantısından (`SKYNOTIFY_LIST_UNSUBSCRIBE` açıkken). Gövde
   e-posta izin listesinden geçer; haber için `s`, `code`, `pre`, `hr` eklendi.
   Konu varsayılanı başlık, duyuruda başında "Duyuru: ".
 - **Şablon değişkenleri.** Gönderimin: `Subject`, `Preheader`, `Title`,
@@ -1146,12 +1148,12 @@ bileti duyuru-haber 06; ADR 0067). Varsayılan kapalı; kapalıyken uç
   `HeroUrl`, `HeroAlt`, `CtaHref`, `CtaLabel`, `ReadMoreUrl`, `KindLabel`.
   Alıcının (core'dan): `AudienceReason`, `CategoryLabel`, `UnsubscribeUrl`.
 - **Rıza ve çıkış.** Alıcıların hepsi hesaptır (`recipient_sub`), bu yüzden
-  `SKYMAIL_LIST_CONSENT`'in hesapsız adres kuralı bu gönderime uygulanmaz.
-  SkyMail'in çıkış kaydı (`mail_unsubscribes`) kuyruğa alırken uygulanır.
+  `SKYNOTIFY_LIST_CONSENT`'in hesapsız adres kuralı bu gönderime uygulanmaz.
+  SkyNotify'ın çıkış kaydı (`mail_unsubscribes`) kuyruğa alırken uygulanır.
 - **Günlük.** Yalnız sayılar (`news_send_queued`): kişi, adres, bağlantı ve
   kaydın metni yazılmaz.
-- **Önizleme, deneme, canlı sayı (bilet 07, 08).** `skymail:announcements:send`
-  ya da `skymail:mails:write` ile:
+- **Önizleme, deneme, canlı sayı (bilet 07, 08).** `skynotify:announcements:send`
+  ya da `skynotify:mails:write` ile:
   - `POST /v1/news_sends/preview`: gönderimin kuyruğa alacağı konu, HTML ve
     düz metin, çağıran okur olarak (örnek çıkış bağlantısı: tercihler sayfası;
     "neden aldın" core'un biçiminde örnek). Hiçbir şey yazılmaz.
@@ -1163,43 +1165,43 @@ bileti duyuru-haber 06; ADR 0067). Varsayılan kapalı; kapalıyken uç
     okunmaz): üyeler, takipçiler, atlananlar; `already_received` kaydın bugüne
     dek ulaştığı posta kutusu sayısı (bu kitleden atlanacakların üst sınırı;
     kesin sayı gönderimde); bu kitleye gönderim varsa `already_sent_task_id`.
-  - `GET /v1/news_sends/availability`: `SKYMAIL_NEWS_SEND` açık mı.
+  - `GET /v1/news_sends/availability`: `SKYNOTIFY_NEWS_SEND` açık mı.
 
-## Ekip postası (`SKYMAIL_TEAM_SEND`, `GET /v1/me/team_audiences`)
+## Ekip postası (`SKYNOTIFY_TEAM_SEND`, `GET /v1/me/team_audiences`)
 
 Leader kendi ekibine ya da altındaki alt ekiplere Mail onayıyla posta
 gönderir (ADR-0067 eki 2026-11-08; hub biletleri ekip-postasi 03 ve 04).
-`TEAM_DELEGATION`'a bağlı değildir; SkyMail'in kendi anahtarıyla açılır.
+`TEAM_DELEGATION`'a bağlı değildir; SkyNotify'ın kendi anahtarıyla açılır.
 
 | Değişken | Değer |
 |---|---|
-| `SKYMAIL_TEAM_SEND` | `off` (varsayılan) ya da `on`. `on` için `CORE_URL`, `SKYMAIL_MAIL_PURPOSE=on` ve `SKYMAIL_BULK_PREFERENCE=on` gerekir; eksikse açılış durur |
+| `SKYNOTIFY_TEAM_SEND` | `off` (varsayılan) ya da `on`. `on` için `CORE_URL`, `SKYNOTIFY_MAIL_PURPOSE=on` ve `SKYNOTIFY_BULK_PREFERENCE=on` gerekir; eksikse açılış durur |
 
-**Liderliği core söyler.** SkyMail, core'un
+**Liderliği core söyler.** SkyNotify, core'un
 `GET /internal/v1/users/{sub}/teams` ucunu kendi servis hesabıyla
 (`audience:read`) çağırır ve yalnız `role: leader` satırlarını kullanır.
 Keycloak'tan ya da token'dan kendisi okumaz; core cevap vermezse ekip postası
-yoktur (`503 team_mail.leadership_unavailable`, `Retry-After: 30`), SkyMail'in
+yoktur (`503 team_mail.leadership_unavailable`, `Retry-After: 30`), SkyNotify'ın
 geri kalanı etkilenmez. Rota kapısı core'un cevabını 60 sn tutar; gönderme,
 yeniden gönderme ve onay her seferinde core'a yeniden sorar.
 
-**Rolsüz Leader zinciri.** Şu rotalar `/v1`'in `skymail:access` kapısından
-önce kendi zincirindedir (token, hesap erişim kapısı, sonra `skymail:access`
+**Rolsüz Leader zinciri.** Şu rotalar `/v1`'in `skynotify:access` kapısından
+önce kendi zincirindedir (token, hesap erişim kapısı, sonra `skynotify:access`
 YA DA core'da en az bir `leader` satırı):
 
 - `GET /v1/me/team_audiences`
 - `POST /v1/mail_approvals`, `GET /v1/mail_approvals`, `GET /v1/mail_approvals/{id}`
 - `POST /v1/mail_approvals/{id}/resubmit`, `/accept`, `/decline`
-- `GET /v1/templates/by-key/free.basic` (serbest duyuru çerçevesi; formun önizlemesi). `skymail:templates:read` olmadan da okunur: rolsüz Leader ya da core'un lider dediği `skymail:access` sahibi; başka anahtar bu rolü ister
+- `GET /v1/templates/by-key/free.basic` (serbest duyuru çerçevesi; formun önizlemesi). `skynotify:templates:read` olmadan da okunur: rolsüz Leader ya da core'un lider dediği `skynotify:access` sahibi; başka anahtar bu rolü ister
 
-`skymail:access` taşıyan için bu rotalar `/v1`'dekiyle aynıdır ve core'a hiç
-sorulmaz. `skymail:access` taşımayan token'ın öteki SkyMail rolleri (örneğin
+`skynotify:access` taşıyan için bu rotalar `/v1`'dekiyle aynıdır ve core'a hiç
+sorulmaz. `skynotify:access` taşımayan token'ın öteki SkyNotify rolleri (örneğin
 onaycı rolü) bu zincirde yok sayılır. Rolü olmayan kişinin token'ı kişinin kendi token'ı olmalı ve `aud`'u
-SkyMail'i adlandırmalıdır (yoksa 401; servis hesabı 403
+SkyNotify'ı adlandırmalıdır (yoksa 401; servis hesabı 403
 `auth.person_required`). Rolsüz Leader yalnız ekip postası gönderir, yalnız
 serbest duyuru çerçevesiyle (`free.basic`, `403
 team_mail.free_announcement_only`), yalnız kendi isteklerini görür; başka
-hiçbir SkyMail ucuna giremez. Onaylanan isteğinin sonucunu
+hiçbir SkyNotify ucuna giremez. Onaylanan isteğinin sonucunu
 `GET /v1/mail_approvals/{id}` yanıtındaki `result` toplamlarından okur
 ("Piksel, tıklama ve raporlar").
 
@@ -1210,14 +1212,14 @@ ekiplerinin e-postası olan üyeleri, Leader grupları dahil, kişi başı bir; 
 ve ad yok). Anahtar kapalıyken `404 team_mail.off`.
 
 **Onay isteği.** `team_ids` (1..50) `mail_list_id`, `recipients` ve
-`form_source_id` yerine seçilir; `skymail:lists:read` gerekmez. Her ekip
+`form_source_id` yerine seçilir; `skynotify:lists:read` gerekmez. Her ekip
 kişinin lider olduğu ekiplerden olmalıdır (`403 team_mail.not_leader`); Leader
 grubu ve Privileged kök hiçbir zaman seçilemez. Üst ekiple alt ekibi birlikte
 seçilirse alt ekip düşer; kalanlar yol sırasında saklanır (`mail_approvals.team_ids`,
 ilki aynı zamanda `mail_list_id`). Amaç her zaman `duyuru`'dur, kategori
 ekibindir; gövde başka amaç ya da kategori söyleyemez (`400
 team_mail.purpose_fixed`), tanıtım olamaz. Ekip postasında serbest duyuru
-(`free.basic`) `skymail:templates:read` istemez, gönderen kim olursa olsun;
+(`free.basic`) `skynotify:templates:read` istemez, gönderen kim olursa olsun;
 başka şablon bu rolü ister. Rolsüz Leader eski, ekip postası olmayan
 isteğini kabul edip gönderemez.
 
@@ -1237,7 +1239,7 @@ değişmedi.
 
 Sıra önemlidir; imajı önce geri almayın.
 
-1. **Anahtarı kapatın:** `SKYMAIL_TEAM_SEND=off` ve yeniden dağıtım. Yeni ekip
+1. **Anahtarı kapatın:** `SKYNOTIFY_TEAM_SEND=off` ve yeniden dağıtım. Yeni ekip
    isteği açılamaz, rolsüz liderin zinciri kalkar, bekleyen ekip isteğinin
    onayı `409 mail_approval.team_mail_off` alır ve gönderilmez.
 2. **Bekleyen ve geri gönderilmiş ekip isteklerini kapatın:** onaycı her
@@ -1256,9 +1258,9 @@ Türün kanallarında `inbox` varsa her alıcıya, tercihine bakılmadan, bir ku
 girmez). Kişi kendi öğelerini kendi token'ıyla okur ve işaretler:
 `GET /v1/me/inbox` (imleçli, yeniden eskiye), `GET /v1/me/inbox/counts`,
 `POST /v1/me/inbox/{id}/seen|read|unread|archive`, `POST /v1/me/inbox/read-all`,
-`POST /v1/me/inbox/seen-all`. Token `aud`'unda `skymail` olmalı
+`POST /v1/me/inbox/seen-all`. Token `aud`'unda `skynotify` olmalı
 (`V1_TOKEN_AUDIENCE_MODE`'dan bağımsız) ve kişi token'ı olmalı; rol, ve
-`skymail:access`, istenmez. Başkasının öğesi `404`. Aynı zincirdeki öteki
+`skynotify:access`, istenmez. Başkasının öğesi `404`. Aynı zincirdeki öteki
 kişi ucu: `GET /v1/me/email-delivery` (bkz. [bastırma listesi](#geri-dönen-posta-ve-bastırma-listesi-mail_bounces-mail_suppressions)). Öğe en çok 90 gün kalır
 (bildirimin `expires_at`'i daha erken silebilir); kutu süpürmesi saatte bir
 siler, hesap silme kişinin bütün öğelerini siler. Bu sürümden önceki imaja
@@ -1307,7 +1309,7 @@ Her şeridin bekleyen satırlarının kendi kısmi indeksi var
 yalnız alacağı satırları okur, binlerce toplu satır sistem şeridinin turunu
 yavaşlatmaz.
 
-## Gönderim bütçesi (`SKYMAIL_RATE_PER_MINUTE`, `SKYMAIL_DAILY_RECIPIENT_BUDGET`)
+## Gönderim bütçesi (`SKYNOTIFY_RATE_PER_MINUTE`, `SKYNOTIFY_DAILY_RECIPIENT_BUDGET`)
 
 Röle sınırları tüm süreçler için birlikte tutulur. Production rölesi
 `smtp.office365.com`: Exchange Online'ın genel sınırları dakikada 30 mesaj ve
@@ -1315,8 +1317,8 @@ günde 10.000 alıcı. Varsayılanlar bunların altında kalır.
 
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
-| `SKYMAIL_RATE_PER_MINUTE` | `25` | Dakikada en çok bu kadar posta (iki şerit birlikte) |
-| `SKYMAIL_DAILY_RECIPIENT_BUDGET` | `9000` | Günde en çok bu kadar alıcı (iki şerit birlikte) |
+| `SKYNOTIFY_RATE_PER_MINUTE` | `25` | Dakikada en çok bu kadar posta (iki şerit birlikte) |
+| `SKYNOTIFY_DAILY_RECIPIENT_BUDGET` | `9000` | Günde en çok bu kadar alıcı (iki şerit birlikte) |
 
 - Değer tam sayıdır. `0` o sınırı kapatır, ikisi de `0` ise bütçe yoktur
   (bütçeden önceki davranış). Başka bir değer açılışı durdurur.
@@ -1324,7 +1326,7 @@ günde 10.000 alıcı. Varsayılanlar bunların altında kalır.
   şerit başına alınan satır sayısı. Bütün replikalar aynı satırları okur ve yazar,
   zaman olarak veritabanının saatini kullanır.
 - Toplu şerit her sınırın en çok %70'ini alır (25'te 17, 9.000'de 6.300). Bir
-  süreç toplu satırı yalnız `skymail-backend send budget` advisory lock'u
+  süreç toplu satırı yalnız `skynotify-backend send budget` advisory lock'u
   altında alır: pencereleri okur, kalan yer kadar satır alır, sayar, commit
   eder. Sonraki süreç bu sayıyı görür.
 - Sistem şeridi (`/mail_tasks/single`) bütçe yüzünden hiçbir zaman beklemez ve
@@ -1349,23 +1351,23 @@ günde 10.000 alıcı. Varsayılanlar bunların altında kalır.
   Ayrılmış alan adlı alıcı hiç alınmadığı için sayılmaz; kalıcı olarak
   reddedilen alıcı yalnız tek denemesiyle sayılır (Kanallar).
 
-## Kısma ve görev düzeyinde işlemler (`SKYMAIL_THROTTLE_PAUSE`, `SKYMAIL_FAILURE_PAUSE_COUNT`, `SKYMAIL_FAILURE_PAUSE_PERCENT`)
+## Kısma ve görev düzeyinde işlemler (`SKYNOTIFY_THROTTLE_PAUSE`, `SKYNOTIFY_FAILURE_PAUSE_COUNT`, `SKYNOTIFY_FAILURE_PAUSE_PERCENT`)
 
 Toplu şeridin iki koruması ve bir gönderimin üç düğmesi (duyuru-haber bilet 05,
 G3 ve G4).
 
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
-| `SKYMAIL_THROTTLE_PAUSE` | `5m` | Kısma yanıtından sonra toplu şeridin en az bekleyeceği süre. `0` kapatır, en çok `1h` |
-| `SKYMAIL_FAILURE_PAUSE_COUNT` | `10` | Bir gönderimde röle bu kadar alıcıyı kalıcı olarak reddedince gönderim kendiliğinden duraklar. `0` hiç duraklatmaz |
-| `SKYMAIL_FAILURE_PAUSE_PERCENT` | `10` | ... ve bu reddedilenler, rölenin kesin yanıt verdiklerinin (gönderilen + reddedilen) en az bu yüzdesiyse. 1–100 |
+| `SKYNOTIFY_THROTTLE_PAUSE` | `5m` | Kısma yanıtından sonra toplu şeridin en az bekleyeceği süre. `0` kapatır, en çok `1h` |
+| `SKYNOTIFY_FAILURE_PAUSE_COUNT` | `10` | Bir gönderimde röle bu kadar alıcıyı kalıcı olarak reddedince gönderim kendiliğinden duraklar. `0` hiç duraklatmaz |
+| `SKYNOTIFY_FAILURE_PAUSE_PERCENT` | `10` | ... ve bu reddedilenler, rölenin kesin yanıt verdiklerinin (gönderilen + reddedilen) en az bu yüzdesiyse. 1–100 |
 
 Yanlış değer açılışı durdurur. Açılış logu üç değeri de yazar.
 
 **Kısma (G3).** Röle hesabın yavaşlamasını isterse (SMTP `421`, `432` ya da
 herhangi bir `4.7.x`; Graph `429` ya da `503`):
 
-- Bütün süreçlerin toplu şeridi `SKYMAIL_THROTTLE_PAUSE` kadar, yanıtın
+- Bütün süreçlerin toplu şeridi `SKYNOTIFY_THROTTLE_PAUSE` kadar, yanıtın
   `Retry-After`'ı daha uzunsa o kadar hiçbir satır almaz. Bekleme Postgres'te
   tek satırdır (`mail_bulk_holds`); daha uzun bir bekleme kısaltılmaz. Saat
   veritabanının saatidir.
@@ -1386,8 +1388,8 @@ herhangi bir `4.7.x`; Graph `429` ya da `503`):
 **Hata oranında kendiliğinden duraklama (G3, listmonk deseni).** Bir toplu
 gönderimin alıcısı rölede kalıcı olarak başarısız olunca (5 deneme bitti ya da
 alıcının adresi reddedildi) gönderimin sayacı (`mail_tasks.send_failures`) artar.
-Sayaç `SKYMAIL_FAILURE_PAUSE_COUNT`'a ulaşır ve reddedilenler gönderilenlerle
-birlikte sayılanların en az `SKYMAIL_FAILURE_PAUSE_PERCENT`'i olursa gönderim
+Sayaç `SKYNOTIFY_FAILURE_PAUSE_COUNT`'a ulaşır ve reddedilenler gönderilenlerle
+birlikte sayılanların en az `SKYNOTIFY_FAILURE_PAUSE_PERCENT`'i olursa gönderim
 `paused_reason = failure_rate` ile duraklar. Log: `event=send_paused_failure_rate`.
 Atlananlar (tercih, bastırma, rıza, ayrılmış alan adı, iptal) sayılmaz.
 
@@ -1406,7 +1408,7 @@ Atlananlar (tercih, bastırma, rıza, ayrılmış alan adı, iptal) sayılmaz.
   tekil posta `409 mail_task.not_bulk`. İptal edilmiş gönderim duraklatılamaz ya
   da sürdürülemez (`409 mail_task.cancelled`). Bütün alıcıları bitmiş gönderim
   duraklatılamaz ya da iptal edilemez (`409 mail_task.finished`).
-- Kim: `skymail:announcements:send` her gönderimi; `skymail:mails:write` yalnız
+- Kim: `skynotify:announcements:send` her gönderimi; `skynotify:mails:write` yalnız
   kendi gönderdiğini (`sent_by`). Ötekine 403.
 - İptal edilen satır atlanmış sayılır: gönderimi `failed` okutmaz
   (`mail_task_status()`). Bir alıcısı gitmiş, kalanı iptal edilmiş gönderim
@@ -1443,7 +1445,7 @@ Her kuyruk satırı alıcısının postasını (konu, düz metin, HTML) tutar.
 (`Cache-Control: no-store`); `access` kimin neyi gördüğünü söyler, alanlar
 yalnız `available` ya da `masked` iken doludur:
 
-| Gönderim | Gönderen | `skymail:mails:write` | `skymail:system-mails:read` | Diğer `skymail:mails:read` |
+| Gönderim | Gönderen | `skynotify:mails:write` | `skynotify:system-mails:read` | Diğer `skynotify:mails:read` |
 |---|---|---|---|---|
 | Hassas, toplu (liste, grup, onaylanmış istek) | maskeli | maskeli | maskeli | `restricted` |
 | Hassas, tekil (`/single`; kod, tek kullanımlık bağlantı) | maskeli | `restricted` | maskeli | `restricted` |
@@ -1456,7 +1458,7 @@ yalnız `available` ya da `masked` iken doludur:
   kopyasıyla, gönderimin `body_variables`'ını maskeli değerlerle
   **değiştirir**; ham kod/bağlantı saklanmaz, okurken maskeleme yoktur. Kod,
   tek kullanımlık bağlantı, IP adresi ve konum `••••••` olur (HTML'de
-  `<mark data-skymail-masked="">`). Önce değişkenler (ad, biçim, metin
+  `<mark data-skynotify-masked="">`). Önce değişkenler (ad, biçim, metin
   içinde) maskelenip posta **gönderim anında yürürlükteki** şablonla (o
   zamandan beri yazılmamış satır ya da o ana kadar yayımlanmış en yeni sürüm)
   yeniden render edilir; birebir tutmazsa desen yedeği. Son denetimde bir
@@ -1497,7 +1499,7 @@ yalnız `available` ya da `masked` iken doludur:
 - **Maskelenemeyen gönderim:** maskeleme hata verirse gönderim geri atılır
   (5 dk, her hatada ×2, en çok 1 gün). Hata yalnız **aynı turda** başka bir
   gönderim maskelendiyse sayılır ve yalnız o turun hatası sayılır: hiçbir
-  şeyin maskelenmediği turların (SkyMail çapında arıza) hataları arıza
+  şeyin maskelenmediği turların (SkyNotify çapında arıza) hataları arıza
   bitince toptan sayılmaz. 3 sayılmış hatada içerik boşaltılır. Sayılsın
   sayılmasın, ilk hatasından **7 gün** sonra hâlâ maskelenemeyen hassas
   gönderim de boşaltılır (`mail_tasks.content_mask_failing_since`); kuyrukta
@@ -1509,22 +1511,22 @@ yalnız `available` ya da `masked` iken doludur:
   `"event":"sensitive_content_mask_failed"` yazar. Olayın adı ve alanları
   (`event`, `reason`, `task_id`) sözleşmedir, değiştirilmez: ADMIN'e otomatik
   mail ops tarafında bu satırı okuyan bir alarmla gelecek (Yusuf, 2026-10-14);
-  SkyMail kendisi mail atmaz. O gelene kadar production sunucusunda haftalık
+  SkyNotify kendisi mail atmaz. O gelene kadar production sunucusunda haftalık
   sayım (salt okunur):
 
 ```bash
-docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | grep -F '"event":"sensitive_content_mask_' | grep -o '"event":"[^"]*"\(,"reason":"[^"]*"\)\?' | sort | uniq -c
+docker service logs --raw --since 168h "$SERVIS" 2>&1 | grep -F '"event":"sensitive_content_mask_' | grep -o '"event":"[^"]*"\(,"reason":"[^"]*"\)\?' | sort | uniq -c
 ```
 
-- `skymail:system-mails:read` SkyMail istemcisinin rolüdür (yönetici: YK, DK,
+- `skynotify:system-mails:read` SkyNotify istemcisinin rolüdür (yönetici: YK, DK,
   ADMIN).
 - **Kim açtı:** `GET /v1/mail_tasks/{id}/content-views` gönderimin maskeli
   içeriğinin her açılışını en yeniden eskiye döner (sayfalı `_start`/`_end`,
   `X-Total-Count`, `Cache-Control: no-store`): `actor` (`sub`, `name`),
   `queue_item_id`, `masked_by`, `masked_variables`, `created_at`. Alıcının adı
-  ve adresi dönmez. Yalnız `skymail:audit:read` okur (Yusuf, 2026-11-22: yalnız
-  DK). İçeriği açan roller (`skymail:system-mails:read`, `skymail:mails:write`,
-  gönderimin sahibi) ve `skymail:mails:read` bu rolü taşımaz, kaydı okuyamaz:
+  ve adresi dönmez. Yalnız `skynotify:audit:read` okur (Yusuf, 2026-11-22: yalnız
+  DK). İçeriği açan roller (`skynotify:system-mails:read`, `skynotify:mails:write`,
+  gönderimin sahibi) ve `skynotify:mails:read` bu rolü taşımaz, kaydı okuyamaz:
   denetlenen kendi kaydını okumaz (Microsoft Purview Audit Reader, NIST SP
   800-53 AU-9(4)). Silinen hesabın açılışı `Silinmiş kullanıcı` döner. Rol
   e-skylab-keycloak'ta tanımlanır ve DK'ya bir kez tohumlanır; rol yokken uç
@@ -1539,7 +1541,7 @@ docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | 
   boşaltır (güvenli, geri gelmez). `20261013140000` down migration'ı
   koşturulmaz (açılış kaydını siler).
 
-## Hesapsız alıcıların saklaması (`SKYMAIL_RECIPIENT_RETENTION`)
+## Hesapsız alıcıların saklaması (`SKYNOTIFY_RECIPIENT_RETENTION`)
 
 ADR-0062'nin iki satırı (hub sektör denetimi 2026-11-24, 06 düzeltme 3):
 "arşivlenmiş elle listenin alıcıları: arşivden 1 yıl sonra" ve "alıcı başına
@@ -1551,8 +1553,8 @@ Yusuf, 2026-11-24). Liste arşivi hesapları ve üyeleri etkilemez (Yusuf,
 
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
-| `SKYMAIL_RECIPIENT_RETENTION` | `dry-run` | `off`, `dry-run` ya da `apply`; başka değer açılışı durdurur |
-| `SKYMAIL_RECIPIENT_RETENTION_MAX_ROWS` | `50000` | fren: bir apply'da silinecek liste üyeliği ya da alıcı, boşalacak kuyruk satırı, onay kişisi ya da Forms yanıtlayanı, maskelenecek değişken ya da değişiklik kaydı sınırı (1–10.000.000); başka değer açılışı durdurur |
+| `SKYNOTIFY_RECIPIENT_RETENTION` | `dry-run` | `off`, `dry-run` ya da `apply`; başka değer açılışı durdurur |
+| `SKYNOTIFY_RECIPIENT_RETENTION_MAX_ROWS` | `50000` | fren: bir apply'da silinecek liste üyeliği ya da alıcı, boşalacak kuyruk satırı, onay kişisi ya da Forms yanıtlayanı, maskelenecek değişken ya da değişiklik kaydı sınırı (1–10.000.000); başka değer açılışı durdurur |
 
 - **Kurallar** (her liste, gönderim ve onay isteği kendi işleminde):
   1. 1 yıldan önce arşivlenmiş elle listede hesabı olmayan kişinin
@@ -1580,7 +1582,7 @@ Yusuf, 2026-11-24). Liste arşivi hesapları ve üyeleri etkilemez (Yusuf,
      ve olayları silinmez.
 - **Hesabı olan kişiye dokunulmaz** (ADR-0062: "üyede hesapla birlikte";
   hesap silme siler). Satır yalnız şu üçü birden doğruysa boşalır:
-  `recipient_sub` boş; SkyMail adresi hiçbir yerde bir `sub`'a bağlamamış
+  `recipient_sub` boş; SkyNotify adresi hiçbir yerde bir `sub`'a bağlamamış
   (başka bir kuyruk satırı, bastırma kaydı); Keycloak'ta adresi birincil
   adresi, kullanıcı adı, okul (`schoolEmail`) ya da kişisel
   (`personalEmail`) adresi olan hiçbir kullanıcı yok (etkin olmayan ve
@@ -1603,7 +1605,7 @@ Yusuf, 2026-11-24). Liste arşivi hesapları ve üyeleri etkilemez (Yusuf,
 - **Zamanlama, kilit, dry-run, fren, makbuz:** takip saklamasının kalıbı
   (aşağıda, "Saklama"): açılışta ve saatte bir "zamanı geldi mi" denetlenir,
   aynı kipte son 23 saatte bitmiş bir koşu yoksa koşar; oturum advisory
-  lock'u `skymail-backend recipient retention`; dry-run aynı ifadeleri
+  lock'u `skynotify-backend recipient retention`; dry-run aynı ifadeleri
   çalıştırıp geri alır, apply önce dry-run'ı koşar; sayılardan biri freni
   aşarsa apply hiçbir şey değiştirmez (`refused_large`, `"alarm":"recipient_retention_brake"`;
   dry-run'da `would_refuse_large`). Her koşu `recipient_retention_runs`'a
@@ -1631,10 +1633,10 @@ Yusuf, 2026-11-24). Liste arşivi hesapları ve üyeleri etkilemez (Yusuf,
 Makbuzlar (production sunucusunda, salt okunur):
 
 ```bash
-docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | grep -F '"event":"recipient_retention_run"'
+docker service logs --raw --since 168h "$SERVIS" 2>&1 | grep -F '"event":"recipient_retention_run"'
 ```
 
-## Açılma ve tıklama takibi (`SKYMAIL_TRACKING`)
+## Açılma ve tıklama takibi (`SKYNOTIFY_TRACKING`)
 
 Kişi bazında açılma ve tıklama takibi (hub bilet iletişim-servisi 14, tasarım
 notu 07). **Varsayılan kapalı.** Bu sürümde takip verisi, SMTP anında
@@ -1649,16 +1651,16 @@ gönderimde her alıcı takip edilir: hesabı olmayan adres (liste, Forms,
 konuk), Member olmayan ve daha önce itiraz etmiş kişi de. core'un
 `tracking:resolve` yanıtındaki "hayır" yalnız etkin olmayan hesap
 (`inactive`) ve core'un işletme freni (`COMMUNICATION_TRACKING_MODE=opt_in`)
-içindir; SkyMail core'un hayırını nedeni ne olursa olsun uygular. Keycloak
+içindir; SkyNotify core'un hayırını nedeni ne olursa olsun uygular. Keycloak
 ya da core yanıt vermezse, ya da kişi yanıtta yoksa, alıcı yine takip
 edilir. Bu yüzden yeni satırlara `no_account` ve `preference_unavailable`
 yazılmaz (eski satırlarda kalır). Geri alma ucu bir sürüm daha `204` döner
 ama hiçbir şey silmez (aşağıda). Daha önce geri alınmış (belirteci kapalı)
 eski postalara geriye dönük bir şey yapılmaz. Kesin acil kapatma yalnız
-`SKYMAIL_TRACKING*` bayraklarıdır: core'un freni yalnız core'a ulaşıldığında
+`SKYNOTIFY_TRACKING*` bayraklarıdır: core'un freni yalnız core'a ulaşıldığında
 tutar, core'a ulaşılamazsa gönderim takipli gider.
 Bilinen durum: Keycloak'ta devre dışı bırakılmış ama kulüp üyesi olmayan
-hesap, adresle gönderilen postada takipli kalır (SkyMail yalnız etkin hesap
+hesap, adresle gönderilen postada takipli kalır (SkyNotify yalnız etkin hesap
 arar, core yalnız kulüp üyelerinin devre dışı olduğunu görür).
 
 **Saklama süresi (KVKK aydınlatma metni s6, 2026-10-23; Yusuf'un
@@ -1677,24 +1679,24 @@ Olay yazımı, raporlar ve saklama işi aynı sabiti kullanır.
 
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
-| `SKYMAIL_TRACKING` | `off` | `off` ya da `on`; başka değer açılışı durdurur |
-| `SKYMAIL_TRACKING_SYSTEM` | `off` | servislerin postaları (hesap ve işlem postaları, bildirimler): `off` ya da `on`; başka değer açılışı durdurur; yalnız `SKYMAIL_TRACKING=on` iken etkili (aşağıda, "Sistem postaları") |
-| `SKYMAIL_TRACKING_OPERATOR` | `off` | panelin (operatörün) gönderimleri: `off` kutuyla (yalnız isteyen), `on` her zaman takipli, kutu yok; başka değer açılışı durdurur; yalnız `SKYMAIL_TRACKING=on` iken etkili (aşağıda, "Operatör postaları") |
-| `SKYMAIL_TRACKING_BASE_URL` | yok | `/t/`'nin herkese açık adresi (`https://api.yildizskylab.com/api/skymail`); yalnız https, kimlik bilgisi, sorgu ve parça yok; `on` iken zorunlu |
+| `SKYNOTIFY_TRACKING` | `off` | `off` ya da `on`; başka değer açılışı durdurur |
+| `SKYNOTIFY_TRACKING_SYSTEM` | `off` | servislerin postaları (hesap ve işlem postaları, bildirimler): `off` ya da `on`; başka değer açılışı durdurur; yalnız `SKYNOTIFY_TRACKING=on` iken etkili (aşağıda, "Sistem postaları") |
+| `SKYNOTIFY_TRACKING_OPERATOR` | `off` | panelin (operatörün) gönderimleri: `off` kutuyla (yalnız isteyen), `on` her zaman takipli, kutu yok; başka değer açılışı durdurur; yalnız `SKYNOTIFY_TRACKING=on` iken etkili (aşağıda, "Operatör postaları") |
+| `SKYNOTIFY_TRACKING_BASE_URL` | yok | `/t/`'nin herkese açık adresi (`https://api.yildizskylab.com/api/skynotify`); yalnız https, kimlik bilgisi, sorgu ve parça yok; `on` iken zorunlu |
 | `CORE_URL` | yok | core'un Docker ağındaki adresi (`http://core-backend:8080`); `on` iken zorunlu |
-| `SKYMAIL_SENDER_SEES_RECIPIENTS` | `off` | gönderimin kendi göndereni kişi raporunu (`GET /v1/mail_tasks/{id}/tracking/recipients`) okur mu: `off` yalnız toplu sayılar, `on` kendi gönderiminin kişileri de; başka değer açılışı durdurur. `skymail:mails:tracking:read` sahiplerini etkilemez (aşağıda, "Kim okur") |
-| `SKYMAIL_TRACKING_RETENTION` | `off` | saklama işi: `off`, `dry-run`, `apply` ya da `purge`; başka değer açılışı durdurur; `purge` için `SKYMAIL_TRACKING=off` zorunlu |
-| `SKYMAIL_TRACKING_RETENTION_MAX_ROWS` | `50000` | saklama freni: bir apply'da kapanacak belirteç, silinecek olay ya da boşalacak bağlantı sınırı (1–10.000.000); başka değer açılışı durdurur |
+| `SKYNOTIFY_SENDER_SEES_RECIPIENTS` | `off` | gönderimin kendi göndereni kişi raporunu (`GET /v1/mail_tasks/{id}/tracking/recipients`) okur mu: `off` yalnız toplu sayılar, `on` kendi gönderiminin kişileri de; başka değer açılışı durdurur. `skynotify:mails:tracking:read` sahiplerini etkilemez (aşağıda, "Kim okur") |
+| `SKYNOTIFY_TRACKING_RETENTION` | `off` | saklama işi: `off`, `dry-run`, `apply` ya da `purge`; başka değer açılışı durdurur; `purge` için `SKYNOTIFY_TRACKING=off` zorunlu |
+| `SKYNOTIFY_TRACKING_RETENTION_MAX_ROWS` | `50000` | saklama freni: bir apply'da kapanacak belirteç, silinecek olay ya da boşalacak bağlantı sınırı (1–10.000.000); başka değer açılışı durdurur |
 
 Hatalı adres, değeri değil değişkeni söyleyerek açılışı durdurur. Açılışta
-`open and click tracking (SKYMAIL_TRACKING)` satırı kipi ve adresleri,
-`open and click tracking of system mail (SKYMAIL_TRACKING_SYSTEM; …)` satırı
+`open and click tracking (SKYNOTIFY_TRACKING)` satırı kipi ve adresleri,
+`open and click tracking of system mail (SKYNOTIFY_TRACKING_SYSTEM; …)` satırı
 sistem postalarının geçerli kipini (`mode`) ve istenen değeri (`requested`),
-`open and click tracking of every operator send (SKYMAIL_TRACKING_OPERATOR; …)`
+`open and click tracking of every operator send (SKYNOTIFY_TRACKING_OPERATOR; …)`
 satırı aynısını operatör postaları için,
-`a send's own sender reads its people (SKYMAIL_SENDER_SEES_RECIPIENTS; …)`
+`a send's own sender reads its people (SKYNOTIFY_SENDER_SEES_RECIPIENTS; …)`
 satırı anahtarın değerini (`on`),
-`open and click tracking retention (SKYMAIL_TRACKING_RETENTION)` satırı
+`open and click tracking retention (SKYNOTIFY_TRACKING_RETENTION)` satırı
 saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
 
 - **Kim takip edilir (gönderim kuyruğa yazılırken sabitlenir):** bayrak açık;
@@ -1703,8 +1705,8 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   isteği); satır toplu şeritte; şablon System değil ve hassas değil
   (`mail_task_content_sensitive()`, içerik panelinin tek tanımı; kişilere
   giden gönderimde içeriği hakkında bir şey söylemeyen şablon hassas
-  sayılır). Servislerin postaları bu kurala değil `SKYMAIL_TRACKING_SYSTEM`'e
-  bağlıdır (aşağıda, "Sistem postaları"); `SKYMAIL_TRACKING_OPERATOR=on`
+  sayılır). Servislerin postaları bu kurala değil `SKYNOTIFY_TRACKING_SYSTEM`'e
+  bağlıdır (aşağıda, "Sistem postaları"); `SKYNOTIFY_TRACKING_OPERATOR=on`
   iken bir kişinin her gönderimi istese de istemese de takip edilir ve bu
   paragrafın şablon ve bağlantı kuralı yerine sistem postalarınınki geçer
   (aşağıda, "Operatör postaları"). Bayrak kapalıyken ya da şablon
@@ -1713,7 +1715,7 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   (`recipient_sub`: Keycloak grubu üyeleri ve kişilere tek tek gönderimde
   adresten bulunan hesap, aşağıda) ve core izin veriyor.
   core'a gönderimin veritabanı işlemi **başlamadan önce** sorulur (Mail
-  onayında istek kilitlenmeden önce, grup üyeleriyle birlikte); SkyMail core'u
+  onayında istek kilitlenmeden önce, grup üyeleriyle birlikte); SkyNotify core'u
   hiçbir zaman işlem ya da kilit tutarken beklemez. O yanıtta olmayan kişi
   (sorulmamış, ör. yanıt gelmemiş) ve `sub`'ı bilinmeyen alıcı da takip
   edilir (B9); takip edilmeyen yalnız core'un hayır dediği kişidir.
@@ -1748,9 +1750,9 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   istekle hiçbir zaman takip edilmez. Bir servisin token'ıyla gelen
   `/single` (Keycloak, core, Forms: hesap ve işlem postaları) takip isteyemez:
   alan yok sayılır, posta sistem şeridinde kalır ve yalnız
-  `SKYMAIL_TRACKING_SYSTEM=on` iken takip edilir (aşağıda). Forms kaynağı
+  `SKYNOTIFY_TRACKING_SYSTEM=on` iken takip edilir (aşağıda). Forms kaynağı
   gönderimi takip istemez, `tracking: false` der; yalnız
-  `SKYMAIL_TRACKING_OPERATOR=on` iken takiplidir ("Operatör postaları").
+  `SKYNOTIFY_TRACKING_OPERATOR=on` iken takiplidir ("Operatör postaları").
 - **core'a ulaşılamazsa** (5 saniye, hata ya da sözleşme dışı yanıt) o
   gönderimde herkes takip edilir (B9), gönderim durmaz.
   Uyarı satırı `"event":"tracking_preferences_unavailable"` (`"cause":"core"`
@@ -1764,7 +1766,7 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   göreli adres, kullanıcı bilgili ya da 2048 karakterden uzun adres, boşluk
   ya da denetim karakteri taşıyan adres, yolunda `communication-preferences`
   ya da `unsubscribe` geçen adres (core'un çıkış bağlantısı, my.'nın tercih
-  sayfası), SkyMail'in kendi `/t/` adresleri ve `data-skymail-notrack`
+  sayfası), SkyNotify'ın kendi `/t/` adresleri ve `data-skynotify-notrack`
   öznitelikli bağlantı kaydedilmez, postada olduğu gibi kalır.
   `List-Unsubscribe` başlığına dokunulmaz. **İstisna:** tek alıcılı (ya da
   tek postası işlenebilen) gönderimde karşılaştıracak başka posta olmadığı
@@ -1782,9 +1784,9 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   `mail_queue.sent_at` relay'in postayı aldığı an.
 - **Okuma:** `GET /v1/mail_tasks/summary` → `tracking_available` (gönderim
   formu kutuyu yalnız bu `true` iken gösterir) ve `tracking_always`
-  (`SKYMAIL_TRACKING_OPERATOR=on` iken `true`: her gönderim takipli, form
+  (`SKYNOTIFY_TRACKING_OPERATOR=on` iken `true`: her gönderim takipli, form
   kutuyu hiç göstermez); aynı iki alan `GET /v1/mail_tasks/tracking-mode`'da
-  yalnız `skymail:access` ile okunur (bir ayardır, gönderim değil:
+  yalnız `skynotify:access` ile okunur (bir ayardır, gönderim değil:
   `mails:read`'i olmayan, yalnız onaya sunan kişi de görür); gönderim
   satırları, Mail onayı isteği ve `POST /v1/mail_tasks/single` yanıtı
   `tracking` alanı taşır.
@@ -1794,23 +1796,23 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   `tracking_events_deleted`, `tracking_links_cleared`
   ([`docs/data-lifecycle.md`](docs/data-lifecycle.md#open-and-click-tracking)).
 
-### Sistem postaları (`SKYMAIL_TRACKING_SYSTEM`)
+### Sistem postaları (`SKYNOTIFY_TRACKING_SYSTEM`)
 
 Yusuf, 2026-10-21: takip bütün postalarda (avukat onayı); gizli anahtarlı
 bağlantılar takibe girmez. **Varsayılan kapalı**; açılış, KVKK aydınlatma
 metni bu kapsamla yayımlandıktan sonra (hub
 `notes/hukuki/kvkk-aydinlatma-metni-YENI-20261021-s3-taslak.md`). Yalnız
-`SKYMAIL_TRACKING=on` iken etkilidir: `on` + `SKYMAIL_TRACKING=off` hata
-değildir, hiçbir şey yapmaz, açılış satırı uyarır (takibi kapatmak SkyMail'in
+`SKYNOTIFY_TRACKING=on` iken etkilidir: `on` + `SKYNOTIFY_TRACKING=off` hata
+değildir, hiçbir şey yapmaz, açılış satırı uyarır (takibi kapatmak SkyNotify'ın
 açılmasını hiçbir zaman engellemez).
 
 - **Hangi postalar:** servislerin istemeden gönderdiği postalar: bir servisin
   token'ıyla gelen `POST /v1/mail_tasks/single` (Keycloak'ın giriş/kayıt
   kodu, doğrulama, parola sıfırlama; core; Forms onayları), core'un
-  bildirimleri (`POST /v1/notifications`, her iki şeritte) ve SkyMail'in
+  bildirimleri (`POST /v1/notifications`, her iki şeritte) ve SkyNotify'ın
   kendi Mail onayı bildirimleri. Şablonun System ya da hassas olması takibi
   engellemez. Bir kişinin (operatörün) gönderimi bu bayrağa bağlı değildir:
-  `SKYMAIL_TRACKING_OPERATOR` kapalıyken kutuyu işaretlemediyse takip
+  `SKYNOTIFY_TRACKING_OPERATOR` kapalıyken kutuyu işaretlemediyse takip
   edilmez, işaretlediyse yukarıdaki kuralla; açıkken her zaman (aşağıda,
   "Operatör postaları"). Forms kaynağı gönderimi (yanıtlayanlara operatör
   postası) de o bayrağa bağlıdır.
@@ -1845,7 +1847,7 @@ açılmasını hiçbir zaman engellemez).
     kaydedilmez; tek alıcılı gönderimin "değişkenli bağlantı da kaydedilir"
     istisnası burada yoktur. Serbest gövdeli şablonun (`safeHTML .BodyHtml`)
     gövdesindeki bağlantılar da değişkenden geldiği için yazılmaz.
-  - `data-skymail-notrack` ve öteki kurallar (`mailto:`, `unsubscribe`,
+  - `data-skynotify-notrack` ve öteki kurallar (`mailto:`, `unsubscribe`,
     `communication-preferences`, `/t/`) her postada geçerlidir.
   - Emsal: SendGrid parola sıfırlama gibi postalarda `clicktracking`'i
     kapatmayı, Postmark bağlantı başına `data-pm-no-track`'i önerir; burada
@@ -1855,30 +1857,30 @@ açılmasını hiçbir zaman engellemez).
   (belirteç aldıysa) `tracking: true`, core hayır dediği için edilmiyorsa
   `tracking: false` der. Satır nedenleri, raporlar, geri alma, hesap silme ve saklama aynıdır.
 - **Kişi raporu yalnız rolle:** sistem şeridindeki gönderimin
-  (`mail_queue.priority > 0`: servis tekil postası, SkyMail'in Mail onayı
+  (`mail_queue.priority > 0`: servis tekil postası, SkyNotify'ın Mail onayı
   bildirimi) kişileri `GET /v1/mail_tasks/{id}/tracking/recipients`'te
-  yalnız `skymail:mails:tracking:read` ile okunur; `sent_by` bir kişiyi
+  yalnız `skynotify:mails:tracking:read` ile okunur; `sent_by` bir kişiyi
   (bildirimi doğuran isteyen ya da karar veren) adlandırsa da o kişi
   okuyamaz (KVKK aydınlatma metni s3 §4: sistemin gönderdiği postalardaki
   kişi bilgisini yalnız YK, DK ve sistem yöneticileri görür). Kişinin
   takipli gönderimi her zaman toplu şerittedir (sistem şeridi istekle ya da
-  `SKYMAIL_TRACKING_OPERATOR` ile hiçbir zaman takip edilmez); gönderen
-  onun kişilerini yalnız `SKYMAIL_SENDER_SEES_RECIPIENTS=on` iken okur
+  `SKYNOTIFY_TRACKING_OPERATOR` ile hiçbir zaman takip edilmez); gönderen
+  onun kişilerini yalnız `SKYNOTIFY_SENDER_SEES_RECIPIENTS=on` iken okur
   ("Kim okur"). Bu kural bayrağa bağlı değildir; bugün sistem
   şeridinde takipli gönderim olmadığı için birleşmeyle görünür bir şey
   değişmez.
-- **Geri dönüş:** `SKYMAIL_TRACKING_SYSTEM=off` + yeniden dağıtım: yeni
+- **Geri dönüş:** `SKYNOTIFY_TRACKING_SYSTEM=off` + yeniden dağıtım: yeni
   sistem postaları takipsiz. Bilinen sınır: kapatmadan önce kuyruğa girmiş
   (saniyeler içinde giden) sistem postası takipli gider, daha önce gitmiş
-  sistem postalarının açılması `SKYMAIL_TRACKING=on` kaldıkça yazılmaya
-  devam eder. **Tam geri dönüş için `SKYMAIL_TRACKING=off`:** kuyrukta
+  sistem postalarının açılması `SKYNOTIFY_TRACKING=on` kaldıkça yazılmaya
+  devam eder. **Tam geri dönüş için `SKYNOTIFY_TRACKING=off`:** kuyrukta
   bekleyen takipli satır da temiz gider (belirteci `flag_off` ile kapanır),
   yeni olay yazılmaz; silme için saklama işinin `purge` kipi (aşağıda).
-  Eski imaja dönüş açılışı bozmaz: `SKYMAIL_TRACKING_SYSTEM` ve
-  `SKYMAIL_TRACKING_OPERATOR` değerleri `off|on` dışına çıkmaz, eski imaj
-  `SKYMAIL_TRACKING_OPERATOR`'ı hiç okumaz.
+  Eski imaja dönüş açılışı bozmaz: `SKYNOTIFY_TRACKING_SYSTEM` ve
+  `SKYNOTIFY_TRACKING_OPERATOR` değerleri `off|on` dışına çıkmaz, eski imaj
+  `SKYNOTIFY_TRACKING_OPERATOR`'ı hiç okumaz.
 
-### Operatör postaları (`SKYMAIL_TRACKING_OPERATOR`)
+### Operatör postaları (`SKYNOTIFY_TRACKING_OPERATOR`)
 
 Yusuf, 2026-10-21: panelden giden postalarda takip **her zaman açık**;
 gönderim formunda "takip et" kutusu ya da sorusu yok, gönderim başına
@@ -1891,9 +1893,9 @@ core'un `COMMUNICATION_TRACKING_MODE=opt_in` freni).
 **Varsayılan kapalı**; açılış, KVKK aydınlatma metni bu kapsamla
 yayımlandıktan sonra (hub
 `notes/hukuki/kvkk-aydinlatma-metni-YENI-20261021-s3-taslak.md`). Yalnız
-`SKYMAIL_TRACKING=on` iken etkilidir; `on` + `SKYMAIL_TRACKING=off` hata
+`SKYNOTIFY_TRACKING=on` iken etkilidir; `on` + `SKYNOTIFY_TRACKING=off` hata
 değildir, hiçbir şey yapmaz, açılış satırı uyarır.
-`SKYMAIL_TRACKING_SYSTEM`'den bağımsızdır: biri açılıp öteki kapalı
+`SKYNOTIFY_TRACKING_SYSTEM`'den bağımsızdır: biri açılıp öteki kapalı
 kalabilir, ayrı ayrı geri alınır.
 
 - **Hangi postalar:** bir kişinin token'ıyla kuyruğa giren her gönderim:
@@ -1904,8 +1906,8 @@ kalabilir, ayrı ayrı geri alınır.
   `tracking` alanı yok sayılır (`false` da); yanıt, gönderim satırı ve onay
   isteği `tracking: true` der (Forms kaynağının tekrarı, ilk gönderimin
   takibini). Onay isteği takipsiz gönderilmiş olsa da bayrak açıkken
-  onaylanırsa takipli gider. Servislerin postaları ve SkyMail'in
-  bildirimleri bu bayrağa değil `SKYMAIL_TRACKING_SYSTEM`'e bağlıdır.
+  onaylanırsa takipli gider. Servislerin postaları ve SkyNotify'ın
+  bildirimleri bu bayrağa değil `SKYNOTIFY_TRACKING_SYSTEM`'e bağlıdır.
 - **Şablon fark etmez; hassas postada yalnız piksel:** System ya da hassas
   şablon da takip edilir; içeriği hassas gönderim (`mail_task_content_sensitive()`:
   hassas işaretli ya da kilitli anahtarlı şablon, kişiye giden gönderimde
@@ -1931,9 +1933,9 @@ kalabilir, ayrı ayrı geri alınır.
   şablonda düz yazılmış bağlantılar sayılır. Gövde değişkeni şablon olarak
   yorumlanmaz: gövdeye yazılan `{{.Email}}` metindir, alıcının adresine
   dönüşmez. Tek istisna alıcının adı etiketidir ("Serbest duyuruda alıcının
-  adı"): yalnız metne girer, hiçbir bağlantının adresine girmez. `data-skymail-notrack` öteki kurallarla her zaman geçerlidir;
+  adı"): yalnız metne girer, hiçbir bağlantının adresine girmez. `data-skynotify-notrack` öteki kurallarla her zaman geçerlidir;
   serbest gövdede de: temizleyici `<a>` üzerinde boş ya da `true` değerli
-  `data-skymail-notrack`'i geçirir (başka öznitelik geçmez), panel
+  `data-skynotify-notrack`'i geçirir (başka öznitelik geçmez), panel
   düzenleyicisindeki "Bu bağlantıyı sayma" anahtarı bunu yazar. Kişiye
   özel ya da tek kullanımlık bir bağlantı (kişisel davet, toplantı
   adresi) böylece `/t/`'den geçmez ve `mail_task_links`'e yazılmaz
@@ -1954,17 +1956,17 @@ kalabilir, ayrı ayrı geri alınır.
   isteğin tekrarı kimseyi yeniden sormaz.
 - **Şerit:** her operatör postası toplu şerittedir (gönderen şeridi
   `duyuru`); bayrak kapalıyken kutusuz giden tekil posta sistem şeridine
-  (`bilgi`) giderdi. `SKYMAIL_MAIL_PURPOSE=on` iken `islem` amaçlı
+  (`bilgi`) giderdi. `SKYNOTIFY_MAIL_PURPOSE=on` iken `islem` amaçlı
   operatör gönderimi de takiplidir, toplu şeritte bekler ve `bilgi@`'dan
   çıkar (yukarıda "Gönderim amacı ve kategori"). Sistem şeridindeki bir posta bu bayrakla hiçbir zaman
   takip edilmez (kişi raporu kuralı buna dayanır, yukarıda).
-- **Geri dönüş:** `SKYMAIL_TRACKING_OPERATOR=off` + yeniden dağıtım: form
+- **Geri dönüş:** `SKYNOTIFY_TRACKING_OPERATOR=off` + yeniden dağıtım: form
   kutuyu yeniden gösterir, yeni gönderim yalnız isterse takip edilir.
   Bayrak açıkken gönderilmiş, henüz onaylanmamış onay isteği `tracking: true`
   taşır ve onaylanınca istemiş gibi gider (System/hassas şablonda takipsiz;
   Forms kaynağı takipsiz).
   Kuyrukta bekleyen takipli satır için ve tam geri dönüş için yukarıdaki
-  `SKYMAIL_TRACKING=off`.
+  `SKYNOTIFY_TRACKING=off`.
 
 ### Piksel, tıklama ve raporlar
 
@@ -1995,14 +1997,14 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   üretir: günlük yalnız uç adı, sonuç sınıfı ve süre taşır.
 - **Kim okur (Yusuf, 2026-11-08; ADR-0074 karar 9 eki 2026-11-08, ADR-0075
   eki madde 10):** kişi bazında rapor (alıcının adı, adresi, açma ve
-  tıklaması) yalnız `skymail:mails:tracking:read` (YK, ADMIN, DK) ile
+  tıklaması) yalnız `skynotify:mails:tracking:read` (YK, ADMIN, DK) ile
   okunur. Gönderen, ekip postasının Leader'ı ve Mail onayı isteyeni dahil,
   kendi gönderiminde yalnız toplu sayıları görür; kişi raporu ona `403`
-  döner. `SKYMAIL_SENDER_SEES_RECIPIENTS=on` bunu geri alır: gönderen
+  döner. `SKYNOTIFY_SENDER_SEES_RECIPIENTS=on` bunu geri alır: gönderen
   sistem şeridi dışındaki kendi gönderiminin kişilerini yine okur.
   Kuyruk (`GET /{id}/queue`) ve içerik uçları gönderene göre değil rolle
-  (`skymail:mails:read`) açılır; anahtar onlara dokunmaz.
-- `GET /v1/mail_tasks/{id}/tracking` (`skymail:mails:read`) yanıtı
+  (`skynotify:mails:read`) açılır; anahtar onlara dokunmaz.
+- `GET /v1/mail_tasks/{id}/tracking` (`skynotify:mails:read`) yanıtı
   `{tracking_available, tracking_requested, retained, withheld,
   recipients_readable, report}`; `recipients_readable` çağıranın kişi
   raporunu okuyup okuyamayacağını söyler (ekran kişileri yalnız o zaman
@@ -2024,7 +2026,7 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   yalnız kişisiz toplam (10'dan az alıcılıda gönderimden 1 yıl sonra
   silinir), yoksa `report: null`; seri dönmez.
   **Sistem postası:** sistem şeridindeki bir gönderimin sayıları yalnız
-  kişi raporunu okuyabilene (`skymail:mails:tracking:read`) gider; başka
+  kişi raporunu okuyabilene (`skynotify:mails:tracking:read`) gider; başka
   bir `mails:read` sahibine `withheld: true` ve `report: null` döner (KVKK
   aydınlatma metni s3 §4). Kişinin gönderiminin sayıları takipli alıcı
   sayısı ne olursa olsun `mails:read` sahibine görünür (Yusuf, 2026-11-24,
@@ -2034,7 +2036,7 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   kişisiz toplamı 1 yıl sonra silinir).
 - **Onaylanan isteğin sonucu (hub bileti ekip-postasi 09):**
   `GET /v1/mail_approvals/{id}` onaylanıp gönderilmiş istekte `result`
-  döner; isteyen `skymail:mails:read` olmadan da okur (erişim kuralı aynı:
+  döner; isteyen `skynotify:mails:read` olmadan da okur (erişim kuralı aynı:
   onaycı ya da isteğin sahibi). Yalnız toplamlar: `sent`, `skipped`
   (kuralla gönderilmeyen: bastırılmış ya da çıkmış adres, kapatılmış
   kategori, etkin olmayan hesap, ortak adres, ayrılmış alan adı, iptal),
@@ -2051,9 +2053,9 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   okunamadıysa `result` hiç yoktur, yalnız takip okunamadıysa `tracking:
   null` ve `tracking_withheld: false`.
 - `GET /v1/mail_tasks/{id}/tracking/recipients` rolü
-  `skymail:mails:tracking:read` ister; `mails:read` tek başına yetmez.
+  `skynotify:mails:tracking:read` ister; `mails:read` tek başına yetmez.
   `sent_by = token sub` (gönderimin kendi göndereni) yalnız
-  `SKYMAIL_SENDER_SEES_RECIPIENTS=on` iken yeter (varsayılan `off`: `403`). Servis
+  `SKYNOTIFY_SENDER_SEES_RECIPIENTS=on` iken yeter (varsayılan `off`: `403`). Servis
   token'ı ve sistem şeridindeki gönderim (servis tekil postası, Mail onayı
   bildirimi) yalnız rolle okunur ("Sistem postaları"). Parametreler
   `filter=opened|not_opened|clicked|automated_only`, `page` (1–1000000) ve
@@ -2082,17 +2084,17 @@ satırı `"event":"tracking_withdrawal_ignored"`. Aşağıdaki "Etki" maddesi
 B9 öncesini anlatır; sonraki sürümde uç kalkar.
 
 Kişi my.'da takibi kapatınca (`enabled=false`) core bu ucu çağırırdı (bilet 16;
-tek yön core → SkyMail, postada kapatma bağlantısı yok, T8). Hesap silme
+tek yön core → SkyNotify, postada kapatma bağlantısı yok, T8). Hesap silme
 ucunun kalıbı: `/v1` dışında, yalnız iç Docker ağından (`X-Forwarded-*`,
 `Forwarded`, `X-Real-Ip` taşıyan istek çıplak `404`); token realm'in JWKS'i
-ile yerelde doğrulanır ve `azp` = `core` (core'un SkyMail'i zaten çağıran
-istemcisi), `aud` ∋ `skymail`, `resource_access.skymail.roles` ∋
-`skymail:tracking:withdraw` ister. `core-erasure`'ın `skymail:account:erase`
+ile yerelde doğrulanır ve `azp` = `core` (core'un SkyNotify'ı zaten çağıran
+istemcisi), `aud` ∋ `skynotify`, `resource_access.skynotify.roles` ∋
+`skynotify:tracking:withdraw` ister. `core-erasure`'ın `skynotify:account:erase`
 rolü bu uca **yetmez** (`403`). Çağıranın kendi erişim marker'ı her uçtaki
 gibi denetlenir.
 
 ```http
-PUT {SKYMAIL_URL}/internal/v1/tracking-withdrawals/7d3c1f6e-0b9a-4c55-9a51-3f4d2b8e6a10
+PUT {SKYNOTIFY_URL}/internal/v1/tracking-withdrawals/7d3c1f6e-0b9a-4c55-9a51-3f4d2b8e6a10
 Authorization: Bearer <core istemcisinin client credentials token'ı>
 ```
 
@@ -2121,7 +2123,7 @@ Authorization: Bearer <core istemcisinin client credentials token'ı>
   takipli kuyruğa girebilir (bir sonraki geri alma ya da hesap silme onu da
   kapatır).
 
-### Saklama (`SKYMAIL_TRACKING_RETENTION`)
+### Saklama (`SKYNOTIFY_TRACKING_RETENTION`)
 
 ADR-0062'nin imha işi kalıbı (core `RETENTION_SWEEP_MODE` ile aynı):
 `off` (varsayılan, hiçbir şey koşmaz), `dry-run` (her kuralı çalıştırır,
@@ -2136,7 +2138,7 @@ dönüş, aşağıda). Açılışta `dry-run`; 1–2 dry-run makbuzu okunur okun
   yapılır: iki replika aynı gün iki kez koşmaz. Durum veritabanındaki
   makbuzlardan okunur: yeniden başlatma ya da yayın koşuyu tekrarlamaz; kip
   değişince yeni kip hemen koşar.
-- **Tek koşu:** oturum advisory lock'u (`skymail-backend tracking
+- **Tek koşu:** oturum advisory lock'u (`skynotify-backend tracking
   retention`); kilidi bulamayan replika hiçbir şey yapmaz, makbuz yazmaz.
 - **Kurallar** (gönderim başına tek işlem; önce gönderimin takipli kuyruk
   satırları `ORDER BY id FOR UPDATE`, sonra bağlantılar, sonra olaylar;
@@ -2164,7 +2166,7 @@ dönüş, aşağıda). Açılışta `dry-run`; 1–2 dry-run makbuzu okunur okun
 - **dry-run ile apply aynı tanımdan:** dry-run aynı ifadeleri çalıştırıp
   işlemi geri alır; apply önce dry-run'ı koşar, sonra değiştirir.
 - **Fren:** bir koşuda kapanacak belirteç, silinecek olay ya da toplam veya
-  boşalacak bağlantı sayısı `SKYMAIL_TRACKING_RETENTION_MAX_ROWS`'u (varsayılan 50.000)
+  boşalacak bağlantı sayısı `SKYNOTIFY_TRACKING_RETENTION_MAX_ROWS`'u (varsayılan 50.000)
   aşarsa apply hiçbir şey değiştirmez (`refused_large`, `error` düzeyinde
   `"alarm":"tracking_retention_brake"`). Karar yalnız apply'ın önce koştuğu
   dry-run sayılarına bakar; değişiklik yapan apply hiçbir zaman
@@ -2177,7 +2179,7 @@ dönüş, aşağıda). Açılışta `dry-run`; 1–2 dry-run makbuzu okunur okun
   `totals_deleted`, `events_deleted`, `links_expired`, `links_erased`, `sends_closed`,
   `sends_failed`); kişi, belirteç ya da adres yoktur. Aynı sayılar
   `"event":"tracking_retention_run"` günlük satırındadır.
-- **`purge` (tam geri dönüş):** `SKYMAIL_TRACKING=off` ister (yoksa açılış
+- **`purge` (tam geri dönüş):** `SKYNOTIFY_TRACKING=off` ister (yoksa açılış
   durur). Bütün belirteçleri siler ve bütün olayları siler, yaşına
   bakmadan; kişisiz toplamlar ve bağlantılar kalır, eski postaların
   bağlantıları yönlendirir. Her koşuda tekrarlanır (zararsız); iş bitince
@@ -2195,7 +2197,7 @@ dönüş, aşağıda). Açılışta `dry-run`; 1–2 dry-run makbuzu okunur okun
 - **Geri dönüş (`20261023180000`, toplam her gönderimde):** imajı eskiye
   döndürmek yeterli, eski imaj yeni şemada çalışır (yalnız ≥10 toplam
   yazar). Down migration yalnız eski imaj ayaktayken ya da
-  `SKYMAIL_TRACKING_RETENTION=off` iken koşulur: önce 10'dan az alıcılı
+  `SKYNOTIFY_TRACKING_RETENTION=off` iken koşulur: önce 10'dan az alıcılı
   toplamları siler (geri gelmez), sonra CHECK'i geri koyar; yeni imajın
   saklama işi arada 10'dan az bir toplam yazarsa CHECK düşer ve sürüm
   `dirty` kalır. Silinen belirteçler hiçbir geri dönüşte geri gelmez.
@@ -2203,17 +2205,17 @@ dönüş, aşağıda). Açılışta `dry-run`; 1–2 dry-run makbuzu okunur okun
 Makbuzlar (production sunucusunda, salt okunur):
 
 ```bash
-docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | grep -F '"event":"tracking_retention_run"'
+docker service logs --raw --since 168h "$SERVIS" 2>&1 | grep -F '"event":"tracking_retention_run"'
 ```
 
 ### core sözleşmesi (bilet 16)
 
-SkyMail, takip isteyen gönderimde `sub`'ı olan alıcılar için core'a bir kez
+SkyNotify, takip isteyen gönderimde `sub`'ı olan alıcılar için core'a bir kez
 (1000'erlik partilerle) sorar:
 
 ```http
 POST {CORE_URL}/internal/v1/communication-preferences/tracking:resolve
-Authorization: Bearer <skymail-backend servis hesabının token'ı>
+Authorization: Bearer <skynotify-backend servis hesabının token'ı>
 Content-Type: application/json
 
 {"subs": ["7d3c1f6e-0b9a-4c55-9a51-3f4d2b8e6a10", "…"]}
@@ -2232,9 +2234,9 @@ Content-Type: application/json
 - `reason` yalnız `allowed: false` iken okunur: `inactive` (hesap etkin
   değil) ya da core'un freni `tracking_off` (`not_allowed` olarak
   kaydedilir). B9 öncesi core `preference_off` (my.'da kapattı) ve
-  `not_member` (`/UYELER` dışında) da derdi; SkyMail onları da uygular.
+  `not_member` (`/UYELER` dışında) da derdi; SkyNotify onları da uygular.
   Bilinmeyen neden `not_allowed` olarak kaydedilir.
-- Token: `KEYCLOAK_SERVICE_CLIENT_ID` (`skymail-backend`) servis hesabının
+- Token: `KEYCLOAK_SERVICE_CLIENT_ID` (`skynotify-backend`) servis hesabının
   client credentials token'ı (Admin REST'in kullandığı); core `aud` ∋ `core`
   ve `core` istemcisinin `communication-preferences:read` rolünü
   (`resource_access.core.roles`) arar (bilet 17, core #256).
@@ -2244,7 +2246,7 @@ Content-Type: application/json
 Gönderimin kendi değişkenleri veridir, şablon değildir: serbest duyurunun
 gövdesine yazılan `{{.Email}}` metin olarak gider. Bunun tek istisnası
 alıcının adıdır (sektörün "merge tag"i: Mailchimp `*|FNAME|*`, SendGrid
-`{{first_name}}`; hub bileti `skymail-serbest-duyuru-alici-adi` 01). Tam
+`{{first_name}}`; hub bileti `skynotify-serbest-duyuru-alici-adi` 01). Tam
 olarak iki etiket, yazıldığı gibi tanınır (`internal/mailer/recipient_name.go`):
 
 - `{{.FullName}}`: alıcının adı;
@@ -2276,7 +2278,7 @@ aynı ifadeye verdiği anlamla aynıdır.
 - **Maskeleme ve saklama:** ad, gönderilen içerikte postanın kendisi gibi
   durur (`recipient_full_name` zaten satırdadır); maskeleme postayı aynı
   adla yeniden işler; Account erasure içeriği her zamanki gibi boşaltır.
-- **Önizleme:** skymail-frontend aynı iki etiketi aynı kuralla doldurur;
+- **Önizleme:** skynotify-frontend aynı iki etiketi aynı kuralla doldurur;
   iki repo aynı vaka dosyasını tutar (`internal/mailer/testdata/recipient-name.json`,
   SHA-256 iki testte sabit).
 
@@ -2292,7 +2294,7 @@ environment değerleri için
 ## Veritabanı bağlantıları (`DATABASE_URL`)
 
 `DATABASE_URL` havuz sınırı taşıyabilir ve taşımalıdır:
-`postgres://…/skymail?sslmode=…&pool_max_conns=5`. Yoksa pgx'in varsayılanı
+`postgres://…/skynotify?sslmode=…&pool_max_conns=5`. Yoksa pgx'in varsayılanı
 max(4, CPU) olur. Bir görev ana havuz + `/ready`'nin kendi 1 bağlantısını
 tutar (migrate ederken geçici 1 + golang-migrate'in kendi bağlantısı);
 start-first deploy'da iki görev birlikte. `pool_*` ayarları yalnız havuza
@@ -2301,8 +2303,8 @@ gider, migration bağlantıları onları atar.
 
 ## Katkıda Bulunanlar 🧙‍♂️
 
-<a href="https://github.com/skylab-kulubu/skymail-backend/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=skylab-kulubu/skymail-backend" />
+<a href="https://github.com/skylab-kulubu/skynotify-backend/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=skylab-kulubu/skynotify-backend" />
 </a>
 
 <sup><sub>[contrib.rocks](https://contrib.rocks) ile yapıldı.</sub></sup>
@@ -2317,21 +2319,21 @@ bildirmez. `GET /v1/form_mail_sources/{id}` yalnız sahibine, `no-store` ile
 kaynak bilgisini verir. Hazırlanan kaynak 30 dakika içinde sahibince
 `POST /v1/mail_tasks/form-source` ile doğrudan gönderilir veya mevcut
 `POST /v1/mail_approvals` isteğindeki `form_source_id` ile onaya sunulur.
-Doğrudan gönderim, liste gibi, `skymail:mails:write` ister; tekil postalar
-için olan `skymail:mails:send` yetmez (403), o rolü tutan kaynağı onaya sunar.
+Doğrudan gönderim, liste gibi, `skynotify:mails:write` ister; tekil postalar
+için olan `skynotify:mails:send` yetmez (403), o rolü tutan kaynağı onaya sunar.
 Onay mevcut şablon okuma ve onay rollerini kullanır.
 
 Yeni kaynak hazırlama şu iki zorunlu değer yokken kapalıdır (503); eski yollar ve
 geçmiş gönderimler etkilenmez:
 
-- `SKYMAIL_FORMS_SOURCE_SERVICE_SUB`: Forms'un gerçek servis hesabının tam UUID'si.
-- `SKYMAIL_FORMS_SOURCE_MAX_RECIPIENTS`: yalnız bu özellik için pozitif, dağıtımda
+- `SKYNOTIFY_FORMS_SOURCE_SERVICE_SUB`: Forms'un gerçek servis hesabının tam UUID'si.
+- `SKYNOTIFY_FORMS_SOURCE_MAX_RECIPIENTS`: yalnız bu özellik için pozitif, dağıtımda
   seçilen üst sınır; varsayılan ürün limiti yoktur. Mevcut HTTP body limiti ayrıca
   geçerlidir. Fazlası kesilmez, istek reddedilir. Manuel alıcı sınırı 100 kalır.
-- `SKYMAIL_FORMS_SOURCE_CLIENT_ID`: mevcut Forms servis istemcisi; varsayılan `forms`.
+- `SKYNOTIFY_FORMS_SOURCE_CLIENT_ID`: mevcut Forms servis istemcisi; varsayılan `forms`.
 
 Yalnız yeni hazırlama ucunda, aynı bearer Keycloak userinfo tarafından kabul
-edildikten sonra tam servis sub'ı, issuer, SkyMail audience'ı ve eşit
+edildikten sonra tam servis sub'ı, issuer, SkyNotify audience'ı ve eşit
 `azp`/`client_id` doğrulanır. Genel token audience modu değişmez. Canlı servis
 kimliği ve limit dağıtım öncesi doğrulanmadan özellik açılmaz; token veya servis
 kimlik bilgisi çıktıya yazılmaz.

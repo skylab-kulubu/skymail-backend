@@ -9,8 +9,8 @@ import (
 
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/gofiber/fiber/v3"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
 func TestSearchInstantTakesDaysInIstanbulAndTimes(t *testing.T) {
@@ -162,14 +162,14 @@ func TestSendListQuery(t *testing.T) {
 	}
 
 	// open_rate needs the tracking role.
-	if _, err := read("/?_sort=open_rate", "skymail:mails:read"); !errors.Is(err, errOpenRateSortForbidden) {
+	if _, err := read("/?_sort=open_rate", "skynotify:mails:read"); !errors.Is(err, errOpenRateSortForbidden) {
 		t.Errorf("open_rate without the role: %v", err)
 	}
-	if query, err := read("/?_sort=open_rate", "skymail:mails:read", TrackingReadRole); err != nil || query.sort != sendSortOpenRate {
+	if query, err := read("/?_sort=open_rate", "skynotify:mails:read", TrackingReadRole); err != nil || query.sort != sendSortOpenRate {
 		t.Errorf("open_rate with the role: %+v %v", query, err)
 	}
 	// A validation error comes before the role's refusal.
-	if _, err := read("/?_sort=open_rate&kind=x", "skymail:mails:read"); errors.Is(err, errOpenRateSortForbidden) {
+	if _, err := read("/?_sort=open_rate&kind=x", "skynotify:mails:read"); errors.Is(err, errOpenRateSortForbidden) {
 		t.Error("forbidden before validation")
 	}
 }

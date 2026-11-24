@@ -12,8 +12,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
 // summaryTimeZone is where the club is. "Sent today" on the home screen has to
@@ -135,7 +135,7 @@ type QueueTotals struct {
 	Suppressed int64 `json:"suppressed"`
 	// Skipped, never sent: the person turned the send's category off in core (communication preferences; in failed too).
 	OptedOut int64 `json:"opted_out"`
-	// Skipped, never sent: the address left SkyMail's duyuru stream through its own link (in suppressed and failed too).
+	// Skipped, never sent: the address left SkyNotify's duyuru stream through its own link (in suppressed and failed too).
 	Unsubscribed int64 `json:"unsubscribed"`
 	// Skipped, never sent: core says the account is disabled or being erased (in failed too).
 	Inactive int64 `json:"inactive"`
@@ -208,43 +208,43 @@ type SendSummary struct {
 	QueueCounts QueueCounts `json:"queue_counts"`
 	// True while MAIL_SENDER=paused holds the sender back, as after a restore
 	// from backup: mail is queued and stays pending, and none is sent until
-	// the variable is removed and SkyMail redeployed.
+	// the variable is removed and SkyNotify redeployed.
 	SenderPaused bool `json:"sender_paused"`
-	// True while SKYMAIL_TRACKING=on: a send may ask for open and click tracking. The send form shows its tracking box only then.
+	// True while SKYNOTIFY_TRACKING=on: a send may ask for open and click tracking. The send form shows its tracking box only then.
 	TrackingAvailable bool `json:"tracking_available"`
-	// True while SKYMAIL_TRACKING_OPERATOR=on with SKYMAIL_TRACKING=on: every person's send (a list, a group, people, a Forms source, a Mail onayı request) is tracked whether it asked or not, of any template. The send form then shows no tracking box: a send's tracking field is ignored.
+	// True while SKYNOTIFY_TRACKING_OPERATOR=on with SKYNOTIFY_TRACKING=on: every person's send (a list, a group, people, a Forms source, a Mail onayı request) is tracked whether it asked or not, of any template. The send form then shows no tracking box: a send's tracking field is ignored.
 	TrackingAlways bool `json:"tracking_always"`
-	// True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru) and a duyuru send its category, and the purpose picks the mailbox it goes out from. The send form shows its purpose, category and statements only then; while it is false they are ignored.
+	// True while SKYNOTIFY_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru) and a duyuru send its category, and the purpose picks the mailbox it goes out from. The send form shows its purpose, category and statements only then; while it is false they are ignored.
 	PurposeAvailable bool `json:"purpose_available"`
-	// True while SKYMAIL_LIST_CONSENT=on, as tracking-mode says it: the list send form shows the own event statement box.
+	// True while SKYNOTIFY_LIST_CONSENT=on, as tracking-mode says it: the list send form shows the own event statement box.
 	ListConsentAvailable bool `json:"list_consent_available"`
-	// Until when the bulk lane takes nothing because the relay throttled the account (SMTP 421, 432, 4.7.x; Graph 429, 503; SKYMAIL_THROTTLE_PAUSE): lists, groups and News sends wait, single mail goes. Null when not held.
+	// Until when the bulk lane takes nothing because the relay throttled the account (SMTP 421, 432, 4.7.x; Graph 429, 503; SKYNOTIFY_THROTTLE_PAUSE): lists, groups and News sends wait, single mail goes. Null when not held.
 	BulkHeldUntil *time.Time     `json:"bulk_held_until"`
 	SendCounts    SendCounts     `json:"send_counts"`
 	DailySent     []DailySent    `json:"daily_sent"`
 	RecentSends   []MailTaskItem `json:"recent_sends"`
 }
 
-// TrackingMode is how SkyMail tracks a person's send: what the send form needs
+// TrackingMode is how SkyNotify tracks a person's send: what the send form needs
 // to show its box, or to say that every send is tracked. It names no send and
 // no person.
 type TrackingMode struct {
-	// True while SKYMAIL_TRACKING=on: a send may ask for open and click tracking.
+	// True while SKYNOTIFY_TRACKING=on: a send may ask for open and click tracking.
 	TrackingAvailable bool `json:"tracking_available"`
-	// True while SKYMAIL_TRACKING_OPERATOR=on too: every person's send is tracked, the send form shows no box and a send's tracking field is ignored.
+	// True while SKYNOTIFY_TRACKING_OPERATOR=on too: every person's send is tracked, the send form shows no box and a send's tracking field is ignored.
 	TrackingAlways bool `json:"tracking_always"`
-	// True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru), and a duyuru send its category; tracking follows tracking_available and tracking_always whatever the purpose. False: the fields are ignored.
+	// True while SKYNOTIFY_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru), and a duyuru send its category; tracking follows tracking_available and tracking_always whatever the purpose. False: the fields are ignored.
 	PurposeAvailable bool `json:"purpose_available"`
-	// True while SKYMAIL_PROMOTIONAL=on (with purpose_available): a duyuru send may say it is promotional (commercial_content_absent false: its main purpose is promoting a product or a service, such as a discount code, a company's job posting, a sale or a raffle), and then goes only to those who consented to promotional mail, each with the link that withdraws that consent. False: such a send is refused (400 mail_task.commercial_content_not_allowed).
+	// True while SKYNOTIFY_PROMOTIONAL=on (with purpose_available): a duyuru send may say it is promotional (commercial_content_absent false: its main purpose is promoting a product or a service, such as a discount code, a company's job posting, a sale or a raffle), and then goes only to those who consented to promotional mail, each with the link that withdraws that consent. False: such a send is refused (400 mail_task.commercial_content_not_allowed).
 	PromotionalAvailable bool `json:"promotional_available"`
-	// True while SKYMAIL_LIST_CONSENT=on: an address without an account gets a duyuru only with its announcement consent, whatever the send (a list, a Forms source's respondents, one person, an approved send); islem mail is not held. A list or group send that states own_event_statement (the mail is about the list's own event or work) needs none. The list send form shows that box only then.
+	// True while SKYNOTIFY_LIST_CONSENT=on: an address without an account gets a duyuru only with its announcement consent, whatever the send (a list, a Forms source's respondents, one person, an approved send); islem mail is not held. A list or group send that states own_event_statement (the mail is about the list's own event or work) needs none. The list send form shows that box only then.
 	ListConsentAvailable bool `json:"list_consent_available"`
 }
 
 // GetTrackingMode godoc
 //
 //	@Summary		How a person's send is tracked
-//	@Description	tracking_available, tracking_always and purpose_available, as the summary says them, and promotional_available, for anyone who may use SkyMail: someone who only submits a send for approval sees whether it will be tracked and whether it names a purpose. It is a setting of SkyMail, not of any send.
+//	@Description	tracking_available, tracking_always and purpose_available, as the summary says them, and promotional_available, for anyone who may use SkyNotify: someone who only submits a send for approval sees whether it will be tracked and whether it names a purpose. It is a setting of SkyNotify, not of any send.
 //	@Tags			Mail
 //	@Produce		json
 //	@Success		200	{object}	handlers.TrackingMode
@@ -257,7 +257,7 @@ func (h *mailHandlerImpl) GetTrackingMode(c fiber.Ctx) error {
 // GetSummary godoc
 //
 //	@Summary		Summarise mail sends
-//	@Description	Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); tracking_always, true while SKYMAIL_TRACKING_OPERATOR=on too (every person's send is tracked, the field is ignored, the send form shows no box); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today), each split by stream (by_stream: system, duyuru, islem); and the latest sends. Derived status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).
+//	@Description	Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYNOTIFY_TRACKING=on (a send may ask for open and click tracking); tracking_always, true while SKYNOTIFY_TRACKING_OPERATOR=on too (every person's send is tracked, the field is ignored, the send form shows no box); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today), each split by stream (by_stream: system, duyuru, islem); and the latest sends. Derived status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			days	query		int	false	"Days in the daily series, ending today in Europe/Istanbul (1-90)"	default(30)

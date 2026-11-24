@@ -6,15 +6,15 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
 )
 
 // A send's purpose and category (ADR 0072 decision 2; Yusuf, 2026-10-21;
 // hub ticket abonelik-cikisi 03; README, "Gönderim amacı ve kategori"). While
-// SKYMAIL_MAIL_PURPOSE is on, every send a person queues or submits is
+// SKYNOTIFY_MAIL_PURPOSE is on, every send a person queues or submits is
 // written with a purpose, which picks its stream (mailer.LaneOf):
 //
 //   - a list or a Keycloak group is always duyuru;
@@ -22,10 +22,10 @@ import (
 //     people) and a Forms source's respondents may be islem, with the
 //     sender's statement that the mail is about the recipient's own
 //     application or transaction; it is tracked as any person's send is
-//     (Yusuf: every mail is tracked; SKYMAIL_TRACKING_OPERATOR);
+//     (Yusuf: every mail is tracked; SKYNOTIFY_TRACKING_OPERATOR);
 //   - a duyuru send may say it is promotional (commercial_content_absent
 //     false: its main purpose is promoting a product or a service) only
-//     while SKYMAIL_PROMOTIONAL is on; it then goes only to those who
+//     while SKYNOTIFY_PROMOTIONAL is on; it then goes only to those who
 //     consented to promotional mail (KVKK aydınlatma s6 §5.10; mailer,
 //     consent_gate.go). No islem send is promotional;
 //   - a duyuru send names core's category;
@@ -60,7 +60,7 @@ var (
 	errTransactionalStatementRequired = apperrors.New("mail_task.transactional_statement_required",
 		"An islem send needs transactional_statement true: the mail is about the recipient's own application or transaction.", fiber.StatusBadRequest)
 	errCommercialContent = apperrors.New("mail_task.commercial_content_not_allowed",
-		"commercial_content_absent false makes a mail promotional (its main purpose is promoting a product or a service: a discount code, a company's job posting, a sale, a raffle), which goes only to those who consented to promotional mail: it is allowed on a duyuru send while SkyMail's promotional sends are on (tracking-mode promotional_available), and never on an islem send.", fiber.StatusBadRequest)
+		"commercial_content_absent false makes a mail promotional (its main purpose is promoting a product or a service: a discount code, a company's job posting, a sale, a raffle), which goes only to those who consented to promotional mail: it is allowed on a duyuru send while SkyNotify's promotional sends are on (tracking-mode promotional_available), and never on an islem send.", fiber.StatusBadRequest)
 	errPromotionalAccountTemplate = apperrors.New("mail_task.promotional_account_template",
 		"A promotional mail (commercial_content_absent false) is not sent with an account template (a System template keyed keycloak.* or account.*): account mail carries neither List-Unsubscribe nor the footer line, so the mail would have no link that withdraws the promotional consent.", fiber.StatusBadRequest)
 	errCategoryRequired = apperrors.New("mail_task.category_required",
@@ -70,7 +70,7 @@ var (
 	errCategoryNotAllowed = apperrors.New("mail_task.category_not_allowed",
 		"An islem send has no category.", fiber.StatusBadRequest)
 	errCommercialStatementRequired = apperrors.New("mail_task.commercial_statement_required",
-		"A duyuru send needs commercial_content_absent: true, the statement that its main purpose is not promotion (a short sponsor thanks or logo is allowed), while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE).", fiber.StatusBadRequest)
+		"A duyuru send needs commercial_content_absent: true, the statement that its main purpose is not promotion (a short sponsor thanks or logo is allowed), while every duyuru send obeys the recipients' preferences (SKYNOTIFY_BULK_PREFERENCE).", fiber.StatusBadRequest)
 )
 
 // clubAnnouncements is the category a send that names none has always been
@@ -100,14 +100,14 @@ func isDuyuru(p mailer.SendPurpose) bool {
 // zero SendPurpose while purposes are off (on false) or when the body names
 // none, which the caller then gives its default; otherwise the purpose the
 // send is written with, or why it is refused. promotional is
-// SKYMAIL_PROMOTIONAL: a duyuru send may then be promotional. listConsent is
-// SKYMAIL_LIST_CONSENT: a duyuru send to a list or a group then keeps its
-// own event statement. commercialRequired is SKYMAIL_BULK_PREFERENCE: a
+// SKYNOTIFY_PROMOTIONAL: a duyuru send may then be promotional. listConsent is
+// SKYNOTIFY_LIST_CONSENT: a duyuru send to a list or a group then keeps its
+// own event statement. commercialRequired is SKYNOTIFY_BULK_PREFERENCE: a
 // duyuru send that names its purpose must then state whether its main
 // purpose is promotion (commercial_content_absent; abonelik-cikisi 03 and
 // 09); a body that names no purpose (an older client) still gets its
 // default. Tracking is the
-// tracking rules' (SKYMAIL_TRACKING, SKYMAIL_TRACKING_OPERATOR), whatever the
+// tracking rules' (SKYNOTIFY_TRACKING, SKYNOTIFY_TRACKING_OPERATOR), whatever the
 // purpose.
 func choosePurpose(on, promotional, listConsent, commercialRequired bool, asked requests.SendPurpose, target sendTarget) (mailer.SendPurpose, error) {
 	if !on {
@@ -149,7 +149,7 @@ func choosePurpose(on, promotional, listConsent, commercialRequired bool, asked 
 		purpose := mailer.PurposeDuyuru
 		chosen := mailer.SendPurpose{Purpose: &purpose, Category: &category, CommercialContentAbsent: asked.CommercialContentAbsent}
 		// The list's own event statement is a list's or a group's, and only
-		// while list consents are on (SKYMAIL_LIST_CONSENT).
+		// while list consents are on (SKYNOTIFY_LIST_CONSENT).
 		if listConsent && target == targetAudience {
 			chosen.OwnEventStatement = asked.OwnEventStatement
 		}

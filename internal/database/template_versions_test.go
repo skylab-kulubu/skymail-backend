@@ -15,7 +15,7 @@ import (
 // .tsx source, and a comment is not a source.
 func TestTemplateJSXSourceRule(t *testing.T) {
 	db := lifecycleStore(t)
-	pointer := "// Kaynak: skymail-frontend/emails/keycloak.verify-email.tsx — burada düzenlersen repodaki kaynakla ayrışır.\n"
+	pointer := "// Kaynak: skynotify-frontend/emails/keycloak.verify-email.tsx — burada düzenlersen repodaki kaynakla ayrışır.\n"
 	component := "export default function Email() {\n  return <Img src=\"https://yildizskylab.com/logo.png\" />; // logo\n}\n"
 
 	for name, tc := range map[string]struct {

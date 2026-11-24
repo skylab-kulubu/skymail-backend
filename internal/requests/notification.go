@@ -12,7 +12,7 @@ const MaxNotificationRecipients = 1000
 
 // SendNotification is POST /v1/notifications: what happened (type), to whom
 // (recipients, people by their Keycloak sub), the variables its text needs
-// and where it came from. SkyMail picks each person's channels.
+// and where it came from. SkyNotify picks each person's channels.
 type SendNotification struct {
 	// The notification type's key (GET /notification_types), the Template key's alphabet.
 	Type string `json:"type" validate:"required,templatekey" example:"event.cancelled"`
@@ -32,13 +32,13 @@ type SendNotification struct {
 type NotificationRecipient struct {
 	// The person's Keycloak subject.
 	Sub uuid.UUID `json:"sub" validate:"required" example:"31ef736f-72da-4a40-8791-d523199cf9f0"`
-	// The address to e-mail, when the caller knows it; left out, SkyMail reads the person's primary e-mail from Keycloak.
+	// The address to e-mail, when the caller knows it; left out, SkyNotify reads the person's primary e-mail from Keycloak.
 	Email string `json:"email" validate:"omitempty,email,max=254" example:"ayse@example.com"`
 	// The name the mail greets; left out, the name in Keycloak.
 	Name string `json:"name" validate:"max=200" example:"Ayşe Kaya"`
 	// The channels the person's preferences allow for this notification, as core resolved them. Required for an optional type (a person with [] gets nothing); a required type ignores it.
 	AllowedChannels *[]string `json:"allowed_channels" validate:"omitempty,dive,oneof=email inbox push sms" example:"email"`
-	// The person's one-click unsubscribe link as core signed it (core's /v1/communication-preferences/unsubscribe?t=…), for an optional type of the bulk lane only: the e-mail renders it as .UnsubscribeUrl and, while SKYMAIL_LIST_UNSUBSCRIBE is on, carries it in List-Unsubscribe and List-Unsubscribe-Post from the duyuru mailbox. An https URL of visible ASCII, at most 960 characters, without < > , or ".
+	// The person's one-click unsubscribe link as core signed it (core's /v1/communication-preferences/unsubscribe?t=…), for an optional type of the bulk lane only: the e-mail renders it as .UnsubscribeUrl and, while SKYNOTIFY_LIST_UNSUBSCRIBE is on, carries it in List-Unsubscribe and List-Unsubscribe-Post from the duyuru mailbox. An https URL of visible ASCII, at most 960 characters, without < > , or ".
 	UnsubscribeURL string `json:"unsubscribe_url,omitempty" validate:"omitempty,max=960" example:"https://api.yildizskylab.com/v1/communication-preferences/unsubscribe?t=AQEB"`
 }
 

@@ -1,6 +1,6 @@
 # Veritabanı migration'ları
 
-SkyMail migration dosyalarını uygulama binary'sine gömer. Otomatik uygulama,
+SkyNotify migration dosyalarını uygulama binary'sine gömer. Otomatik uygulama,
 geriye dönük uyumlu bir rollout için varsayılan olarak kapalıdır.
 
 ## Yeni veya sürümlendirilmiş veritabanı
@@ -16,7 +16,7 @@ migration'lar uygulanır. Migration başarısız veya kirli kalırsa servis baş
 ## Aynı anda açılan görevler
 
 Bir görev, sürümü okumadan önceden işi bitene dek oturum düzeyinde bir advisory
-lock tutar: `pg_try_advisory_lock(hashtextextended('skymail-backend migrations', 0))`
+lock tutar: `pg_try_advisory_lock(hashtextextended('skynotify-backend migrations', 0))`
 (`migrations.LockName`). Aynı anda açılan öbür görevler (ölçekleme, iki kopya,
 start-first deploy'un yeni görevi) kilidi 500 ms'de bir yeniden ister, en çok
 5 dakika (`migrations.LockWait`) bekler, sonra sürümü temiz bulup yapacak iş
@@ -77,7 +77,8 @@ başlangıcında otomatik downgrade yapılmaz.
 ## Eski imaja geri dönüş
 
 Migration'lar expand-only yazılır: eski imaj yeni sütunları yok sayar, bu
-yüzden geri dönüşte şemayı geri almak gerekmez.
+yüzden geri dönüşte şemayı geri almak gerekmez. Tek istisna SkyNotify ad
+taşımasıdır (yukarıda): onun geri dönüşü `db/tasima/` dosyalarıyladır.
 
 1. **Eski imajı `DATABASE_MIGRATIONS_MODE=off` ile deploy edin.** Veritabanı
    eski imajın tanımadığı bir sürümdeyse (ör. `20261009120000`) eski imaj
@@ -105,10 +106,39 @@ yüzden geri dönüşte şemayı geri almak gerekmez.
    UPDATE mail_queue SET claimed_at = NULL, claimed_by = NULL WHERE status IN ('pending', 'processing');
    ```
 
+## SkyNotify ad taşıması (ADR 0091)
+
+Servis tek pencerede yeni adına taşınır; eski ad için istisna yok. Bu, yukarıdaki
+expand/contract kuralına uyamayan tek sürümdür ve stop-first, kesinti duyurularak
+yayınlanır: eski görev durmadan yeni görev başlamaz.
+
+- **Şema:** `20261125090000_rename_to_skynotify` listelerin arama
+  fonksiyonunu `skynotify_search_fold()` adıyla aynen yeniden kurar ve eski
+  adı düşürür; servisin adını anan sütun ve tablo yorumları yeni adı anar.
+  Eski imaj eski fonksiyonu çağırdığı için yeni şemada açılmaz.
+- **Veri:** satırlarda saklı biçim kimlikleri (Visual belge türü, takipsiz
+  bağlantı özniteliği, SkyNotify'ın kendi postalarının `sent_by` değeri)
+  golang-migrate'e girmez. `db/tasima/` altındaki dosyalar pencerede, uygulama
+  başlamadan önce, sunucuda konteynerin süper kullanıcısıyla tek işlemde
+  (`psql -X -v ON_ERROR_STOP=1 -1 … -f`) koşar; her dosyanın başı ne yaptığını,
+  denetimlerini ve çıktısını anlatır:
+  - `veri-olcum.sql`: salt okur sayım (Ö8, karşılaştırma, doğrulama);
+  - `veri-ileri.sql`: eski kimliklerden yenilere;
+  - `veri-geri.sql`: tersi, gövdesi `veri-ileri.sql`'in aynısı;
+  - `sema-geri.sql`: down migration'ın şeması ve `schema_migrations`'ın önceki
+    sürüme (`20261124200000`, `dirty=false`) dönüşü.
+- **Sıra:** ileri: eski görev durur → `veri-ileri.sql` → yeni imaj açılır (şema
+  göçü açılışta). Geri: yeni görev durur → `veri-geri.sql` → `sema-geri.sql` →
+  eski imaj açılır (göç bulmaz).
+- Testpostgres'te ileri → geri → ileri, satırlar baytı baytına aynı ve eski
+  imajın şeması: `internal/migrations/skynotify_tasima_test.go`.
+- Pencereye kadar bu depoya başka migration girmez: `sema-geri.sql` önceki
+  sürümü adıyla bilir.
+
 ## Kirli (dirty) sürüm
 
 Bir migration yarıda kalırsa golang-migrate sürümü `dirty` bırakır ve servis
-açılmaz (`database migration version … is dirty`). SkyMail'in migration
+açılmaz (`database migration version … is dirty`). SkyNotify'ın migration
 dosyaları tek örtük işlemde koşar: başarısız olan dosyanın değişiklikleri geri
 alınmıştır. Nedeni giderdikten sonra (ör. `20261009120000`'in 5 saniyelik
 `lock_timeout`'u: `mail_queue`'yu uzun tutan işlemi bitirin) sürümü bir

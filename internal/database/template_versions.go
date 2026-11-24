@@ -9,7 +9,7 @@ import (
 // carried at the time. It is what a version is written with and what the
 // version routes serve.
 type VersionAuthor struct {
-	// operator: written in SkyMail; template_seed: written by the Template seed from the repo.
+	// operator: written in SkyNotify; template_seed: written by the Template seed from the repo.
 	Kind TemplateAuthorKind `json:"kind" enums:"operator,template_seed" swaggertype:"string"`
 	// The Keycloak subject of the token that wrote the version. Null when not known: the first versions, made from templates written before versions were kept.
 	Sub *string `json:"sub"`

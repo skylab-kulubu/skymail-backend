@@ -54,7 +54,7 @@ const Mask = "••••••"
 // maskMark is a masked value in the HTML part's text: a <mark> the panel can
 // make stand out. In an attribute html/template strips it to its text, and in
 // a URL attribute escapes it to an address that goes nowhere.
-const maskMark = `<mark data-skymail-masked="">` + Mask + `</mark>`
+const maskMark = `<mark data-skynotify-masked="">` + Mask + `</mark>`
 
 // MaskMethod says how a mail was masked.
 type MaskMethod string

@@ -8,14 +8,14 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
 )
 
-// Every error SkyMail answers is an RFC 9457 problem (ADR-0010; hub sector
+// Every error SkyNotify answers is an RFC 9457 problem (ADR-0010; hub sector
 // audit 2026-11-24, 02): application/problem+json with type about:blank, the
 // status's reason phrase as title, status, detail and the path as instance;
 // and, as extension members, the body it answered before — code, message,
-// params — unchanged, which skymail-frontend and the other clients read.
+// params — unchanged, which skynotify-frontend and the other clients read.
 func TestErrorsAreProblemDetailsThatKeepTheOldBody(t *testing.T) {
 	t.Parallel()
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})

@@ -10,26 +10,26 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/news"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/news"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
 )
 
 // AnnouncementsSendRole lets a person mail a News record to an audience
 // directly (Karar D4: ADMIN and YK; bilet 04). Others will submit it to Mail
 // onayı (a later slice of bilet 06).
-const AnnouncementsSendRole = "skymail:announcements:send"
+const AnnouncementsSendRole = "skynotify:announcements:send"
 
 // NewsSendEnv turns POST /v1/news_sends on: off (the default, also when
-// unset) or on. On needs SKYMAIL_NEWS_CMS_URL and CORE_URL.
-const NewsSendEnv = "SKYMAIL_NEWS_SEND"
+// unset) or on. On needs SKYNOTIFY_NEWS_CMS_URL and CORE_URL.
+const NewsSendEnv = "SKYNOTIFY_NEWS_SEND"
 
 // NewsReadMoreEnv says where the mail's "Devamını oku" opens: home (the
 // default: the site's home page, until the site has its News pages, bilet
 // 11) or pages (/haberler/<slug>, /duyurular/<slug>).
-const NewsReadMoreEnv = "SKYMAIL_NEWS_READ_MORE"
+const NewsReadMoreEnv = "SKYNOTIFY_NEWS_READ_MORE"
 
 // maxNewsSlug is the longest slug a send keeps (mail_tasks.source_ref is
 // news:<slug> of at most 200; requests.SendNews asks the same).
@@ -40,7 +40,7 @@ const skipNoUnsubscribeURL = "no_unsubscribe_url"
 
 var (
 	errNewsSendOff = apperrors.New("news_send.not_enabled",
-		"Sending a News record is off on this SkyMail (SKYMAIL_NEWS_SEND).", fiber.StatusServiceUnavailable)
+		"Sending a News record is off on this SkyNotify (SKYNOTIFY_NEWS_SEND).", fiber.StatusServiceUnavailable)
 	errNewsCommercialStatement = apperrors.New("news_send.commercial_statement_required",
 		"A News send needs commercial_content_absent true: the mail's main purpose is not promotion (a short thanks to a sponsor or its logo is allowed).", fiber.StatusBadRequest)
 	errNewsTeams = apperrors.New("news_send.teams_invalid",
@@ -62,7 +62,7 @@ var (
 	errNewsAudienceUnavailable = apperrors.New("news_send.audience_unavailable",
 		"core did not answer who the record goes to. Nothing was queued; retry.", fiber.StatusServiceUnavailable)
 	errNewsSlugTooLong = apperrors.New("news_send.slug_too_long",
-		"The record's slug is longer than 200 characters: SkyMail keeps a News send's source as news:<slug> of at most 200.", fiber.StatusBadRequest)
+		"The record's slug is longer than 200 characters: SkyNotify keeps a News send's source as news:<slug> of at most 200.", fiber.StatusBadRequest)
 	errNewsNoRecipients = apperrors.New("news_send.no_recipients",
 		"Nobody is left to send the record to: params says who was left out and why.", fiber.StatusUnprocessableEntity)
 )
@@ -81,11 +81,11 @@ type NewsAudiences interface {
 
 // NewsSendOptions configure NewsSendHandler.
 type NewsSendOptions struct {
-	// Enabled is SKYMAIL_NEWS_SEND=on.
+	// Enabled is SKYNOTIFY_NEWS_SEND=on.
 	Enabled bool
-	// ReadMore is SKYMAIL_NEWS_READ_MORE: news.ReadMoreHome or ReadMorePages.
+	// ReadMore is SKYNOTIFY_NEWS_READ_MORE: news.ReadMoreHome or ReadMorePages.
 	ReadMore string
-	// ImageHosts are SKYMAIL_NEWS_IMAGE_HOSTS: the hosts a record's cover
+	// ImageHosts are SKYNOTIFY_NEWS_IMAGE_HOSTS: the hosts a record's cover
 	// may come from; a cover from anywhere else is left out.
 	ImageHosts []string
 }
@@ -162,14 +162,14 @@ type NewsSendResult struct {
 // Send godoc
 //
 //	@Summary		Mail a published News record to an audience
-//	@Description	Reads the record of slug from the CMS (inscribed, anonymously: only public records in Faz 1), asks core who it goes to (every Member, or some teams with their sub-teams and followers; core leaves out who turned the category off, a disabled, unverified or address-less account, and answers each person's own unsubscribe link and why they get it), and queues the club.news template to each in the bulk lane, as a duyuru of core's category with List-Unsubscribe from that link. The send keeps the record as it was (source.version; a later edit changes the web, never the mail). A record's mail goes to a mailbox once: an address a row of this record already went to (an earlier send to another audience) is left out and counted already_received; the same record to the same audience again is 409 news_send.already_sent with that send's id. A cancelled send holds nothing back: its recipients who never got the mail get it when the record is sent again (409 news_send.cancel_finishing while its rows being sent finish). Only a person with skymail:announcements:send sends directly; Mail onayı for the others comes with a later version. Off unless SKYMAIL_NEWS_SEND=on (503 news_send.not_enabled).
+//	@Description	Reads the record of slug from the CMS (inscribed, anonymously: only public records in Faz 1), asks core who it goes to (every Member, or some teams with their sub-teams and followers; core leaves out who turned the category off, a disabled, unverified or address-less account, and answers each person's own unsubscribe link and why they get it), and queues the club.news template to each in the bulk lane, as a duyuru of core's category with List-Unsubscribe from that link. The send keeps the record as it was (source.version; a later edit changes the web, never the mail). A record's mail goes to a mailbox once: an address a row of this record already went to (an earlier send to another audience) is left out and counted already_received; the same record to the same audience again is 409 news_send.already_sent with that send's id. A cancelled send holds nothing back: its recipients who never got the mail get it when the record is sent again (409 news_send.cancel_finishing while its rows being sent finish). Only a person with skynotify:announcements:send sends directly; Mail onayı for the others comes with a later version. Off unless SKYNOTIFY_NEWS_SEND=on (503 news_send.not_enabled).
 //	@Tags			News sends
 //	@Accept			json
 //	@Produce		json
 //	@Param			send	body		requests.SendNews	true	"The record, the audience and the mail"
 //	@Success		201		{object}	handlers.NewsSendResult
 //	@Failure		400		{object}	apperrors.Problem	"validation.error; attachment.not_allowed: a News send takes no attachments; news_send.commercial_statement_required; news_send.teams_invalid; news_send.team_unknown; news_send.slug_too_long"
-//	@Failure		403		{object}	apperrors.Problem	"server.forbidden: no skymail:announcements:send"
+//	@Failure		403		{object}	apperrors.Problem	"server.forbidden: no skynotify:announcements:send"
 //	@Failure		404		{object}	apperrors.Problem	"news_send.not_found: unknown or archived"
 //	@Failure		409		{object}	apperrors.Problem	"news_send.already_sent (params.task_id); news_send.cancel_finishing (params.task_id); news_send.private_record; news_send.template_missing"
 //	@Failure		422		{object}	apperrors.Problem	"news_send.no_recipients (params: the counts)"
@@ -211,7 +211,7 @@ func (h *newsSendHandlerImpl) Send(c fiber.Ctx) error {
 		return err
 	}
 
-	// core is asked before the transaction: SkyMail never waits for it
+	// core is asked before the transaction: SkyNotify never waits for it
 	// holding one.
 	audience, err := h.audiences.Resolve(ctx, news.AudienceRequest{
 		Type: params.Audience.Type, Teams: teams, NewsKind: record.Kind, Visibility: record.Audience,

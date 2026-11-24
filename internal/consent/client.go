@@ -1,7 +1,7 @@
 // Package consent reads what core says about contact consents (core
 // docs/contact-consents.md; KVKK aydınlatma s6 §5.8, §5.10, §5.14) and which
 // of a send's addresses belong to an account (core docs/news-audience.md,
-// "Recipients"). SkyMail applies both as it takes rows to send (mailer,
+// "Recipients"). SkyNotify applies both as it takes rows to send (mailer,
 // consent_gate.go).
 package consent
 
@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-// The purposes SkyMail reads the audience of.
+// The purposes SkyNotify reads the audience of.
 const (
 	// PurposePromotional: mails whose main purpose is promoting a product or
 	// a service (s6 §5.10, row 13 b).
@@ -55,7 +55,7 @@ const (
 // only when it is one, never free text.
 var codePattern = regexp.MustCompile(`^[a-z][a-z0-9_.]{0,79}$`)
 
-// TokenSource is SkyMail's service account token (KEYCLOAK_SERVICE_CLIENT_ID).
+// TokenSource is SkyNotify's service account token (KEYCLOAK_SERVICE_CLIENT_ID).
 type TokenSource interface {
 	ServiceToken(ctx context.Context) (string, error)
 }
@@ -73,7 +73,7 @@ type Item struct {
 	RenewalDue bool
 }
 
-// Client asks core with SkyMail's service account token.
+// Client asks core with SkyNotify's service account token.
 type Client struct {
 	base   string
 	tokens TokenSource
@@ -163,7 +163,7 @@ type Recipient struct {
 // Result is core's answer about one recipient (ADR 0072 decision 3).
 type Result struct {
 	// Matched: the recipient is an account's (by sub, or a verified address).
-	// Not matched, SkyMail's own record and link apply.
+	// Not matched, SkyNotify's own record and link apply.
 	Matched bool
 	// Sub is the account's subject; empty for ambiguous.
 	Sub string

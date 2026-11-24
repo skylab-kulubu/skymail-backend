@@ -14,12 +14,12 @@ type SubmitMailApproval struct {
 	// An immutable snapshot prepared by Forms for this caller. Never with a
 	// list or browser-supplied recipients. Manual recipients retain max=100.
 	FormSourceID *uuid.UUID `json:"form_source_id"`
-	// Team mail (ADR-0067 addendum of 2026-11-08): Teams the caller leads, as GET /me/team_audiences lists them, 1..50. Choose exactly one of this, mail_list_id, recipients or form_source_id. No skymail:lists:read is needed; a picked Sub-team of a picked Team is dropped; each remaining Team is its own send once approved, always duyuru with its own category team:<id>:duyuru (purpose may be omitted or duyuru, category omitted or one of the picked Teams'); a person in two picked Teams gets one mail. A Leader without skymail:access sends only the free announcement (template free.basic).
+	// Team mail (ADR-0067 addendum of 2026-11-08): Teams the caller leads, as GET /me/team_audiences lists them, 1..50. Choose exactly one of this, mail_list_id, recipients or form_source_id. No skynotify:lists:read is needed; a picked Sub-team of a picked Team is dropped; each remaining Team is its own send once approved, always duyuru with its own category team:<id>:duyuru (purpose may be omitted or duyuru, category omitted or one of the picked Teams'); a person in two picked Teams gets one mail. A Leader without skynotify:access sends only the free announcement (template free.basic).
 	TeamIDs []uuid.UUID `json:"team_ids" validate:"omitempty,max=50"`
 	// The people, 1..100, each address once (compared case-insensitively); each gets a send of their own. Omit for a mailing list or Forms source.
 	Recipients    []MailApprovalRecipient `json:"recipients" validate:"omitempty,max=100,dive"`
 	BodyVariables map[string]interface{}  `json:"body_variables"`
-	// Open and click tracking for the send once approved (as POST /mail_tasks takes it). Ignored (and kept false) while SkyMail's tracking is off, for a System or sensitive template (to people, a template that says nothing counts as sensitive) and for a Forms source. People named here are looked up in Keycloak by address when the request is sent, as POST /mail_tasks/single does: one enabled account with that verified primary e-mail; an address without one is tracked too.
+	// Open and click tracking for the send once approved (as POST /mail_tasks takes it). Ignored (and kept false) while SkyNotify's tracking is off, for a System or sensitive template (to people, a template that says nothing counts as sensitive) and for a Forms source. People named here are looked up in Keycloak by address when the request is sent, as POST /mail_tasks/single does: one enabled account with that verified primary e-mail; an address without one is tracked too.
 	Tracking bool `json:"tracking"`
 	// The purpose of the send once approved (as POST /mail_tasks takes it): islem only to people or to a Forms source.
 	SendPurpose

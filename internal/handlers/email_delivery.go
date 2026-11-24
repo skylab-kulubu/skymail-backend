@@ -6,8 +6,8 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/requestid"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
 )
 
 // A person's own e-mail delivery (hub ticket rabbitmq-olaylar 10; ADR 0073):
@@ -46,11 +46,11 @@ func NewEmailDeliveryHandler(db *database.Store) EmailDeliveryHandler {
 // Get godoc
 //
 //	@Summary		Which of my addresses mail does not reach
-//	@Description	The caller's own addresses on the suppression list: the rows suppressed with their sub, and the rows of the addresses their token says are theirs — Keycloak's email (only when email_verified is true) and school_email — compared lower-cased and trimmed, each once, oldest first. since is when the address was first suppressed. No source, code or id; no parameter: someone else's address cannot be asked about. Only a person's own token issued for SkyMail (aud skymail) may call it; no role is needed. Served with Cache-Control: no-store.
+//	@Description	The caller's own addresses on the suppression list: the rows suppressed with their sub, and the rows of the addresses their token says are theirs — Keycloak's email (only when email_verified is true) and school_email — compared lower-cased and trimmed, each once, oldest first. since is when the address was first suppressed. No source, code or id; no parameter: someone else's address cannot be asked about. Only a person's own token issued for SkyNotify (aud skynotify) may call it; no role is needed. Served with Cache-Control: no-store.
 //	@Tags			Inbox
 //	@Produce		json
 //	@Success		200	{object}	handlers.EmailDelivery
-//	@Failure		401	{object}	apperrors.Problem	"server.unauthorized: no live token, or one not issued for SkyMail"
+//	@Failure		401	{object}	apperrors.Problem	"server.unauthorized: no live token, or one not issued for SkyNotify"
 //	@Failure		403	{object}	apperrors.Problem	"auth.person_required: a service's token"
 //	@Router			/me/email-delivery [get]
 func (h *emailDeliveryHandlerImpl) Get(c fiber.Ctx) error {

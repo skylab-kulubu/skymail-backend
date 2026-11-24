@@ -7,10 +7,10 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/msauth"
+	"github.com/skylab-kulubu/skynotify-backend/internal/msauth"
 )
 
-// Sender lanes (hub ticket skymail-bounce-isleme 10; Yusuf, 2026-10-20): a
+// Sender lanes (hub ticket skynotify-bounce-isleme 10; Yusuf, 2026-10-20): a
 // mail goes out from one of three shared mailboxes by what it is, each with
 // its own display name, all with Reply-To the club's human address:
 //
@@ -27,14 +27,14 @@ import (
 //     notifications, and an operator's mail they declared transactional.
 //
 // The purpose (mail_tasks.purpose; Purpose*) picks the stream only while
-// SKYMAIL_MAIL_PURPOSE is on; off, and for a send without one (queued before
+// SKYNOTIFY_MAIL_PURPOSE is on; off, and for a send without one (queued before
 // it, or while it was off), the queue priority does as before: the bulk lane
 // is duyuru, the system lane bilgi. Account mail is hesap whatever its
 // stream. Each lane has its own switch: off (the
-// default) sends it the way SkyMail always has, SMTP AUTH as SMTP_USER from
+// default) sends it the way SkyNotify always has, SMTP AUTH as SMTP_USER from
 // SMTP_FROM; graph sends it through Microsoft Graph sendMail without a copy in
 // Sent Items; xoauth2 sends it over SMTP with an OAuth token. Both use the
-// skymail-posta application's certificate (internal/msauth). A duyuru mail
+// skynotify-posta application's certificate (internal/msauth). A duyuru mail
 // with a List-Unsubscribe link goes either way (list_unsubscribe.go): Graph
 // sends it as MIME, which keeps the header and a copy in Sent Items.
 
@@ -54,7 +54,7 @@ var Lanes = []Lane{LaneHesap, LaneBilgi, LaneDuyuru}
 type Transport string
 
 const (
-	// TransportOff sends the lane's mail as SkyMail always has: SMTP AUTH
+	// TransportOff sends the lane's mail as SkyNotify always has: SMTP AUTH
 	// (LOGIN, or PLAIN with SMTP_PLAIN) as SMTP_USER, from SMTP_FROM.
 	TransportOff Transport = "off"
 	// TransportGraph sends it with Microsoft Graph sendMail from the lane's
@@ -68,26 +68,26 @@ const (
 // LaneConfig is one lane's switch and its From.
 type LaneConfig struct {
 	Transport Transport
-	// From is the lane's display name and mailbox (SKYMAIL_FROM_<LANE>);
+	// From is the lane's display name and mailbox (SKYNOTIFY_FROM_<LANE>);
 	// set when Transport is not off.
 	From *netmail.Address
 }
 
 // SendLanes is how the e-mail channel picks its sender (SendLanesFromEnv).
-// The zero value is SkyMail as it always was: every lane off, no Reply-To.
+// The zero value is SkyNotify as it always was: every lane off, no Reply-To.
 type SendLanes struct {
 	Lanes map[Lane]LaneConfig
 	// ReplyTo is SMTP_REPLY_TO, the Reply-To of every mail, every lane and
 	// the off path too; nil, none.
 	ReplyTo *netmail.Address
-	// Credentials are the skymail-posta application's (GRAPH_*), read when
+	// Credentials are the skynotify-posta application's (GRAPH_*), read when
 	// a lane is not off.
 	Credentials *msauth.Credentials
-	// ListUnsubscribe is SKYMAIL_LIST_UNSUBSCRIBE: the duyuru lane's mail
+	// ListUnsubscribe is SKYNOTIFY_LIST_UNSUBSCRIBE: the duyuru lane's mail
 	// whose row has an unsubscribe link carries List-Unsubscribe and
 	// List-Unsubscribe-Post (list_unsubscribe.go). Off by default.
 	ListUnsubscribe bool
-	// Purpose is SKYMAIL_MAIL_PURPOSE: a send's purpose, not its queue
+	// Purpose is SKYNOTIFY_MAIL_PURPOSE: a send's purpose, not its queue
 	// priority, picks its stream (LaneOf), a send may name its purpose and
 	// category, and a duyuru mail whose row has an unsubscribe link carries a
 	// visible line with it when its body has none (footer.go). Off by default:
@@ -121,14 +121,14 @@ type SendPurpose struct {
 	CommercialContentAbsent *bool
 	// OwnEventStatement: on a duyuru send to a list or a Keycloak group,
 	// the sender's statement that the mail is about the list's own event or
-	// work (s6 row 15); kept only while SKYMAIL_LIST_CONSENT is on.
+	// work (s6 row 15); kept only while SKYNOTIFY_LIST_CONSENT is on.
 	OwnEventStatement *bool
 }
 
 // PurposeEnv switches purposes on: off (the default, also when unset) or on.
-const PurposeEnv = "SKYMAIL_MAIL_PURPOSE"
+const PurposeEnv = "SKYNOTIFY_MAIL_PURPOSE"
 
-// purposeFromEnv reads SKYMAIL_MAIL_PURPOSE; anything but off, on or nothing
+// purposeFromEnv reads SKYNOTIFY_MAIL_PURPOSE; anything but off, on or nothing
 // stops startup.
 func purposeFromEnv(getenv func(string) string) (bool, error) {
 	switch raw := strings.ToLower(strings.TrimSpace(getenv(PurposeEnv))); raw {
@@ -142,7 +142,7 @@ func purposeFromEnv(getenv func(string) string) (bool, error) {
 }
 
 // purposeOf is the purpose a mail's stream is read from: the send's while
-// SKYMAIL_MAIL_PURPOSE is on, none (the rule of before) while it is off, so
+// SKYNOTIFY_MAIL_PURPOSE is on, none (the rule of before) while it is off, so
 // turning it off sends a mail queued while it was on as before too.
 func (l SendLanes) purposeOf(purpose *string) *string {
 	if !l.Purpose {
@@ -179,20 +179,20 @@ func (l SendLanes) anyOn() bool {
 	return false
 }
 
-// Environment names: SKYMAIL_SEND_HESAP, SKYMAIL_FROM_HESAP, and so on.
-func sendEnv(lane Lane) string { return "SKYMAIL_SEND_" + strings.ToUpper(string(lane)) }
-func fromEnv(lane Lane) string { return "SKYMAIL_FROM_" + strings.ToUpper(string(lane)) }
+// Environment names: SKYNOTIFY_SEND_HESAP, SKYNOTIFY_FROM_HESAP, and so on.
+func sendEnv(lane Lane) string { return "SKYNOTIFY_SEND_" + strings.ToUpper(string(lane)) }
+func fromEnv(lane Lane) string { return "SKYNOTIFY_FROM_" + strings.ToUpper(string(lane)) }
 
 // ReplyToEnv is the Reply-To of every mail.
 const ReplyToEnv = "SMTP_REPLY_TO"
 
-// SendLanesFromEnv reads the sender lanes. Each SKYMAIL_SEND_<LANE> is off
+// SendLanesFromEnv reads the sender lanes. Each SKYNOTIFY_SEND_<LANE> is off
 // (also when unset), graph or xoauth2; a lane that is not off needs
-// SKYMAIL_FROM_<LANE>, a display name and address ("SKY LAB Hesap
+// SKYNOTIFY_FROM_<LANE>, a display name and address ("SKY LAB Hesap
 // <hesap@bildirim.yildizskylab.com>"), and the application's credentials
 // (GRAPH_TENANT_ID, GRAPH_CLIENT_ID, GRAPH_CLIENT_KEY, GRAPH_CLIENT_CERT).
 // SMTP_REPLY_TO, optional, is an address with or without a display name.
-// SKYMAIL_LIST_UNSUBSCRIBE and SKYMAIL_MAIL_PURPOSE are off (also when unset)
+// SKYNOTIFY_LIST_UNSUBSCRIBE and SKYNOTIFY_MAIL_PURPOSE are off (also when unset)
 // or on. Anything else stops startup, so a typo cannot quietly send from the
 // wrong mailbox.
 func SendLanesFromEnv(getenv func(string) string) (SendLanes, error) {
@@ -247,7 +247,7 @@ func SendLanesFromEnv(getenv func(string) string) (SendLanes, error) {
 // template keyed keycloak.* or account.*), whatever its stream; otherwise its
 // purpose's (ADR 0072 decision 2): duyuru for duyuru, bilgi for islem. A send
 // without a purpose (nil: queued before purposes, or while
-// SKYMAIL_MAIL_PURPOSE was off, or read while it is off) is read by the rule
+// SKYNOTIFY_MAIL_PURPOSE was off, or read while it is off) is read by the rule
 // of before: duyuru for the bulk lane, bilgi for the system lane. key and
 // system are the send's template's (nil and false without one); priority is
 // the queue row's. The queue priority is the send budget's, not the
@@ -313,8 +313,8 @@ func WithSendLanes(lanes SendLanes) Option {
 // WithDSNRequest asks the relay for delivery status notifications of a
 // failure only, with the returned mail's headers only (RFC 3461 RET=HDRS,
 // NOTIFY=FAILURE), when its EHLO offers DSN: the NDR reader's reports carry
-// less of the mail (hub ticket skymail-bounce-isleme 04, ADR 0073 decision
-// 9). main turns it on with SKYMAIL_BOUNCE_READER.
+// less of the mail (hub ticket skynotify-bounce-isleme 04, ADR 0073 decision
+// 9). main turns it on with SKYNOTIFY_BOUNCE_READER.
 func WithDSNRequest(on bool) Option { return func(m *mailerImpl) { m.requestDSN = on } }
 
 // tokenSource is a scope's access token (msauth.TokenSource).

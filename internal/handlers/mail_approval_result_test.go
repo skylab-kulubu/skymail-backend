@@ -3,7 +3,7 @@ package handlers
 import (
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
 // An approved request's opens and clicks are summed over its tracked sends
@@ -13,8 +13,8 @@ import (
 // sum of fewer than 10 tracked recipients is shown (Yusuf, 2026-11-24, K6).
 func TestApprovalTrackingSumsTheSendsAndWithholdsWhatTellsOfPeople(t *testing.T) {
 	const submitter = "6d3c3a52-1f1b-4c1e-9d6a-1d0c9b7e2a10"
-	plain := contentCaller{sub: submitter, roles: []string{"skymail:access"}}
-	role := contentCaller{sub: "0b8a0f43-6f7e-4d3a-8f2b-5c1d2e3f4a50", roles: []string{"skymail:access", TrackingReadRole}}
+	plain := contentCaller{sub: submitter, roles: []string{"skynotify:access"}}
+	role := contentCaller{sub: "0b8a0f43-6f7e-4d3a-8f2b-5c1d2e3f4a50", roles: []string{"skynotify:access", TrackingReadRole}}
 	send := func(tracked, opened, clicked int) trackedSend {
 		return trackedSend{
 			task:   database.TrackingTaskAccessRow{SentBy: submitter},

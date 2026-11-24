@@ -1,4 +1,4 @@
-// Package unsubscribe is the part of SkyMail's own one-click unsubscribe
+// Package unsubscribe is the part of SkyNotify's own one-click unsubscribe
 // that needs no database: the key ring, the token and the link (ADR 0072
 // decision 4; hub ticket abonelik-cikisi 02; README, "Tek tık çıkış ucu").
 //
@@ -44,7 +44,7 @@ const KeySize = chacha20poly1305.KeySize
 
 // aad binds a token to this use and to its version: a key of the ring can
 // open nothing sealed for another purpose.
-const aad = "skymail unsubscribe v"
+const aad = "skynotify unsubscribe v"
 
 var (
 	// ErrInvalid says a token does not open: changed, cut, or not a token.

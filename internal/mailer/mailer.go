@@ -17,7 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 	"github.com/wneessen/go-mail"
 )
 
@@ -77,12 +77,12 @@ type Priority int16
 const (
 	// PriorityBulk is a send to a mailing list or a Keycloak group, an
 	// approved send, and a single mail a person sends asking for tracking
-	// (every one, with SKYMAIL_TRACKING_OPERATOR on): an operator's mail,
+	// (every one, with SKYNOTIFY_TRACKING_OPERATOR on): an operator's mail,
 	// which can wait a moment.
 	PriorityBulk Priority = 0
 	// PrioritySystem is a single mail (POST /mail_tasks/single): a login
 	// code, a certificate, a Forms confirmation, a notification. It is
-	// tracked only as a service's mail, with SKYMAIL_TRACKING_SYSTEM on
+	// tracked only as a service's mail, with SKYNOTIFY_TRACKING_SYSTEM on
 	// (EnqueueSystemSingle).
 	PrioritySystem Priority = 1
 )
@@ -138,10 +138,10 @@ type EnqueueWithRecipientsParams struct {
 	BodyVariables []byte
 	Recipients    []RecipientInfo
 	// Tracking asks for open and click tracking (tracking.go); it is ignored
-	// while SKYMAIL_TRACKING is off.
+	// while SKYNOTIFY_TRACKING is off.
 	Tracking bool
 	// System says the send is a service's mail (core's notification): with
-	// SKYMAIL_TRACKING_SYSTEM on it is tracked whatever Tracking says, its
+	// SKYNOTIFY_TRACKING_SYSTEM on it is tracked whatever Tracking says, its
 	// Preferences what ResolveSystemTracking said; off, it is not tracked.
 	System bool
 	// Preferences is whom core lets be tracked, asked before the send's
@@ -172,7 +172,7 @@ type Mailer interface {
 	// SenderPaused says MAIL_SENDER=paused holds this process's sender back:
 	// mail is queued but none is sent.
 	SenderPaused() bool
-	// TrackingAvailable says SKYMAIL_TRACKING=on: a send may ask for open
+	// TrackingAvailable says SKYNOTIFY_TRACKING=on: a send may ask for open
 	// and click tracking. Off, the request is ignored.
 	TrackingAvailable() bool
 	// TrackingApplies says a send of templateID to mailListID (nil: to one
@@ -180,30 +180,30 @@ type Mailer interface {
 	// template is neither a System template nor sensitive. Its answer is
 	// what a send's tracking says.
 	TrackingApplies(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID) bool
-	// SystemTrackingAvailable says SKYMAIL_TRACKING_SYSTEM is on with
-	// SKYMAIL_TRACKING: the mail services send (EnqueueSystemSingle,
+	// SystemTrackingAvailable says SKYNOTIFY_TRACKING_SYSTEM is on with
+	// SKYNOTIFY_TRACKING: the mail services send (EnqueueSystemSingle,
 	// EnqueueWithRecipientsParams.System) is tracked without asking.
 	SystemTrackingAvailable() bool
-	// OperatorTrackingAlways says SKYMAIL_TRACKING_OPERATOR is on with
-	// SKYMAIL_TRACKING: every send a person queues (an operator's mail) is
+	// OperatorTrackingAlways says SKYNOTIFY_TRACKING_OPERATOR is on with
+	// SKYNOTIFY_TRACKING: every send a person queues (an operator's mail) is
 	// tracked whether it asked or not, whatever its template; its callers
 	// ask for tracking on every one. A sensitive mail gets the pixel only,
 	// any other a click address on the links every recipient gets alike,
 	// never on one made from the recipient.
 	OperatorTrackingAlways() bool
-	// PurposeAvailable says SKYMAIL_MAIL_PURPOSE is on: a send may name its
+	// PurposeAvailable says SKYNOTIFY_MAIL_PURPOSE is on: a send may name its
 	// purpose and category, and its purpose picks its stream (LaneOf). Off,
 	// the fields are ignored and no send is written with one.
 	PurposeAvailable() bool
-	// PromotionalAvailable says SKYMAIL_PROMOTIONAL is on: a duyuru send may
+	// PromotionalAvailable says SKYNOTIFY_PROMOTIONAL is on: a duyuru send may
 	// be promotional (commercial_content_absent false), and goes only to
 	// those who consented to promotional mail (consent_gate.go).
 	PromotionalAvailable() bool
-	// ListConsentAvailable says SKYMAIL_LIST_CONSENT is on: a list's
+	// ListConsentAvailable says SKYNOTIFY_LIST_CONSENT is on: a list's
 	// address without an account needs its announcement consent, unless the
 	// send states it is about the list's own event (consent_gate.go).
 	ListConsentAvailable() bool
-	// PreferenceAvailable says SKYMAIL_BULK_PREFERENCE is on: every duyuru
+	// PreferenceAvailable says SKYNOTIFY_BULK_PREFERENCE is on: every duyuru
 	// send obeys core's preferences when it is queued and again right before
 	// each mail goes out (preference_gate.go); a duyuru send must state that
 	// its main purpose is not promotion.
@@ -212,7 +212,7 @@ type Mailer interface {
 	EnqueueSingle(ctx context.Context, arg database.CreateSingleMailTaskParams) (uuid.UUID, error)
 	// EnqueueSystemSingle queues a mail a service sends one person (a login
 	// code, a Forms confirmation, an approval notice) in the system lane, as
-	// EnqueueSingle does, and with SKYMAIL_TRACKING_SYSTEM on tracks it:
+	// EnqueueSingle does, and with SKYNOTIFY_TRACKING_SYSTEM on tracks it:
 	// before the transaction the person's account is found in Keycloak by
 	// address and core is asked (ResolveSystemTracking); the mail gets the
 	// pixel, and a click address only on the links its template writes out
@@ -224,7 +224,7 @@ type Mailer interface {
 	EnqueueSystemSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *TrackingPreferences) (uuid.UUID, bool, error)
 	// EnqueueTrackedSingle queues a mail a person sends one person and asks
 	// tracking for (POST /mail_tasks/single with tracking, or any with
-	// SKYMAIL_TRACKING_OPERATOR on): an operator's mail, so in the bulk lane,
+	// SKYNOTIFY_TRACKING_OPERATOR on): an operator's mail, so in the bulk lane,
 	// where tracking is planned. The system lane
 	// is never tracked as asked (only a service's mail is, by
 	// EnqueueSystemSingle). preferences is what ResolveTracking said about the
@@ -271,7 +271,7 @@ type Transactional interface {
 	// ResolveTracking asks core whom of recipients a send of templateID to
 	// mailListID may track. Call it before the transaction a Queue writes
 	// in and pass the answer as EnqueueWithRecipientsParams.Preferences:
-	// SkyMail never waits for core holding a transaction.
+	// SkyNotify never waits for core holding a transaction.
 	ResolveTracking(ctx context.Context, templateID uuid.UUID, mailListID *uuid.UUID, recipients []RecipientInfo) *TrackingPreferences
 	// ResolvePeopleTracking is ResolveTracking for people a send names one
 	// by one: their accounts are first found in Keycloak by address. Call it
@@ -280,7 +280,7 @@ type Transactional interface {
 	ResolvePeopleTracking(ctx context.Context, templateID uuid.UUID, recipients []RecipientInfo) *TrackingPreferences
 	// ResolveSystemTracking asks Keycloak (for those known only by address)
 	// and core whom of the recipients of a service's mail it may track, all
-	// within 2 seconds; nil when SKYMAIL_TRACKING_SYSTEM is off. Call it
+	// within 2 seconds; nil when SKYNOTIFY_TRACKING_SYSTEM is off. Call it
 	// before the transaction and pass the answer with
 	// EnqueueWithRecipientsParams.System.
 	ResolveSystemTracking(ctx context.Context, recipients []RecipientInfo) *TrackingPreferences
@@ -685,7 +685,7 @@ type queue struct {
 	// refuseReserved is the mailer's (WithReservedDomainsRefused).
 	refuseReserved bool
 	// lanes are the mailer's (WithSendLanes): whether a send's purpose picks
-	// its stream (SKYMAIL_MAIL_PURPOSE).
+	// its stream (SKYNOTIFY_MAIL_PURPOSE).
 	lanes SendLanes
 	// preferences is the mailer's bulk preference check, and verdicts what
 	// core said about this send's recipients (WithPreferences).
@@ -921,7 +921,7 @@ func (q *queue) enqueue(ctx context.Context, arg database.CreateMailTaskParams) 
 }
 
 // enqueueSingle queues a mail to one person; system says it is a service's
-// mail, tracked as the system (SKYMAIL_TRACKING_SYSTEM) and never as asked.
+// mail, tracked as the system (SKYNOTIFY_TRACKING_SYSTEM) and never as asked.
 // preferences, when it is tracked, is what ResolveTracking or
 // ResolveSystemTracking found: the person's account, if Keycloak found one
 // by address, becomes the row's recipient_sub.
@@ -994,7 +994,7 @@ func (q *queue) enqueueWithRecipients(ctx context.Context, params EnqueueWithRec
 	for _, r := range params.Recipients {
 		sub := r.Sub
 		// A person's send to people known by address (a Forms source's
-		// respondents) with SKYMAIL_TRACKING_OPERATOR on: the account
+		// respondents) with SKYNOTIFY_TRACKING_OPERATOR on: the account
 		// Keycloak found for the address, if any, is the row's, as for one
 		// person (enqueueSingle).
 		if sub == nil && kind == trackOperator {
@@ -1164,8 +1164,8 @@ func (t mailTemplates) renderWith(textVars, htmlVars map[string]interface{}, rec
 // flagged suppressed_but_sent. A recipient whose address left the duyuru
 // stream is written failed with unsubscribedError when the send is in it
 // (unsubscribe.go). kind says how the send is tracked (asked for
-// with the flag on, every person's send with SKYMAIL_TRACKING_OPERATOR on, or
-// a service's mail with SKYMAIL_TRACKING_SYSTEM on): each queued row gets a
+// with the flag on, every person's send with SKYNOTIFY_TRACKING_OPERATOR on, or
+// a service's mail with SKYNOTIFY_TRACKING_SYSTEM on): each queued row gets a
 // token or why not, as preferences — what core said before the transaction —
 // allows, and the links a click is counted on are registered (tracking.go).
 func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict bool, kind trackingKind, preferences *TrackingPreferences) (queueResult, error) {
@@ -1242,7 +1242,7 @@ func (q *queue) renderAndQueue(ctx context.Context, rows []commonMailRow, strict
 			continue
 		}
 		// The bulk preference check (preference_gate.go): the link core gave
-		// for the person, SkyMail's own for an address without an account,
+		// for the person, SkyNotify's own for an address without an account,
 		// or core's no.
 		var checked *time.Time
 		if gated {

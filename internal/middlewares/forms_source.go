@@ -9,7 +9,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
 )
 
 // FormsSourceConfig applies only to creating a Forms audience snapshot. It
@@ -25,21 +25,21 @@ type FormsSourceConfig struct {
 func (c FormsSourceConfig) Enabled() bool { return c.ServiceSub != "" && c.MaxRecipients > 0 }
 
 func FormsSourceConfigFromEnv(getenv func(string) string, issuer, audience string) (FormsSourceConfig, error) {
-	c := FormsSourceConfig{Issuer: issuer, Audience: audience, ClientID: strings.TrimSpace(getenv("SKYMAIL_FORMS_SOURCE_CLIENT_ID"))}
+	c := FormsSourceConfig{Issuer: issuer, Audience: audience, ClientID: strings.TrimSpace(getenv("SKYNOTIFY_FORMS_SOURCE_CLIENT_ID"))}
 	if c.ClientID == "" {
 		c.ClientID = "forms"
 	}
-	c.ServiceSub = strings.TrimSpace(getenv("SKYMAIL_FORMS_SOURCE_SERVICE_SUB"))
+	c.ServiceSub = strings.TrimSpace(getenv("SKYNOTIFY_FORMS_SOURCE_SERVICE_SUB"))
 	if c.ServiceSub != "" {
 		id, err := uuid.Parse(c.ServiceSub)
 		if err != nil || id == uuid.Nil || id.String() != c.ServiceSub {
-			return c, fmt.Errorf("SKYMAIL_FORMS_SOURCE_SERVICE_SUB must be a canonical nonzero UUID")
+			return c, fmt.Errorf("SKYNOTIFY_FORMS_SOURCE_SERVICE_SUB must be a canonical nonzero UUID")
 		}
 	}
-	if raw := strings.TrimSpace(getenv("SKYMAIL_FORMS_SOURCE_MAX_RECIPIENTS")); raw != "" {
+	if raw := strings.TrimSpace(getenv("SKYNOTIFY_FORMS_SOURCE_MAX_RECIPIENTS")); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n <= 0 {
-			return c, fmt.Errorf("SKYMAIL_FORMS_SOURCE_MAX_RECIPIENTS must be a positive whole number")
+			return c, fmt.Errorf("SKYNOTIFY_FORMS_SOURCE_MAX_RECIPIENTS must be a positive whole number")
 		}
 		c.MaxRecipients = n
 	}
@@ -53,7 +53,7 @@ type acceptedTokenIdentity struct {
 	audience                       []string
 }
 
-const acceptedTokenIdentityKey = "skymail.accepted_token_identity"
+const acceptedTokenIdentityKey = "skynotify.accepted_token_identity"
 
 func acceptedIdentity(token string) acceptedTokenIdentity {
 	claims := jwt.MapClaims{}

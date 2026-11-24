@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
 )
 
 func TestConfigDefaultsToOff(t *testing.T) {

@@ -18,9 +18,9 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/msauth"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/msauth"
 	"github.com/wneessen/go-mail"
 )
 
@@ -360,7 +360,7 @@ func html(s string) *string { return &s }
 // The decided lanes (hub ticket 10): a login code goes out of hesap@ and a
 // Forms confirmation out of bilgi@ through Graph sendMail, with no copy in
 // Sent Items; a send to a list goes out of duyuru@ over SMTP with AUTH
-// XOAUTH2. Every mail has Reply-To info@ and X-SkyMail-Queue-Id; Graph's token
+// XOAUTH2. Every mail has Reply-To info@ and X-SkyNotify-Queue-Id; Graph's token
 // is fetched once for both of its mails.
 func TestTheLanesSendFromTheirMailboxes(t *testing.T) {
 	captureMailerLogs(t)
@@ -421,7 +421,7 @@ func TestTheLanesSendFromTheirMailboxes(t *testing.T) {
 				"name": want.recipientName, "address": want.toAddres}}},
 			"replyTo": []any{map[string]any{"emailAddress": map[string]any{"address": "info@example.org"}}},
 			"internetMessageHeaders": []any{map[string]any{
-				"name": "X-SkyMail-Queue-Id", "value": "<" + want.job.ID.String() + "@example.com>"}},
+				"name": "X-SkyNotify-Queue-Id", "value": "<" + want.job.ID.String() + "@example.com>"}},
 		}
 		gotJSON, _ := json.Marshal(message)
 		wantJSON, _ := json.Marshal(wantMessage)
@@ -444,11 +444,11 @@ func TestTheLanesSendFromTheirMailboxes(t *testing.T) {
 		t.Errorf("AUTH as %q with %q, MAIL FROM %q", got.user, got.token, got.mailFrom)
 	}
 	for header, want := range map[string]string{
-		"From":               `"SKY LAB Bildirim Hizmeti" <duyuru@bildirim.example.org>`,
-		"Reply-To":           "<info@example.org>",
-		"Message-ID":         "<" + list.ID.String() + "@example.com>",
-		"X-SkyMail-Queue-Id": "<" + list.ID.String() + "@example.com>",
-		"Subject":            "Ekim duyurusu",
+		"From":                 `"SKY LAB Bildirim Hizmeti" <duyuru@bildirim.example.org>`,
+		"Reply-To":             "<info@example.org>",
+		"Message-ID":           "<" + list.ID.String() + "@example.com>",
+		"X-SkyNotify-Queue-Id": "<" + list.ID.String() + "@example.com>",
+		"Subject":              "Ekim duyurusu",
 	} {
 		if v := headerOf(got.data, header); v != want {
 			t.Errorf("%s: %q, want %q", header, v, want)
@@ -460,7 +460,7 @@ func TestTheLanesSendFromTheirMailboxes(t *testing.T) {
 }
 
 // With every lane off, a mail goes out as it always has: from SMTP_FROM,
-// without X-SkyMail-Queue-Id, and its template is never read. SMTP_REPLY_TO
+// without X-SkyNotify-Queue-Id, and its template is never read. SMTP_REPLY_TO
 // alone adds the Reply-To.
 func TestEveryLaneOffSendsAsAlways(t *testing.T) {
 	for _, replyTo := range []string{"", "info@example.org"} {
@@ -488,11 +488,11 @@ func TestEveryLaneOffSendsAsAlways(t *testing.T) {
 			if len(mails) != 1 {
 				t.Fatalf("%d mails", len(mails))
 			}
-			if from := headerOf(mails[0], "From"); from != "<skymail@example.com>" {
+			if from := headerOf(mails[0], "From"); from != "<skynotify@example.com>" {
 				t.Errorf("From %q", from)
 			}
-			if v := headerOf(mails[0], "X-SkyMail-Queue-Id"); v != "" {
-				t.Errorf("X-SkyMail-Queue-Id %q on the off path", v)
+			if v := headerOf(mails[0], "X-SkyNotify-Queue-Id"); v != "" {
+				t.Errorf("X-SkyNotify-Queue-Id %q on the off path", v)
 			}
 			wantReplyTo := ""
 			if replyTo != "" {
@@ -509,8 +509,8 @@ func TestEveryLaneOffSendsAsAlways(t *testing.T) {
 func TestALaneOffFallsBackToSMTPAuth(t *testing.T) {
 	captureMailerLogs(t)
 	env := decidedEnv()
-	env["SKYMAIL_SEND_BILGI"] = "off"
-	env["SKYMAIL_SEND_DUYURU"] = "off"
+	env["SKYNOTIFY_SEND_BILGI"] = "off"
+	env["SKYNOTIFY_SEND_DUYURU"] = "off"
 	task := uuid.New()
 	l := newLaneMailer(t, env, map[uuid.UUID]struct {
 		key    *string
@@ -528,7 +528,7 @@ func TestALaneOffFallsBackToSMTPAuth(t *testing.T) {
 	if len(relay.taken()) != 1 || len(l.graph.taken()) != 0 {
 		t.Fatalf("relay %d, graph %d: want the relay", len(relay.taken()), len(l.graph.taken()))
 	}
-	if from := headerOf(relay.taken()[0], "From"); from != "<skymail@example.com>" {
+	if from := headerOf(relay.taken()[0], "From"); from != "<skynotify@example.com>" {
 		t.Errorf("From %q", from)
 	}
 }

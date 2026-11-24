@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/config"
+	"github.com/skylab-kulubu/skynotify-backend/internal/config"
 )
 
 // KEYCLOAK_ADMIN_URL moves Admin REST only. The Erasure command's token is
@@ -13,8 +13,8 @@ func TestKeycloakAdminURLLeavesTheErasureTokenCheckOnTheRealmURL(t *testing.T) {
 	t.Parallel()
 	const realm = "https://e.yildizskylab.com/realms/e-skylab"
 	for _, admin := range []string{"", "http://sky-lab-production-keycloak-cfrcp6:8080"} {
-		got := erasureTokenConfig(config.Config{KeycloakRealmURL: realm, KeycloakAdminURL: admin, KeycloakClientID: "skymail"})
-		if got.Issuer != realm || got.JWKSURL != realm+"/protocol/openid-connect/certs" || got.ResourceClient != "skymail" {
+		got := erasureTokenConfig(config.Config{KeycloakRealmURL: realm, KeycloakAdminURL: admin, KeycloakClientID: "skynotify"})
+		if got.Issuer != realm || got.JWKSURL != realm+"/protocol/openid-connect/certs" || got.ResourceClient != "skynotify" {
 			t.Fatalf("admin %q: erasure token config = %+v", admin, got)
 		}
 	}

@@ -135,7 +135,7 @@ func TestTheRingAndTheLinkAreReadFromTheEnvironment(t *testing.T) {
 	}
 
 	cfg, err = ConfigFromEnv(env(map[string]string{
-		LinkEnv: "on", BaseURLEnv: "https://api.yildizskylab.com/api/skymail/",
+		LinkEnv: "on", BaseURLEnv: "https://api.yildizskylab.com/api/skynotify/",
 		CurrentKeyEnv: "2", KeyEnvPrefix + "1": keyV1, KeyEnvPrefix + "2": keyV2,
 	}))
 	if err != nil {
@@ -145,16 +145,16 @@ func TestTheRingAndTheLinkAreReadFromTheEnvironment(t *testing.T) {
 		t.Errorf("ring current %d of %d versions", cfg.Ring.Current(), cfg.Ring.Versions())
 	}
 	link, ok := cfg.Link("Ayse@Example.com")
-	if !ok || !strings.HasPrefix(link, "https://api.yildizskylab.com/api/skymail/u/") {
+	if !ok || !strings.HasPrefix(link, "https://api.yildizskylab.com/api/skynotify/u/") {
 		t.Fatalf("link %q, %v", link, ok)
 	}
-	got, err := cfg.Ring.Open(strings.TrimPrefix(link, "https://api.yildizskylab.com/api/skymail/u/"))
+	got, err := cfg.Ring.Open(strings.TrimPrefix(link, "https://api.yildizskylab.com/api/skynotify/u/"))
 	if err != nil || got.Address != "ayse@example.com" {
 		t.Errorf("the link opens to %+v, %v", got, err)
 	}
 
 	// On with no key: no error (the page answers 503), no link.
-	cfg, err = ConfigFromEnv(env(map[string]string{LinkEnv: "on", BaseURLEnv: "https://api.yildizskylab.com/api/skymail"}))
+	cfg, err = ConfigFromEnv(env(map[string]string{LinkEnv: "on", BaseURLEnv: "https://api.yildizskylab.com/api/skynotify"}))
 	if err != nil || !cfg.Ring.Empty() {
 		t.Fatalf("on without a key: %+v, %v", cfg, err)
 	}
@@ -192,8 +192,8 @@ func TestTheRingAndTheLinkAreReadFromTheEnvironment(t *testing.T) {
 	for name, values := range map[string]map[string]string{
 		"a typo":                     {LinkEnv: "yes"},
 		"on without its address":     {LinkEnv: "on"},
-		"an http address":            {BaseURLEnv: "http://api.yildizskylab.com/api/skymail"},
-		"an address with a query":    {BaseURLEnv: "https://api.yildizskylab.com/api/skymail?x=1"},
+		"an http address":            {BaseURLEnv: "http://api.yildizskylab.com/api/skynotify"},
+		"an address with a query":    {BaseURLEnv: "https://api.yildizskylab.com/api/skynotify?x=1"},
 		"a short key":                {CurrentKeyEnv: "1", KeyEnvPrefix + "1": secret},
 		"a key that is not base64":   {CurrentKeyEnv: "1", KeyEnvPrefix + "1": "not base64 at all!"},
 		"a key without current":      {KeyEnvPrefix + "1": keyV1},

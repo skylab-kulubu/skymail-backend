@@ -13,23 +13,23 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/bounce"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/dsn"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/bounce"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/dsn"
 )
 
 // SuppressionsManageRole lets an operator read the suppression list and
-// remove an address from it (Keycloak client role on skymail, given to a
-// group: hub ticket skymail-bounce-isleme 06).
-const SuppressionsManageRole = "skymail:suppressions:manage"
+// remove an address from it (Keycloak client role on skynotify, given to a
+// group: hub ticket skynotify-bounce-isleme 06).
+const SuppressionsManageRole = "skynotify:suppressions:manage"
 
 // UnsubscribesReactivateRole lets an operator reverse an address's own
 // unsubscribe, only when the person asks or after a mistake, with a reason
-// that is recorded (Keycloak client role on skymail, given to a group: hub
+// that is recorded (Keycloak client role on skynotify, given to a group: hub
 // ticket abonelik-cikisi 10; ADR 0072 decision 7). It also reads the
 // reversals.
-const UnsubscribesReactivateRole = "skymail:unsubscribes:reactivate"
+const UnsubscribesReactivateRole = "skynotify:unsubscribes:reactivate"
 
 // The reasons a row of the list has: a permanent failure (every stream) or
 // the address's own unsubscribe (its stream).
@@ -90,7 +90,7 @@ type Suppression struct {
 	Address string `json:"address"`
 	// bounce: a permanent failure, mail of every stream is held (account
 	// mail is sent, flagged); unsubscribed: the address left a stream
-	// through SkyMail's link, only that stream's mail is held.
+	// through SkyNotify's link, only that stream's mail is held.
 	Reason string `json:"reason" enums:"bounce,unsubscribed"`
 	// The stream held: all for a bounce, duyuru for an unsubscribe.
 	Stream string `json:"stream" enums:"all,duyuru"`
@@ -99,7 +99,7 @@ type Suppression struct {
 	RecipientSub *uuid.UUID `json:"recipient_sub"`
 	// dsn: a delivery status notification said the address does not exist;
 	// smtp: the relay refused it when the mail was sent; link: the address
-	// unsubscribed through SkyMail's link (the one-click POST or its page).
+	// unsubscribed through SkyNotify's link (the one-click POST or its page).
 	Source string `json:"source" enums:"dsn,smtp,link"`
 	// The codes of the last permanent failure, never its text: 5.1.10,
 	// 5.4.1 AS(201806281), RCPT TO 550 5.1.1. Empty for an unsubscribe.
@@ -119,7 +119,7 @@ type Suppression struct {
 // List godoc
 //
 //	@Summary		List the suppression list
-//	@Description	One list of two records, most recent first. reason bounce: an address mail is not sent to after one permanent failure (a relay's refusal of the address, or a delivery status notification saying it does not exist), in every stream; account mail (keycloak.*, account.* templates) is still sent to it and flagged. reason unsubscribed: an address that left the duyuru stream through SkyMail's one-click link; mail of the islem stream still goes to it. Nothing leaves the list by itself: an operator removes a bounce, the person (or an operator with skymail:unsubscribes:reactivate, at their request) reverses an unsubscribe, or Account erasure does. reason keeps one of the two; q keeps the addresses that contain it, case-insensitively; X-Total-Count counts them. Needs skymail:suppressions:manage or skymail:unsubscribes:reactivate.
+//	@Description	One list of two records, most recent first. reason bounce: an address mail is not sent to after one permanent failure (a relay's refusal of the address, or a delivery status notification saying it does not exist), in every stream; account mail (keycloak.*, account.* templates) is still sent to it and flagged. reason unsubscribed: an address that left the duyuru stream through SkyNotify's one-click link; mail of the islem stream still goes to it. Nothing leaves the list by itself: an operator removes a bounce, the person (or an operator with skynotify:unsubscribes:reactivate, at their request) reverses an unsubscribe, or Account erasure does. reason keeps one of the two; q keeps the addresses that contain it, case-insensitively; X-Total-Count counts them. Needs skynotify:suppressions:manage or skynotify:unsubscribes:reactivate.
 //	@Tags			Suppressions
 //	@Produce		json
 //	@Param			reason	query		string	false	"Only bounce or only unsubscribed rows"	Enums(bounce,unsubscribed)
@@ -233,7 +233,7 @@ type ReactivateRequest struct {
 // Reactivate godoc
 //
 //	@Summary		Reverse an address's unsubscribe
-//	@Description	Only when the person asks, or after a mistake (ADR 0072 decision 7): duyuru mail is sent to the address again. Needs skymail:unsubscribes:reactivate. The reason is required (10 to 500 printable characters) and must not contain an address. The reversal is recorded — who, when, the reason, and the record's stream, source and date — without the address. A bounce row is 409 suppression.use_delete.
+//	@Description	Only when the person asks, or after a mistake (ADR 0072 decision 7): duyuru mail is sent to the address again. Needs skynotify:unsubscribes:reactivate. The reason is required (10 to 500 printable characters) and must not contain an address. The reversal is recorded — who, when, the reason, and the record's stream, source and date — without the address. A bounce row is 409 suppression.use_delete.
 //	@Tags			Suppressions
 //	@Accept			json
 //	@Param			id		path	string						true	"Suppression ID (an unsubscribed row)"
@@ -330,7 +330,7 @@ type Reactivation struct {
 // Reactivations godoc
 //
 //	@Summary		List the reversals of unsubscribes
-//	@Description	Who reversed an unsubscribe and when — the person themself, or an operator with the reason they gave — newest first, without the address. Needs skymail:unsubscribes:reactivate. X-Total-Count counts them.
+//	@Description	Who reversed an unsubscribe and when — the person themself, or an operator with the reason they gave — newest first, without the address. Needs skynotify:unsubscribes:reactivate. X-Total-Count counts them.
 //	@Tags			Suppressions
 //	@Produce		json
 //	@Param			_start	query		int	false	"Start index"
@@ -390,7 +390,7 @@ type BounceSummary struct {
 }
 
 // BounceReaderState is one sender mailbox's last poll and what its reports
-// came to since the reader started in that mode (SKYMAIL_BOUNCE_READER).
+// came to since the reader started in that mode (SKYNOTIFY_BOUNCE_READER).
 type BounceReaderState struct {
 	// The club's sender mailbox.
 	Mailbox string `json:"mailbox" example:"hesap@bildirim.yildizskylab.com"`
@@ -415,7 +415,7 @@ type BounceReaderState struct {
 // Bounces godoc
 //
 //	@Summary		The bounce rate and the NDR reader's state
-//	@Description	Of the e-mails sent in the last days days (1 to 90, 7 by default), how many a delivery status notification later said did not reach their address (hard), failed otherwise (soft) or were delayed, and hard_rate = hard / sent. reader is each sender mailbox's last poll and counts, without the reader's place in the mailbox. Needs skymail:suppressions:manage. No address of a person.
+//	@Description	Of the e-mails sent in the last days days (1 to 90, 7 by default), how many a delivery status notification later said did not reach their address (hard), failed otherwise (soft) or were delayed, and hard_rate = hard / sent. reader is each sender mailbox's last poll and counts, without the reader's place in the mailbox. Needs skynotify:suppressions:manage. No address of a person.
 //	@Tags			Suppressions
 //	@Produce		json
 //	@Param			days	query		int	false	"The window, in days (1 to 90)"
@@ -481,7 +481,7 @@ type SoftBounceAddress struct {
 // SoftBounces godoc
 //
 //	@Summary		List the addresses with repeated soft bounces
-//	@Description	The addresses that had 3 or more soft bounces (a full mailbox, a policy refusal, a time-out: a permanent failure other than "no such address") in the last 30 days, most recent first: how many mails, when the last one was and its codes, never its text. A soft bounce never suppresses (ADR 0073 decision 5), so these addresses are not on the suppression list and mail still goes to them; an address already suppressed is left out. A mail counts once however many reports it had; only reports that named the mail's own address count. The window and the threshold are fixed. q keeps the addresses that contain it, case-insensitively; X-Total-Count counts them. Needs skymail:suppressions:manage.
+//	@Description	The addresses that had 3 or more soft bounces (a full mailbox, a policy refusal, a time-out: a permanent failure other than "no such address") in the last 30 days, most recent first: how many mails, when the last one was and its codes, never its text. A soft bounce never suppresses (ADR 0073 decision 5), so these addresses are not on the suppression list and mail still goes to them; an address already suppressed is left out. A mail counts once however many reports it had; only reports that named the mail's own address count. The window and the threshold are fixed. q keeps the addresses that contain it, case-insensitively; X-Total-Count counts them. Needs skynotify:suppressions:manage.
 //	@Tags			Suppressions
 //	@Produce		json
 //	@Param			q		query		string	false	"Part of an address"

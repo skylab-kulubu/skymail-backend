@@ -5,36 +5,36 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 	"github.com/wneessen/go-mail"
 )
 
-// One-click unsubscribe (RFC 8058; hub ticket skymail-bounce-isleme 11). A
+// One-click unsubscribe (RFC 8058; hub ticket skynotify-bounce-isleme 11). A
 // bulk mail whose recipient core gave an unsubscribe link for (the row's
 // list_unsubscribe_url) carries
 //
 //	List-Unsubscribe: <https://api.yildizskylab.com/v1/communication-preferences/unsubscribe?t=…>
 //	List-Unsubscribe-Post: List-Unsubscribe=One-Click
 //
-// only while SKYMAIL_LIST_UNSUBSCRIBE is on, and only from the duyuru@
+// only while SKYNOTIFY_LIST_UNSUBSCRIBE is on, and only from the duyuru@
 // mailbox: the duyuru lane sent with graph or xoauth2. Account mail (hesap@)
 // and system mail (bilgi@) never carry it, nor does the off path. The link is
 // core's (its communication preferences, which the Account center shows):
 // core signs it and turns the categories off on the mail client's POST;
-// SkyMail never holds the key and keeps no preference of its own. Graph's JSON
+// SkyNotify never holds the key and keeps no preference of its own. Graph's JSON
 // sendMail carries only X- headers, so on the graph transport such a mail is
 // sent as MIME (graph.go), the others as before.
 
 // ListUnsubscribeEnv switches the headers on: off (the default, also when
 // unset) or on.
-const ListUnsubscribeEnv = "SKYMAIL_LIST_UNSUBSCRIBE"
+const ListUnsubscribeEnv = "SKYNOTIFY_LIST_UNSUBSCRIBE"
 
 // MaxUnsubscribeURLLength bounds a link, as mail_queue's check does: the
 // header is written on one line, which RFC 5322 caps at 998 characters. Core's
 // link for a few categories is about 150.
 const MaxUnsubscribeURLLength = 960
 
-// listUnsubscribeFromEnv reads SKYMAIL_LIST_UNSUBSCRIBE; anything but off, on
+// listUnsubscribeFromEnv reads SKYNOTIFY_LIST_UNSUBSCRIBE; anything but off, on
 // or nothing stops startup.
 func listUnsubscribeFromEnv(getenv func(string) string) (bool, error) {
 	switch raw := strings.ToLower(strings.TrimSpace(getenv(ListUnsubscribeEnv))); raw {

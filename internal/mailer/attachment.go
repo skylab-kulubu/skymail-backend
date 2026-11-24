@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 	"github.com/wneessen/go-mail"
 )
 
@@ -24,7 +24,7 @@ type Attachment struct {
 	// Filename is the name the recipient sees, already reduced to
 	// [A-Za-z0-9._-] (handlers.attachmentFilename).
 	Filename string
-	// ContentType is the file's media type, one SkyMail takes
+	// ContentType is the file's media type, one SkyNotify takes
 	// (handlers.attachmentTypes).
 	ContentType string
 	Content     []byte

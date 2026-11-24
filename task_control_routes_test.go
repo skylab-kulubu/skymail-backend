@@ -7,11 +7,11 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // A send's controls (duyuru-haber 05 G4): POST /v1/mail_tasks/{id}/pause,
@@ -61,7 +61,7 @@ func controlApp(t *testing.T, sub string, roles ...string) (*fiber.App, *databas
 		c.Locals("roles", roles)
 		return c.Next()
 	})
-	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
 	registerMailTaskRoutes(api, auth, handlers.NewMailHandler(store, idleMailer{}, noGroups{}))
 	return app, store
 }
@@ -105,7 +105,7 @@ func control(t *testing.T, app *fiber.App, task, action string) controlAnswer {
 }
 
 func TestASendersOwnSendCanBePausedResumedAndCancelled(t *testing.T) {
-	app, store := controlApp(t, controlSender, "skymail:access", "skymail:mails:write", "skymail:mails:read")
+	app, store := controlApp(t, controlSender, "skynotify:access", "skynotify:mails:write", "skynotify:mails:read")
 
 	paused := control(t, app, controlList, "pause")
 	if paused.Status != fiber.StatusOK || paused.PausedAt == nil || paused.PausedReason == nil || *paused.PausedReason != "operator" {
@@ -158,7 +158,7 @@ func TestASendersOwnSendCanBePausedResumedAndCancelled(t *testing.T) {
 }
 
 func TestOnlyABulkUnfinishedSendHasControls(t *testing.T) {
-	app, _ := controlApp(t, controlSender, "skymail:access", "skymail:mails:write")
+	app, _ := controlApp(t, controlSender, "skynotify:access", "skynotify:mails:write")
 	for _, action := range []string{"pause", "resume", "cancel"} {
 		if got := control(t, app, controlSingle, action); got.Status != fiber.StatusConflict || got.Code != "mail_task.not_bulk" {
 			t.Fatalf("%s of a single mail answered %+v, want 409 mail_task.not_bulk", action, got)
@@ -176,17 +176,17 @@ func TestOnlyABulkUnfinishedSendHasControls(t *testing.T) {
 
 func TestWhoMayControlASend(t *testing.T) {
 	// Another list sender may not touch the send.
-	app, _ := controlApp(t, controlOther, "skymail:access", "skymail:mails:write")
+	app, _ := controlApp(t, controlOther, "skynotify:access", "skynotify:mails:write")
 	if got := control(t, app, controlList, "cancel"); got.Status != fiber.StatusForbidden {
 		t.Fatalf("another list sender's cancel answered %+v, want 403", got)
 	}
 	// Reading sends is not enough.
-	app, _ = controlApp(t, controlSender, "skymail:access", "skymail:mails:read")
+	app, _ = controlApp(t, controlSender, "skynotify:access", "skynotify:mails:read")
 	if got := control(t, app, controlList, "pause"); got.Status != fiber.StatusForbidden {
 		t.Fatalf("a reader's pause answered %+v, want 403", got)
 	}
 	// Who may send to everyone controls any send.
-	app, _ = controlApp(t, controlOther, "skymail:access", handlers.AnnouncementsSendRole)
+	app, _ = controlApp(t, controlOther, "skynotify:access", handlers.AnnouncementsSendRole)
 	if got := control(t, app, controlList, "pause"); got.Status != fiber.StatusOK || got.PausedAt == nil {
 		t.Fatalf("an announcements sender's pause answered %+v, want 200", got)
 	}

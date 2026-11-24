@@ -17,8 +17,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/unsubscribe"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/unsubscribe"
 )
 
 // unsubscribeFake is the record in memory: the addresses out of a stream and
@@ -103,7 +103,7 @@ func newUnsubscribeWorld(t *testing.T, cfg unsubscribe.Config) *unsubscribeWorld
 }
 
 func onConfig(ring *unsubscribe.Ring) unsubscribe.Config {
-	return unsubscribe.Config{On: true, BaseURL: "https://api.yildizskylab.com/api/skymail", AccountURL: unsubscribe.DefaultAccountURL, Ring: ring}
+	return unsubscribe.Config{On: true, BaseURL: "https://api.yildizskylab.com/api/skynotify", AccountURL: unsubscribe.DefaultAccountURL, Ring: ring}
 }
 
 func (w *unsubscribeWorld) token(t *testing.T, address string) string {

@@ -10,7 +10,7 @@ run:
 
 .PHONY: build-prod
 build-prod:
-	@CGO_ENABLED=0 go build -o skymail-backend .
+	@CGO_ENABLED=0 go build -o skynotify-backend .
 
 .PHONY: docs
 docs:

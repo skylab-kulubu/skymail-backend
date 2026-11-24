@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"github.com/microcosm-cc/bluemonday"
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
 // The free-form template lets a club admin write the body themselves, so that
@@ -14,7 +14,7 @@ import (
 // e-mail actually needs. Everything outside this list is dropped, so a template
 // cannot become a way to inject markup into someone's inbox.
 //
-// One attribute beyond href survives on a link: data-skymail-notrack, empty
+// One attribute beyond href survives on a link: data-skynotify-notrack, empty
 // or "true", which the sender sets on a link the panel should not count
 // (a personal or one-off link: SendGrid's clicktracking=off, Postmark's
 // data-pm-no-track). Such a link keeps its own address and is never sent
@@ -39,7 +39,7 @@ var emailPolicy = sync.OnceValue(func() *bluemonday.Policy {
 	return p
 })
 
-// noTrackValue is what the editor writes for data-skymail-notrack.
+// noTrackValue is what the editor writes for data-skynotify-notrack.
 var noTrackValue = regexp.MustCompile(`^(true)?$`)
 
 // sanitizeEmailHTML narrows rich text to the allowlist above. It is applied at

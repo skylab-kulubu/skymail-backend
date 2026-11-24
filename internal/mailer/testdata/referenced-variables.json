@@ -7,8 +7,8 @@
     "around the actions do not count, and neither does an action inside an HTML comment (<!-- to the next --> in the text",
     "between actions), which html/template leaves out of the mail. Nothing inside a define counts; a block given dot reads",
     "like the text around it.",
-    "The same file, byte for byte, is read by skymail-backend (internal/mailer/testdata/referenced-variables.json,",
-    "which checks what the server refuses) and skymail-frontend (src/lib/mail-render/testdata/referenced-variables.json,",
+    "The same file, byte for byte, is read by skynotify-backend (internal/mailer/testdata/referenced-variables.json,",
+    "which checks what the server refuses) and skynotify-frontend (src/lib/mail-render/testdata/referenced-variables.json,",
     "which checks what the panel shows). Change both copies together."
   ],
   "cases": [

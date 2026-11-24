@@ -15,8 +15,8 @@ import (
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/docs"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/docs"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
 type queueRow struct {

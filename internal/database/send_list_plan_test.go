@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// The send list's queries over 50,000 sends (hub ticket skymail-yeni-tasarim
+// The send list's queries over 50,000 sends (hub ticket skynotify-yeni-tasarim
 // 16, review): 48,000 single mails of one recipient each and 2,000 tracked
 // list sends of 20, 88,000 queue rows. Each plan's execution time is logged
 // (go test -v), for the pull request; nothing is asserted about it, a CI

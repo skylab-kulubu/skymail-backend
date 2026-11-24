@@ -11,14 +11,14 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/accessgate"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
-// skymail-backend queue-close-restored: the step of a restore from backup
+// skynotify-backend queue-close-restored: the step of a restore from backup
 // that closes the queue the dump brought back without sending it
 // (docs/data-lifecycle.md, Backup and restore; account erasure ticket 16).
 
@@ -46,7 +46,7 @@ func runQueueClose(env func(string) string, args ...string) (int, string) {
 func TestQueueCloseRestoredRejectsAMissingOrInvalidBefore(t *testing.T) {
 	// Nothing listens here: a command that got past its arguments would fail
 	// to connect and exit 1, not 2.
-	unreachable := "postgres://skymail:secret@127.0.0.1:1/skymail?sslmode=disable&connect_timeout=1"
+	unreachable := "postgres://skynotify:secret@127.0.0.1:1/skynotify?sslmode=disable&connect_timeout=1"
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -261,7 +261,7 @@ func TestQueueCloseRestoredApplyRefusesUnlessTheSenderIsPaused(t *testing.T) {
 			t.Errorf("MAIL_SENDER=%q: exit = %d, want 1:\n%s", sender, code, out)
 		}
 		want := "queue-close-restored: --apply refused: " + says +
-			". Set MAIL_SENDER=paused on SkyMail and deploy first; a dry run works either way.\n"
+			". Set MAIL_SENDER=paused on SkyNotify and deploy first; a dry run works either way.\n"
 		if out != want {
 			t.Errorf("MAIL_SENDER=%q: output:\n%s\nwant:\n%s", sender, out, want)
 		}
@@ -381,7 +381,7 @@ queued at or after --before, left alone: 2
 // restored queue is closed, that mail is failed: the replay clears its body by
 // name and finishes with 200 (case A). A third person's closed mail, which
 // holds nothing of the erased person, is left as it was and can be sent again
-// by a new send, the one way SkyMail sends a failed mail again (case B).
+// by a new send, the one way SkyNotify sends a failed mail again (case B).
 func TestErasureReplayFinishesOnceTheRestoredQueueIsClosed(t *testing.T) {
 	captureLogs(t)
 	ctx := context.Background()
