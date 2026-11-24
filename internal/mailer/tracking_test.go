@@ -226,9 +226,10 @@ func linksOf(t *testing.T, db *database.Store, task uuid.UUID) []registeredLink 
 	return links
 }
 
-// A tracked send to a Keycloak group: each person core lets be tracked gets
-// a token of their own; everyone else gets why not; core is asked once about
-// the people with an id, and only them. The links every recipient has are
+// A tracked send to a Keycloak group: each person core lets be tracked, and
+// the member SkyMail knows by address only (B9), gets a token of their own;
+// whom core says no for gets why not; core is asked once about the people
+// with an id, and only them. The links every recipient has are
 // registered with a token each; a personal one, a mail address, an
 // unsubscribe link and a link marked data-skymail-notrack are not.
 func TestATrackedGroupSendGivesATokenToWhomCoreAllows(t *testing.T) {
@@ -251,13 +252,14 @@ func TestATrackedGroupSendGivesATokenToWhomCoreAllows(t *testing.T) {
 		t.Error("the send does not say it asked for tracking")
 	}
 	rows := trackedRows(t, db, task)
-	if got := rows["ayse@example.com"]; len(got.token) != tracking.RecipientTokenBytes || got.reason != "" {
-		t.Errorf("Ayşe: token %x, reason %q; want a token of her own", got.token, got.reason)
+	for _, email := range []string{"ayse@example.com", "adres@example.com"} {
+		if got := rows[email]; len(got.token) != tracking.RecipientTokenBytes || got.reason != "" {
+			t.Errorf("%s: token %x, reason %q; want a token of their own", email, got.token, got.reason)
+		}
 	}
 	for email, reason := range map[string]string{
 		"mehmet@example.com": tracking.SkipPreferenceOff,
 		"zeynep@example.com": tracking.SkipNotMember,
-		"adres@example.com":  tracking.SkipNoAccount,
 	} {
 		if got := rows[email]; got.token != nil || got.reason != reason {
 			t.Errorf("%s: token %x, reason %q; want none, %q", email, got.token, got.reason, reason)
@@ -306,9 +308,8 @@ func TestCoreIsAskedBeforeTheSendsTransaction(t *testing.T) {
 // A send queued in a caller's transaction (a Mail onayı approval) never asks
 // core in it: it takes what the caller asked core before the transaction
 // (ResolveTracking). Whoever is not in that answer — a member who joined the
-// group since, or no answer at all — is not tracked (preference_unavailable),
-// and the send goes out.
-func TestASendInATransactionTracksOnlyWhomCoreWasAskedAbout(t *testing.T) {
+// group since, or no answer at all — is tracked (B9), and the send goes out.
+func TestASendInATransactionTracksWhomCoreWasNotAskedAbout(t *testing.T) {
 	captureMailerLogs(t)
 	db := trackingQueue(t)
 	prefs := coreSays()
@@ -340,28 +341,19 @@ func TestASendInATransactionTracksOnlyWhomCoreWasAskedAbout(t *testing.T) {
 	}
 
 	rows := trackedRows(t, db, queueIn(asked))
-	want := map[string]string{
-		"mehmet@example.com": tracking.SkipPreferenceUnavailable,
-		"zeynep@example.com": tracking.SkipPreferenceUnavailable,
-		"adres@example.com":  tracking.SkipNoAccount,
+	if len(rows) != 4 {
+		t.Fatalf("%d rows queued, want all 4", len(rows))
 	}
-	if len(rows["ayse@example.com"].token) != tracking.RecipientTokenBytes {
-		t.Errorf("Ayşe, asked about and allowed: %+v", rows["ayse@example.com"])
-	}
-	for email, reason := range want {
-		if rows[email].token != nil || rows[email].reason != reason {
-			t.Errorf("%s: token %x, reason %q; want none, %q", email, rows[email].token, rows[email].reason, reason)
+	for email, row := range rows {
+		if len(row.token) != tracking.RecipientTokenBytes || row.reason != "" {
+			t.Errorf("%s: token %x, reason %q; want a token (Ayşe allowed, the others not asked about)", email, row.token, row.reason)
 		}
 	}
 
 	rows = trackedRows(t, db, queueIn(nil))
 	for email, row := range rows {
-		reason := tracking.SkipPreferenceUnavailable
-		if email == "adres@example.com" {
-			reason = tracking.SkipNoAccount
-		}
-		if row.token != nil || row.reason != reason || row.status != "pending" {
-			t.Errorf("not asked, %s: %s, token %x, reason %q; want pending, none, %q", email, row.status, row.token, row.reason, reason)
+		if len(row.token) != tracking.RecipientTokenBytes || row.reason != "" || row.status != "pending" {
+			t.Errorf("not asked, %s: %s, token %x, reason %q; want pending, a token", email, row.status, row.token, row.reason)
 		}
 	}
 	if len(prefs.asked()) != 1 {
@@ -431,9 +423,10 @@ func TestNoTokenWhereTrackingNeverGoes(t *testing.T) {
 	}
 }
 
-// A core that cannot say is no one tracked in that send, and the send goes
-// on: every row is queued, each saying preference_unavailable.
-func TestASendCoreCannotAnswerForTracksNoOneAndGoesOut(t *testing.T) {
+// A core that cannot say is everyone tracked in that send (B9), and the
+// send goes on: every row is queued with a token, the common link
+// registered.
+func TestASendCoreCannotAnswerForTracksEveryoneAndGoesOut(t *testing.T) {
 	logs := captureMailerLogs(t)
 	db := trackingQueue(t)
 	prefs := &fakePreferences{err: errors.New("core answered 503")}
@@ -451,16 +444,12 @@ func TestASendCoreCannotAnswerForTracksNoOneAndGoesOut(t *testing.T) {
 		t.Fatalf("%d rows queued, want all 4", len(rows))
 	}
 	for email, row := range rows {
-		want := tracking.SkipPreferenceUnavailable
-		if email == "adres@example.com" {
-			want = tracking.SkipNoAccount
-		}
-		if row.status != "pending" || row.token != nil || row.reason != want {
-			t.Errorf("%s: %s, token %x, reason %q; want pending, none, %s", email, row.status, row.token, row.reason, want)
+		if row.status != "pending" || len(row.token) != tracking.RecipientTokenBytes || row.reason != "" {
+			t.Errorf("%s: %s, token %x, reason %q; want pending, a token", email, row.status, row.token, row.reason)
 		}
 	}
-	if links := linksOf(t, db, task); len(links) != 0 {
-		t.Errorf("registered links %+v with no one tracked", links)
+	if links := linksOf(t, db, task); len(links) != 1 {
+		t.Errorf("registered links %+v, want the one every recipient has", links)
 	}
 	found := false
 	for _, line := range logs.lines(t) {
@@ -496,8 +485,8 @@ func (c *slowCore) Resolve(ctx context.Context, _ []uuid.UUID) (map[uuid.UUID]tr
 	return nil, context.DeadlineExceeded
 }
 
-// A send gives core 5 seconds and no more: past them no one in the send is
-// tracked and it goes out.
+// A send gives core 5 seconds and no more: past them everyone in the send is
+// tracked (B9) and it goes out.
 func TestASendGivesCoreFiveSeconds(t *testing.T) {
 	captureMailerLogs(t)
 	db := trackingQueue(t)
@@ -514,8 +503,8 @@ func TestASendGivesCoreFiveSeconds(t *testing.T) {
 		t.Errorf("core was given %s (deadline %v), want 5 seconds", core.budget, core.deadline)
 	}
 	for email, row := range trackedRows(t, db, task) {
-		if row.token != nil || row.status != "pending" {
-			t.Errorf("%s: %s, token %x; want pending and not tracked", email, row.status, row.token)
+		if len(row.token) != tracking.RecipientTokenBytes || row.status != "pending" {
+			t.Errorf("%s: %s, token %x; want pending and tracked", email, row.status, row.token)
 		}
 	}
 }
@@ -569,9 +558,9 @@ func TestTrackingOffIgnoresTheRequest(t *testing.T) {
 	}
 }
 
-// A mailing list's people are known by address only: none is tracked and
-// core is not asked.
-func TestAListSendTracksNoOne(t *testing.T) {
+// A mailing list's people are known by address only: since B9 each is
+// tracked, and core is not asked.
+func TestAListSendTracksEveryoneWithoutAskingCore(t *testing.T) {
 	captureMailerLogs(t)
 	db := trackingQueue(t)
 	prefs := coreSays()
@@ -591,8 +580,8 @@ func TestAListSendTracksNoOne(t *testing.T) {
 		t.Fatalf("rows %v", rows)
 	}
 	for email, row := range rows {
-		if row.token != nil || row.reason != tracking.SkipNoAccount {
-			t.Errorf("%s: token %x, reason %q; want none, no_account", email, row.token, row.reason)
+		if len(row.token) != tracking.RecipientTokenBytes || row.reason != "" {
+			t.Errorf("%s: token %x, reason %q; want a token", email, row.token, row.reason)
 		}
 	}
 	if asked := prefs.asked(); len(asked) != 0 {

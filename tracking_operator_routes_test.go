@@ -115,8 +115,8 @@ func TestEveryPersonsSingleSendIsTrackedWithOperatorTracking(t *testing.T) {
 }
 
 // A send to a Keycloak group and to an internal list that does not ask is
-// tracked: the group's members as core says, the list's addresses
-// no_account. The send list says tracking true.
+// tracked: the group's members as core says, the list's addresses too
+// (B9). The send list says tracking true.
 func TestEveryPersonsSendToManyIsTrackedWithOperatorTracking(t *testing.T) {
 	w, _ := operatorTrackedWorld(t)
 	for _, audience := range []uuid.UUID{w.group, w.list.ID} {
@@ -137,8 +137,8 @@ func TestEveryPersonsSendToManyIsTrackedWithOperatorTracking(t *testing.T) {
 			}
 		} else {
 			for email, row := range rows {
-				if row.token != nil || row.reason != tracking.SkipNoAccount {
-					t.Errorf("list, %s: %+v; want no_account", email, row)
+				if len(row.token) != tracking.RecipientTokenBytes || row.reason != "" {
+					t.Errorf("list, %s: %+v; want a token", email, row)
 				}
 			}
 		}
@@ -151,7 +151,7 @@ func TestEveryPersonsSendToManyIsTrackedWithOperatorTracking(t *testing.T) {
 
 // A request for approval that does not ask is tracked: the request says
 // tracking true, and the send it becomes once approved is tracked (Elif by
-// her account, Ayşe no_account), in the bulk lane.
+// her account, Ayşe without one, B9), in the bulk lane.
 func TestARequestThatDoesNotAskIsTrackedWithOperatorTracking(t *testing.T) {
 	w, _ := operatorTrackedWorld(t)
 	var submitted map[string]any
@@ -172,8 +172,8 @@ func TestARequestThatDoesNotAskIsTrackedWithOperatorTracking(t *testing.T) {
 			if email == elif.email && (row.sub != elif.sub || len(row.token) != tracking.RecipientTokenBytes) {
 				t.Errorf("Elif's row %+v; want her account and a token", row)
 			}
-			if email == ayseKaya.Email && (row.token != nil || row.reason != tracking.SkipNoAccount) {
-				t.Errorf("Ayşe's row %+v; want no_account", row)
+			if email == ayseKaya.Email && (row.sub != "" || len(row.token) != tracking.RecipientTokenBytes || row.reason != "") {
+				t.Errorf("Ayşe's row %+v; want no account and a token", row)
 			}
 		}
 	}
@@ -191,8 +191,8 @@ func TestARequestThatDoesNotAskIsTrackedWithOperatorTracking(t *testing.T) {
 }
 
 // A service's single mail says whether its recipient is tracked, not
-// whether the send is: Elif is (true); Başka turned it off and Ayşe has no
-// account (false), though the send is tracked for both.
+// whether the send is: Elif is (true), and Ayşe without an account too (B9);
+// core says no for Başka (false), though the send is tracked.
 func TestAServicesSingleMailSaysWhetherItsRecipientIsTracked(t *testing.T) {
 	w, _ := systemTrackedWorld(t)
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
@@ -202,7 +202,7 @@ func TestAServicesSingleMailSaysWhetherItsRecipientIsTracked(t *testing.T) {
 	for _, c := range []struct {
 		email, reason string
 		tracked       bool
-	}{{elif.email, "", true}, {baska.email, tracking.SkipPreferenceOff, false}, {ayseKaya.Email, tracking.SkipNoAccount, false}} {
+	}{{elif.email, "", true}, {baska.email, tracking.SkipPreferenceOff, false}, {ayseKaya.Email, "", true}} {
 		body, _ := json.Marshal(w.singleSendTo(c.email, "Kişi", false))
 		request := httptest.NewRequest(http.MethodPost, "/v1/mail_tasks/single", bytes.NewReader(body))
 		request.Header.Set("Authorization", "Bearer "+bearer(t, service, true, "skymail:access", "skymail:mails:send"))
@@ -322,7 +322,7 @@ func operatorFormSourceWorld(t *testing.T) (*approvalWorld, *routePreferences) {
 }
 
 // checkFormSourceRows says a Forms source's send is tracked: the respondent
-// with an account has it and a token, the others are no_account.
+// with an account has it and a token, the others a token without one (B9).
 func checkFormSourceRows(t *testing.T, w *approvalWorld, task uuid.UUID, n int) {
 	t.Helper()
 	requested, rows := w.trackingOf(task)
@@ -334,8 +334,8 @@ func checkFormSourceRows(t *testing.T, w *approvalWorld, task uuid.UUID, n int) 
 			if row.sub != elif.sub || len(row.token) != tracking.RecipientTokenBytes {
 				t.Errorf("%s: %+v; want the account found and a token", email, row)
 			}
-		} else if row.sub != "" || row.token != nil || row.reason != tracking.SkipNoAccount {
-			t.Errorf("%s: %+v; want no_account", email, row)
+		} else if row.sub != "" || len(row.token) != tracking.RecipientTokenBytes || row.reason != "" {
+			t.Errorf("%s: %+v; want no account and a token", email, row)
 		}
 	}
 }
@@ -343,7 +343,7 @@ func checkFormSourceRows(t *testing.T, w *approvalWorld, task uuid.UUID, n int) 
 // A send to a Forms source's respondents is tracked with operator tracking
 // on, directly and through Mail onayı: each address looked up in Keycloak
 // once, all before the transaction, core asked once; an address with no
-// account is no_account. The answers say tracking true.
+// account is tracked too (B9). The answers say tracking true.
 func TestAFormSourceSendIsTrackedWithOperatorTracking(t *testing.T) {
 	w, prefs := operatorFormSourceWorld(t)
 	source := prepareSource(t, w, "source-sender", 12)

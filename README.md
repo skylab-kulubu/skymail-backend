@@ -1539,6 +1539,101 @@ docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | 
   boşaltır (güvenli, geri gelmez). `20261013140000` down migration'ı
   koşturulmaz (açılış kaydını siler).
 
+## Hesapsız alıcıların saklaması (`SKYMAIL_RECIPIENT_RETENTION`)
+
+ADR-0062'nin iki satırı (hub sektör denetimi 2026-11-24, 06 düzeltme 3):
+"arşivlenmiş elle listenin alıcıları: arşivden 1 yıl sonra" ve "alıcı başına
+gövdesiz durum kaydı: üyede hesapla birlikte, konukta konuk süresince".
+ADR'den sapma: "konukta konuk süresince" yerine hesabı olmayan kişinin süresi
+gönderimin içerik süresidir (`MAIL_CONTENT_RETENTION_DAYS`, varsayılan 365;
+Yusuf, 2026-11-24). Liste arşivi hesapları ve üyeleri etkilemez (Yusuf,
+2026-11-24): 1 yıl sonra yalnız hesapsız kişilerin üyelikleri gider.
+
+| Değişken | Varsayılan | Anlamı |
+|---|---|---|
+| `SKYMAIL_RECIPIENT_RETENTION` | `dry-run` | `off`, `dry-run` ya da `apply`; başka değer açılışı durdurur |
+| `SKYMAIL_RECIPIENT_RETENTION_MAX_ROWS` | `50000` | fren: bir apply'da silinecek liste üyeliği ya da alıcı, boşalacak kuyruk satırı, onay kişisi ya da Forms yanıtlayanı, maskelenecek değişken ya da değişiklik kaydı sınırı (1–10.000.000); başka değer açılışı durdurur |
+
+- **Kurallar** (her liste, gönderim ve onay isteği kendi işleminde):
+  1. 1 yıldan önce arşivlenmiş elle listede hesabı olmayan kişinin
+     üyeliği (`mailing_list_recipients`) silinir; başka hiçbir listede
+     olmayan `recipients` satırı da silinir. Hesabı olan kişinin ve
+     Keycloak'ın yanıt vermediği adresin üyeliği kalır. 1 yıldan sonra geri
+     alınan listede yalnız onlar vardır.
+  2. İçeriği süpürücünün boşalttığı gönderimin (`content_cleared_at`)
+     hesapsız alıcı satırlarında `recipient_email` ve `recipient_full_name`
+     boşalır; `error`'daki adres `••••••` olur, kodlar kalır. Satır kalır,
+     gönderimin sayıları değişmez. Gönderim bir Forms anlık görüntüsünden
+     yapıldıysa hesapsız yanıtlayanlar (`mail_form_source_recipients`) da
+     yerinde boşalır (`cleared_at`). Haberden gönderimin satırı
+     (`source_ref`) adresini korur: kaydın "bir kez" indeksi
+     (`idx_mail_queue_news_once`) ona dayanır; core'un kitlesi zaten
+     hesaplardır.
+  3. Bitmiş (onaylanmış, reddedilmiş, geri çevrilmiş, süresi geçmiş),
+     `MAIL_CONTENT_RETENTION_DAYS` boyunca değişmemiş ve gönderimlerinin
+     içeriği boşalmış Mail onayı isteğinin hesapsız kişileri
+     (`mail_approval_recipients`, isteğin Forms anlık görüntüsünün
+     yanıtlayanları) yerinde boşalır (`cleared_at`): sırası kalır,
+     `task_ids[i]` yine `recipients[i]`'nin gönderimidir. Bu kişilerin
+     `body_variables` ve olayların `changes` alanındaki adresleri `••••••`
+     olur (`changes`'te maskelenen adresin yanındaki ad da boşalır); istek
+     ve olayları silinmez.
+- **Hesabı olan kişiye dokunulmaz** (ADR-0062: "üyede hesapla birlikte";
+  hesap silme siler). Satır yalnız şu üçü birden doğruysa boşalır:
+  `recipient_sub` boş; SkyMail adresi hiçbir yerde bir `sub`'a bağlamamış
+  (başka bir kuyruk satırı, bastırma kaydı); Keycloak'ta adresi birincil
+  adresi, kullanıcı adı, okul (`schoolEmail`) ya da kişisel
+  (`personalEmail`) adresi olan hiçbir kullanıcı yok (etkin olmayan ve
+  doğrulanmamış da sayılır; şüphede satır kalır). Kulübün kendi alan
+  adlarındaki adresler (`yildizskylab.com`, `skyl.app` ve alt alanları)
+  kişi verisi değildir: hiç sorulmaz, boşalmaz, maskelenmez
+  (`addresses_club`). Adres sayılan yalnız gerçek adrestir: bağlantı içindeki
+  `@` (`youtube.com/@…`, `x.com/@…`) ve Mastodon tanıtıcısı
+  (`@kisi@sunucu.tld`) adres sayılmaz; `mailto:` bağlantısındaki adres
+  sayılır. Keycloak yanıt vermezse adres o koşuda bekler
+  (`addresses_unknown`), ertesi gün yeniden sorulur. Bir koşu en çok 2000
+  liste, 2000 gönderim, 2000 istek ve 2000 adres sorar; adresler liste
+  liste, gönderim gönderim, istek istek, en eskiden başlayarak sorulur
+  (sığmayan birim ertesi güne kalır: `addresses_deferred`). Hesabı olduğu
+  bulunan satır işaretlenir (`account_at`, `mail_queue.recipient_account_at`)
+  ve bir daha sorulmaz; böylece hesaplı adresler her koşuyu doldurmaz.
+  `recipients` satırının adresi değişirse işaret silinir. Bir gönderimin ya
+  da isteğin bütün kişileri kararlaşınca (`recipient_retention_at`) bir daha
+  bakılmaz; istek sonradan değişirse yeniden bakılır.
+- **Zamanlama, kilit, dry-run, fren, makbuz:** takip saklamasının kalıbı
+  (aşağıda, "Saklama"): açılışta ve saatte bir "zamanı geldi mi" denetlenir,
+  aynı kipte son 23 saatte bitmiş bir koşu yoksa koşar; oturum advisory
+  lock'u `skymail-backend recipient retention`; dry-run aynı ifadeleri
+  çalıştırıp geri alır, apply önce dry-run'ı koşar; sayılardan biri freni
+  aşarsa apply hiçbir şey değiştirmez (`refused_large`, `"alarm":"recipient_retention_brake"`;
+  dry-run'da `would_refuse_large`). Her koşu `recipient_retention_runs`'a
+  kip, zaman, durum (`ok|partial|refused_large|would_refuse_large|failed`;
+  Keycloak'ın yanıtlamadığı adres ya da başarısız işlem `partial`) ve
+  sayılar yazar: `lists`, `list_memberships_deleted`, `recipients_deleted`,
+  `sends`, `queue_rows_cleared`, `sends_decided`, `approvals`,
+  `approval_recipients_cleared`, `approval_json_masked`,
+  `approvals_decided`, `form_recipients_cleared`, `account_rows_marked`,
+  `addresses`,
+  `addresses_club`, `addresses_tied`, `addresses_with_account`,
+  `addresses_without_account`,
+  `addresses_unknown`, `addresses_deferred`, `failed`. Kişi, adres ya da ad
+  yoktur. Aynı sayılar `"event":"recipient_retention_run"` günlük
+  satırındadır.
+- **Açılış:** varsayılan `dry-run`; ilk makbuzlar okunur, sayılar beklenenle
+  uyuşunca `apply`'a alınır. Kilit: `MAIL_CONTENT_RETENTION_DAYS` dolmamış
+  hiçbir gönderime ve bitmemiş hiçbir isteğe dokunulmaz.
+- **Geri dönüş:** imajı eskiye döndürmek yeterli (eski imaj yeni sütunları
+  okumaz). Boşalan ve silinen satırlar hiçbir geri dönüşte geri gelmez.
+  `20261124180000` down migration'ı boşalmış onay kişilerine ve Forms
+  yanıtlayanlarına yer tutucu adres (`saklama-suresi-doldu-<sıra>@invalid`)
+  yazar, sonra eski kısıtları geri koyar.
+
+Makbuzlar (production sunucusunda, salt okunur):
+
+```bash
+docker service logs --raw --since 168h sky-lab-production-skymail-tvrjzs 2>&1 | grep -F '"event":"recipient_retention_run"'
+```
+
 ## Açılma ve tıklama takibi (`SKYMAIL_TRACKING`)
 
 Kişi bazında açılma ve tıklama takibi (hub bilet iletişim-servisi 14, tasarım
@@ -1548,6 +1643,23 @@ alma ucu ve saklama işi (14c) vardır. core tercihleri/rolleri (16/17) ve
 aydınlatma metni (18) tamamlanmadan hiçbir ortamda bayrak açılmaz;
 production açılışı bilet 19'dadır. `on` geçerli adreslerle başlatılabilir,
 ancak bu bir açılış izni değildir.
+
+**Her posta takipli (B9, ADR-0074 2026-11-24 eki).** Takip uygulanan
+gönderimde her alıcı takip edilir: hesabı olmayan adres (liste, Forms,
+konuk), Member olmayan ve daha önce itiraz etmiş kişi de. core'un
+`tracking:resolve` yanıtındaki "hayır" yalnız etkin olmayan hesap
+(`inactive`) ve core'un işletme freni (`COMMUNICATION_TRACKING_MODE=opt_in`)
+içindir; SkyMail core'un hayırını nedeni ne olursa olsun uygular. Keycloak
+ya da core yanıt vermezse, ya da kişi yanıtta yoksa, alıcı yine takip
+edilir. Bu yüzden yeni satırlara `no_account` ve `preference_unavailable`
+yazılmaz (eski satırlarda kalır). Geri alma ucu bir sürüm daha `204` döner
+ama hiçbir şey silmez (aşağıda). Daha önce geri alınmış (belirteci kapalı)
+eski postalara geriye dönük bir şey yapılmaz. Kesin acil kapatma yalnız
+`SKYMAIL_TRACKING*` bayraklarıdır: core'un freni yalnız core'a ulaşıldığında
+tutar, core'a ulaşılamazsa gönderim takipli gider.
+Bilinen durum: Keycloak'ta devre dışı bırakılmış ama kulüp üyesi olmayan
+hesap, adresle gönderilen postada takipli kalır (SkyMail yalnız etkin hesap
+arar, core yalnız kulüp üyelerinin devre dışı olduğunu görür).
 
 **Saklama süresi (KVKK aydınlatma metni s6, 2026-10-23; Yusuf'un
 2026-10-19 "1 yıl" kararının yerine): kişi bazındaki açılma ve tıklama
@@ -1603,11 +1715,14 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   core'a gönderimin veritabanı işlemi **başlamadan önce** sorulur (Mail
   onayında istek kilitlenmeden önce, grup üyeleriyle birlikte); SkyMail core'u
   hiçbir zaman işlem ya da kilit tutarken beklemez. O yanıtta olmayan kişi
-  (sorulmamış, ör. yanıt gelmemiş) takip edilmez.
+  (sorulmamış, ör. yanıt gelmemiş) ve `sub`'ı bilinmeyen alıcı da takip
+  edilir (B9); takip edilmeyen yalnız core'un hayır dediği kişidir.
   Takip edilen satır 16 baytlık rastgele bir belirteç alır
   (`mail_queue.tracking_token`); edilmeyen satır nedenini
-  (`tracking_skip_reason`): `no_account`, `preference_off`, `not_member`,
-  `inactive`, `not_allowed`, `preference_unavailable`, `flag_off`. Gönderim
+  (`tracking_skip_reason`): B9'dan beri yalnız core'un nedeni (`inactive`;
+  core'un freni `tracking_off` burada `not_allowed` olur; B9 öncesi core'un
+  `preference_off`/`not_member`'ı da aynen yazılır) ya da `flag_off`.
+  `no_account` ve `preference_unavailable` yalnız eski satırlardadır. Gönderim
   takip istemediyse ya da takip edilemezse (`tracking: false`) ikisi de
   boştur. (`transactional` kısıtta duruyor, yazılmıyor.)
 - **Kişilere tek tek gönderim (Yusuf, 2026-10-20):** gönderim formunun
@@ -1618,11 +1733,12 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   (`GET /admin/realms/<realm>/users?email=…&exact=true&max=2`), yalnız
   birincil `email` alanı, büyük/küçük harf duyarsız tam eşitlik, kullanıcı
   etkin ve `emailVerified=true`. Tam bir eşleşme yoksa (ya da birden fazla
-  varsa) `no_account`; okul adresi gibi ikincil öznitelikler okunmaz. İnternal
-  listenin ve grubun adres-yalnız alıcıları aranmaz (`no_account`). Realm
+  varsa) hesapsız takip edilir; okul adresi gibi ikincil öznitelikler okunmaz.
+  İnternal listenin ve grubun adres-yalnız alıcıları aranmaz, hesapsız takip
+  edilir. Realm
   `duplicateEmailsAllowed=false` (e-skylab-keycloak `account-center-realm.json`,
   uzlaştırıcı doğrular). Arama en çok 5 eşzamanlı, gönderim başına toplam
-  5 saniye; Keycloak'ın yanıtlamadığı adres `preference_unavailable` alır,
+  5 saniye; Keycloak'ın yanıtlamadığı adres hesapsız takip edilir,
   gönderim durmaz (`"event":"tracking_accounts_unavailable"` satırı adres
   yazmaz, yalnız sayar). Bulunan hesap satırın `recipient_sub`'ı olur ve core
   ona grup üyeleri gibi sorulur; geri alma ve hesap silme bu satırları da
@@ -1636,7 +1752,7 @@ saklama kipini, `event_retention_days` ve `max_rows` değerini yazar.
   gönderimi takip istemez, `tracking: false` der; yalnız
   `SKYMAIL_TRACKING_OPERATOR=on` iken takiplidir ("Operatör postaları").
 - **core'a ulaşılamazsa** (5 saniye, hata ya da sözleşme dışı yanıt) o
-  gönderimde kimse takip edilmez (`preference_unavailable`), gönderim durmaz.
+  gönderimde herkes takip edilir (B9), gönderim durmaz.
   Uyarı satırı `"event":"tracking_preferences_unavailable"` (`"cause":"core"`
   ya da sorulmadıysa `"not_asked"`) gönderim kimliğini ve kişi sayısını yazar,
   kimseyi adlandırmaz. System ya da hassas şablonun gönderiminde core'a hiç
@@ -1705,10 +1821,10 @@ açılmasını hiçbir zaman engellemez).
 - **Kim:** her alıcı yukarıdaki kuralla: `sub`'ı bilinen (bildirim) core'a
   sorulur; yalnız adresi bilinen (tekil posta, onay bildirimi) önce
   Keycloak'ta tam doğrulanmış birincil e-postayla aranır, hesap yoksa
-  `no_account` (ör. henüz doğrulanmamış kayıt adresi), varsa core karar
-  verir. Keycloak ve core gönderimin veritabanı işlemi başlamadan önce,
+  hesapsız takip edilir (ör. henüz doğrulanmamış kayıt adresi), varsa core
+  karar verir. Keycloak ve core gönderimin veritabanı işlemi başlamadan önce,
   **ikisi birlikte en çok 2 saniye** sorulur (giriş kodunu bekleyen biri
-  var); süre dolarsa ya da yanıt yoksa `preference_unavailable`, posta
+  var); süre dolarsa ya da yanıt yoksa alıcı yine takip edilir (B9), posta
   gider. Mail onayı bildirimlerinde bütün onaycılar tek seferde sorulur
   (Keycloak en çok 5 eşzamanlı, core bir kez), sonra her bildirim kuyruğa
   yazılır: işlem onaycı sayısından bağımsız en çok 2 saniye bekler.
@@ -1736,9 +1852,8 @@ açılmasını hiçbir zaman engellemez).
     varsayılan güvenli taraftır: emin olunamayan bağlantı takibe girmez.
 - **Kayıt:** gönderim `tracking_requested = true` olur; tekil postanın
   `POST /v1/mail_tasks/single` yanıtı alıcı gerçekten takip ediliyorsa
-  (belirteç aldıysa) `tracking: true`, `no_account`, `preference_off`,
-  `preference_unavailable` gibi bir nedenle edilmiyorsa `tracking: false`
-  der. Satır nedenleri, raporlar, geri alma, hesap silme ve saklama aynıdır.
+  (belirteç aldıysa) `tracking: true`, core hayır dediği için edilmiyorsa
+  `tracking: false` der. Satır nedenleri, raporlar, geri alma, hesap silme ve saklama aynıdır.
 - **Kişi raporu yalnız rolle:** sistem şeridindeki gönderimin
   (`mail_queue.priority > 0`: servis tekil postası, SkyMail'in Mail onayı
   bildirimi) kişileri `GET /v1/mail_tasks/{id}/tracking/recipients`'te
@@ -1769,8 +1884,10 @@ Yusuf, 2026-10-21: panelden giden postalarda takip **her zaman açık**;
 gönderim formunda "takip et" kutusu ya da sorusu yok, gönderim başına
 kapatılamaz. Sektörden bilinçli sapma: Mailchimp, HubSpot, Dynamics 365
 Customer Insights ve SendGrid takibi varsayılan açık tutar ama kampanya ya
-da gönderim başına kapatmaya izin verir; burada kapatma yalnız alıcı
-tarafında (my.'daki itiraz ayarı, core `tracking:resolve`) vardır.
+da gönderim başına kapatmaya izin verir; burada gönderim başına kapatma
+yoktur. B9'dan beri alıcı tarafında da kapatma yoktur (my.'daki itiraz
+ayarı kalktı); kapatma yalnız işletmenin anahtarlarıyladır (bayraklar,
+core'un `COMMUNICATION_TRACKING_MODE=opt_in` freni).
 **Varsayılan kapalı**; açılış, KVKK aydınlatma metni bu kapsamla
 yayımlandıktan sonra (hub
 `notes/hukuki/kvkk-aydinlatma-metni-YENI-20261021-s3-taslak.md`). Yalnız
@@ -1828,12 +1945,12 @@ kalabilir, ayrı ayrı geri alınır.
 - **Kim:** her alıcı yukarıdaki kuralla: grup üyeleri `sub`'larıyla core'a
   sorulur; gönderim formunun kişileri, onay isteğinin kişileri ve Forms
   yanıtlayanları önce Keycloak'ta aranır (hassas şablonda da), hesap yoksa
-  `no_account`; internal listenin adres-yalnız alıcıları aranmaz,
-  `no_account`. Bütçeler kişi gönderimininkidir: bir gönderimin bütün
+  hesapsız takip edilir; internal listenin adres-yalnız alıcıları aranmaz,
+  hesapsız takip edilir. Bütçeler kişi gönderimininkidir: bir gönderimin bütün
   adresleri tek seferde, en çok 5 eşzamanlı aramayla **toplam 5 sn**
   içinde, sonra core bir kez (5 sn). Forms kaynağında arama kaynağı
   kilitleyen işlemden önce yapılır (kaynak değişmez); süre içinde yanıt
-  gelmeyen adres `preference_unavailable` olur, gönderim beklemez. Aynı
+  gelmeyen adres hesapsız takip edilir, gönderim beklemez. Aynı
   isteğin tekrarı kimseyi yeniden sormaz.
 - **Şerit:** her operatör postası toplu şerittedir (gönderen şeridi
   `duyuru`); bayrak kapalıyken kutusuz giden tekil posta sistem şeridine
@@ -1882,9 +1999,7 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   okunur. Gönderen, ekip postasının Leader'ı ve Mail onayı isteyeni dahil,
   kendi gönderiminde yalnız toplu sayıları görür; kişi raporu ona `403`
   döner. `SKYMAIL_SENDER_SEES_RECIPIENTS=on` bunu geri alır: gönderen
-  sistem şeridi dışındaki kendi gönderiminin kişilerini yine okur. Anahtar
-  10 kişi eşiğini de izler: kapalıyken gönderen, takipli alıcısı 10'dan az
-  olan kendi gönderiminin sayılarını da `withheld: true` olarak alır.
+  sistem şeridi dışındaki kendi gönderiminin kişilerini yine okur.
   Kuyruk (`GET /{id}/queue`) ve içerik uçları gönderene göre değil rolle
   (`skymail:mails:read`) açılır; anahtar onlara dokunmaz.
 - `GET /v1/mail_tasks/{id}/tracking` (`skymail:mails:read`) yanıtı
@@ -1898,20 +2013,25 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   (`id`, `position`, `clicks`, `unique_clickers`) ve `series` vardır.
   Seri noktaları UTC'de ilk 72 saat saatlik, sonra günlük; `at`, `interval`,
   `likely_human_opens`, `automated_opens`, `likely_human_clicks`,
-  `automated_clicks` taşır. Boş kovalar yazılmaz. Kimlik ve hedef URL yoktur
-  (tek alıcılı hedef kişiyi adlandırabilir). Son postadan 90 gün sonra
+  `automated_clicks` taşır. Boş kovalar yazılmaz. Kimlik yoktur.
+  `clicks_by_link`'in her bağlantısı hedefini de taşır (Yusuf, 2026-11-24:
+  "her şeyi görelim"): `url` gönderildiği gibi tam adrestir; tek
+  kullanımlık giriş/sıfırlama bağlantısı ya da kod taşıyan bağlantı da
+  maskelenmez (Yusuf, 2026-11-24: `mails:read` sahibi postayı tam görür).
+  Boşalmış bağlantıda `url: null` ve
+  `url_cleared_reason` (`expired` 1 yıl, `erased` maske/hesap silme). Son postadan 90 gün sonra
 `retained: true`:
   yalnız kişisiz toplam (10'dan az alıcılıda gönderimden 1 yıl sonra
   silinir), yoksa `report: null`; seri dönmez.
-  **Küçük gönderim ve sistem postası:** takipli alıcısı 10'dan az
-  (`tracking.TotalsMinRecipients`) ya da sistem
-  şeridindeki bir gönderimin sayıları kişiye dair bilgidir ("1/1 açıldı,
-  14:00"; alıcı `GET /{id}/queue`'da görünür). Bu sayıları yalnız kişi
-  raporunu okuyabilen (aşağıdaki kural: `skymail:mails:tracking:read`;
-  `SKYMAIL_SENDER_SEES_RECIPIENTS=on` iken sistem şeridi dışında
-  gönderimin kendi göndereni de) alır; başka bir
-  `mails:read` sahibine `withheld: true` ve `report: null` döner (KVKK
-  aydınlatma metni s3 §4).
+  **Sistem postası:** sistem şeridindeki bir gönderimin sayıları yalnız
+  kişi raporunu okuyabilene (`skymail:mails:tracking:read`) gider; başka
+  bir `mails:read` sahibine `withheld: true` ve `report: null` döner (KVKK
+  aydınlatma metni s3 §4). Kişinin gönderiminin sayıları takipli alıcı
+  sayısı ne olursa olsun `mails:read` sahibine görünür (Yusuf, 2026-11-24,
+  K6: ADR-0074 karar 9 / 2026-11-08 eki m.4'teki 10 kişi eşiği görünürlüğü
+  artık sınırlamaz). `tracking.TotalsMinRecipients` (10) yalnız saklama
+  kuralında kalır (ADR-0074 karar 10: 10'dan az takipli gönderimin
+  kişisiz toplamı 1 yıl sonra silinir).
 - **Onaylanan isteğin sonucu (hub bileti ekip-postasi 09):**
   `GET /v1/mail_approvals/{id}` onaylanıp gönderilmiş istekte `result`
   döner; isteyen `skymail:mails:read` olmadan da okur (erişim kuralı aynı:
@@ -1923,10 +2043,9 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   Takipli gönderimlerin `tracking` toplamı (`tracked_recipients`,
   `opened` = `unique_likely_human_opens`, `clicked` = `unique_clickers`)
   `GET /{id}/tracking` ile aynı kuralla gizlenir (`tracking_withheld:
-  true`, `tracking: null`): toplam takipli 10'dan az ya da sistem şeridi,
-  ve kişi raporunu okuyamayan çağıran. Ekip postasında küçük ekiplerin
-  toplamı 10'dan azken büyükleri de varsa aynı: büyüklerin sayısını okuyan
-  farkı çıkarabilirdi. Bekleyen, geri gönderilmiş, reddedilmiş ve süresi
+  true`, `tracking: null`): yalnız sistem şeridindeki bir gönderim varken
+  ve kişi raporunu okuyamayan çağırana; takipli alıcı sayısı ne olursa
+  olsun toplam görünür. Bekleyen, geri gönderilmiş, reddedilmiş ve süresi
   dolmuş istekte `result` yoktur. Sonuç okunamazsa (2 sn bütçe, DB
   hatası) istek yine `200` döner ve günlüğe yazılır: teslim toplamları
   okunamadıysa `result` hiç yoktur, yalnız takip okunamadıysa `tracking:
@@ -1944,9 +2063,10 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
   `tracking_skip_reason`, `first_open_at`, `first_likely_human_open_at`,
   `likely_human_open_source` (`open|click_inferred|null`), `open_count`,
   `last_clicked_at`, `automated_only`, `source_classes`, `clicked_links`
-  (`link_id`, `clicks`, `last_clicked_at`) içerir. “opened” açılma veya
+  (`link_id`, `position`, `clicks`, `last_clicked_at`, `url`,
+  `url_cleared_reason`; hedef tam adres, maskesiz) içerir. “opened” açılma veya
   otomatik olmayan tıklama çıkarımını, “not_opened” ikisinin yokluğunu
-  belirtir; “okumadı” anlamına gelmez. Token/hedef URL dönmez. Gönderimin
+  belirtir; “okumadı” anlamına gelmez. Token dönmez. Gönderimin
   son `sent_at`'ından (teslim yoksa `created_at`) 90 gün sonra 410 döner
   ("Kişi bazında takip kaydı 90 gün sonra silindi.");
   bu tarihten önce de her alıcının kendi 90 günlük pencere dışı olayları
@@ -1954,7 +2074,14 @@ Yetkili okuma uçları ana `/docs` belgesindedir.
 
 ### Geri alma: `PUT /internal/v1/tracking-withdrawals/{sub}` (core'dan)
 
-Kişi my.'da takibi kapatınca (`enabled=false`) core bu ucu çağırır (bilet 16;
+**B9'dan beri (2026-11-24) bu uç bir sürüm boyunca yalnız uyumluluk için
+durur:** kimlik ve `sub` denetimleri aynıdır, başarıda `204` döner, ama
+hiçbir belirteç kapatılmaz, hiçbir olay silinmez (B9 core'u bu ucu artık
+çağırmaz; eski core çağırırsa başarı alır ve kuyruğunu boşaltır). Günlük
+satırı `"event":"tracking_withdrawal_ignored"`. Aşağıdaki "Etki" maddesi
+B9 öncesini anlatır; sonraki sürümde uç kalkar.
+
+Kişi my.'da takibi kapatınca (`enabled=false`) core bu ucu çağırırdı (bilet 16;
 tek yön core → SkyMail, postada kapatma bağlantısı yok, T8). Hesap silme
 ucunun kalıbı: `/v1` dışında, yalnız iç Docker ağından (`X-Forwarded-*`,
 `Forwarded`, `X-Real-Ip` taşıyan istek çıplak `404`); token realm'in JWKS'i
@@ -1973,7 +2100,7 @@ Authorization: Bearer <core istemcisinin client credentials token'ı>
   başka yazım ya da Silinmiş kullanıcı `400 invalid_withdrawal_subject`.
 - Başarı **`204`**, gövdesiz; idempotent: tekrar çağrı da `204` döner,
   hiçbir şey değiştirmez. Bayrak açık ya da kapalı fark etmez.
-- Etki, tek işlemde: kişinin `recipient_sub`'ına giden bütün takipli
+- Etki (B9 öncesi; artık yapılmaz), tek işlemde: kişinin `recipient_sub`'ına giden bütün takipli
   satırlar `ORDER BY id FOR UPDATE` kilitlenir, açılma ve tıklama olayları
   silinir, sonra belirteçleri silinir (`tracking_token` NULL,
   `tracking_disabled_at` dolar; gönderilmiş ve kuyrukta bekleyen postalar
@@ -1983,11 +2110,11 @@ Authorization: Bearer <core istemcisinin client credentials token'ı>
   core `tracking:resolve` ile `preference_off` der.
 - Hatalar `application/problem+json`, sabit `code` ile: `401
   withdrawal_unauthorized`, `403 withdrawal_forbidden`, `503`
-  (`token_keys_unavailable`, `access_gate_unavailable`,
-  `withdrawal_store_unavailable`) `Retry-After: 30` ile; core'un tekrar
+  (`token_keys_unavailable`, `access_gate_unavailable`; B9 öncesi
+  `withdrawal_store_unavailable` de) `Retry-After: 30` ile; core'un tekrar
   denemeli işi 5xx'te yeniden dener.
-- Günlük yalnız `"event":"tracking_withdrawal"` satırında sayılar
-  (`tokens_closed`, `events_deleted`) ya da reddin sabit kodu; `sub` hiçbir
+- Günlük yalnız `"event":"tracking_withdrawal_ignored"` satırı (B9 öncesi
+  `"event":"tracking_withdrawal"` ve sayılar) ya da reddin sabit kodu; `sub` hiçbir
   yerde yazılmaz ya da yanıtta geri dönmez.
 - Bilinen sınır: core'a gönderim kuyruğa yazılmadan hemen önce sorulur;
   geri alma o birkaç saniyelik aralığa denk gelirse o gönderimde kişi yine
@@ -2095,16 +2222,18 @@ Content-Type: application/json
 ```json
 {"results": [
   {"sub": "7d3c1f6e-0b9a-4c55-9a51-3f4d2b8e6a10", "allowed": true, "reason": null},
-  {"sub": "…", "allowed": false, "reason": "preference_off"}
+  {"sub": "…", "allowed": false, "reason": "inactive"}
 ]}
 ```
 
 - Her `sub` küçük harfli UUID, istekte bir kez, en çok 1000. Yanıt `200` ve
   sorulan her `sub`'ı **tam bir kez** içerir, başkasını içermez; değilse
   (ya da başka durum kodu, JSON dışı gövde) yanıt hiç yokmuş sayılır.
-- `reason` yalnız `allowed: false` iken okunur: `preference_off` (my.'da
-  kapattı), `not_member` (`/UYELER` dışında), `inactive` (hesap etkin
-  değil). Bilinmeyen neden `not_allowed` olarak kaydedilir.
+- `reason` yalnız `allowed: false` iken okunur: `inactive` (hesap etkin
+  değil) ya da core'un freni `tracking_off` (`not_allowed` olarak
+  kaydedilir). B9 öncesi core `preference_off` (my.'da kapattı) ve
+  `not_member` (`/UYELER` dışında) da derdi; SkyMail onları da uygular.
+  Bilinmeyen neden `not_allowed` olarak kaydedilir.
 - Token: `KEYCLOAK_SERVICE_CLIENT_ID` (`skymail-backend`) servis hesabının
   client credentials token'ı (Admin REST'in kullandığı); core `aud` ∋ `core`
   ve `core` istemcisinin `communication-preferences:read` rolünü

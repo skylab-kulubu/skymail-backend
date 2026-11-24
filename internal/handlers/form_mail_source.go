@@ -202,7 +202,7 @@ func formSourceRecipientInfos(rows []database.MailFormSourceRecipient) []mailer.
 // (SKYMAIL_TRACKING_OPERATOR), whom of a Forms source's respondents the
 // send may track, asked before the transaction that locks the source: each
 // address looked up in Keycloak (exact verified primary e-mail; none is
-// no_account), all of them at once within the people send's budget, then
+// tracked without an account), all of them at once within the people send's budget, then
 // core. The source is immutable, so the people asked about are the people
 // the send goes to. Nil when the flag is off, or the source cannot be read
 // (the transaction then refuses it, or tracks no one), or — direct, a send
@@ -387,7 +387,7 @@ func (h *mailHandlerImpl) GetFormSource(c fiber.Ctx) error {
 // SendFormSource godoc
 //
 //	@Summary		Send to an immutable Forms audience
-//	@Description	The source owner holding current skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is no_account) and core deciding, and the answer says tracking true. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): duyuru with a category by default; islem with transactional_statement true when the mail is about each respondent's own application: tracked as any Forms source send, queued in the bulk lane, sent from bilgi@ without List-Unsubscribe. The purpose is part of an exact retry.
+//	@Description	The source owner holding current skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is tracked without an account) and core deciding, and the answer says tracking true. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): duyuru with a category by default; islem with transactional_statement true when the mail is about each respondent's own application: tracked as any Forms source send, queued in the bulk lane, sent from bilgi@ without List-Unsubscribe. The purpose is part of an exact retry.
 //	@Tags			Mail
 //	@Param			send	body	requests.SendFormSource	true	"Prepared source and mail content"
 //	@Accept			json

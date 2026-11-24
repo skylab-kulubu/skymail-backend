@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v3"
@@ -94,13 +95,14 @@ func TestTrackingReadRoutesEnforceRolesSenderAndNinetyDays(t *testing.T) {
 		t.Error("expired existence revealed before recipient authorization")
 	}
 	// Every send keeps its counts now (KVKK notice s6); those of fewer than
-	// 10 tracked people still go only to who may read the send's people.
+	// 10 tracked people go to anyone with mails:read too (Yusuf, 2026-11-24,
+	// K6).
 	if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_task_tracking_totals SET tracked_recipients=3 WHERE task_id=$1`, created.ID); err != nil {
 		t.Fatal(err)
 	}
 	approvalPeople["tracking_reader"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skymail:access", "skymail:mails:read", handlers.TrackingReadRole}}
 	defer delete(approvalPeople, "tracking_reader")
-	for who, wantWithheld := range map[string]bool{"baska": true, "tracking_reader": false} {
+	for who, wantWithheld := range map[string]bool{"baska": false, "tracking_reader": false} {
 		var small struct {
 			Retained bool            `json:"retained"`
 			Withheld bool            `json:"withheld"`
@@ -274,3 +276,111 @@ func TestAClickPastTheNinetyDaysRedirectsAndRecordsNothing(t *testing.T) {
 		t.Errorf("%d events written past the 90 days (%v)", events, err)
 	}
 }
+
+// The tracking reports show where each clicked link goes (Yusuf, 2026-11-24:
+// "her şeyi görelim"): the full target as sent, a one-time link or one with a
+// code included, nothing masked and no url_masked flag (Yusuf, 2026-11-24);
+// an emptied link has no target and says why.
+func TestTrackingReportsShowWhereTheLinksGo(t *testing.T) {
+	w, _ := trackedWorld(t, true)
+	send := w.listSend()
+	send["mail_list_id"] = w.group
+	send["tracking"] = true
+	var created struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if status, raw := w.call("yusuf", "POST", "/v1/mail_tasks", send, &created); status != 201 {
+		t.Fatalf("%d %s", status, raw)
+	}
+	ctx := context.Background()
+	if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_queue SET status='sent',sent_at=now()-interval '2 minutes' WHERE task_id=$1`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, rows := w.trackingOf(created.ID)
+	rt := tracking.EncodeToken(rows[elif.email].token)
+	targets := []string{"https://yildizskylab.com/etkinlikler/yaz-kampi", "https://my.yildizskylab.com/verify?token=Qx7Kp2Lm9Rt4Vw8Zb3Nc", "https://yildizskylab.com/eski"}
+	var tokens [][]byte
+	for i, target := range targets {
+		lt, _ := tracking.NewLinkToken()
+		tokens = append(tokens, lt)
+		if _, err := w.store.Conn.Exec(ctx, `INSERT INTO mail_task_links(task_id,link_token,url,position) VALUES($1,$2,$3,$4)`, created.ID, lt, target, 90+i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handlers.NewTrackingPublicHandler(w.store, tracking.Config{Mode: tracking.ModeOn}).Register(w.app)
+	for _, lt := range tokens {
+		if status, _ := w.call("yusuf", "GET", "/t/c/"+rt+"/"+tracking.EncodeToken(lt), nil, nil); status != fiber.StatusFound {
+			t.Fatalf("click=%d", status)
+		}
+	}
+	if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_task_links SET url=NULL,url_cleared_reason='expired' WHERE link_token=$1`, tokens[2]); err != nil {
+		t.Fatal(err)
+	}
+	approvalPeople["takip_okur"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skymail:access", "skymail:mails:read", handlers.TrackingReadRole}}
+	defer delete(approvalPeople, "takip_okur")
+	base := "/v1/mail_tasks/" + created.ID.String() + "/tracking"
+
+	type link struct {
+		Position         int     `json:"position"`
+		URL              *string `json:"url"`
+		URLClearedReason *string `json:"url_cleared_reason"`
+	}
+	want := map[int]link{
+		90: {90, &targets[0], nil},
+		91: {91, &targets[1], nil},
+		92: {92, nil, ptrTo("expired")},
+	}
+	same := func(got, want link) bool {
+		return got.Position == want.Position &&
+			(got.URL == nil) == (want.URL == nil) && (got.URL == nil || *got.URL == *want.URL) &&
+			(got.URLClearedReason == nil) == (want.URLClearedReason == nil) && (got.URLClearedReason == nil || *got.URLClearedReason == *want.URLClearedReason)
+	}
+
+	var summary struct {
+		Report struct {
+			ClicksByLink []link `json:"clicks_by_link"`
+		} `json:"report"`
+	}
+	status, raw := w.call("baska", "GET", base, nil, &summary)
+	if status != 200 {
+		t.Fatalf("summary: %d %s", status, raw)
+	}
+	if strings.Contains(string(raw), "url_masked") || strings.Contains(string(raw), "••") {
+		t.Errorf("summary still masks a link: %s", raw)
+	}
+	seen := 0
+	for _, got := range summary.Report.ClicksByLink {
+		if expected, ok := want[got.Position]; ok {
+			seen++
+			if !same(got, expected) {
+				t.Errorf("clicks_by_link position %d = %+v, want %+v", got.Position, got, expected)
+			}
+		}
+	}
+	if seen != len(want) {
+		t.Errorf("clicks_by_link has %d of the %d links", seen, len(want))
+	}
+
+	var people struct {
+		Items []struct {
+			ClickedLinks []link `json:"clicked_links"`
+		} `json:"items"`
+	}
+	status, raw = w.call("takip_okur", "GET", base+"/recipients?filter=clicked", nil, &people)
+	if status != 200 || len(people.Items) != 1 {
+		t.Fatalf("recipients: %d %s", status, raw)
+	}
+	if strings.Contains(string(raw), "url_masked") || strings.Contains(string(raw), "••") {
+		t.Errorf("recipients still mask a link: %s", raw)
+	}
+	if got := people.Items[0].ClickedLinks; len(got) != len(want) {
+		t.Fatalf("clicked_links = %+v, want %d links", got, len(want))
+	}
+	for _, got := range people.Items[0].ClickedLinks {
+		if !same(got, want[got.Position]) {
+			t.Errorf("clicked link position %d = %+v, want %+v", got.Position, got, want[got.Position])
+		}
+	}
+}
+
+func ptrTo[T any](v T) *T { return &v }

@@ -1,34 +1,27 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"strconv"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rs/zerolog/log"
 	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
 	"github.com/skylab-kulubu/skymail-backend/internal/database"
 	"github.com/skylab-kulubu/skymail-backend/internal/erasuretoken"
 )
 
-// TrackingWithdrawalStore is Postgres for the withdrawal route.
-type TrackingWithdrawalStore interface {
-	WithdrawTracking(ctx context.Context, subject string) (database.TrackingWithdrawal, error)
-}
-
 // TrackingWithdrawalHandler serves PUT /internal/v1/tracking-withdrawals/{sub}:
 // core telling SkyMail that a person turned open and click tracking off on
-// my. (hub ticket iletisim-servisi 14c and 16; design note 07 §4.6, §4.7). It
-// closes every token of mail to the person and deletes their openings and
-// clicks; their old mail's links still redirect. It is idempotent: every
-// call that gets through answers 204, a repeat changing nothing. It works
-// whether SKYMAIL_TRACKING is on or off.
+// my. (hub ticket iletisim-servisi 14c and 16; design note 07 §4.6, §4.7).
+// Since B9 (ADR-0074 addendum of 2026-11-24: every mail is tracked, an
+// objection no longer stops it) the route is kept for one release only, so
+// a core from before B9 still gets its success: it checks the caller and
+// the subject as before, answers 204 and changes nothing. No token is
+// closed and no opening or click is deleted. The route then goes.
 type TrackingWithdrawalHandler struct {
-	store  TrackingWithdrawalStore
 	tokens ErasureTokenVerifier
 	// The account access gate; nil when ACCOUNT_ACCESS_GATE_MODE is off.
 	gate accessgate.Reader
@@ -37,8 +30,8 @@ type TrackingWithdrawalHandler struct {
 // NewTrackingWithdrawalHandler builds the handler. tokens must take core's
 // token with SkyMail's withdraw role (erasuretoken.WithdrawCallerClientID,
 // erasuretoken.WithdrawRole), never core-erasure's.
-func NewTrackingWithdrawalHandler(store TrackingWithdrawalStore, tokens ErasureTokenVerifier, gate accessgate.Reader) TrackingWithdrawalHandler {
-	return TrackingWithdrawalHandler{store: store, tokens: tokens, gate: gate}
+func NewTrackingWithdrawalHandler(tokens ErasureTokenVerifier, gate accessgate.Reader) TrackingWithdrawalHandler {
+	return TrackingWithdrawalHandler{tokens: tokens, gate: gate}
 }
 
 // The fixed codes the route answers with (RFC 7807). None carries a value
@@ -49,14 +42,13 @@ const (
 	withdrawalForbidden           = "withdrawal_forbidden"
 	withdrawalAccessGateDown      = "access_gate_unavailable"
 	withdrawalTokenKeysDown       = "token_keys_unavailable"
-	withdrawalStoreUnavailable    = "withdrawal_store_unavailable"
 	withdrawalRetryAfter          = 30
-	trackingWithdrawalLogEvent    = "tracking_withdrawal"
+	trackingWithdrawalLogEvent    = "tracking_withdrawal_ignored"
 	trackingWithdrawalRefuseEvent = "tracking_withdrawal_refused"
 )
 
-// Withdraw runs the withdrawal. The subject is never logged or echoed: logs
-// carry fixed codes and counts only.
+// Withdraw answers the withdrawal and does nothing (B9). The subject is never
+// logged or echoed: logs carry fixed codes only.
 func (h TrackingWithdrawalHandler) Withdraw(c fiber.Ctx) error {
 	c.Set(fiber.HeaderCacheControl, "no-store")
 	caller, err := h.tokens.Verify(c.Context(), c.Get(fiber.HeaderAuthorization))
@@ -90,19 +82,8 @@ func (h TrackingWithdrawalHandler) Withdraw(c fiber.Ctx) error {
 		return withdrawalProblem(c, fiber.StatusBadRequest, withdrawalInvalidSubject, "Invalid withdrawal subject")
 	}
 
-	done, err := h.store.WithdrawTracking(c.Context(), subject)
-	if err != nil {
-		state := "none"
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			state = pgErr.Code
-		}
-		log.Error().Str("event", trackingWithdrawalRefuseEvent).Str("code", withdrawalStoreUnavailable).Str("sqlstate", state).
-			Msg("tracking withdrawal store failed")
-		return withdrawalUnavailable(c, withdrawalStoreUnavailable)
-	}
-	log.Info().Str("event", trackingWithdrawalLogEvent).Int64("tokens_closed", done.TokensClosed).
-		Int64("events_deleted", done.EventsDeleted).Msg("tracking withdrawn")
+	log.Info().Str("event", trackingWithdrawalLogEvent).
+		Msg("tracking withdrawal ignored: every mail is tracked, nothing changed")
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
@@ -125,8 +106,6 @@ func withdrawalProblem(c fiber.Ctx, status int, code, title string) error {
 
 func withdrawalUnavailable(c fiber.Ctx, code string) error {
 	c.Set(fiber.HeaderRetryAfter, strconv.Itoa(withdrawalRetryAfter))
-	if code != withdrawalStoreUnavailable {
-		log.Warn().Str("event", trackingWithdrawalRefuseEvent).Str("code", code).Msg("tracking withdrawal not done")
-	}
+	log.Warn().Str("event", trackingWithdrawalRefuseEvent).Str("code", code).Msg("tracking withdrawal not done")
 	return withdrawalProblem(c, fiber.StatusServiceUnavailable, code, "Withdrawal temporarily unavailable")
 }
