@@ -20,11 +20,11 @@ import (
 //	@Param			id			path		string							true	"Template ID"
 //	@Param			variable	body		requests.AddRequiredVariable	true	"The variable to require"
 //	@Success		200			{object}	handlers.Template
-//	@Failure		400			{object}	apperrors.AppError	"The name is not a variable name (validation.error)"
-//	@Failure		403			{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404			{object}	apperrors.AppError	"No such template in use: unknown or archived"
-//	@Failure		422			{object}	apperrors.AppError	"The published body does not reference the variable (template.required_variables_missing) or does not parse (template.unparseable, params.part "html")"
-//	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400			{object}	apperrors.Problem	"The name is not a variable name (validation.error)"
+//	@Failure		403			{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404			{object}	apperrors.Problem	"No such template in use: unknown or archived"
+//	@Failure		422			{object}	apperrors.Problem	"The published body does not reference the variable (template.required_variables_missing) or does not parse (template.unparseable, params.part "html")"
+//	@Failure		500			{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/templates/{id}/required-variables [post]
 func (h *templateHandlerImpl) AddRequiredVariable(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -60,11 +60,11 @@ func (h *templateHandlerImpl) AddRequiredVariable(c fiber.Ctx) error {
 //	@Param			id		path		string	true	"Template ID"
 //	@Param			name	path		string	true	"Variable name"
 //	@Success		200		{object}	handlers.Template
-//	@Failure		400		{object}	apperrors.AppError	"The name is not a variable name (template.invalid_variable_name)"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404		{object}	apperrors.AppError	"No such template in use: unknown or archived"
-//	@Failure		409		{object}	apperrors.AppError	"The variable is in the contract set (template.required_variable_in_contract, params.name)"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem	"The name is not a variable name (template.invalid_variable_name)"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404		{object}	apperrors.Problem	"No such template in use: unknown or archived"
+//	@Failure		409		{object}	apperrors.Problem	"The variable is in the contract set (template.required_variable_in_contract, params.name)"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/templates/{id}/required-variables/{name} [delete]
 func (h *templateHandlerImpl) RemoveRequiredVariable(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))

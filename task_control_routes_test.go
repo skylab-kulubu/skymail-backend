@@ -87,7 +87,17 @@ func control(t *testing.T, app *fiber.App, task, action string) controlAnswer {
 		t.Fatal(err)
 	}
 	var answer controlAnswer
-	if err := json.NewDecoder(response.Body).Decode(&answer); err != nil {
+	if response.StatusCode >= 400 {
+		// A refusal is a problem (RFC 9457), whose status is the HTTP
+		// status, not the send's: only its code is read here.
+		var refusal struct {
+			Code string `json:"code"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&refusal); err != nil {
+			t.Fatal(err)
+		}
+		answer.Code = refusal.Code
+	} else if err := json.NewDecoder(response.Body).Decode(&answer); err != nil {
 		t.Fatal(err)
 	}
 	answer.Status = response.StatusCode

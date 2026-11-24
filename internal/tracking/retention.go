@@ -23,11 +23,10 @@ const EventRetentionDays = 90
 const EventRetention = EventRetentionDays * 24 * time.Hour
 
 // TotalsMinRecipients is the fewest tracked recipients whose counts without
-// people are kept for good and shown to anyone who reads the send (T4, #97
-// T6): fewer, and a count could still tell about one person. A send with
-// fewer keeps its counts too, shown only to who may read its people, and
-// the retention run deletes them a year after the send was created
-// (mail_tasks.created_at), as its content (KVKK notice s6).
+// people are kept for good (T4; ADR-0074 decision 10). A send with fewer
+// keeps its counts too, and the retention run deletes them a year after the
+// send was created (mail_tasks.created_at), as its content (KVKK notice s6).
+// It no longer limits who sees a send's counts (Yusuf, 2026-11-24, K6).
 const TotalsMinRecipients = 10
 
 // RetentionMode is what the retention run does: SKYMAIL_TRACKING_RETENTION.

@@ -1,10 +1,7 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/gofiber/fiber/v3"
@@ -18,33 +15,13 @@ import (
 
 // PUT /internal/v1/tracking-withdrawals/{sub}: core telling SkyMail a person
 // turned open and click tracking off on my. (hub ticket iletisim-servisi
-// 14c; design note 07 §4.6).
+// 14c; design note 07 §4.6). Since B9 (every mail is tracked) it is kept for
+// one release: it checks the caller and the subject as before, answers 204
+// and changes nothing (the handler holds no store to change anything with).
 
 const withdrawalSubject = "7a1e4b20-3c5d-4e6f-8a9b-0c1d2e3f4a5b"
 
-type withdrawalStoreStub struct {
-	mu       sync.Mutex
-	subjects []string
-	err      error
-}
-
-func (s *withdrawalStoreStub) WithdrawTracking(_ context.Context, subject string) (database.TrackingWithdrawal, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.err != nil {
-		return database.TrackingWithdrawal{}, s.err
-	}
-	s.subjects = append(s.subjects, subject)
-	return database.TrackingWithdrawal{TokensClosed: 2, EventsDeleted: 5}, nil
-}
-
-func (s *withdrawalStoreStub) calls() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]string(nil), s.subjects...)
-}
-
-func newWithdrawalRoute(t *testing.T, store handlers.TrackingWithdrawalStore, gate accessgate.Reader) *erasureRoute {
+func newWithdrawalRoute(t *testing.T, gate accessgate.Reader) *erasureRoute {
 	t.Helper()
 	keycloak := newErasureKeycloak(t)
 	tokens := erasuretoken.Config{Issuer: erasureIssuer, JWKSURL: keycloak.jwksURL, ResourceClient: "skymail"}
@@ -54,7 +31,7 @@ func newWithdrawalRoute(t *testing.T, store handlers.TrackingWithdrawalStore, ga
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
 	registerInternalRoutes(app,
 		handlers.NewAccountErasureHandler(&erasureStoreStub{}, erasuretoken.NewVerifier(tokens), gate),
-		handlers.NewTrackingWithdrawalHandler(store, erasuretoken.NewVerifier(withdraw), gate))
+		handlers.NewTrackingWithdrawalHandler(erasuretoken.NewVerifier(withdraw), gate))
 	return &erasureRoute{app: app, keycloak: keycloak}
 }
 
@@ -74,13 +51,12 @@ func assertNoSubject(t *testing.T, logs *erasureLogs, answer erasureAnswer) {
 	}
 }
 
-// core's token with the withdraw role withdraws, 204 with no body, each time
-// the same; the log line has counts only.
-func TestWithdrawalRouteWithdrawsForCore(t *testing.T) {
+// core's token with the withdraw role gets 204 with no body, each time the
+// same, and nothing is withdrawn; the log line says it was ignored.
+func TestWithdrawalRouteAnswersCoreAndChangesNothing(t *testing.T) {
 	logs := captureLogs(t)
-	store := &withdrawalStoreStub{}
 	gate := &erasureGate{}
-	route := newWithdrawalRoute(t, store, gate)
+	route := newWithdrawalRoute(t, gate)
 	path := "/internal/v1/tracking-withdrawals/" + withdrawalSubject
 	for i := 0; i < 2; i++ {
 		answer := route.put(t, path, route.keycloak.token(t, coreClaims(route.keycloak)), "", nil, nil)
@@ -92,11 +68,8 @@ func TestWithdrawalRouteWithdrawsForCore(t *testing.T) {
 		}
 		assertNoSubject(t, logs, answer)
 	}
-	if got := store.calls(); len(got) != 2 || got[0] != withdrawalSubject {
-		t.Errorf("withdrawn = %v", got)
-	}
-	if !strings.Contains(logs.String(), `"event":"tracking_withdrawal"`) || !strings.Contains(logs.String(), `"events_deleted":5`) {
-		t.Errorf("no counts line:\n%s", logs.String())
+	if !strings.Contains(logs.String(), `"event":"tracking_withdrawal_ignored"`) || strings.Contains(logs.String(), "events_deleted") {
+		t.Errorf("no ignored line, or counts of a withdrawal:\n%s", logs.String())
 	}
 	// The caller's own access marker is checked, as on every route.
 	if len(gate.checked) != 2 || gate.checked[0] != erasureCaller {
@@ -109,8 +82,7 @@ func TestWithdrawalRouteWithdrawsForCore(t *testing.T) {
 // ingress gets a bare 404. A subject that is not a lower-case UUID is 400.
 func TestWithdrawalRouteRefusesWhoeverIsNotCore(t *testing.T) {
 	logs := captureLogs(t)
-	store := &withdrawalStoreStub{}
-	route := newWithdrawalRoute(t, store, &erasureGate{decisions: map[string]accessgate.Decision{}})
+	route := newWithdrawalRoute(t, &erasureGate{decisions: map[string]accessgate.Decision{}})
 	k := route.keycloak
 	path := "/internal/v1/tracking-withdrawals/" + withdrawalSubject
 
@@ -160,33 +132,29 @@ func TestWithdrawalRouteRefusesWhoeverIsNotCore(t *testing.T) {
 				fiber.StatusBadRequest, "invalid_withdrawal_subject")
 		})
 	}
-	if got := store.calls(); len(got) != 0 {
-		t.Errorf("withdrawn for refused calls: %v", got)
+	if strings.Contains(logs.String(), `"event":"tracking_withdrawal_ignored"`) {
+		t.Errorf("a refused call was answered:\n%s", logs.String())
 	}
 	assertNoSubject(t, logs, erasureAnswer{})
 }
 
-// What SkyMail cannot do now is 503 with Retry-After, for core's retrying
-// job: Keycloak's keys, the access gate, the database.
+// What SkyMail cannot check now is 503 with Retry-After, for core's
+// retrying job: Keycloak's keys, the access gate. No database is read any
+// more.
 func TestWithdrawalRouteUnavailableIsRetried(t *testing.T) {
 	captureLogs(t)
-	store := &withdrawalStoreStub{err: errors.New("database down")}
-	route := newWithdrawalRoute(t, store, &erasureGate{})
 	path := "/internal/v1/tracking-withdrawals/" + withdrawalSubject
-	answer := route.put(t, path, route.keycloak.token(t, coreClaims(route.keycloak)), "", nil, nil)
-	assertErasureProblem(t, answer, fiber.StatusServiceUnavailable, "withdrawal_store_unavailable")
+	gated := newWithdrawalRoute(t, &erasureGate{decisions: map[string]accessgate.Decision{erasureCaller: accessgate.Unavailable}})
+	answer := gated.put(t, path, gated.keycloak.token(t, coreClaims(gated.keycloak)), "", nil, nil)
+	assertErasureProblem(t, answer, fiber.StatusServiceUnavailable, "access_gate_unavailable")
 	if answer.header.Get(fiber.HeaderRetryAfter) != "30" {
 		t.Errorf("Retry-After = %q", answer.header.Get(fiber.HeaderRetryAfter))
 	}
-
-	gated := newWithdrawalRoute(t, &withdrawalStoreStub{}, &erasureGate{decisions: map[string]accessgate.Decision{erasureCaller: accessgate.Unavailable}})
-	assertErasureProblem(t, gated.put(t, path, gated.keycloak.token(t, coreClaims(gated.keycloak)), "", nil, nil),
-		fiber.StatusServiceUnavailable, "access_gate_unavailable")
-	blocked := newWithdrawalRoute(t, &withdrawalStoreStub{}, &erasureGate{decisions: map[string]accessgate.Decision{erasureCaller: accessgate.Blocked}})
+	blocked := newWithdrawalRoute(t, &erasureGate{decisions: map[string]accessgate.Decision{erasureCaller: accessgate.Blocked}})
 	assertErasureProblem(t, blocked.put(t, path, blocked.keycloak.token(t, coreClaims(blocked.keycloak)), "", nil, nil),
 		fiber.StatusUnauthorized, "withdrawal_unauthorized")
 
-	keys := newWithdrawalRoute(t, &withdrawalStoreStub{}, &erasureGate{})
+	keys := newWithdrawalRoute(t, &erasureGate{})
 	token := keys.keycloak.token(t, coreClaims(keys.keycloak))
 	keys.keycloak.down.Store(true)
 	assertErasureProblem(t, keys.put(t, path, token, "", nil, nil), fiber.StatusServiceUnavailable, "token_keys_unavailable")

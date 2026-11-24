@@ -85,10 +85,10 @@ func versionSummary(s database.TemplateVersionSummary) TemplateVersionSummary {
 //	@Param			state	query		string	false	"Which versions: published ones, drafts (discarded ones included, flagged), or all"	Enums(published,draft,all)	default(all)
 //	@Success		200		{array}		handlers.TemplateVersionSummary
 //	@Header			200		{integer}	X-Total-Count		"Number of versions the template has in that state"
-//	@Failure		400		{object}	apperrors.AppError	"validation.error: an unknown state"
-//	@Failure		403		{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404		{object}	apperrors.AppError	"Not Found"
-//	@Failure		500		{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		400		{object}	apperrors.Problem	"validation.error: an unknown state"
+//	@Failure		403		{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404		{object}	apperrors.Problem	"Not Found"
+//	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/templates/{id}/versions [get]
 func (h *templateHandlerImpl) ListTemplateVersions(c fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
@@ -151,9 +151,9 @@ func parseVersionState(raw string) (*bool, error) {
 //	@Param			id			path		string	true	"Template ID"
 //	@Param			versionId	path		string	true	"Version ID"
 //	@Success		200			{object}	handlers.TemplateVersion
-//	@Failure		403			{object}	apperrors.AppError	"Forbidden"
-//	@Failure		404			{object}	apperrors.AppError	"Not Found"
-//	@Failure		500			{object}	apperrors.AppError	"Internal Server Error"
+//	@Failure		403			{object}	apperrors.Problem	"Forbidden"
+//	@Failure		404			{object}	apperrors.Problem	"Not Found"
+//	@Failure		500			{object}	apperrors.Problem	"Internal Server Error"
 //	@Router			/templates/{id}/versions/{versionId} [get]
 func (h *templateHandlerImpl) GetTemplateVersion(c fiber.Ctx) error {
 	templateID, versionID, err := versionPath(c)

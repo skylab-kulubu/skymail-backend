@@ -335,9 +335,9 @@ func decodeInboxCursor(cursor string) (time.Time, uuid.UUID, error) {
 //	@Param			limit		query		int		false	"Items per page, 1 to 100"	default(50)
 //	@Param			archived	query		string	false	"exclude, include or only"	default(exclude)
 //	@Success		200			{object}	handlers.InboxPage
-//	@Failure		400			{object}	apperrors.AppError	"inbox.invalid_query; inbox.invalid_cursor"
-//	@Failure		401			{object}	apperrors.AppError	"server.unauthorized: no live token, or one not issued for SkyMail"
-//	@Failure		403			{object}	apperrors.AppError	"auth.person_required: a service's token"
+//	@Failure		400			{object}	apperrors.Problem	"inbox.invalid_query; inbox.invalid_cursor"
+//	@Failure		401			{object}	apperrors.Problem	"server.unauthorized: no live token, or one not issued for SkyMail"
+//	@Failure		403			{object}	apperrors.Problem	"auth.person_required: a service's token"
 //	@Router			/me/inbox [get]
 func (h *inboxHandlerImpl) List(c fiber.Ctx) error {
 	me, err := owner(c)
@@ -387,8 +387,8 @@ func (h *inboxHandlerImpl) List(c fiber.Ctx) error {
 //	@Tags			Inbox
 //	@Produce		json
 //	@Success		200	{object}	handlers.InboxCounts
-//	@Failure		401	{object}	apperrors.AppError	"server.unauthorized"
-//	@Failure		403	{object}	apperrors.AppError	"auth.person_required"
+//	@Failure		401	{object}	apperrors.Problem	"server.unauthorized"
+//	@Failure		403	{object}	apperrors.Problem	"auth.person_required"
 //	@Router			/me/inbox/counts [get]
 func (h *inboxHandlerImpl) Counts(c fiber.Ctx) error {
 	me, err := owner(c)
@@ -433,9 +433,9 @@ func (h *inboxHandlerImpl) mark(c fiber.Ctx, mark string) error {
 //	@Produce		json
 //	@Param			id	path		string	true	"The item"
 //	@Success		200	{object}	handlers.InboxItem
-//	@Failure		401	{object}	apperrors.AppError	"server.unauthorized"
-//	@Failure		403	{object}	apperrors.AppError	"auth.person_required"
-//	@Failure		404	{object}	apperrors.AppError	"server.not_found: not the caller's, not there, or expired"
+//	@Failure		401	{object}	apperrors.Problem	"server.unauthorized"
+//	@Failure		403	{object}	apperrors.Problem	"auth.person_required"
+//	@Failure		404	{object}	apperrors.Problem	"server.not_found: not the caller's, not there, or expired"
 //	@Router			/me/inbox/{id}/seen [post]
 func (h *inboxHandlerImpl) Seen(c fiber.Ctx) error { return h.mark(c, "seen") }
 
@@ -447,9 +447,9 @@ func (h *inboxHandlerImpl) Seen(c fiber.Ctx) error { return h.mark(c, "seen") }
 //	@Produce		json
 //	@Param			id	path		string	true	"The item"
 //	@Success		200	{object}	handlers.InboxItem
-//	@Failure		401	{object}	apperrors.AppError	"server.unauthorized"
-//	@Failure		403	{object}	apperrors.AppError	"auth.person_required"
-//	@Failure		404	{object}	apperrors.AppError	"server.not_found: not the caller's, not there, or expired"
+//	@Failure		401	{object}	apperrors.Problem	"server.unauthorized"
+//	@Failure		403	{object}	apperrors.Problem	"auth.person_required"
+//	@Failure		404	{object}	apperrors.Problem	"server.not_found: not the caller's, not there, or expired"
 //	@Router			/me/inbox/{id}/read [post]
 func (h *inboxHandlerImpl) Read(c fiber.Ctx) error { return h.mark(c, "read") }
 
@@ -461,9 +461,9 @@ func (h *inboxHandlerImpl) Read(c fiber.Ctx) error { return h.mark(c, "read") }
 //	@Produce		json
 //	@Param			id	path		string	true	"The item"
 //	@Success		200	{object}	handlers.InboxItem
-//	@Failure		401	{object}	apperrors.AppError	"server.unauthorized"
-//	@Failure		403	{object}	apperrors.AppError	"auth.person_required"
-//	@Failure		404	{object}	apperrors.AppError	"server.not_found: not the caller's, not there, or expired"
+//	@Failure		401	{object}	apperrors.Problem	"server.unauthorized"
+//	@Failure		403	{object}	apperrors.Problem	"auth.person_required"
+//	@Failure		404	{object}	apperrors.Problem	"server.not_found: not the caller's, not there, or expired"
 //	@Router			/me/inbox/{id}/unread [post]
 func (h *inboxHandlerImpl) Unread(c fiber.Ctx) error { return h.mark(c, "unread") }
 
@@ -475,9 +475,9 @@ func (h *inboxHandlerImpl) Unread(c fiber.Ctx) error { return h.mark(c, "unread"
 //	@Produce		json
 //	@Param			id	path		string	true	"The item"
 //	@Success		200	{object}	handlers.InboxItem
-//	@Failure		401	{object}	apperrors.AppError	"server.unauthorized"
-//	@Failure		403	{object}	apperrors.AppError	"auth.person_required"
-//	@Failure		404	{object}	apperrors.AppError	"server.not_found: not the caller's, not there, or expired"
+//	@Failure		401	{object}	apperrors.Problem	"server.unauthorized"
+//	@Failure		403	{object}	apperrors.Problem	"auth.person_required"
+//	@Failure		404	{object}	apperrors.Problem	"server.not_found: not the caller's, not there, or expired"
 //	@Router			/me/inbox/{id}/archive [post]
 func (h *inboxHandlerImpl) Archive(c fiber.Ctx) error { return h.mark(c, "archived") }
 
@@ -500,8 +500,8 @@ func (h *inboxHandlerImpl) markAll(c fiber.Ctx, read bool) error {
 //	@Tags			Inbox
 //	@Produce		json
 //	@Success		200	{object}	handlers.InboxUpdated
-//	@Failure		401	{object}	apperrors.AppError	"server.unauthorized"
-//	@Failure		403	{object}	apperrors.AppError	"auth.person_required"
+//	@Failure		401	{object}	apperrors.Problem	"server.unauthorized"
+//	@Failure		403	{object}	apperrors.Problem	"auth.person_required"
 //	@Router			/me/inbox/read-all [post]
 func (h *inboxHandlerImpl) ReadAll(c fiber.Ctx) error { return h.markAll(c, true) }
 
@@ -512,8 +512,8 @@ func (h *inboxHandlerImpl) ReadAll(c fiber.Ctx) error { return h.markAll(c, true
 //	@Tags			Inbox
 //	@Produce		json
 //	@Success		200	{object}	handlers.InboxUpdated
-//	@Failure		401	{object}	apperrors.AppError	"server.unauthorized"
-//	@Failure		403	{object}	apperrors.AppError	"auth.person_required"
+//	@Failure		401	{object}	apperrors.Problem	"server.unauthorized"
+//	@Failure		403	{object}	apperrors.Problem	"auth.person_required"
 //	@Router			/me/inbox/seen-all [post]
 func (h *inboxHandlerImpl) SeenAll(c fiber.Ctx) error { return h.markAll(c, false) }
 

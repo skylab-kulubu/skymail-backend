@@ -202,7 +202,7 @@ func formSourceRecipientInfos(rows []database.MailFormSourceRecipient) []mailer.
 // (SKYMAIL_TRACKING_OPERATOR), whom of a Forms source's respondents the
 // send may track, asked before the transaction that locks the source: each
 // address looked up in Keycloak (exact verified primary e-mail; none is
-// no_account), all of them at once within the people send's budget, then
+// tracked without an account), all of them at once within the people send's budget, then
 // core. The source is immutable, so the people asked about are the people
 // the send goes to. Nil when the flag is off, or the source cannot be read
 // (the transaction then refuses it, or tracks no one), or — direct, a send
@@ -295,10 +295,10 @@ func checkFormSourceTemplate(ctx context.Context, q *database.Queries, id uuid.U
 //	@Accept			json
 //	@Produce		json
 //	@Success		201	{object}	handlers.FormMailSource
-//	@Failure		400	{object}	apperrors.AppError	"Invalid snapshot, duplicate address or configured count limit exceeded"
-//	@Failure		403	{object}	apperrors.AppError	"The caller is not the configured Forms service or lacks current send-or-write permission"
+//	@Failure		400	{object}	apperrors.Problem	"Invalid snapshot, duplicate address or configured count limit exceeded"
+//	@Failure		403	{object}	apperrors.Problem	"The caller is not the configured Forms service or lacks current send-or-write permission"
 //	@Failure		413	{string}	string				"Existing request body limit exceeded"
-//	@Failure		503	{object}	apperrors.AppError	"Forms source preparation is not configured"
+//	@Failure		503	{object}	apperrors.Problem	"Forms source preparation is not configured"
 //	@Router			/form_mail_sources [post]
 func (h *mailHandlerImpl) CreateFormSource(c fiber.Ctx) error {
 	c.Set(fiber.HeaderCacheControl, "no-store")
@@ -347,9 +347,9 @@ func (h *mailHandlerImpl) CreateFormSource(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			id	path		string	true	"Prepared source ID, distinct from the form ID"
 //	@Success		200	{object}	handlers.FormMailSource
-//	@Failure		404	{object}	apperrors.AppError	"No such source owned by the caller"
-//	@Failure		409	{object}	apperrors.AppError	"Source invalidated or already consumed"
-//	@Failure		410	{object}	apperrors.AppError	"Prepare the Forms audience again"
+//	@Failure		404	{object}	apperrors.Problem	"No such source owned by the caller"
+//	@Failure		409	{object}	apperrors.Problem	"Source invalidated or already consumed"
+//	@Failure		410	{object}	apperrors.Problem	"Prepare the Forms audience again"
 //	@Router			/form_mail_sources/{id} [get]
 func (h *mailHandlerImpl) GetFormSource(c fiber.Ctx) error {
 	c.Set(fiber.HeaderCacheControl, "no-store")
@@ -387,20 +387,20 @@ func (h *mailHandlerImpl) GetFormSource(c fiber.Ctx) error {
 // SendFormSource godoc
 //
 //	@Summary		Send to an immutable Forms audience
-//	@Description	The source owner holding current skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is no_account) and core deciding, and the answer says tracking true. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): duyuru with a category by default; islem with transactional_statement true when the mail is about each respondent's own application: tracked as any Forms source send, queued in the bulk lane, sent from bilgi@ without List-Unsubscribe. The purpose is part of an exact retry.
+//	@Description	The source owner holding current skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is tracked without an account) and core deciding, and the answer says tracking true. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): duyuru with a category by default; islem with transactional_statement true when the mail is about each respondent's own application: tracked as any Forms source send, queued in the bulk lane, sent from bilgi@ without List-Unsubscribe. The purpose is part of an exact retry.
 //	@Tags			Mail
 //	@Param			send	body	requests.SendFormSource	true	"Prepared source and mail content"
 //	@Accept			json
 //	@Produce		json
 //	@Success		201	{object}	handlers.CreatedMailTask	"New task"
 //	@Success		200	{object}	handlers.CreatedMailTask	"Same task for an exact retry"
-//	@Failure		400	{object}	apperrors.AppError			"Invalid request or caller-supplied recipient/metadata fields. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team. A retry whose purpose differs is not the same request: 409 form_source.consumed"
-//	@Failure		403	{object}	apperrors.AppError			"Current skymail:mails:write permission required: skymail:mails:send opens single mails only, its holder submits the source for approval"
-//	@Failure		404	{object}	apperrors.AppError			"No such source owned by the caller"
-//	@Failure		409	{object}	apperrors.AppError			"Source invalidated, consumed differently or busy"
-//	@Failure		410	{object}	apperrors.AppError			"Prepare the Forms audience again"
-//	@Failure		422	{object}	apperrors.AppError			"Template or variables unavailable or invalid"
-//	@Failure		503	{object}	apperrors.AppError			"Transactional sending unavailable; mail_task.preference_unavailable (Retry-After): a duyuru send while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing is queued, the source is not consumed"
+//	@Failure		400	{object}	apperrors.Problem			"Invalid request or caller-supplied recipient/metadata fields. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team. A retry whose purpose differs is not the same request: 409 form_source.consumed"
+//	@Failure		403	{object}	apperrors.Problem			"Current skymail:mails:write permission required: skymail:mails:send opens single mails only, its holder submits the source for approval"
+//	@Failure		404	{object}	apperrors.Problem			"No such source owned by the caller"
+//	@Failure		409	{object}	apperrors.Problem			"Source invalidated, consumed differently or busy"
+//	@Failure		410	{object}	apperrors.Problem			"Prepare the Forms audience again"
+//	@Failure		422	{object}	apperrors.Problem			"Template or variables unavailable or invalid"
+//	@Failure		503	{object}	apperrors.Problem			"Transactional sending unavailable; mail_task.preference_unavailable (Retry-After): a duyuru send while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing is queued, the source is not consumed"
 //	@Router			/mail_tasks/form-source [post]
 func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 	var p requests.SendFormSource

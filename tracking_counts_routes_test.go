@@ -9,13 +9,13 @@ import (
 	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
 )
 
-// The counts of a send to fewer than 10 tracked people, and of mail the
-// system sends, tell of people: GET /:id/tracking gives them only to one who
-// may read the send's people (hub review T6; KVKK notice s3, §4). Anyone else
-// with mails:read gets withheld and no report: the send's own sender too,
-// unless SKYMAIL_SENDER_SEES_RECIPIENTS is on (ADR-0074 decision 9, addendum
-// 2026-11-08).
-func TestTrackingCountsOfASmallSendGoOnlyToWhoMayReadItsPeople(t *testing.T) {
+// The counts of a send to fewer than 10 tracked people go to anyone with
+// mails:read (Yusuf, 2026-11-24, K6: the threshold no longer limits who sees
+// them). The counts of mail the system sends tell of people: GET /:id/tracking
+// gives them only to one who may read the send's people (KVKK notice s3, §4).
+// Anyone else with mails:read gets withheld and no report: the person it names
+// as sender too (ADR-0074 decision 9, addendum 2026-11-08).
+func TestTrackingCountsOfASmallSendAreShownAndOfSystemMailWithheld(t *testing.T) {
 	for _, on := range []bool{false, true} {
 		t.Run(map[bool]string{false: "switch off", true: "switch on"}[on], func(t *testing.T) {
 			trackingCountsOfASmallSend(t, on)
@@ -63,10 +63,10 @@ func trackingCountsOfASmallSend(t *testing.T, senderSees bool) {
 		}
 	}
 
-	// A person's small send: the tracking role reads the counts, another
-	// mails:read does not; its sender only while the switch is on.
-	expect("small send", "baska", true)
-	expect("small send", "yusuf_okur", !senderSees)
+	// A person's small send: anyone with mails:read reads the counts, its
+	// sender too, the switch on or off.
+	expect("small send", "baska", false)
+	expect("small send", "yusuf_okur", false)
 	expect("small send", "takip_okur", false)
 
 	// Mail the system sends: only the role, not the person it names as sender.
