@@ -5201,59 +5201,75 @@ func (q *Queries) ListMailTaskLinkTargets(ctx context.Context, taskID uuid.UUID)
 const listMailTaskSends = `-- name: ListMailTaskSends :many
 WITH matching AS (SELECT mt.id,
                          mt.created_at,
-                         CASE
-                             WHEN $4::text <> 'open_rate' THEN NULL
-                             -- Never tracked (tracking_requested is set on every tracked
-                             -- send): no rate, nothing to read.
-                             WHEN NOT mt.tracking_requested THEN NULL
-                             WHEN mt.tracking_closed_at IS NOT NULL
-                                 OR COALESCE((SELECT max(q.sent_at) FROM mail_queue q WHERE q.task_id = mt.id), mt.created_at)
-                                        <= now() - interval '90 days'
-                                 THEN (SELECT tt.unique_likely_human_opens::float8 / NULLIF(tt.tracked_recipients, 0)
-                                       FROM mail_task_tracking_totals tt
-                                       WHERE tt.task_id = mt.id)
-                             ELSE (SELECT count(DISTINCT e.queue_id)
-                                   FROM mail_tracking_events e
-                                            JOIN mail_queue q ON q.id = e.queue_id
-                                   WHERE e.task_id = mt.id
-                                     AND NOT e.automated_likely
-                                     AND q.sent_at > now() - interval '90 days')::float8
-                                  / NULLIF((SELECT count(*)
-                                            FROM mail_queue q
-                                            WHERE q.task_id = mt.id
-                                              AND (q.tracking_token IS NOT NULL OR q.tracking_disabled_at IS NOT NULL)), 0)
-                             END AS open_rate
+                         mt.tracking_requested,
+                         mt.tracking_closed_at
                   FROM mail_tasks mt
          LEFT JOIN templates t ON t.id = mt.template_id
          LEFT JOIN mailing_lists ml ON ml.id = mt.mail_list_id
          LEFT JOIN mail_form_sources fs ON fs.id = mt.form_source_id
-                  WHERE ($5::uuid IS NULL OR mt.id = $5::uuid)
-                    AND ($6::text IS NULL OR mail_task_status(mt.id) = $6::text)
-  AND ($7::text IS NULL
-       OR strpos(skymail_search_fold(COALESCE(t.name, '')), skymail_search_fold($7::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold($7::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(t.subject, '')), skymail_search_fold($7::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(ml.name, '')), skymail_search_fold($7::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold($7::text)) > 0
+                  WHERE ($4::uuid IS NULL OR mt.id = $4::uuid)
+                    AND ($5::text IS NULL OR mail_task_status(mt.id) = $5::text)
+  AND ($6::text IS NULL
+       OR strpos(skymail_search_fold(COALESCE(t.name, '')), skymail_search_fold($6::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold($6::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(t.subject, '')), skymail_search_fold($6::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(ml.name, '')), skymail_search_fold($6::text)) > 0
+       OR strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold($6::text)) > 0
        OR EXISTS (SELECT 1
                   FROM mail_approval_tasks mat
                            JOIN mail_approvals a ON a.id = mat.approval_id
                   WHERE mat.task_id = mt.id
-                    AND strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold($7::text)) > 0)
+                    AND strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold($6::text)) > 0)
        OR (mt.mail_list_id IS NULL AND mt.form_source_id IS NULL AND mt.source_kind IS NULL
            AND EXISTS (SELECT 1
                        FROM mail_queue q
                        WHERE q.task_id = mt.id
-                         AND (strpos(skymail_search_fold(q.recipient_email), skymail_search_fold($7::text)) > 0
-                              OR strpos(skymail_search_fold(q.recipient_full_name), skymail_search_fold($7::text)) > 0))))
-  AND ($8::timestamptz IS NULL OR mt.created_at >= $8::timestamptz)
-  AND ($9::timestamptz IS NULL OR mt.created_at < $9::timestamptz)
-  AND ($10::text IS NULL OR mail_task_kind(mt.id) = $10::text)
-  AND ($11::uuid IS NULL OR mt.template_id = $11::uuid)
-  AND ($12::uuid IS NULL OR mt.mail_list_id = $12::uuid)
-  AND ($13::text IS NULL OR mt.sent_by = $13::text)),
+                         AND (strpos(skymail_search_fold(q.recipient_email), skymail_search_fold($6::text)) > 0
+                              OR strpos(skymail_search_fold(q.recipient_full_name), skymail_search_fold($6::text)) > 0))))
+  AND ($7::timestamptz IS NULL OR mt.created_at >= $7::timestamptz)
+  AND ($8::timestamptz IS NULL OR mt.created_at < $8::timestamptz)
+  AND ($9::text IS NULL OR mail_task_kind(mt.id) = $9::text)
+  AND ($10::uuid IS NULL OR mt.template_id = $10::uuid)
+  AND ($11::uuid IS NULL OR mt.mail_list_id = $11::uuid)
+  AND ($12::text IS NULL OR mt.sent_by = $12::text)),
+     -- The open rate is read only for sort open_rate, and only for the
+     -- matching sends that were tracked (tracking_requested is set on every
+     -- tracked send), in one pass each over their rows and their events:
+     -- per-send subqueries would cost the planner past jit_above_cost.
+     rated_tasks AS (SELECT id
+                     FROM matching
+                     WHERE $13::text = 'open_rate'
+                       AND tracking_requested),
+     tracked AS (SELECT q.task_id,
+                        count(*) FILTER (WHERE q.tracking_token IS NOT NULL OR q.tracking_disabled_at IS NOT NULL) AS tracked,
+                        max(q.sent_at) AS last_sent_at
+                 FROM mail_queue q
+                 WHERE q.task_id IN (SELECT id FROM rated_tasks)
+                 GROUP BY q.task_id),
+     opened AS (SELECT e.task_id, count(DISTINCT e.queue_id) AS opened
+                FROM mail_tracking_events e
+                         JOIN mail_queue q ON q.id = e.queue_id
+                WHERE e.task_id IN (SELECT id FROM rated_tasks)
+                  AND NOT e.automated_likely
+                  AND q.sent_at > now() - interval '90 days'
+                GROUP BY e.task_id),
+     rated AS (SELECT m.id,
+                      m.created_at,
+                      CASE
+                          WHEN $13::text <> 'open_rate' OR NOT m.tracking_requested THEN NULL
+                          -- As GET /mail_tasks/{id}/tracking reads it: the retained
+                          -- totals once tracking closed or 90 days after the last mail.
+                          WHEN m.tracking_closed_at IS NOT NULL
+                              OR COALESCE(tr.last_sent_at, m.created_at) <= now() - interval '90 days'
+                              THEN tt.unique_likely_human_opens::float8 / NULLIF(tt.tracked_recipients, 0)
+                          ELSE COALESCE(op.opened, 0)::float8 / NULLIF(tr.tracked, 0)
+                          END AS open_rate
+               FROM matching m
+                        LEFT JOIN tracked tr ON tr.task_id = m.id
+                        LEFT JOIN opened op ON op.task_id = m.id
+                        LEFT JOIN mail_task_tracking_totals tt ON tt.task_id = m.id),
      page AS (SELECT id, created_at, open_rate
-              FROM matching
+              FROM rated
               ORDER BY CASE WHEN $3::boolean THEN open_rate END ASC NULLS LAST,
                        CASE WHEN NOT $3::boolean THEN open_rate END DESC NULLS LAST,
                        CASE WHEN $3::boolean THEN created_at END,
@@ -5341,7 +5357,6 @@ type ListMailTaskSendsParams struct {
 	Limit         int32      `json:"limit"`
 	Offset        int32      `json:"offset"`
 	Ascending     bool       `json:"ascending"`
-	Sort          string     `json:"sort"`
 	TaskID        *uuid.UUID `json:"task_id"`
 	Status        *string    `json:"status"`
 	Search        *string    `json:"search"`
@@ -5351,6 +5366,7 @@ type ListMailTaskSendsParams struct {
 	TemplateID    *uuid.UUID `json:"template_id"`
 	ListID        *uuid.UUID `json:"list_id"`
 	SentBy        *string    `json:"sent_by"`
+	Sort          string     `json:"sort"`
 }
 
 type ListMailTaskSendsRow struct {
@@ -5420,7 +5436,6 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 		arg.Limit,
 		arg.Offset,
 		arg.Ascending,
-		arg.Sort,
 		arg.TaskID,
 		arg.Status,
 		arg.Search,
@@ -5430,6 +5445,7 @@ func (q *Queries) ListMailTaskSends(ctx context.Context, arg ListMailTaskSendsPa
 		arg.TemplateID,
 		arg.ListID,
 		arg.SentBy,
+		arg.Sort,
 	)
 	if err != nil {
 		return nil, err

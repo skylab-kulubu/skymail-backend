@@ -54,7 +54,9 @@ func TestSendListPlansOverFiftyThousandSends(t *testing.T) {
 	search := "kisi49999"
 	list := func(sort string, search *string) []any {
 		// ListMailTaskSends's arguments, in the order sqlc binds them.
-		return []any{int32(20), int32(0), false, sort, nil, nil, search, nil, nil, nil, nil, nil, nil}
+		// limit, offset, ascending, task_id, status, search, created_from,
+		// created_before, kind, template_id, list_id, sent_by, sort.
+		return []any{int32(20), int32(0), false, nil, nil, search, nil, nil, nil, nil, nil, nil, sort}
 	}
 	count := func(search *string) []any { return []any{nil, search, nil, nil, nil, nil, nil, nil} }
 	executionTime := regexp.MustCompile(`Execution Time: ([0-9.]+ ms)`)
@@ -69,6 +71,7 @@ func TestSendListPlansOverFiftyThousandSends(t *testing.T) {
 		{"q count", countMailTaskSends, count(&search), false},
 		{"count, no filter", countMailTaskSends, count(nil), false},
 		{"_sort=open_rate", listMailTaskSends, list("open_rate", nil), false},
+		{"_sort=open_rate, generic plan", listMailTaskSends, list("open_rate", nil), true},
 	} {
 		conn, err := db.Conn.Acquire(ctx)
 		if err != nil {

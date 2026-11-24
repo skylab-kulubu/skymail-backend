@@ -1722,28 +1722,8 @@ ORDER BY d.day;
 -- name: ListMailTaskSends :many
 WITH matching AS (SELECT mt.id,
                          mt.created_at,
-                         CASE
-                             WHEN sqlc.arg(sort)::text <> 'open_rate' THEN NULL
-                             -- Never tracked (tracking_requested is set on every tracked
-                             -- send): no rate, nothing to read.
-                             WHEN NOT mt.tracking_requested THEN NULL
-                             WHEN mt.tracking_closed_at IS NOT NULL
-                                 OR COALESCE((SELECT max(q.sent_at) FROM mail_queue q WHERE q.task_id = mt.id), mt.created_at)
-                                        <= now() - interval '90 days'
-                                 THEN (SELECT tt.unique_likely_human_opens::float8 / NULLIF(tt.tracked_recipients, 0)
-                                       FROM mail_task_tracking_totals tt
-                                       WHERE tt.task_id = mt.id)
-                             ELSE (SELECT count(DISTINCT e.queue_id)
-                                   FROM mail_tracking_events e
-                                            JOIN mail_queue q ON q.id = e.queue_id
-                                   WHERE e.task_id = mt.id
-                                     AND NOT e.automated_likely
-                                     AND q.sent_at > now() - interval '90 days')::float8
-                                  / NULLIF((SELECT count(*)
-                                            FROM mail_queue q
-                                            WHERE q.task_id = mt.id
-                                              AND (q.tracking_token IS NOT NULL OR q.tracking_disabled_at IS NOT NULL)), 0)
-                             END AS open_rate
+                         mt.tracking_requested,
+                         mt.tracking_closed_at
                   FROM mail_tasks mt
          LEFT JOIN templates t ON t.id = mt.template_id
          LEFT JOIN mailing_lists ml ON ml.id = mt.mail_list_id
@@ -1773,8 +1753,44 @@ WITH matching AS (SELECT mt.id,
   AND (sqlc.narg(template_id)::uuid IS NULL OR mt.template_id = sqlc.narg(template_id)::uuid)
   AND (sqlc.narg(list_id)::uuid IS NULL OR mt.mail_list_id = sqlc.narg(list_id)::uuid)
   AND (sqlc.narg(sent_by)::text IS NULL OR mt.sent_by = sqlc.narg(sent_by)::text)),
+     -- The open rate is read only for sort open_rate, and only for the
+     -- matching sends that were tracked (tracking_requested is set on every
+     -- tracked send), in one pass each over their rows and their events:
+     -- per-send subqueries would cost the planner past jit_above_cost.
+     rated_tasks AS (SELECT id
+                     FROM matching
+                     WHERE sqlc.arg(sort)::text = 'open_rate'
+                       AND tracking_requested),
+     tracked AS (SELECT q.task_id,
+                        count(*) FILTER (WHERE q.tracking_token IS NOT NULL OR q.tracking_disabled_at IS NOT NULL) AS tracked,
+                        max(q.sent_at) AS last_sent_at
+                 FROM mail_queue q
+                 WHERE q.task_id IN (SELECT id FROM rated_tasks)
+                 GROUP BY q.task_id),
+     opened AS (SELECT e.task_id, count(DISTINCT e.queue_id) AS opened
+                FROM mail_tracking_events e
+                         JOIN mail_queue q ON q.id = e.queue_id
+                WHERE e.task_id IN (SELECT id FROM rated_tasks)
+                  AND NOT e.automated_likely
+                  AND q.sent_at > now() - interval '90 days'
+                GROUP BY e.task_id),
+     rated AS (SELECT m.id,
+                      m.created_at,
+                      CASE
+                          WHEN sqlc.arg(sort)::text <> 'open_rate' OR NOT m.tracking_requested THEN NULL
+                          -- As GET /mail_tasks/{id}/tracking reads it: the retained
+                          -- totals once tracking closed or 90 days after the last mail.
+                          WHEN m.tracking_closed_at IS NOT NULL
+                              OR COALESCE(tr.last_sent_at, m.created_at) <= now() - interval '90 days'
+                              THEN tt.unique_likely_human_opens::float8 / NULLIF(tt.tracked_recipients, 0)
+                          ELSE COALESCE(op.opened, 0)::float8 / NULLIF(tr.tracked, 0)
+                          END AS open_rate
+               FROM matching m
+                        LEFT JOIN tracked tr ON tr.task_id = m.id
+                        LEFT JOIN opened op ON op.task_id = m.id
+                        LEFT JOIN mail_task_tracking_totals tt ON tt.task_id = m.id),
      page AS (SELECT id, created_at, open_rate
-              FROM matching
+              FROM rated
               ORDER BY CASE WHEN sqlc.arg(ascending)::boolean THEN open_rate END ASC NULLS LAST,
                        CASE WHEN NOT sqlc.arg(ascending)::boolean THEN open_rate END DESC NULLS LAST,
                        CASE WHEN sqlc.arg(ascending)::boolean THEN created_at END,
