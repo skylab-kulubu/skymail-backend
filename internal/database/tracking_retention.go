@@ -31,7 +31,8 @@ type TrackingWithdrawal struct {
 }
 
 // WithdrawTracking stops tracking a person (core's withdrawal: they turned
-// it off on my.). Their openings and clicks are deleted and every token of
+// it off on my.). Not called since B9 (every mail is tracked: the route
+// answers and changes nothing); it goes with the route. Their openings and clicks are deleted and every token of
 // mail to their subject is dropped (tracking_token NULL, tracking_disabled_at
 // set) — mail already sent, whose links still redirect by their own link
 // token, and mail still queued, which then goes out without the pixel.

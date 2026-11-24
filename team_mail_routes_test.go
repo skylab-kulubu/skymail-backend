@@ -110,7 +110,7 @@ func newTeamWorld(t *testing.T) *teamWorld {
 	w.directory.groups[teamLeaders.String()] = []*gocloak.User{lider.user()}
 
 	w.handler = handlers.NewMailApprovalHandler(w.store, w.mail, w.directory, handlers.MailApprovalOptions{
-		ClientID: "skymail", UIURL: "https://iletisim.yildizskylab.com/", Now: w.now, Teams: leaders,
+		ClientID: "skymail", UIURL: "https://notify.yildizskylab.com/", Now: w.now, Teams: leaders,
 	})
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
 	app.Use(func(c fiber.Ctx) error {

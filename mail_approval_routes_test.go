@@ -411,7 +411,7 @@ func newApprovalWorldWith(t *testing.T, poolSize int, handlerOpts []handlers.Mai
 
 	w.handler = handlers.NewMailApprovalHandler(store, w.mail, w.directory, handlers.MailApprovalOptions{
 		ClientID: "skymail",
-		UIURL:    "https://iletisim.yildizskylab.com/",
+		UIURL:    "https://notify.yildizskylab.com/",
 		Now:      w.now,
 	})
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
@@ -671,7 +671,7 @@ func TestSubmittingASendQueuesNothingAndTellsTheApprovers(t *testing.T) {
 		t.Fatalf("approval-requested went to %s", got)
 	}
 	vars := notices[0].variables
-	link := "https://iletisim.yildizskylab.com/mail-approvals/show/" + answer.ID.String()
+	link := "https://notify.yildizskylab.com/mail-approvals/show/" + answer.ID.String()
 	if vars["RequesterName"] != "Elif Yıldız" || vars["TemplateName"] != "Serbest Gönderim" || vars["AudienceName"] != "Tüm üyeler" ||
 		vars["RecipientCount"] != "2" || vars["ApproveUrl"] != link || vars["PreviewUrl"] != link+"#preview" {
 		t.Errorf("approval-requested variables = %v", vars)
@@ -901,7 +901,7 @@ func TestApprovingSendsExactlyWhatWasSubmittedOnce(t *testing.T) {
 	vars := notices[0].variables
 	if vars["Decision"] != "approved" || vars["DecidedBy"] != "Fatih Naz" || vars["DecisionNote"] != "Güzel olmuş." ||
 		vars["TemplateName"] != "Serbest Gönderim" || vars["AudienceName"] != "Tüm üyeler" ||
-		vars["RequestUrl"] != "https://iletisim.yildizskylab.com/mail-approvals/show/"+submitted.ID.String() ||
+		vars["RequestUrl"] != "https://notify.yildizskylab.com/mail-approvals/show/"+submitted.ID.String() ||
 		vars["DeadlineAt"] != "30.09.2026 13:00" {
 		t.Errorf("approval-resolved variables = %v", vars)
 	}
@@ -1366,7 +1366,7 @@ func TestReadingAnOverdueRequestWritesAndSendsNothing(t *testing.T) {
 		t.Errorf("after the sweep: %s %s", read.State, read.kinds())
 	}
 	if notices := w.mail.of(w.resolved.ID); len(notices) != 1 || notices[0].variables["Decision"] != "expired" ||
-		notices[0].variables["RequestUrl"] != "https://iletisim.yildizskylab.com/mail-approvals/show/"+overdue.ID.String() ||
+		notices[0].variables["RequestUrl"] != "https://notify.yildizskylab.com/mail-approvals/show/"+overdue.ID.String() ||
 		notices[0].variables["DeadlineAt"] != "30.09.2026 13:00" {
 		t.Errorf("expiry notices = %+v", notices)
 	}
