@@ -242,6 +242,20 @@ func TestSendListSearchFiltersAndSorts(t *testing.T) {
 		if got := letters(t, raw); got != tc.want || total != itoa(len(tc.want)) {
 			t.Errorf("%s: sends %q, X-Total-Count %s; want %q, %d", tc.query, got, total, tc.want, len(tc.want))
 		}
+		// The same filter oldest first goes through the other query
+		// (ListMailTaskSendsSorted), whose filters are a copy: the same
+		// sends, reversed, the same count.
+		if strings.Contains(tc.query, "_order=") {
+			continue
+		}
+		asc := "/v1/mail_tasks" + tc.query + sep(tc.query) + "_order=asc&_end=50"
+		status, raw, total = searchGet(t, app, searchReader, asc)
+		if status != 200 {
+			t.Fatalf("%s: %d %s", asc, status, raw)
+		}
+		if got, want := letters(t, raw), reversed(tc.want); got != want || total != itoa(len(tc.want)) {
+			t.Errorf("%s: sends %q, X-Total-Count %s; want %q, %d", asc, got, total, want, len(tc.want))
+		}
 	}
 
 	// Each send says its kind.
@@ -459,6 +473,14 @@ func sep(query string) string {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+func reversed(letters string) string {
+	runes := []rune(letters)
+	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+		runes[i], runes[j] = runes[j], runes[i]
+	}
+	return string(runes)
+}
 
 func equalMaps(a, b map[string]string) bool {
 	if len(a) != len(b) {
