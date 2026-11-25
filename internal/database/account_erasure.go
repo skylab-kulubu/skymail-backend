@@ -58,6 +58,9 @@ const (
 	// a file still to go out with its name and size, a sent one's name and
 	// size.
 	AccountErasureAttachmentsDeleted = "attachments_deleted"
+	// The record of who read a person's mail history (GET
+	// /recipients/history): the reads of the person's addresses deleted.
+	AccountErasureHistoryViewsDeleted = "history_views_deleted"
 )
 
 // ErrAccountErasureInProgress says a send to the person, or another person's
@@ -267,7 +270,9 @@ func newEraser(ctx context.Context, tx pgx.Tx, erasure AccountErasure) (*eraser,
 		              UNION ALL
 		              SELECT actor_name FROM template_content_sensitive_events WHERE actor_sub = @subject
 		              UNION ALL
-		              SELECT actor_name FROM sent_content_views WHERE actor_sub = @subject),
+		              SELECT actor_name FROM sent_content_views WHERE actor_sub = @subject
+		              UNION ALL
+		              SELECT actor_name FROM recipient_history_views WHERE actor_sub = @subject),
 		     full_names AS (SELECT DISTINCT lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) AS name
 		                    FROM held
 		                    WHERE name IS NOT NULL)
@@ -291,7 +296,7 @@ func newEraser(ctx context.Context, tx pgx.Tx, erasure AccountErasure) (*eraser,
 		AccountErasureApprovalRecipientsRemoved, AccountErasureApprovalPlaceholders, AccountErasureApprovalSendLinksDeleted,
 		AccountErasureTrackingEventsDeleted, AccountErasureTrackingLinksCleared, AccountErasureSuppressionsDeleted,
 		AccountErasureInboxItemsDeleted, AccountErasureInboxItemsNamingDeleted, AccountErasureUnsubscribesDeleted,
-		AccountErasureAttachmentsDeleted,
+		AccountErasureAttachmentsDeleted, AccountErasureHistoryViewsDeleted,
 	} {
 		counts[key] = 0
 	}
@@ -691,6 +696,13 @@ var dropNamesSteps = []erasureStep{
 		      SET actor_sub = @deleted_sub, actor_name = @deleted_name
 		      WHERE actor_sub = @subject`,
 	},
+	{
+		name:  "readers of mail histories",
+		count: AccountErasureActorColumnsReplaced,
+		sql: `UPDATE recipient_history_views
+		      SET actor_sub = @deleted_sub, actor_name = @deleted_name
+		      WHERE actor_sub = @subject`,
+	},
 }
 
 // replaceApprovalRecipients takes the person out of every Mail onayı
@@ -789,6 +801,15 @@ var dropAddressSteps = []erasureStep{
 		name:  "unsubscribes",
 		count: AccountErasureUnsubscribesDeleted,
 		sql:   `DELETE FROM mail_unsubscribes WHERE address = ANY (@emails::text[])`,
+	},
+	{
+		// Who read the person's mail history: the record names them by the
+		// SHA-256 of an address, as RecordRecipientHistoryView wrote it.
+		name:  "reads of the person's history",
+		count: AccountErasureHistoryViewsDeleted,
+		sql: `DELETE FROM recipient_history_views
+		      WHERE address_sha256 IN (SELECT encode(sha256(convert_to(x, 'UTF8')), 'hex')
+		                               FROM unnest(@emails::text[]) AS x)`,
 	},
 	{
 		// Sent and failed mail to the person stays as a row, so every count

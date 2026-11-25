@@ -32,6 +32,7 @@ type MailHandler interface {
 	GetTaskQueueItems(c fiber.Ctx) error
 	GetQueueItemContent(c fiber.Ctx) error
 	ListContentViews(c fiber.Ctx) error
+	GetRecipientHistory(c fiber.Ctx) error
 	GetSummary(c fiber.Ctx) error
 	GetTrackingMode(c fiber.Ctx) error
 	GetTracking(c fiber.Ctx) error
@@ -146,7 +147,7 @@ func operatorTracking(ctx context.Context, m mailer.Mailer, asked bool, template
 //	@Failure		400		{object}	apperrors.Problem	"Bad Request. attachment.not_allowed: a send to a list or a group takes no attachments. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team"
 //	@Failure		422		{object}	apperrors.Problem	"mail.audience_unavailable: the Keycloak group is unknown or gone"
 //	@Failure		500		{object}	apperrors.Problem	"Internal Server Error"
-//	@Failure		503		{object}	apperrors.Problem	"mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE; README, \"Toplu postada tercih\"), core did not say whom the send may go to; nothing is queued"
+//	@Failure		503		{object}	apperrors.Problem	"mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE; README, \"Toplu	postada	tercih\"), core did not say whom the send may go to; nothing is queued"
 //	@Router			/mail_tasks [post]
 func (h *mailHandlerImpl) CreateTask(c fiber.Ctx) error {
 	var params requests.CreateMailTask
@@ -488,7 +489,7 @@ type SendPurposeFields struct {
 //	@Param			from		query		string	false	"Sends created on or after this date (YYYY-MM-DD, Europe/Istanbul) or RFC 3339 time (encode + as %2B; a space where + was is read as +)"
 //	@Param			to			query		string	false	"Sends created on or before this date (YYYY-MM-DD, Europe/Istanbul, the whole day) or RFC 3339 time (encode + as %2B)"
 //	@Param			kind		query		string	false	"bulk (a list, a group, a Forms source, an approved send, a News send), system (mail a service or SkyMail sent), single (a person's single mail)"	Enums(bulk,single,system)
-//	@Param			template_id	query		string	false	"Sends of this template"																									format(uuid)
+//	@Param			template_id	query		string	false	"Sends of this template"																															format(uuid)
 //	@Param			list_id		query		string	false	"Sends to this list or Keycloak group (mail_list_id)"																								format(uuid)
 //	@Param			sent_by		query		string	false	"Sends by this sender (the sender's sub, as sent_by returns it)"
 //	@Param			_sort		query		string	false	"Order"		Enums(created_at,open_rate)	default(created_at)

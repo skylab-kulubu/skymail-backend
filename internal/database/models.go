@@ -675,6 +675,16 @@ type Recipient struct {
 	AccountAt *time.Time `json:"-"`
 }
 
+// Each read of an address's mail history: whose (SHA-256 of the address), who, when. Account erasure deletes the person's and replaces the reader.
+type RecipientHistoryView struct {
+	ID            int64     `json:"id"`
+	AddressSha256 string    `json:"address_sha256"`
+	ActorSub      *string   `json:"actor_sub"`
+	ActorName     *string   `json:"actor_name"`
+	Results       int       `json:"results"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
 // Receipts of the recipient retention run: mode, times, status, counts. No person, address or name.
 type RecipientRetentionRun struct {
 	ID         int64      `json:"id"`

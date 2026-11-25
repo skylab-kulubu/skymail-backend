@@ -116,6 +116,8 @@ type Querier interface {
 	// test (POST /v1/news_sends/test) is a send of club.news to its sender
 	// without a source, at most 3 a minute.
 	CountRecentNewsTests(ctx context.Context, arg CountRecentNewsTestsParams) (int, error)
+	// How many queue rows went to the address (X-Total-Count).
+	CountRecipientHistory(ctx context.Context, email string) (int64, error)
 	CountRecipients(ctx context.Context) (int64, error)
 	CountRecipientsByMailingListId(ctx context.Context, mailListID uuid.UUID) (int64, error)
 	// After a restore from backup (docs/data-lifecycle.md, Backup and restore),
@@ -219,6 +221,9 @@ type Querier interface {
 	// Deletes up to batch_size of the keys older than retention_hours: the
 	// content sweep's step.
 	DeleteOldMailTaskIdempotencyKeys(ctx context.Context, arg DeleteOldMailTaskIdempotencyKeysParams) (int64, error)
+	// Deletes up to batch_size records of who read a history, older than
+	// retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
+	DeleteOldRecipientHistoryViews(ctx context.Context, arg DeleteOldRecipientHistoryViewsParams) (int64, error)
 	// Deletes up to batch_size of the oldest records of who opened a masked mail
 	// that are older than retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
 	DeleteOldSentContentViews(ctx context.Context, arg DeleteOldSentContentViewsParams) (int64, error)
@@ -505,6 +510,17 @@ type Querier interface {
 	// between the reading and the writing (a row it is emptying is waited for and
 	// read again: emptied, it is not taken).
 	ListQueueRowsToMask(ctx context.Context, arg ListQueueRowsToMaskParams) ([]ListQueueRowsToMaskRow, error)
+	// A person's mail history (GET /recipients/history): every queue row to the
+	// address, compared whole and case-insensitively, newest first with the row
+	// id breaking ties, down idx_mail_queue_recipient_address. Each row with its
+	// send, its delivery (skipped: not sent on purpose, as mail_task_status()
+	// reads it; undelivered: a report said the address does not exist after it
+	// was sent) and its openings and clicks within the recipient's 90-day window
+	// (tracking.EventRetentionDays), as ListTrackingRecipients counts them.
+	// content_gone: the send's content was emptied (retention, a sensitive send
+	// not kept) or the row's own body was (account erasure of what named
+	// someone). No tracking token, unsubscribe link or body is selected.
+	ListRecipientHistory(ctx context.Context, arg ListRecipientHistoryParams) ([]ListRecipientHistoryRow, error)
 	// The openings of a send's masked content, newest first: who, which queue row,
 	// how it was masked. No recipient (idx_sent_content_views_task).
 	ListSentContentViews(ctx context.Context, arg ListSentContentViewsParams) ([]ListSentContentViewsRow, error)
@@ -661,6 +677,10 @@ type Querier interface {
 	RecordBounceReaderPoll(ctx context.Context, arg RecordBounceReaderPollParams) error
 	// Numbered after the request's last event; the caller holds its row lock.
 	RecordMailApprovalEvent(ctx context.Context, arg RecordMailApprovalEventParams) (MailApprovalEvent, error)
+	// Records that someone read an address's mail history, before it is answered:
+	// the address as the SHA-256 of it trimmed and lower-cased, as account
+	// erasure hashes the person's addresses to find these records.
+	RecordRecipientHistoryView(ctx context.Context, arg RecordRecipientHistoryViewParams) error
 	// Keeps on a template that a Template seed was refused, and why. Refusing the
 	// content refused last time again keeps when it was first refused; other
 	// content starts over. Nothing that is sent changes, so updated_at stays.

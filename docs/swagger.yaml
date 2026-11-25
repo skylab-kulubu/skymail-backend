@@ -1261,6 +1261,128 @@ components:
           description: When the unsubscribe reversed had been made.
           type: string
       type: object
+    handlers.RecipientHistoryItem:
+      properties:
+        attempts:
+          type: integer
+        content:
+          description: 'available, or deleted: the send''s content was emptied (MAIL_CONTENT_RETENTION_DAYS,
+            a sensitive send not kept) or this mail''s own body was. GET /mail_tasks/{task_id}/queue/{id}/content
+            opens it while available.'
+          enum:
+          - available
+          - deleted
+          type: string
+        error:
+          description: 'Why it failed or was skipped (suppressed:…, preference: …,
+            reserved_domain:…, cancelled, the relay''s reply); null otherwise.'
+          type: string
+        id:
+          description: The queue row.
+          type: string
+        queued_at:
+          type: string
+        recipient_email:
+          description: The row's address and name as queued; an account erasure or
+            the recipient retention run empties them, and the row is then no longer
+            found by its address.
+          type: string
+        recipient_full_name:
+          type: string
+        recipient_sub:
+          type: string
+        send:
+          $ref: '#/components/schemas/handlers.RecipientHistorySend'
+        sent_at:
+          description: When the relay took it; null when not sent (or sent by an image
+            from before sent_at).
+          type: string
+        skipped:
+          description: 'Not sent on purpose (a reserved domain, a suppressed or unsubscribed
+            address, core''s no, a cancelled send): failed, never making the send
+            read failed.'
+          type: boolean
+        status:
+          description: pending, processing, sent or failed.
+          enum:
+          - pending
+          - processing
+          - sent
+          - failed
+          type: string
+        subject:
+          description: The mail's subject as it was rendered; "" once erased.
+          type: string
+        suppressed_but_sent:
+          description: Account mail sent to a suppressed address anyway.
+          type: boolean
+        task_id:
+          description: The send (GET /mail_tasks/{id}).
+          type: string
+        tracking:
+          $ref: '#/components/schemas/handlers.RecipientHistoryTracking'
+        undelivered:
+          description: Sent, then a report said the address does not exist (a hard
+            bounce naming the row's own address).
+          type: boolean
+      type: object
+    handlers.RecipientHistorySend:
+      description: The send the mail was part of.
+      properties:
+        category:
+          type: string
+        created_at:
+          type: string
+        kind:
+          description: bulk, single or system, as GET /mail_tasks's kind.
+          enum:
+          - bulk
+          - single
+          - system
+          type: string
+        mail_list_id:
+          type: string
+        mail_list_name:
+          type: string
+        purpose:
+          enum:
+          - islem
+          - duyuru
+          type: string
+        sent_by:
+          description: Who sent it (the Keycloak subject; skymail for SkyMail's own
+            notices; Silinmiş kullanıcı's subject once erased).
+          type: string
+        template_id:
+          type: string
+        template_key:
+          type: string
+        template_name:
+          type: string
+      type: object
+    handlers.RecipientHistoryTracking:
+      description: Openings and clicks.
+      properties:
+        clicks:
+          type: integer
+        first_likely_human_open_at:
+          description: The first opening or click not marked as likely automated.
+          type: string
+        first_open_at:
+          description: The first opening, a mail client's prefetch included.
+          type: string
+        last_clicked_at:
+          type: string
+        opens:
+          type: integer
+        skip_reason:
+          description: Why a row of a tracked send was not tracked; null otherwise.
+          type: string
+        tracked:
+          description: 'The row had a tracking token: its openings and clicks were
+            recorded.'
+          type: boolean
+      type: object
     handlers.SeedOverride:
       description: 'What a forced seed wrote over: the rules that held, the version
         that was sent and the operator''s versions after the last seed — what an unforced
@@ -3945,10 +4067,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/apperrors.Problem'
-          description: 'mail_task.preference_unavailable (Retry-After): while every
-            duyuru send obeys the recipients'' preferences (SKYMAIL_BULK_PREFERENCE;
-            README, \"Toplu postada tercih\"), core did not say whom the send may
-            go to; nothing is queued'
+          description: "mail_task.preference_unavailable (Retry-After): while every
+            duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE;
+            README, \\\"Toplu\tpostada\ttercih\\\"), core did not say whom the send
+            may go to; nothing is queued"
       summary: Create a new mail task
       tags:
       - Mail
@@ -5951,6 +6073,70 @@ paths:
       summary: Send a notification to people
       tags:
       - Notifications
+  /recipients/history:
+    get:
+      description: 'Every mail SkyMail queued to the address, compared whole and case-insensitively,
+        newest first with the row id breaking ties: the send it was part of, whether
+        it went (status, skipped, undelivered), its openings and clicks within the
+        recipient''s 90-day window, and whether its content is still kept. Every caller
+        with skymail:mails:read reads every address''s history; each read, whose and
+        by whom, is recorded before it is answered (the address as its SHA-256), kept
+        SENT_CONTENT_VIEWS_RETENTION_DAYS. Mail whose address an account erasure or
+        the recipient retention run emptied, and a send that keeps no record of its
+        recipient (erase_after_send), is not found. X-Total-Count counts every row
+        to the address. Never cached.'
+      parameters:
+      - description: The address (at most 320 bytes)
+        in: query
+        name: email
+        required: true
+        schema:
+          type: string
+      - description: Start index
+        in: query
+        name: _start
+        schema:
+          type: integer
+      - description: End index
+        in: query
+        name: _end
+        schema:
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/handlers.RecipientHistoryItem'
+                type: array
+          description: OK
+          headers:
+            X-Total-Count:
+              description: Number of mails queued to the address
+              schema:
+                type: integer
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.Problem'
+          description: 'validation_error: email missing or not an address'
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.Problem'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/apperrors.Problem'
+          description: Internal Server Error
+      summary: List the mail queued to an address
+      tags:
+      - Mail
   /suppressions:
     get:
       description: 'One list of two records, most recent first. reason bounce: an

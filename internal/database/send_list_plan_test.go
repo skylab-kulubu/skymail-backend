@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// The send list's queries over 50,000 sends (hub ticket skymail-yeni-tasarim
-// 16, review): 48,000 single mails of one recipient each and 2,000 tracked
+// The send list's queries, and a person's mail history (ticket 17), over
+// 50,000 sends (hub ticket skymail-yeni-tasarim 16, review): 48,000 single mails of one recipient each and 2,000 tracked
 // list sends of 20, 88,000 queue rows. Each plan's execution time is logged
 // (go test -v), for the pull request; nothing is asserted about it, a CI
 // runner's speed varies.
@@ -81,6 +81,11 @@ func TestSendListPlansOverFiftyThousandSends(t *testing.T) {
 		{"_sort=open_rate", listMailTaskSendsSorted, sorted("open_rate"), false, ""},
 		{"_sort=open_rate, generic plan", listMailTaskSendsSorted, sorted("open_rate"), true, ""},
 		{"_order=asc", listMailTaskSendsSorted, append(sorted("")[:2:2], append([]any{true}, sorted("")[3:]...)...), false, ""},
+		// A person's mail history (B2): read down the address index, the
+		// page and the count alike, never by reading every queue row.
+		{"recipient history page", listRecipientHistory, []any{"Kisi49999@ornek.example.net", int32(20), int32(0)}, false, "idx_mail_queue_recipient_address"},
+		{"recipient history page, generic plan", listRecipientHistory, []any{"kisi49999@ornek.example.net", int32(20), int32(0)}, true, "idx_mail_queue_recipient_address"},
+		{"recipient history count", countRecipientHistory, []any{"kisi49999@ornek.example.net"}, false, "idx_mail_queue_recipient_address"},
 	} {
 		conn, err := db.Conn.Acquire(ctx)
 		if err != nil {

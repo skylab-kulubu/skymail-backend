@@ -694,6 +694,10 @@ func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, m
 	// Who opened a masked mail: the audit role alone (handlers.AuditReadRole),
 	// not the roles that open the content, nor mails:read.
 	tasks.Get("/:id/content-views", auth.RequireAnyPermission(handlers.AuditReadRole), mail.ListContentViews)
+
+	// A person's mail history by address (B2): every reader is recorded.
+	recipients := api.Group("/recipients")
+	recipients.Get("/history", auth.RequireAnyPermission("skymail:mails:read"), mail.GetRecipientHistory)
 }
 
 // contentSweepInterval is how often the content sweep runs: a sensitive
@@ -716,7 +720,8 @@ const viewSweepBatch = 500
 // of its rows is still to go out — at
 // startup and every interval after (docs/data-lifecycle.md, sent mail
 // content). It runs while the sender is paused too: it touches no row still
-// to go out. Then it deletes the records of who opened a masked mail older
+// to go out. Then it deletes the records of who opened a masked mail and of
+// who read a mail history (recipient_history_views) older
 // than viewRetentionDays, the bounces older than a year
 // (bounce.RetentionDays) and the records of reversed unsubscribes and of
 // removed suppressions older than three years, the Idempotency-Keys of
@@ -761,6 +766,13 @@ func clearMailContent(ctx context.Context, db *database.Store, retentionDays, vi
 		}
 		if views > 0 {
 			log.Info().Int64("views", views).Msg("deleted the records of masked mail openings past retention")
+		}
+		reads, err := db.DeleteRecipientHistoryViews(ctx, viewRetentionDays, viewSweepBatch)
+		if err != nil && ctx.Err() == nil {
+			log.Error().Err(err).Msg("recipient history reads sweep failed")
+		}
+		if reads > 0 {
+			log.Info().Int64("reads", reads).Msg("deleted the records of mail history reads past retention")
 		}
 		bounces, err := db.DeleteMailBounces(ctx, bounce.RetentionDays, viewSweepBatch)
 		if err != nil && ctx.Err() == nil {
