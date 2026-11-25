@@ -1018,6 +1018,125 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
+            "handlers.MailTaskEvent": {
+                "properties": {
+                    "actor": {
+                        "$ref": "#/components/schemas/handlers.MailTaskEventActor"
+                    },
+                    "approval_id": {
+                        "description": "approval_*: the request.",
+                        "type": "string"
+                    },
+                    "at": {
+                        "description": "When it happened. retried: the first retry of the hour; finished: about when the last recipient was answered (its sending, or the attempt that failed it); bounced: the latest report.",
+                        "type": "string"
+                    },
+                    "counts": {
+                        "$ref": "#/components/schemas/handlers.MailTaskEventCounts"
+                    },
+                    "kind": {
+                        "description": "approval_* (the Mail onayı request the send was queued from, as GET /mail_approvals/{id} tells its history), created, queued, paused, resumed, retried, cancelled, finished or bounced.",
+                        "enum": [
+                            "approval_submitted",
+                            "approval_resubmitted",
+                            "approval_edited",
+                            "approval_returned",
+                            "approval_accepted",
+                            "approval_declined",
+                            "approval_approved",
+                            "approval_rejected",
+                            "approval_expired",
+                            "created",
+                            "queued",
+                            "paused",
+                            "resumed",
+                            "retried",
+                            "cancelled",
+                            "finished",
+                            "bounced"
+                        ],
+                        "type": "string"
+                    },
+                    "note": {
+                        "description": "An approval event's note: a rejection's reason, or the note an approver or submitter left; null otherwise.",
+                        "type": "string"
+                    },
+                    "reason": {
+                        "description": "paused: operator (by hand) or failure_rate (its recipients failed past SKYMAIL_FAILURE_PAUSE_COUNT and SKYMAIL_FAILURE_PAUSE_PERCENT); null otherwise.",
+                        "enum": [
+                            "operator",
+                            "failure_rate"
+                        ],
+                        "type": "string"
+                    },
+                    "until": {
+                        "description": "retried: the last retry of the hour; null otherwise.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailTaskEventActor": {
+                "description": "Who did it; null for what SkyMail did of its own accord (queued, retried, finished, bounced, a pause by the failure rate).",
+                "properties": {
+                    "deleted": {
+                        "description": "The account was erased or is no longer in Keycloak.",
+                        "type": "boolean"
+                    },
+                    "kind": {
+                        "description": "person, service (a service account's token: a login code, a Forms confirmation) or system (SkyMail itself, as the sender of its own notices).",
+                        "enum": [
+                            "person",
+                            "service",
+                            "system"
+                        ],
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "The name: as the event's record keeps it, or as Keycloak names the account now. \"Silinmiş kullanıcı\" for an erased account or one Keycloak no longer has; null when Keycloak did not answer in time.",
+                        "type": "string"
+                    },
+                    "sub": {
+                        "description": "The Keycloak subject; null for SkyMail.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "handlers.MailTaskEventCounts": {
+                "description": "The numbers the event tells; null on an event that tells none.",
+                "properties": {
+                    "bounced": {
+                        "description": "bounced: the recipients a report said do not exist (a hard bounce naming the row's own address), after their mail was sent.",
+                        "type": "integer"
+                    },
+                    "cancelled": {
+                        "description": "cancelled: the pending recipients the cancel skipped; finished: every recipient skipped by a cancel.",
+                        "type": "integer"
+                    },
+                    "failed": {
+                        "description": "finished: failed for good at the relay (a permanent refusal, or every retry spent).",
+                        "type": "integer"
+                    },
+                    "recipients": {
+                        "description": "queued: the recipients queued.",
+                        "type": "integer"
+                    },
+                    "retries": {
+                        "description": "retried: the retries scheduled in the hour; finished: the recipients tried more than once.",
+                        "type": "integer"
+                    },
+                    "sent": {
+                        "description": "finished: sent.",
+                        "type": "integer"
+                    },
+                    "skipped": {
+                        "description": "finished: skipped, never sent: a reserved domain, a suppressed or unsubscribed address, core's no (opted out, inactive, ambiguous).",
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
             "handlers.MailTaskItem": {
                 "properties": {
                     "audience": {
@@ -4772,7 +4891,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE; README, \\\"Toplu postada tercih\\\"), core did not say whom the send may go to; nothing is queued"
+                        "description": "mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE; README, \\\"Toplu\tpostada\ttercih\\\"), core did not say whom the send may go to; nothing is queued"
                     }
                 },
                 "summary": "Create a new mail task",
@@ -5324,6 +5443,81 @@ const docTemplate = `{
                     }
                 },
                 "summary": "List who opened a send's masked content",
+                "tags": [
+                    "Mail"
+                ]
+            }
+        },
+        "/mail_tasks/{id}/events": {
+            "get": {
+                "description": "The send's history, oldest first: the Mail onayı request it came from (approval_*), created (who queued it: a person, a service account, or SkyMail), queued (how many recipients), every pause (by hand or by the failure rate), resume and cancel with who did it, the mailer's retries counted by the hour (retried), finished (once no recipient is pending or being sent: sent, failed, skipped, cancelled, retried) and bounced (recipients reported not to exist after sending). Two events at one instant come in that order. Pauses, resumes and retries before 20261125150000 were not recorded: a send paused or cancelled then tells its current pause or cancel only. A send that keeps no record of its recipient (erase_after_send) tells no queued or finished. An erased account reads as Silinmiş kullanıcı. Names no row keeps (a sender's) are read from Keycloak within 2 seconds and are null past that. Every caller with skymail:mails:read reads every send's events. Never cached.",
+                "parameters": [
+                    {
+                        "description": "Task ID",
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "items": {
+                                        "$ref": "#/components/schemas/handlers.MailTaskEvent"
+                                    },
+                                    "type": "array"
+                                }
+                            }
+                        },
+                        "description": "OK"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.Problem"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.Problem"
+                                }
+                            }
+                        },
+                        "description": "Forbidden"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.Problem"
+                                }
+                            }
+                        },
+                        "description": "Not Found"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/apperrors.Problem"
+                                }
+                            }
+                        },
+                        "description": "Internal Server Error"
+                    }
+                },
+                "summary": "List a send's events",
                 "tags": [
                     "Mail"
                 ]

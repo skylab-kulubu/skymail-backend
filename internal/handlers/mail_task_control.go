@@ -85,6 +85,7 @@ func (h *mailHandlerImpl) controlTask(c fiber.Ctx, control taskControl) error {
 	if caller.sub == "" {
 		return apperrors.ErrForbidden
 	}
+	callerName := localText(c, "user_name")
 	ctx := c.Context()
 	err = h.db.InTx(ctx, func(q *database.Queries) error {
 		task, err := q.GetMailTaskControl(ctx, id)
@@ -97,6 +98,11 @@ func (h *mailHandlerImpl) controlTask(c fiber.Ctx, control taskControl) error {
 		if !task.Bulk {
 			return errMailTaskNotBulk
 		}
+		// The event is written with the change, by whoever made it
+		// (GET /mail_tasks/{id}/events); a call that changed nothing writes
+		// none.
+		event := database.RecordMailTaskEventParams{TaskID: id, ActorSub: &caller.sub, ActorName: callerName}
+		var changed int64
 		switch control {
 		case pauseTask:
 			if task.CancelledAt != nil {
@@ -108,12 +114,15 @@ func (h *mailHandlerImpl) controlTask(c fiber.Ctx, control taskControl) error {
 			if !task.Unfinished {
 				return errMailTaskFinished
 			}
-			_, err = q.PauseMailTask(ctx, database.PauseMailTaskParams{ID: id, PausedBy: caller.sub})
+			reason := "operator"
+			event.Kind, event.Reason = SendEventPaused, &reason
+			changed, err = q.PauseMailTask(ctx, database.PauseMailTaskParams{ID: id, PausedBy: caller.sub})
 		case resumeTask:
 			if task.CancelledAt != nil {
 				return errMailTaskCancelled
 			}
-			_, err = q.ResumeMailTask(ctx, id)
+			event.Kind = SendEventResumed
+			changed, err = q.ResumeMailTask(ctx, id)
 		case cancelTask:
 			if task.CancelledAt != nil {
 				return nil
@@ -121,11 +130,18 @@ func (h *mailHandlerImpl) controlTask(c fiber.Ctx, control taskControl) error {
 			if !task.Unfinished {
 				return errMailTaskFinished
 			}
-			if _, err = q.CancelMailTask(ctx, database.CancelMailTaskParams{ID: id, CancelledBy: caller.sub}); err == nil {
-				_, err = q.CancelPendingRows(ctx, &id)
+			event.Kind = SendEventCancelled
+			if changed, err = q.CancelMailTask(ctx, database.CancelMailTaskParams{ID: id, CancelledBy: caller.sub}); err == nil {
+				var skipped int64
+				skipped, err = q.CancelPendingRows(ctx, &id)
+				n := int(skipped)
+				event.Count = &n
 			}
 		}
-		return err
+		if err != nil || changed == 0 {
+			return err
+		}
+		return q.RecordMailTaskEvent(ctx, event)
 	})
 	if err != nil {
 		return err

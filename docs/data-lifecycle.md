@@ -251,6 +251,11 @@ run does (see [Recipients without an account](#recipients-without-an-account)):
   whether a template's sends show their content.
 - `sent_content_views.actor_sub` with `actor_name` — who opened a sensitive
   send's masked content (see [Sent mail content](#sent-mail-content)).
+- `mail_task_events.actor_sub` with `actor_name` — who paused, resumed or
+  cancelled a send, and the name their token carried; SkyMail's own events (a
+  pause by the failure rate, retries) have none. `mail_tasks.paused_by` and
+  `cancelled_by` hold the subject of the current pause and the cancel. Kept
+  with the send.
 - `mail_approvals.submitter_sub`, `submitter_name` and `submitter_email` — who
   submitted a request, and the name and verified address their token carried
   (`submitter_email_unverified` says the token carried an address Keycloak
@@ -765,7 +770,8 @@ person is cleared whole, never masked.
 | `mail_queue`, `sent`/`failed` | `recipient_email` in E or `recipient_sub` = S | `recipient_full_name` Silinmiş kullanıcı, `recipient_email`, `subject`, `body` `''`, `body_html`, `error`, `recipient_sub`, `list_unsubscribe_url` NULL; the row stays for the counts |
 | `mail_queue`, anyone else's, `sent`/`failed` | `subject`, `body` or `body_html` names E or N | those three cleared (`''`, `''`, NULL) |
 | `mail_queue`, anyone else's, `pending`/`processing` | the same | waited for (`202`): it goes out as it was rendered, then it is cleared |
-| `mail_tasks` | `sent_by` = S | Silinmiş kullanıcı |
+| `mail_tasks` | `sent_by`, `paused_by` or `cancelled_by` = S | that column Silinmiş kullanıcı |
+| `mail_task_events` | `actor_sub` = S | `actor_sub` and `actor_name` Silinmiş kullanıcı |
 | `mail_tasks.body_variables` | names E or N, or every row of the send is to E | `{}` — a send to the person alone, Keycloak's reset and verification mails among them |
 | `mail_approvals` | `submitter_sub` = S | sub and name Silinmiş kullanıcı, `submitter_email` NULL, `submitter_email_unverified` false |
 | `mail_approvals.body_variables` | names E or N | `{}` |

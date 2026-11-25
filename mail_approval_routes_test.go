@@ -124,7 +124,15 @@ func (d *approverDirectory) VerifiedAccountByEmail(_ context.Context, address st
 	return keycloak.ExactVerifiedAccount(address, d.users[strings.ToLower(address)]), nil
 }
 
-func (*approverDirectory) GetUser(context.Context, string) (*gocloak.User, error) { return nil, nil }
+// GetUser is one of approvalPeople by subject; anyone else is not there.
+func (*approverDirectory) GetUser(_ context.Context, id string) (*gocloak.User, error) {
+	for _, person := range approvalPeople {
+		if person.sub == id {
+			return person.user(), nil
+		}
+	}
+	return nil, nil
+}
 
 func (d *approverDirectory) GetGroupMembers(_ context.Context, id string) ([]*gocloak.User, error) {
 	return d.groups[id], nil

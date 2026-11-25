@@ -873,6 +873,92 @@ SET cancelled_at  = now(),
 WHERE id = sqlc.arg(id)
   AND cancelled_at IS NULL;
 
+-- Writes one of a send's own events (mail_task_events): a pause, a resume or
+-- a cancel, with who did it (null for SkyMail: a send its failure rate
+-- paused). count is a cancel's skipped recipients.
+-- name: RecordMailTaskEvent :exec
+INSERT INTO mail_task_events (task_id, kind, reason, actor_sub, actor_name, count)
+VALUES (sqlc.arg(task_id), sqlc.arg(kind)::text, sqlc.narg(reason)::text, sqlc.narg(actor_sub)::text,
+        sqlc.narg(actor_name)::text, sqlc.narg(count)::int);
+
+-- A send's own events, oldest first (GET /mail_tasks/{id}/events).
+-- name: ListMailTaskEvents :many
+SELECT id, kind, reason, actor_sub, actor_name, count, created_at, last_at
+FROM mail_task_events
+WHERE task_id = sqlc.arg(task_id)
+ORDER BY created_at, id;
+
+-- What GET /mail_tasks/{id}/events reads from the send's own rows: who
+-- queued it and when, its recipients by outcome, when the last of them was
+-- answered, the permanent failures reported after sending (a hard bounce
+-- naming the row's own address). With no row, the times are the send's.
+-- skipped is what mail_task_status() does not count as a failure (a reserved
+-- domain, a suppressed address, core's no), cancelled apart; failed is the
+-- rest of the failed rows. retried counts the recipients tried more than
+-- once. last_outcome_at is the latest of a row's sending, claim (a failed
+-- row keeps the claim that failed it) and queueing: once no row is pending
+-- or processing, about when the send finished.
+-- name: GetMailTaskEventFacts :one
+SELECT mt.id,
+       mt.sent_by,
+       mt.sent_by_service,
+       mt.created_at,
+       mt.erase_after_send,
+       mt.paused_at,
+       mt.paused_reason,
+       mt.paused_by,
+       mt.cancelled_at,
+       mt.cancelled_by,
+       rc.recipients,
+       rc.first_queued_at,
+       rc.unfinished,
+       rc.sent,
+       rc.failed,
+       rc.skipped,
+       rc.cancelled,
+       rc.retried,
+       rc.last_outcome_at,
+       hard.bounced,
+       hard.last_bounced_at
+FROM mail_tasks mt
+         CROSS JOIN LATERAL (SELECT count(*)                                                       AS recipients,
+                                    COALESCE(min(q.created_at), mt.created_at)::timestamptz        AS first_queued_at,
+                                    count(*) FILTER (WHERE q.status IN ('pending', 'processing'))  AS unfinished,
+                                    count(*) FILTER (WHERE q.status = 'sent')                      AS sent,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND NOT (
+                                        COALESCE(q.error, '') LIKE 'reserved\_domain:%'
+                                            OR COALESCE(q.error, '') LIKE 'suppressed:%'
+                                            OR COALESCE(q.error, '') IN ('preference: opted_out', 'preference: inactive',
+                                                                         'preference: ambiguous', 'cancelled'))) AS failed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND (
+                                        COALESCE(q.error, '') LIKE 'reserved\_domain:%'
+                                            OR COALESCE(q.error, '') LIKE 'suppressed:%'
+                                            OR COALESCE(q.error, '') IN ('preference: opted_out', 'preference: inactive',
+                                                                         'preference: ambiguous')))  AS skipped,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'cancelled') AS cancelled,
+                                    count(*) FILTER (WHERE q.attempts > 1
+                                        OR (q.attempts = 1 AND q.status <> 'failed'))               AS retried,
+                                    COALESCE(max(GREATEST(q.sent_at, q.claimed_at, q.created_at)),
+                                             mt.created_at)::timestamptz                           AS last_outcome_at
+                             FROM mail_queue q
+                             WHERE q.task_id = mt.id) rc
+         CROSS JOIN LATERAL (SELECT count(DISTINCT b.queue_id)   AS bounced,
+                                    COALESCE(max(b.received_at), mt.created_at)::timestamptz AS last_bounced_at
+                             FROM mail_queue q
+                                      JOIN mail_bounces b ON b.queue_id = q.id
+                             WHERE q.task_id = mt.id
+                               AND b.kind = 'hard'
+                               AND b.recipient_matched) hard
+WHERE mt.id = sqlc.arg(id);
+
+-- The Mail onayı request a send was queued from, and its submitter as the
+-- request names them (Silinmiş kullanıcı once erased). No row: a direct send.
+-- name: GetMailTaskApprovalSource :one
+SELECT a.id, a.submitter_sub, a.submitter_name
+FROM mail_approval_tasks mat
+         JOIN mail_approvals a ON a.id = mat.approval_id
+WHERE mat.task_id = sqlc.arg(task_id);
+
 -- Parks a paused send's pending rows: never due until it is resumed
 -- (ResumeMailTask). For a send its failure rate paused. Runs after the pause
 -- is committed: a send an operator resumed since is left as it is.
@@ -1117,19 +1203,32 @@ WHERE id = sqlc.arg(id)
   AND claimed_by = sqlc.arg(claimed_by)::text
   AND claimed_at = sqlc.arg(claimed_at)::timestamptz;
 
+-- Puts a row back to pending for another attempt, and counts the retry in
+-- its send's retried event of the hour (mail_task_events): one row a send
+-- and hour, so GET /mail_tasks/{id}/events tells when the relay kept failing.
 -- name: RescheduleMailQueueItem :one
-UPDATE mail_queue
-SET status          = 'pending',
-    attempts        = attempts + 1,
-    error           = sqlc.narg(error)::text,
-    next_attempt_at = NOW() + (sqlc.arg(delay_seconds)::int * INTERVAL '1 second'),
-    claimed_at      = NULL,
-    claimed_by      = NULL
-WHERE id = sqlc.arg(id)
-  AND status = 'processing'
-  AND claimed_by = sqlc.arg(claimed_by)::text
-  AND claimed_at = sqlc.arg(claimed_at)::timestamptz
-RETURNING attempts;
+WITH retried AS (
+    UPDATE mail_queue q
+        SET status = 'pending',
+            attempts = q.attempts + 1,
+            error = sqlc.narg(error)::text,
+            next_attempt_at = NOW() + (sqlc.arg(delay_seconds)::int * INTERVAL '1 second'),
+            claimed_at = NULL,
+            claimed_by = NULL
+        WHERE q.id = sqlc.arg(id)
+            AND q.status = 'processing'
+            AND q.claimed_by = sqlc.arg(claimed_by)::text
+            AND q.claimed_at = sqlc.arg(claimed_at)::timestamptz
+        RETURNING q.task_id, q.attempts),
+     counted AS (
+         INSERT INTO mail_task_events (task_id, kind, count, hour)
+             SELECT task_id, 'retried', 1, date_trunc('hour', now(), 'UTC')
+             FROM retried
+             ON CONFLICT (task_id, hour) WHERE kind = 'retried'
+                 DO UPDATE SET count = mail_task_events.count + 1,
+                     last_at = now())
+SELECT attempts
+FROM retried;
 
 -- content_sensitive_at_send is whether the send is sensitive as it is
 -- queued: 'true' when its template's key is locked sensitive

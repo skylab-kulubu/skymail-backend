@@ -215,6 +215,12 @@ func (m *mailerImpl) countSendFailure(ctx context.Context, logger *zerolog.Logge
 		return
 	}
 	if counted.Paused {
+		reason := "failure_rate"
+		if err := m.db.RecordMailTaskEvent(ctx, database.RecordMailTaskEventParams{
+			TaskID: job.TaskID, Kind: "paused", Reason: &reason,
+		}); err != nil {
+			logger.Err(err).Str("task_id", job.TaskID.String()).Msg("Failed to record a send's pause by its failure rate")
+		}
 		if _, err := m.db.ParkPendingRows(ctx, job.TaskID); err != nil {
 			logger.Err(err).Str("task_id", job.TaskID.String()).Msg("Failed to park a paused send's pending rows; the take hands them back one by one")
 		}

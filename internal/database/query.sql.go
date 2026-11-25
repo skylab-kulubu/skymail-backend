@@ -3069,6 +3069,28 @@ func (q *Queries) GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueu
 	return items, nil
 }
 
+const getMailTaskApprovalSource = `-- name: GetMailTaskApprovalSource :one
+SELECT a.id, a.submitter_sub, a.submitter_name
+FROM mail_approval_tasks mat
+         JOIN mail_approvals a ON a.id = mat.approval_id
+WHERE mat.task_id = $1
+`
+
+type GetMailTaskApprovalSourceRow struct {
+	ID            uuid.UUID `json:"id"`
+	SubmitterSub  string    `json:"submitter_sub"`
+	SubmitterName *string   `json:"submitter_name"`
+}
+
+// The Mail onayı request a send was queued from, and its submitter as the
+// request names them (Silinmiş kullanıcı once erased). No row: a direct send.
+func (q *Queries) GetMailTaskApprovalSource(ctx context.Context, taskID uuid.UUID) (GetMailTaskApprovalSourceRow, error) {
+	row := q.db.QueryRow(ctx, getMailTaskApprovalSource, taskID)
+	var i GetMailTaskApprovalSourceRow
+	err := row.Scan(&i.ID, &i.SubmitterSub, &i.SubmitterName)
+	return i, err
+}
+
 const getMailTaskById = `-- name: GetMailTaskById :one
 SELECT mt.id, mt.sent_by, mt.template_id, mt.mail_list_id, mt.body_variables, mt.created_at, mt.content_cleared_at, mt.content_sensitive_at_send, mt.content_masked_at, mt.content_masked_by, mt.content_masked_variables, mt.content_mask_due, mt.content_mask_failures, mt.content_mask_retry_at, mt.content_mask_unconfirmed, mt.content_mask_failing_since, mt.tracking_requested, mt.tracking_closed_at, mt.form_source_id, mt.notification_id, mt.purpose, mt.category, mt.transactional_statement, mt.commercial_content_absent, mt.own_event_statement, mt.source_kind, mt.source_ref, mt.source_version, mt.source_snapshot, mt.source_audience, mt.source_counts, mt.self_test, mt.paused_at, mt.paused_reason, mt.paused_by, mt.send_failures, mt.cancelled_at, mt.cancelled_by, mt.erase_after_send, mt.recipient_retention_at, mt.sent_by_service,
        t.name  AS template_name,
@@ -3213,6 +3235,123 @@ func (q *Queries) GetMailTaskControl(ctx context.Context, id uuid.UUID) (GetMail
 		&i.CancelledAt,
 		&i.Bulk,
 		&i.Unfinished,
+	)
+	return i, err
+}
+
+const getMailTaskEventFacts = `-- name: GetMailTaskEventFacts :one
+SELECT mt.id,
+       mt.sent_by,
+       mt.sent_by_service,
+       mt.created_at,
+       mt.erase_after_send,
+       mt.paused_at,
+       mt.paused_reason,
+       mt.paused_by,
+       mt.cancelled_at,
+       mt.cancelled_by,
+       rc.recipients,
+       rc.first_queued_at,
+       rc.unfinished,
+       rc.sent,
+       rc.failed,
+       rc.skipped,
+       rc.cancelled,
+       rc.retried,
+       rc.last_outcome_at,
+       hard.bounced,
+       hard.last_bounced_at
+FROM mail_tasks mt
+         CROSS JOIN LATERAL (SELECT count(*)                                                       AS recipients,
+                                    COALESCE(min(q.created_at), mt.created_at)::timestamptz        AS first_queued_at,
+                                    count(*) FILTER (WHERE q.status IN ('pending', 'processing'))  AS unfinished,
+                                    count(*) FILTER (WHERE q.status = 'sent')                      AS sent,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND NOT (
+                                        COALESCE(q.error, '') LIKE 'reserved\_domain:%'
+                                            OR COALESCE(q.error, '') LIKE 'suppressed:%'
+                                            OR COALESCE(q.error, '') IN ('preference: opted_out', 'preference: inactive',
+                                                                         'preference: ambiguous', 'cancelled'))) AS failed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND (
+                                        COALESCE(q.error, '') LIKE 'reserved\_domain:%'
+                                            OR COALESCE(q.error, '') LIKE 'suppressed:%'
+                                            OR COALESCE(q.error, '') IN ('preference: opted_out', 'preference: inactive',
+                                                                         'preference: ambiguous')))  AS skipped,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'cancelled') AS cancelled,
+                                    count(*) FILTER (WHERE q.attempts > 1
+                                        OR (q.attempts = 1 AND q.status <> 'failed'))               AS retried,
+                                    COALESCE(max(GREATEST(q.sent_at, q.claimed_at, q.created_at)),
+                                             mt.created_at)::timestamptz                           AS last_outcome_at
+                             FROM mail_queue q
+                             WHERE q.task_id = mt.id) rc
+         CROSS JOIN LATERAL (SELECT count(DISTINCT b.queue_id)   AS bounced,
+                                    COALESCE(max(b.received_at), mt.created_at)::timestamptz AS last_bounced_at
+                             FROM mail_queue q
+                                      JOIN mail_bounces b ON b.queue_id = q.id
+                             WHERE q.task_id = mt.id
+                               AND b.kind = 'hard'
+                               AND b.recipient_matched) hard
+WHERE mt.id = $1
+`
+
+type GetMailTaskEventFactsRow struct {
+	ID             uuid.UUID  `json:"id"`
+	SentBy         string     `json:"sent_by"`
+	SentByService  *bool      `json:"sent_by_service"`
+	CreatedAt      time.Time  `json:"created_at"`
+	EraseAfterSend bool       `json:"erase_after_send"`
+	PausedAt       *time.Time `json:"paused_at"`
+	PausedReason   *string    `json:"paused_reason"`
+	PausedBy       *string    `json:"paused_by"`
+	CancelledAt    *time.Time `json:"cancelled_at"`
+	CancelledBy    *string    `json:"cancelled_by"`
+	Recipients     int64      `json:"recipients"`
+	FirstQueuedAt  time.Time  `json:"first_queued_at"`
+	Unfinished     int64      `json:"unfinished"`
+	Sent           int64      `json:"sent"`
+	Failed         int64      `json:"failed"`
+	Skipped        int64      `json:"skipped"`
+	Cancelled      int64      `json:"cancelled"`
+	Retried        int64      `json:"retried"`
+	LastOutcomeAt  time.Time  `json:"last_outcome_at"`
+	Bounced        int64      `json:"bounced"`
+	LastBouncedAt  time.Time  `json:"last_bounced_at"`
+}
+
+// What GET /mail_tasks/{id}/events reads from the send's own rows: who
+// queued it and when, its recipients by outcome, when the last of them was
+// answered, the permanent failures reported after sending (a hard bounce
+// naming the row's own address). With no row, the times are the send's.
+// skipped is what mail_task_status() does not count as a failure (a reserved
+// domain, a suppressed address, core's no), cancelled apart; failed is the
+// rest of the failed rows. retried counts the recipients tried more than
+// once. last_outcome_at is the latest of a row's sending, claim (a failed
+// row keeps the claim that failed it) and queueing: once no row is pending
+// or processing, about when the send finished.
+func (q *Queries) GetMailTaskEventFacts(ctx context.Context, id uuid.UUID) (GetMailTaskEventFactsRow, error) {
+	row := q.db.QueryRow(ctx, getMailTaskEventFacts, id)
+	var i GetMailTaskEventFactsRow
+	err := row.Scan(
+		&i.ID,
+		&i.SentBy,
+		&i.SentByService,
+		&i.CreatedAt,
+		&i.EraseAfterSend,
+		&i.PausedAt,
+		&i.PausedReason,
+		&i.PausedBy,
+		&i.CancelledAt,
+		&i.CancelledBy,
+		&i.Recipients,
+		&i.FirstQueuedAt,
+		&i.Unfinished,
+		&i.Sent,
+		&i.Failed,
+		&i.Skipped,
+		&i.Cancelled,
+		&i.Retried,
+		&i.LastOutcomeAt,
+		&i.Bounced,
+		&i.LastBouncedAt,
 	)
 	return i, err
 }
@@ -5155,6 +5294,54 @@ func (q *Queries) ListMailFormSourceRecipients(ctx context.Context, sourceID uui
 			&i.FullName,
 			&i.ClearedAt,
 			&i.AccountAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMailTaskEvents = `-- name: ListMailTaskEvents :many
+SELECT id, kind, reason, actor_sub, actor_name, count, created_at, last_at
+FROM mail_task_events
+WHERE task_id = $1
+ORDER BY created_at, id
+`
+
+type ListMailTaskEventsRow struct {
+	ID        int64     `json:"id"`
+	Kind      string    `json:"kind"`
+	Reason    *string   `json:"reason"`
+	ActorSub  *string   `json:"actor_sub"`
+	ActorName *string   `json:"actor_name"`
+	Count     *int      `json:"count"`
+	CreatedAt time.Time `json:"created_at"`
+	LastAt    time.Time `json:"last_at"`
+}
+
+// A send's own events, oldest first (GET /mail_tasks/{id}/events).
+func (q *Queries) ListMailTaskEvents(ctx context.Context, taskID uuid.UUID) ([]ListMailTaskEventsRow, error) {
+	rows, err := q.db.Query(ctx, listMailTaskEvents, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMailTaskEventsRow
+	for rows.Next() {
+		var i ListMailTaskEventsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Reason,
+			&i.ActorSub,
+			&i.ActorName,
+			&i.Count,
+			&i.CreatedAt,
+			&i.LastAt,
 		); err != nil {
 			return nil, err
 		}
@@ -7575,6 +7762,36 @@ func (q *Queries) RecordMailApprovalEvent(ctx context.Context, arg RecordMailApp
 	return i, err
 }
 
+const recordMailTaskEvent = `-- name: RecordMailTaskEvent :exec
+INSERT INTO mail_task_events (task_id, kind, reason, actor_sub, actor_name, count)
+VALUES ($1, $2::text, $3::text, $4::text,
+        $5::text, $6::int)
+`
+
+type RecordMailTaskEventParams struct {
+	TaskID    uuid.UUID `json:"task_id"`
+	Kind      string    `json:"kind"`
+	Reason    *string   `json:"reason"`
+	ActorSub  *string   `json:"actor_sub"`
+	ActorName *string   `json:"actor_name"`
+	Count     *int      `json:"count"`
+}
+
+// Writes one of a send's own events (mail_task_events): a pause, a resume or
+// a cancel, with who did it (null for SkyMail: a send its failure rate
+// paused). count is a cancel's skipped recipients.
+func (q *Queries) RecordMailTaskEvent(ctx context.Context, arg RecordMailTaskEventParams) error {
+	_, err := q.db.Exec(ctx, recordMailTaskEvent,
+		arg.TaskID,
+		arg.Kind,
+		arg.Reason,
+		arg.ActorSub,
+		arg.ActorName,
+		arg.Count,
+	)
+	return err
+}
+
 const recordSeedRefusal = `-- name: RecordSeedRefusal :exec
 UPDATE templates
 SET seed_refused_at             = CASE
@@ -7954,18 +8171,28 @@ func (q *Queries) RemoveRecipientFromMailingListByID(ctx context.Context, arg Re
 }
 
 const rescheduleMailQueueItem = `-- name: RescheduleMailQueueItem :one
-UPDATE mail_queue
-SET status          = 'pending',
-    attempts        = attempts + 1,
-    error           = $1::text,
-    next_attempt_at = NOW() + ($2::int * INTERVAL '1 second'),
-    claimed_at      = NULL,
-    claimed_by      = NULL
-WHERE id = $3
-  AND status = 'processing'
-  AND claimed_by = $4::text
-  AND claimed_at = $5::timestamptz
-RETURNING attempts
+WITH retried AS (
+    UPDATE mail_queue q
+        SET status = 'pending',
+            attempts = q.attempts + 1,
+            error = $1::text,
+            next_attempt_at = NOW() + ($2::int * INTERVAL '1 second'),
+            claimed_at = NULL,
+            claimed_by = NULL
+        WHERE q.id = $3
+            AND q.status = 'processing'
+            AND q.claimed_by = $4::text
+            AND q.claimed_at = $5::timestamptz
+        RETURNING q.task_id, q.attempts),
+     counted AS (
+         INSERT INTO mail_task_events (task_id, kind, count, hour)
+             SELECT task_id, 'retried', 1, date_trunc('hour', now(), 'UTC')
+             FROM retried
+             ON CONFLICT (task_id, hour) WHERE kind = 'retried'
+                 DO UPDATE SET count = mail_task_events.count + 1,
+                     last_at = now())
+SELECT attempts
+FROM retried
 `
 
 type RescheduleMailQueueItemParams struct {
@@ -7976,6 +8203,9 @@ type RescheduleMailQueueItemParams struct {
 	ClaimedAt    time.Time `json:"claimed_at"`
 }
 
+// Puts a row back to pending for another attempt, and counts the retry in
+// its send's retried event of the hour (mail_task_events): one row a send
+// and hour, so GET /mail_tasks/{id}/events tells when the relay kept failing.
 func (q *Queries) RescheduleMailQueueItem(ctx context.Context, arg RescheduleMailQueueItemParams) (int, error) {
 	row := q.db.QueryRow(ctx, rescheduleMailQueueItem,
 		arg.Error,
