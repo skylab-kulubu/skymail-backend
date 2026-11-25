@@ -8,17 +8,17 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 // SystemMailsReadRole reads the content of single mail — the mail a service
 // sends one person (POST /mail_tasks/single) — whose template does not hide
-// it, beside every send's the other roles let a caller read. It is SkyMail's
+// it, beside every send's the other roles let a caller read. It is SkyNotify's
 // administrator's (Yusuf, 2026-10-12).
-const SystemMailsReadRole = "skymail:system-mails:read"
+const SystemMailsReadRole = "skynotify:system-mails:read"
 
-const mailsWriteRole = "skymail:mails:write"
+const mailsWriteRole = "skynotify:mails:write"
 
 // DefaultContentRetentionDays is how long a send's content is kept when
 // MAIL_CONTENT_RETENTION_DAYS does not say: a year, what production is set
@@ -49,7 +49,7 @@ const (
 	ContentRestricted ContentAccess = "restricted"
 	ContentExpired    ContentAccess = "expired"
 	// ContentNotKept is a sensitive send whose content was emptied within the
-	// retention period: from 2026-10-13 11:16 (skymail-backend #61) until
+	// retention period: from 2026-10-13 11:16 (skynotify-backend #61) until
 	// sensitive content was kept masked, a sensitive send was emptied five
 	// minutes after it went out, the sends from before that among them; and a
 	// send the sweep could not mask for certain. It does not come back.
@@ -164,7 +164,7 @@ type SentMailContent struct {
 	PlainText *string `json:"plain_text"`
 	// The HTML part: show it only in a sandboxed frame, with remote content
 	// blocked unless the operator asks for it. Masked, each masked value in its
-	// text is <mark data-skymail-masked="">••••••</mark>.
+	// text is <mark data-skynotify-masked="">••••••</mark>.
 	HTML *string `json:"html"`
 	// When the content sweep empties it; null when it is not shown.
 	ExpiresAt *time.Time `json:"expires_at"`
@@ -179,7 +179,7 @@ type SentMailContent struct {
 // GetQueueItemContent godoc
 //
 //	@Summary		Get one recipient's mail as kept
-//	@Description	The subject, plain text and HTML a recipient of the send was sent, as SkyMail keeps it. access says whether and how they are shown: available — as sent; masked — the send is sensitive (its template carries a code or a one-time link, or said so when it was sent, or it is a single mail whose template does not say it may be shown), and the content sweep replaced every code, one-time link and IP address with •••••• once the send was done (masked_variables, masked_by); the unmasked mail is not kept, and each opening is recorded in sent_content_views; pending — sensitive and not masked yet (a row still to go out, or sent in the last minutes): not shown; restricted — shown to the send's sender, for a send to a list, a group or an approved request to holders of skymail:mails:write, and to holders of skymail:system-mails:read; expired — past MAIL_CONTENT_RETENTION_DAYS (365 by default) and no longer kept; not_kept — a sensitive send whose content was emptied (before sensitive content was kept, 2026-10-13, or because it could not be masked for certain), which does not come back; unavailable — holds nothing (Account erasure emptied it, or it never rendered). The fields are null unless access is available or masked. The HTML may reach the network (images, a tracking pixel): show it sandboxed, with remote content blocked by default. Never cached.
+//	@Description	The subject, plain text and HTML a recipient of the send was sent, as SkyNotify keeps it. access says whether and how they are shown: available — as sent; masked — the send is sensitive (its template carries a code or a one-time link, or said so when it was sent, or it is a single mail whose template does not say it may be shown), and the content sweep replaced every code, one-time link and IP address with •••••• once the send was done (masked_variables, masked_by); the unmasked mail is not kept, and each opening is recorded in sent_content_views; pending — sensitive and not masked yet (a row still to go out, or sent in the last minutes): not shown; restricted — shown to the send's sender, for a send to a list, a group or an approved request to holders of skynotify:mails:write, and to holders of skynotify:system-mails:read; expired — past MAIL_CONTENT_RETENTION_DAYS (365 by default) and no longer kept; not_kept — a sensitive send whose content was emptied (before sensitive content was kept, 2026-10-13, or because it could not be masked for certain), which does not come back; unavailable — holds nothing (Account erasure emptied it, or it never rendered). The fields are null unless access is available or masked. The HTML may reach the network (images, a tracking pixel): show it sandboxed, with remote content blocked by default. Never cached.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id		path		string	true	"Task ID"
@@ -257,7 +257,7 @@ func (h *mailHandlerImpl) GetQueueItemContent(c fiber.Ctx) error {
 // the content — system-mails:read, mails:write, the send's own sender — so
 // those audited do not read their own record (Yusuf, 2026-11-22: DK alone;
 // Microsoft Purview's Audit Reader, NIST SP 800-53 AU-9(4)).
-const AuditReadRole = "skymail:audit:read"
+const AuditReadRole = "skynotify:audit:read"
 
 // ContentViewer is who opened a masked mail, as their token named them then.
 // Account erasure replaces both with database.DeletedUserSubject and
@@ -283,7 +283,7 @@ type SentContentView struct {
 // ListContentViews godoc
 //
 //	@Summary		List who opened a send's masked content
-//	@Description	Every opening of a recipient's masked mail of the send (GET /mail_tasks/{id}/queue/{itemId}/content answering masked), newest first: who, when, which queue row, how it was masked. Names no recipient. Takes skymail:audit:read, which the roles that open the content do not carry. An erased account reads as Silinmiş kullanıcı. Records older than SENT_CONTENT_VIEWS_RETENTION_DAYS are gone. Never cached.
+//	@Description	Every opening of a recipient's masked mail of the send (GET /mail_tasks/{id}/queue/{itemId}/content answering masked), newest first: who, when, which queue row, how it was masked. Names no recipient. Takes skynotify:audit:read, which the roles that open the content do not carry. An erased account reads as Silinmiş kullanıcı. Records older than SENT_CONTENT_VIEWS_RETENTION_DAYS are gone. Never cached.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id		path		string	true	"Task ID"

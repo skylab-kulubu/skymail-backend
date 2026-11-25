@@ -1,4 +1,4 @@
-// Package health answers whether this SkyMail task should be given traffic
+// Package health answers whether this SkyNotify task should be given traffic
 // (GET /ready, the container's health check) and lets shutdown take it out
 // of rotation before it stops.
 //
@@ -7,7 +7,7 @@
 // or the SMTP relay being down fails only what needs them, the same on every
 // task, so taking tasks out (or letting Swarm restart them) for those would
 // turn a partial outage into a whole one. Migrations are done by
-// construction: SkyMail starts listening only after they have run. The
+// construction: SkyNotify starts listening only after they have run. The
 // account access gate keeps its own check beside this one (main.go), as
 // before.
 package health
@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-// Database is what readiness pings: SkyMail's own PostgreSQL.
+// Database is what readiness pings: SkyNotify's own PostgreSQL.
 type Database interface {
 	Ping(context.Context) error
 }

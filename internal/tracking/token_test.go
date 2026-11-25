@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
 // A recipient's token is 16 random bytes, 22 characters in a URL; a link's 8,

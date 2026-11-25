@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
+	"github.com/skylab-kulubu/skynotify-backend/internal/keycloak"
 )
 
 // The account of a person a send names by address (Yusuf, 2026-10-20): only
@@ -52,7 +52,7 @@ func accountServer(t *testing.T, users map[string][]any) (keycloak.Client, *[]ur
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skymail", "secret"), &queries
+	return keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skynotify", "secret"), &queries
 }
 
 func TestTheAccountOfAnAddressIsTheOneVerifiedEnabledExactMatch(t *testing.T) {
@@ -114,7 +114,7 @@ func TestAnAccountSearchKeycloakFailsIsAnError(t *testing.T) {
 		http.Error(w, "down", http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(srv.Close)
-	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skymail", "secret")
+	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skynotify", "secret")
 	if sub, err := kc.VerifiedAccountByEmail(context.Background(), "ayse@example.com"); err == nil || sub != nil {
 		t.Fatalf("= %v, %v; want an error", sub, err)
 	}

@@ -13,31 +13,31 @@ import (
 // The environment (README, "Tek tık çıkış ucu"). Every key is its own
 // OpenBao reference in Dokploy (ADR-0049); none is ever logged.
 const (
-	// LinkEnv switches SkyMail's own unsubscribe link on: the /u/ page and
+	// LinkEnv switches SkyNotify's own unsubscribe link on: the /u/ page and
 	// one-click endpoint, and Link. off (the default, also when unset) or on.
 	// Off, /u/ answers 404 and Link gives no link; the unsubscribe record is
 	// still applied to every send, so turning it off never mails an address
 	// that left.
-	LinkEnv = "SKYMAIL_UNSUBSCRIBE_LINK"
+	LinkEnv = "SKYNOTIFY_UNSUBSCRIBE_LINK"
 	// BaseURLEnv is where /u/ is served to the public, with no trailing
-	// slash: https://api.yildizskylab.com/api/skymail, as
-	// SKYMAIL_TRACKING_BASE_URL. LinkEnv on needs it.
-	BaseURLEnv = "SKYMAIL_UNSUBSCRIBE_BASE_URL"
+	// slash: https://api.yildizskylab.com/api/skynotify, as
+	// SKYNOTIFY_TRACKING_BASE_URL. LinkEnv on needs it.
+	BaseURLEnv = "SKYNOTIFY_UNSUBSCRIBE_BASE_URL"
 	// AccountURLEnv is the Account center's communication preferences page
 	// the /u/ page links a person with an account to.
-	AccountURLEnv = "SKYMAIL_UNSUBSCRIBE_ACCOUNT_URL"
+	AccountURLEnv = "SKYNOTIFY_UNSUBSCRIBE_ACCOUNT_URL"
 	// CurrentKeyEnv is the version new tokens are sealed with (1–255).
-	CurrentKeyEnv = "SKYMAIL_UNSUBSCRIBE_KEY_CURRENT"
-	// KeyEnvPrefix and a version name each key: SKYMAIL_UNSUBSCRIBE_KEY_V1,
-	// SKYMAIL_UNSUBSCRIBE_KEY_V2, … A key is 32 random bytes in base64 (or
+	CurrentKeyEnv = "SKYNOTIFY_UNSUBSCRIBE_KEY_CURRENT"
+	// KeyEnvPrefix and a version name each key: SKYNOTIFY_UNSUBSCRIBE_KEY_V1,
+	// SKYNOTIFY_UNSUBSCRIBE_KEY_V2, … A key is 32 random bytes in base64 (or
 	// base64url, padded or not).
-	KeyEnvPrefix = "SKYMAIL_UNSUBSCRIBE_KEY_V"
+	KeyEnvPrefix = "SKYNOTIFY_UNSUBSCRIBE_KEY_V"
 )
 
 // DefaultAccountURL is the Account center's communication preferences page.
 const DefaultAccountURL = "https://my.yildizskylab.com/communication-preferences"
 
-// Config is SkyMail's own unsubscribe link as the environment sets it.
+// Config is SkyNotify's own unsubscribe link as the environment sets it.
 type Config struct {
 	On         bool
 	BaseURL    string
@@ -48,7 +48,7 @@ type Config struct {
 // Link is the one-click unsubscribe link of address in the duyuru stream:
 // the base address, /u/ and the token. ok is false while the link is off,
 // the ring is empty, or the address cannot be in a token; then the mail
-// carries no SkyMail link.
+// carries no SkyNotify link.
 func (c Config) Link(address string) (string, bool) {
 	if !c.On || c.BaseURL == "" || c.Ring.Empty() {
 		return "", false
@@ -84,7 +84,7 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 		cfg.AccountURL = DefaultAccountURL
 	}
 	if cfg.On && cfg.BaseURL == "" {
-		return Config{}, fmt.Errorf("%s=on needs %s, the public address /u/ is served at (e.g. https://api.yildizskylab.com/api/skymail)", LinkEnv, BaseURLEnv)
+		return Config{}, fmt.Errorf("%s=on needs %s, the public address /u/ is served at (e.g. https://api.yildizskylab.com/api/skynotify)", LinkEnv, BaseURLEnv)
 	}
 	if cfg.Ring, err = RingFromEnv(getenv); err != nil {
 		return Config{}, err
@@ -92,8 +92,8 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	return cfg, nil
 }
 
-// RingFromEnv reads SKYMAIL_UNSUBSCRIBE_KEY_CURRENT and every
-// SKYMAIL_UNSUBSCRIBE_KEY_V<n>: the ring is exactly the versions set, so a
+// RingFromEnv reads SKYNOTIFY_UNSUBSCRIBE_KEY_CURRENT and every
+// SKYNOTIFY_UNSUBSCRIBE_KEY_V<n>: the ring is exactly the versions set, so a
 // version whose variable is removed (a leaked key) opens nothing from the
 // next start. Neither set is an empty ring. A key without a current version,
 // a current version without its key (fail fast: no start), a key that is not

@@ -15,9 +15,9 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
 )
 
 // The in-app inbox (hub ticket iletisim-servisi 05; ADR 0070): a notification
@@ -328,7 +328,7 @@ func decodeInboxCursor(cursor string) (time.Time, uuid.UUID, error) {
 // List godoc
 //
 //	@Summary		List my inbox
-//	@Description	The caller's own inbox items, newest first, a page at a time: next_cursor goes into cursor for the next page, null on the last. Archived items are left out unless archived says include or only; an item past its expiry (90 days, or sooner) is never served. Only a person's own token issued for SkyMail (aud skymail) may call it; no role is needed.
+//	@Description	The caller's own inbox items, newest first, a page at a time: next_cursor goes into cursor for the next page, null on the last. Archived items are left out unless archived says include or only; an item past its expiry (90 days, or sooner) is never served. Only a person's own token issued for SkyNotify (aud skynotify) may call it; no role is needed.
 //	@Tags			Inbox
 //	@Produce		json
 //	@Param			cursor		query		string	false	"The next_cursor of the page before"
@@ -336,7 +336,7 @@ func decodeInboxCursor(cursor string) (time.Time, uuid.UUID, error) {
 //	@Param			archived	query		string	false	"exclude, include or only"	default(exclude)
 //	@Success		200			{object}	handlers.InboxPage
 //	@Failure		400			{object}	apperrors.Problem	"inbox.invalid_query; inbox.invalid_cursor"
-//	@Failure		401			{object}	apperrors.Problem	"server.unauthorized: no live token, or one not issued for SkyMail"
+//	@Failure		401			{object}	apperrors.Problem	"server.unauthorized: no live token, or one not issued for SkyNotify"
 //	@Failure		403			{object}	apperrors.Problem	"auth.person_required: a service's token"
 //	@Router			/me/inbox [get]
 func (h *inboxHandlerImpl) List(c fiber.Ctx) error {

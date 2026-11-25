@@ -11,19 +11,19 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
-	"github.com/skylab-kulubu/skymail-backend/internal/teams"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/keycloak"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/internal/teams"
 )
 
 // Team mail (ADR-0067 addendum of 2026-11-08; hub tickets ekip-postasi 03
 // and 04): a Leader mails their own Team, or Sub-teams below it, through
 // Mail onayı, YK approving. The rules:
 //
-//   - core says which Teams a person leads (teams.Reader); SkyMail reads
+//   - core says which Teams a person leads (teams.Reader); SkyNotify reads
 //     neither Keycloak nor the token for it, and asks again on submit,
 //     resubmit and at the approval. Core not answering is no Team mail.
 //   - A request names the Teams in team_ids: any of those the submitter
@@ -38,12 +38,12 @@ import (
 //   - One mail per person: someone in two picked Teams gets it from the
 //     first in path order whose category they have not turned off, decided
 //     when the sends are queued.
-//   - A Leader without skymail:access reaches only Team mail's routes
+//   - A Leader without skynotify:access reaches only Team mail's routes
 //     (middlewares.RequireAccessOrTeamLeader) and writes a free announcement
 //     (FreeTemplateKey), no other template.
 
 // FreeTemplateKey is the free announcement's frame, the only template a
-// Leader without skymail:access submits.
+// Leader without skynotify:access submits.
 const FreeTemplateKey = "free.basic"
 
 // maxTeamsPerRequest is the most Teams one request names.
@@ -51,15 +51,15 @@ const maxTeamsPerRequest = 50
 
 var (
 	ErrTeamMailOff = apperrors.New("team_mail.off",
-		"Team mail is off (SKYMAIL_TEAM_SEND).", fiber.StatusNotFound)
+		"Team mail is off (SKYNOTIFY_TEAM_SEND).", fiber.StatusNotFound)
 	errTeamNotLed = apperrors.New("team_mail.not_leader",
 		"You do not lead a Team you picked (core's answer now). params.team_ids names them.", fiber.StatusForbidden)
 	errTeamFreeAnnouncementOnly = apperrors.New("team_mail.free_announcement_only",
-		"Without SkyMail's roles a Leader sends a free announcement (free.basic) to their Teams, no other template.", fiber.StatusForbidden)
+		"Without SkyNotify's roles a Leader sends a free announcement (free.basic) to their Teams, no other template.", fiber.StatusForbidden)
 	errTeamPurposeFixed = apperrors.New("team_mail.purpose_fixed",
 		"Team mail is always duyuru, each Team's send with its own category team:<id>:duyuru: send no purpose other than duyuru and no other category.", fiber.StatusBadRequest)
 	errTeamMailOffAtApproval = apperrors.New("mail_approval.team_mail_off",
-		"Team mail is off (SKYMAIL_TEAM_SEND, or SKYMAIL_MAIL_PURPOSE off): the request stays as it is and is not sent.", fiber.StatusConflict)
+		"Team mail is off (SKYNOTIFY_TEAM_SEND, or SKYNOTIFY_MAIL_PURPOSE off): the request stays as it is and is not sent.", fiber.StatusConflict)
 	errTeamLeadershipLost = apperrors.New("mail_approval.team_leadership_lost",
 		"The submitter no longer leads any of the request's Teams (core's answer now): it was rejected with that reason and nothing was sent.", fiber.StatusConflict)
 )
@@ -77,10 +77,10 @@ func teamsNamedIn(body []byte) bool {
 	return json.Unmarshal(body, &peek) == nil && len(peek.TeamIDs) > 0
 }
 
-// errAccessRequired refuses a Leader without skymail:access anything but
+// errAccessRequired refuses a Leader without skynotify:access anything but
 // Team mail.
 func errAccessRequired() error {
-	return apperrors.ErrForbidden.WithParams(map[string]interface{}{"missing_roles": []string{"skymail:access"}})
+	return apperrors.ErrForbidden.WithParams(map[string]interface{}{"missing_roles": []string{"skynotify:access"}})
 }
 
 // pickTeams is the Teams a request goes to: each of ids must be one the
@@ -126,7 +126,7 @@ func inPathOrder(list []teams.Team) {
 }
 
 // teamSend checks a Team mail submission or resubmission and makes it what
-// is written: the switch is on, a Leader without skymail:access sends the
+// is written: the switch is on, a Leader without skynotify:access sends the
 // free announcement, core says now that the submitter leads every Team
 // picked, and the purpose is duyuru with the first Team's category (each
 // send gets its own at the approval). Its group is the first Team's.
@@ -135,7 +135,7 @@ func (h *mailApprovalHandlerImpl) teamSend(ctx context.Context, caller approvalC
 		return send, ErrTeamMailOff
 	}
 	// The free announcement needs no template read role in Team mail,
-	// whoever sends it; a Leader without skymail:access sends nothing else.
+	// whoever sends it; a Leader without skynotify:access sends nothing else.
 	template, err := h.db.GetTemplateById(ctx, send.templateID)
 	if isNotFound(err) {
 		return send, errApprovalTemplateUnavailable
@@ -169,7 +169,7 @@ func (h *mailApprovalHandlerImpl) teamSend(ctx context.Context, caller approvalC
 // teamPurpose is Team mail's purpose: duyuru, the first Team's category,
 // never promotional. The body may name duyuru, and a category only when it
 // is one of the picked Teams' own; with every duyuru send obeying the
-// preferences (SKYMAIL_BULK_PREFERENCE) commercial_content_absent is
+// preferences (SKYNOTIFY_BULK_PREFERENCE) commercial_content_absent is
 // required, as for any duyuru send.
 func (h *mailApprovalHandlerImpl) teamPurpose(send approvalSend) (mailer.SendPurpose, error) {
 	asked := send.askedPurpose
@@ -367,7 +367,7 @@ func (h *mailApprovalHandlerImpl) applyTeamPlan(ctx context.Context, q *database
 		return a, approvalNotice{}, false, atSend(errApprovalAudienceUnavailable)
 	}
 	if len(plan.sends) == 0 {
-		reason := "SkyMail: gönderen artık seçilen ekiplerin hiçbirinin lideri değil (core'un onay anındaki cevabı): " +
+		reason := "SkyNotify: gönderen artık seçilen ekiplerin hiçbirinin lideri değil (core'un onay anındaki cevabı): " +
 			strings.Join(plan.lostNames, ", ") + "."
 		if len(plan.gone) > 0 {
 			reason += " " + goneTeamsNote(plan)
@@ -379,7 +379,7 @@ func (h *mailApprovalHandlerImpl) applyTeamPlan(ctx context.Context, q *database
 			return a, approvalNotice{}, false, err
 		}
 		notice := resolvedNotice(decisionRejected, caller, nil, reason)
-		notice.decidedBy = "SkyMail"
+		notice.decidedBy = "SkyNotify"
 		return a, notice, true, nil
 	}
 	kept := plan.kept()
@@ -407,7 +407,7 @@ func (h *mailApprovalHandlerImpl) applyTeamPlan(ctx context.Context, q *database
 func droppedTeamsNote(plan *teamPlan) string {
 	var parts []string
 	if len(plan.lost) > 0 {
-		parts = append(parts, "SkyMail: gönderenin liderliği bittiği için bu ekipler gönderimden çıkarıldı (core'un onay anındaki cevabı): "+
+		parts = append(parts, "SkyNotify: gönderenin liderliği bittiği için bu ekipler gönderimden çıkarıldı (core'un onay anındaki cevabı): "+
 			strings.Join(plan.lostNames, ", ")+".")
 	}
 	if len(plan.gone) > 0 {
@@ -422,7 +422,7 @@ func goneTeamsNote(plan *teamPlan) string {
 	for i, id := range plan.gone {
 		ids[i] = id.String()
 	}
-	return "SkyMail: Keycloak'ta artık bulunmadığı için bu ekipler gönderimden çıkarıldı: " + strings.Join(ids, ", ") + "."
+	return "SkyNotify: Keycloak'ta artık bulunmadığı için bu ekipler gönderimden çıkarıldı: " + strings.Join(ids, ", ") + "."
 }
 
 // queueToTeams queues a Team mail request, locked, as one send per Team in
@@ -529,13 +529,13 @@ const teamCountWorkers = 4
 // Audiences godoc
 //
 //	@Summary		The Teams the caller may send Team mail to
-//	@Description	Team mail (ADR-0067 addendum of 2026-11-08): the Teams core says the caller leads — each Team whose Leader group (LIDERLER or KOORDINATORLER) they are directly in, and every Sub-team below it — in path order, the tree in parent_id and depth, each with how many it would reach (its and its Sub-teams' members with an address, Leader groups included, each once; never an address or a name) and its fixed category. Core's answer may be up to a minute old; submitting asks again. A Leader without skymail:access reaches this route; anyone else without it gets 403. An empty list means the caller leads no Team.
+//	@Description	Team mail (ADR-0067 addendum of 2026-11-08): the Teams core says the caller leads — each Team whose Leader group (LIDERLER or KOORDINATORLER) they are directly in, and every Sub-team below it — in path order, the tree in parent_id and depth, each with how many it would reach (its and its Sub-teams' members with an address, Leader groups included, each once; never an address or a name) and its fixed category. Core's answer may be up to a minute old; submitting asks again. A Leader without skynotify:access reaches this route; anyone else without it gets 403. An empty list means the caller leads no Team.
 //	@Tags			Team mail
 //	@Produce		json
 //	@Success		200	{object}	handlers.TeamAudiences
-//	@Failure		401	{object}	apperrors.Problem	"A token without skymail:access whose aud does not name SkyMail"
-//	@Failure		403	{object}	apperrors.Problem	"Neither skymail:access nor a Team the caller leads; auth.person_required for a service account's token without skymail:access"
-//	@Failure		404	{object}	apperrors.Problem	"team_mail.off: SKYMAIL_TEAM_SEND is off"
+//	@Failure		401	{object}	apperrors.Problem	"A token without skynotify:access whose aud does not name SkyNotify"
+//	@Failure		403	{object}	apperrors.Problem	"Neither skynotify:access nor a Team the caller leads; auth.person_required for a service account's token without skynotify:access"
+//	@Failure		404	{object}	apperrors.Problem	"team_mail.off: SKYNOTIFY_TEAM_SEND is off"
 //	@Failure		503	{object}	apperrors.Problem	"team_mail.leadership_unavailable (Retry-After): core did not say which Teams the caller leads"
 //	@Router			/me/team_audiences [get]
 func (h *teamMailHandlerImpl) Audiences(c fiber.Ctx) error {

@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// `skymail-backend healthcheck` is the container's health check: 0 when this
-// container's SkyMail answers /ready?gate=skip with 204, 1 otherwise (Docker reserves
+// `skynotify-backend healthcheck` is the container's health check: 0 when this
+// container's SkyNotify answers /ready?gate=skip with 204, 1 otherwise (Docker reserves
 // 2), saying why on stderr.
 func TestHealthcheckCommand(t *testing.T) {
 	t.Parallel()
@@ -65,10 +65,10 @@ func TestHealthcheckCommand(t *testing.T) {
 
 // Readiness's one connection lives long: re-made every hour (pgx's
 // default), it could meet a database at max_connections and fail the health
-// check of a SkyMail that is fine. Opening connects nothing.
+// check of a SkyNotify that is fine. Opening connects nothing.
 func TestReadinessDatabaseKeepsItsConnection(t *testing.T) {
 	t.Parallel()
-	pool, err := openReadinessDatabase("postgres://skymail:secret@127.0.0.1:1/skymail?sslmode=disable&pool_max_conns=5")
+	pool, err := openReadinessDatabase("postgres://skynotify:secret@127.0.0.1:1/skynotify?sslmode=disable&pool_max_conns=5")
 	if err != nil {
 		t.Fatal(err)
 	}

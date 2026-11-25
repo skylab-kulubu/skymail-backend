@@ -15,14 +15,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
-	"github.com/skylab-kulubu/skymail-backend/internal/requiredvars"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/keycloak"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requiredvars"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 // approvalCaller is who makes a request, as their token names them.
@@ -34,7 +34,7 @@ type approvalCaller struct {
 	emailUnverified bool
 	approver        bool
 	roles           []string
-	// The caller reached a Team mail route without skymail:access, as a
+	// The caller reached a Team mail route without skynotify:access, as a
 	// Leader core named (middlewares.TeamSeat): Team mail only, the free
 	// announcement only.
 	teamSeat bool
@@ -72,7 +72,7 @@ func (c approvalCaller) has(role string) bool {
 // (Yusuf, 2026-09-24): its template, and its list when it goes to one — the
 // rule the screens show, held here too. The roles missing are named. Team
 // mail needs no list read role (the Teams are core's answer, checked by
-// teamSend); a Leader without skymail:access reaches nothing else, and their
+// teamSend); a Leader without skynotify:access reaches nothing else, and their
 // template is the free announcement, which teamSend checks.
 func (c approvalCaller) mayRead(send approvalSend) error {
 	if c.teamSeat {
@@ -529,7 +529,7 @@ type approvalPrepared struct {
 	// The group's members with an address; nil when the group is gone.
 	groupMembers []mailer.RecipientInfo
 	// Whom of them core lets be tracked, asked with them before the lock
-	// when the request asks for tracking: SkyMail never waits for core
+	// when the request asks for tracking: SkyNotify never waits for core
 	// holding the request's transaction. The send tracks no one core was not
 	// asked about here.
 	tracking *mailer.TrackingPreferences
@@ -583,12 +583,12 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	if err := authorizeApproval(caller, view.MailApproval.SubmitterSub, action.by); err != nil {
 		return err
 	}
-	// A Leader without skymail:access sends nothing but Team mail: not even
+	// A Leader without skynotify:access sends nothing but Team mail: not even
 	// their own request from before, to a list or to people.
 	if caller.teamSeat && action.sends && len(view.MailApproval.TeamIds) == 0 {
 		return errAccessRequired()
 	}
-	// An approved send is an operator's mail: while SkyMail tracks every
+	// An approved send is an operator's mail: while SkyNotify tracks every
 	// person's send it is tracked, whatever the request said when it was
 	// submitted (queue does the same under the lock).
 	tracked := view.MailApproval.TrackingRequested || h.mailer.OperatorTrackingAlways()
@@ -619,7 +619,7 @@ func (h *mailApprovalHandlerImpl) act(c fiber.Ctx, action approvalAction) error 
 	if action.sends && tracked && view.MailApproval.MailListID == nil && view.MailApproval.FormSourceID == nil {
 		prepared.tracking = h.mailer.ResolvePeopleTracking(ctx, view.MailApproval.TemplateID, recipientsOfView(view))
 	}
-	// A Forms source's respondents, the same way, while SkyMail tracks every
+	// A Forms source's respondents, the same way, while SkyNotify tracks every
 	// person's send.
 	if action.sends && view.MailApproval.FormSourceID != nil {
 		prepared.tracking = formSourceTracking(ctx, h.db, h.mailer, *view.MailApproval.FormSourceID, view.MailApproval.SubmitterSub, view.MailApproval.TemplateID, false)
@@ -899,8 +899,8 @@ func (h *mailApprovalHandlerImpl) queue(ctx context.Context, q *database.Queries
 
 	// An approved send is an operator's mail, to a list, to up to 100
 	// people or to a Forms source's respondents: the bulk lane, so it never
-	// holds back a login code. While SkyMail tracks every person's send
-	// (SKYMAIL_TRACKING_OPERATOR) it is tracked whatever the request asked
+	// holds back a login code. While SkyNotify tracks every person's send
+	// (SKYNOTIFY_TRACKING_OPERATOR) it is tracked whatever the request asked
 	// when it was submitted; otherwise a Forms source's never is (it has no
 	// box).
 	// An islem send (to people or a Forms source, declared about the
@@ -1092,7 +1092,7 @@ func (h *mailApprovalHandlerImpl) resubmit(ctx context.Context, q *database.Quer
 	}
 
 	now := h.now()
-	// A Forms source's send is tracked only while SkyMail tracks every
+	// A Forms source's send is tracked only while SkyNotify tracks every
 	// person's send: it has no box.
 	tracked := (send.formSourceID == nil || h.mailer.OperatorTrackingAlways()) &&
 		operatorTracking(ctx, h.mailer, send.tracking, checked.template.ID, send.mailListID)
@@ -1212,7 +1212,7 @@ func (h *mailApprovalHandlerImpl) expireLocked(ctx context.Context, q *database.
 		Kind:       database.MailApprovalEventKindExpired,
 		At:         h.now(),
 	})
-	return approvalNotice{kind: noticeResolved, decision: decisionExpired, decidedBy: "SkyMail"}, err
+	return approvalNotice{kind: noticeResolved, decision: decisionExpired, decidedBy: "SkyNotify"}, err
 }
 
 // A sweep expires at most this many requests; the next one goes on.

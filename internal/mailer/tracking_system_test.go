@@ -9,12 +9,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
-// System tracking (SKYMAIL_TRACKING_SYSTEM, Yusuf 2026-10-21): the mail
+// System tracking (SKYNOTIFY_TRACKING_SYSTEM, Yusuf 2026-10-21): the mail
 // services send without asking — Keycloak's and core's account and
 // transaction mail, Forms' confirmations, core's notifications — is tracked
 // too, in its own lane, whatever its template. A link that carries a secret
@@ -152,10 +152,10 @@ func subOf(t *testing.T, db *database.Store, task uuid.UUID) *uuid.UUID {
 	return sub
 }
 
-// Off by default: with SKYMAIL_TRACKING on but SKYMAIL_TRACKING_SYSTEM not,
+// Off by default: with SKYNOTIFY_TRACKING on but SKYNOTIFY_TRACKING_SYSTEM not,
 // a service's mail is queued exactly as before — untracked, in the system
-// lane, Keycloak and core not asked. SKYMAIL_TRACKING_SYSTEM on beside
-// SKYMAIL_TRACKING off is off too.
+// lane, Keycloak and core not asked. SKYNOTIFY_TRACKING_SYSTEM on beside
+// SKYNOTIFY_TRACKING off is off too.
 func TestSystemTrackingIsOffUnlessBothFlagsAreOn(t *testing.T) {
 	captureMailerLogs(t)
 	db := systemQueue(t)

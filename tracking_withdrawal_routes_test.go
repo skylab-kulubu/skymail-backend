@@ -6,14 +6,14 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
-	"github.com/skylab-kulubu/skymail-backend/internal/config"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/erasuretoken"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/accessgate"
+	"github.com/skylab-kulubu/skynotify-backend/internal/config"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/erasuretoken"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
 )
 
-// PUT /internal/v1/tracking-withdrawals/{sub}: core telling SkyMail a person
+// PUT /internal/v1/tracking-withdrawals/{sub}: core telling SkyNotify a person
 // turned open and click tracking off on my. (hub ticket iletisim-servisi
 // 14c; design note 07 §4.6). Since B9 (every mail is tracked) it is kept for
 // one release: it checks the caller and the subject as before, answers 204
@@ -24,7 +24,7 @@ const withdrawalSubject = "7a1e4b20-3c5d-4e6f-8a9b-0c1d2e3f4a5b"
 func newWithdrawalRoute(t *testing.T, gate accessgate.Reader) *erasureRoute {
 	t.Helper()
 	keycloak := newErasureKeycloak(t)
-	tokens := erasuretoken.Config{Issuer: erasureIssuer, JWKSURL: keycloak.jwksURL, ResourceClient: "skymail"}
+	tokens := erasuretoken.Config{Issuer: erasureIssuer, JWKSURL: keycloak.jwksURL, ResourceClient: "skynotify"}
 	withdraw := tokens
 	withdraw.CallerClientID = erasuretoken.WithdrawCallerClientID
 	withdraw.Role = erasuretoken.WithdrawRole
@@ -35,12 +35,12 @@ func newWithdrawalRoute(t *testing.T, gate accessgate.Reader) *erasureRoute {
 	return &erasureRoute{app: app, keycloak: keycloak}
 }
 
-// coreClaims is core's own client credentials token with SkyMail's withdraw
+// coreClaims is core's own client credentials token with SkyNotify's withdraw
 // role.
 func coreClaims(k *erasureKeycloak) jwt.MapClaims {
 	claims := k.claims()
 	claims["azp"] = "core"
-	claims["resource_access"] = map[string]any{"skymail": map[string]any{"roles": []any{"skymail:tracking:withdraw"}}}
+	claims["resource_access"] = map[string]any{"skynotify": map[string]any{"roles": []any{"skynotify:tracking:withdraw"}}}
 	return claims
 }
 
@@ -96,16 +96,16 @@ func TestWithdrawalRouteRefusesWhoeverIsNotCore(t *testing.T) {
 	for name, change := range map[string]func(jwt.MapClaims){
 		"core-erasure's erase token": func(c jwt.MapClaims) {
 			c["azp"] = "core-erasure"
-			c["resource_access"] = map[string]any{"skymail": map[string]any{"roles": []any{"skymail:account:erase"}}}
+			c["resource_access"] = map[string]any{"skynotify": map[string]any{"roles": []any{"skynotify:account:erase"}}}
 		},
 		"the withdraw role on core-erasure": func(c jwt.MapClaims) { c["azp"] = "core-erasure" },
 		"core without the role": func(c jwt.MapClaims) {
-			c["resource_access"] = map[string]any{"skymail": map[string]any{"roles": []any{"skymail:mails:send"}}}
+			c["resource_access"] = map[string]any{"skynotify": map[string]any{"roles": []any{"skynotify:mails:send"}}}
 		},
 		"the role on core's own client": func(c jwt.MapClaims) {
-			c["resource_access"] = map[string]any{"core": map[string]any{"roles": []any{"skymail:tracking:withdraw"}}}
+			c["resource_access"] = map[string]any{"core": map[string]any{"roles": []any{"skynotify:tracking:withdraw"}}}
 		},
-		"not for SkyMail": func(c jwt.MapClaims) { c["aud"] = []any{"core"} },
+		"not for SkyNotify": func(c jwt.MapClaims) { c["aud"] = []any{"core"} },
 	} {
 		t.Run(name+" is 403", func(t *testing.T) {
 			claims := coreClaims(k)
@@ -138,7 +138,7 @@ func TestWithdrawalRouteRefusesWhoeverIsNotCore(t *testing.T) {
 	assertNoSubject(t, logs, erasureAnswer{})
 }
 
-// What SkyMail cannot check now is 503 with Retry-After, for core's
+// What SkyNotify cannot check now is 503 with Retry-After, for core's
 // retrying job: Keycloak's keys, the access gate. No database is read any
 // more.
 func TestWithdrawalRouteUnavailableIsRetried(t *testing.T) {
@@ -161,12 +161,12 @@ func TestWithdrawalRouteUnavailableIsRetried(t *testing.T) {
 }
 
 // The running service checks the withdrawal token as the erase route checks
-// its own — the realm's issuer and keys, SkyMail's client — but for core's
+// its own — the realm's issuer and keys, SkyNotify's client — but for core's
 // client and the withdraw role.
 func TestWithdrawalTokenConfig(t *testing.T) {
-	cfg := config.Config{KeycloakRealmURL: erasureIssuer, KeycloakClientID: "skymail"}
+	cfg := config.Config{KeycloakRealmURL: erasureIssuer, KeycloakClientID: "skynotify"}
 	got, erase := withdrawalTokenConfig(cfg), erasureTokenConfig(cfg)
-	if got.CallerClientID != "core" || got.Role != "skymail:tracking:withdraw" {
+	if got.CallerClientID != "core" || got.Role != "skynotify:tracking:withdraw" {
 		t.Errorf("withdrawal caller %q role %q", got.CallerClientID, got.Role)
 	}
 	if got.Issuer != erase.Issuer || got.JWKSURL != erase.JWKSURL || got.ResourceClient != erase.ResourceClient || got.Issuer == "" {

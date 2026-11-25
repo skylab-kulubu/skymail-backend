@@ -28,7 +28,7 @@ const (
 
 var erasedEmails = []string{erasedSchool, erasedPersonal}
 
-// erasureFixture is one of everything SkyMail keeps about people. Ids are
+// erasureFixture is one of everything SkyNotify keeps about people. Ids are
 // fixed so a row can be named in the assertions.
 const erasureFixture = `
 INSERT INTO templates (id, name, subject, html_content, plain_text_content, react_email_content)

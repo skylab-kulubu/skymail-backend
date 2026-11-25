@@ -16,10 +16,10 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/keycloak"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 // The club is in Turkey: "today" on the home screen is a Turkish operator's
@@ -574,12 +574,12 @@ func TestSendListAndDetailKeepTheFieldsTheOldPanelReads(t *testing.T) {
 
 	// Asked by the send's sender, who may read its content and so its values.
 	app := contentApp(t, db, now)
-	status, body := getAs(t, app, "/mail_tasks", contentSender, "skymail:access", "skymail:mails:read")
+	status, body := getAs(t, app, "/mail_tasks", contentSender, "skynotify:access", "skynotify:mails:read")
 	var rows []map[string]any
 	if err := json.Unmarshal(body, &rows); status != fiber.StatusOK || err != nil || len(rows) != 1 {
 		t.Fatalf("list = %d %s", status, body)
 	}
-	status, body = getAs(t, app, "/mail_tasks/"+id.String(), contentSender, "skymail:access", "skymail:mails:read")
+	status, body = getAs(t, app, "/mail_tasks/"+id.String(), contentSender, "skynotify:access", "skynotify:mails:read")
 	var detail map[string]any
 	if err := json.Unmarshal(body, &detail); status != fiber.StatusOK || err != nil {
 		t.Fatalf("detail = %d %s", status, body)

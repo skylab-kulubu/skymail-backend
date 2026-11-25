@@ -12,7 +12,7 @@ const ProblemContentType = "application/problem+json"
 
 // Problem is an error's body: an RFC 9457 problem details object (ADR-0010,
 // as core-backend writes it) whose extension members (§3.2) are the body
-// SkyMail answered before — code, message, params — unchanged, so a client
+// SkyNotify answered before — code, message, params — unchanged, so a client
 // that reads code reads it as before.
 //
 // The members are written code and message first: a caller that prints only
@@ -23,7 +23,7 @@ type Problem struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	// Type is about:blank: the problem is what the status says (§4.2.1);
-	// what SkyMail means is code.
+	// what SkyNotify means is code.
 	Type string `json:"type"`
 	// Title is the status's reason phrase (§4.2.1).
 	Title  string `json:"title"`

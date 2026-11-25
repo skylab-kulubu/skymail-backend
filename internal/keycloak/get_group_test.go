@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
+	"github.com/skylab-kulubu/skynotify-backend/internal/keycloak"
 )
 
 // A group Keycloak does not have (404) is no group, nil and no error: gocloak
@@ -34,7 +34,7 @@ func TestGetGroupAnswersAGroupKeycloakDoesNotHaveAsNil(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skymail", "secret")
+	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skynotify", "secret")
 
 	group, err := kc.GetGroup(context.Background(), missing)
 	if err != nil || group != nil {
@@ -67,7 +67,7 @@ func TestGetGroupMembersOfAGroupKeycloakDoesNotHaveIsErrGroupNotFound(t *testing
 		}
 	}))
 	t.Cleanup(srv.Close)
-	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skymail", "secret")
+	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skynotify", "secret")
 
 	members, err := kc.GetGroupMembers(context.Background(), missing)
 	if !errors.Is(err, keycloak.ErrGroupNotFound) || members != nil {

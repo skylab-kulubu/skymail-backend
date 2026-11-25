@@ -15,7 +15,7 @@ import (
 )
 
 // ResolvePath is core's News audience (core docs/news-audience.md; role
-// audience:read on SkyMail's service account, bilet 04).
+// audience:read on SkyNotify's service account, bilet 04).
 const ResolvePath = "/v1/audiences/resolve"
 
 const (
@@ -43,7 +43,7 @@ var (
 	ErrVisibilityNotEnabled = errors.New("news audience: core sends only public records yet")
 )
 
-// TokenSource is SkyMail's service account token (KEYCLOAK_SERVICE_CLIENT_ID).
+// TokenSource is SkyNotify's service account token (KEYCLOAK_SERVICE_CLIENT_ID).
 type TokenSource interface {
 	ServiceToken(ctx context.Context) (string, error)
 }
@@ -94,7 +94,7 @@ type Audience struct {
 	Skipped Skipped
 }
 
-// Core asks core with SkyMail's service account token.
+// Core asks core with SkyNotify's service account token.
 type Core struct {
 	base   string
 	tokens TokenSource
@@ -119,7 +119,7 @@ type audiencePage struct {
 }
 
 // Count answers core's numbers only (?countOnly=true): the live count of
-// SkyMail's form. No address is read.
+// SkyNotify's form. No address is read.
 func (c *Core) Count(ctx context.Context, asked AudienceRequest) (Counts, Skipped, error) {
 	var page audiencePage
 	if err := c.call(ctx, url.Values{"countOnly": {"true"}}, asked, &page); err != nil {

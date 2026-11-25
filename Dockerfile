@@ -15,7 +15,7 @@ COPY . .
 
 # Build the application: the package, not main.go alone, so every file of
 # package main is in the binary (queue_close_restored.go among them).
-RUN CGO_ENABLED=0 GOOS=linux go build -o skymail-backend .
+RUN CGO_ENABLED=0 GOOS=linux go build -o skynotify-backend .
 
 # Final stage
 FROM alpine:latest
@@ -26,7 +26,7 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 
 # Copy the binary from the builder stage
-COPY --from=builder /app/skymail-backend .
+COPY --from=builder /app/skynotify-backend .
 # Copy migrations
 COPY --from=builder /app/db/migrations ./db/migrations
 
@@ -41,8 +41,8 @@ ENV PORT=3000
 # wget needed. A Swarm service uses it unless its own Health Check replaces
 # it; the values and why are in docs/health-and-shutdown.md.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --start-interval=2s --retries=6 \
-  CMD ["/app/skymail-backend", "healthcheck"]
+  CMD ["/app/skynotify-backend", "healthcheck"]
 
 # Run the application. On SIGTERM it drains and stops within 25 s: give the
 # service a stop grace period of 30 s (docs/health-and-shutdown.md).
-CMD ["./skymail-backend"]
+CMD ["./skynotify-backend"]

@@ -16,11 +16,11 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 // A service's Idempotency-Key on POST /v1/mail_tasks/single (hub tickets
@@ -46,7 +46,7 @@ func postSingle(t *testing.T, app *fiber.App, sub string, service bool, key stri
 	t.Helper()
 	body, _ := json.Marshal(send)
 	request := httptest.NewRequest(http.MethodPost, "/v1/mail_tasks/single", bytes.NewReader(body))
-	request.Header.Set("Authorization", "Bearer "+bearer(t, sub, service, "skymail:access", "skymail:mails:send"))
+	request.Header.Set("Authorization", "Bearer "+bearer(t, sub, service, "skynotify:access", "skynotify:mails:send"))
 	request.Header.Set("Content-Type", "application/json")
 	if key != "" {
 		request.Header.Set(handlers.IdempotencyKeyHeader, key)
@@ -228,7 +228,7 @@ func TestASingleMailWithAServicesIdempotencyKeyIsQueuedOnce(t *testing.T) {
 func TestATrackedOrErasedSingleMailIsReplayedAsAnswered(t *testing.T) {
 	w, _ := systemTrackedWorld(t)
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
-	auth := middlewares.NewAuthMiddleware("skymail", claimsUserinfo(t), middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", claimsUserinfo(t), middlewares.AudienceOff)
 	registerMailTaskRoutes(protectedAPI(app, auth, nil), auth, handlers.NewMailHandler(w.store, w.mail, w.directory))
 	core := uuid.NewString()
 

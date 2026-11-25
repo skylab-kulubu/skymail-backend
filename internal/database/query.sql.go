@@ -575,7 +575,7 @@ WHERE id = $1
   AND tracking_disabled_at IS NULL
 `
 
-// A tracked row whose mail goes out while SKYMAIL_TRACKING is off: it goes
+// A tracked row whose mail goes out while SKYNOTIFY_TRACKING is off: it goes
 // out clean and its token is closed, so nothing is recorded for it should the
 // flag be turned on again.
 func (q *Queries) CloseQueueTrackingFlagOff(ctx context.Context, id uuid.UUID) (int64, error) {
@@ -659,8 +659,8 @@ type ConfirmMaskFailuresRow struct {
 
 // Counts the failure of each send that failed in a run that masked some other
 // send — the fault was the send's — and only that run's: a failure from a run
-// that masked none (the fault may have been SkyMail's) is never counted, so a
-// fault across SkyMail empties nothing once it is over. Those it leaves go
+// that masked none (the fault may have been SkyNotify's) is never counted, so a
+// fault across SkyNotify empties nothing once it is over. Those it leaves go
 // (content_mask_unconfirmed = 0): they would hold the send's retry at a day,
 // and an image from before this rule would count them all (#65 review, B2).
 // Returns each send and its count.
@@ -732,8 +732,8 @@ func (q *Queries) ConsumeMailFormSource(ctx context.Context, arg ConsumeMailForm
 const countAllMailingListsIncludingArchived = `-- name: CountAllMailingListsIncludingArchived :one
 SELECT count(*)
 FROM mailing_lists
-WHERE ($1::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($1::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(description, '')), skymail_search_fold($1::text)) > 0)
+WHERE ($1::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold($1::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(description, '')), skynotify_search_fold($1::text)) > 0)
 `
 
 func (q *Queries) CountAllMailingListsIncludingArchived(ctx context.Context, search *string) (int64, error) {
@@ -746,9 +746,9 @@ func (q *Queries) CountAllMailingListsIncludingArchived(ctx context.Context, sea
 const countAllTemplatesIncludingArchived = `-- name: CountAllTemplatesIncludingArchived :one
 SELECT count(*)
 FROM templates
-WHERE ($1::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($1::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(key, '')), skymail_search_fold($1::text)) > 0
-       OR strpos(skymail_search_fold(subject), skymail_search_fold($1::text)) > 0)
+WHERE ($1::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold($1::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(key, '')), skynotify_search_fold($1::text)) > 0
+       OR strpos(skynotify_search_fold(subject), skynotify_search_fold($1::text)) > 0)
 `
 
 func (q *Queries) CountAllTemplatesIncludingArchived(ctx context.Context, search *string) (int64, error) {
@@ -762,8 +762,8 @@ const countArchivedMailingLists = `-- name: CountArchivedMailingLists :one
 SELECT count(*)
 FROM mailing_lists
 WHERE archived_at IS NOT NULL
-  AND ($1::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($1::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(description, '')), skymail_search_fold($1::text)) > 0)
+  AND ($1::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold($1::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(description, '')), skynotify_search_fold($1::text)) > 0)
 `
 
 func (q *Queries) CountArchivedMailingLists(ctx context.Context, search *string) (int64, error) {
@@ -777,9 +777,9 @@ const countArchivedTemplates = `-- name: CountArchivedTemplates :one
 SELECT count(*)
 FROM templates
 WHERE archived_at IS NOT NULL
-  AND ($1::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($1::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(key, '')), skymail_search_fold($1::text)) > 0
-       OR strpos(skymail_search_fold(subject), skymail_search_fold($1::text)) > 0)
+  AND ($1::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold($1::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(key, '')), skynotify_search_fold($1::text)) > 0
+       OR strpos(skynotify_search_fold(subject), skynotify_search_fold($1::text)) > 0)
 `
 
 func (q *Queries) CountArchivedTemplates(ctx context.Context, search *string) (int64, error) {
@@ -822,12 +822,12 @@ WHERE ($1::text IS NULL OR a.submitter_sub = $1::text)
         WHEN a.state IN ('pending', 'returned') AND a.deadline_at <= $3 THEN 'expired'
         ELSE a.state END))
   AND ($4::text IS NULL
-       OR strpos(skymail_search_fold(t.name), skymail_search_fold($4::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold($4::text)) > 0
-       OR strpos(skymail_search_fold(t.subject), skymail_search_fold($4::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(ml.name, '')), skymail_search_fold($4::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold($4::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold($4::text)) > 0)
+       OR strpos(skynotify_search_fold(t.name), skynotify_search_fold($4::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(t.key, '')), skynotify_search_fold($4::text)) > 0
+       OR strpos(skynotify_search_fold(t.subject), skynotify_search_fold($4::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(ml.name, '')), skynotify_search_fold($4::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(fs.form_title, '')), skynotify_search_fold($4::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(a.submitter_name, '')), skynotify_search_fold($4::text)) > 0)
 `
 
 type CountMailApprovalsParams struct {
@@ -885,8 +885,8 @@ WHERE task_id = $1
            AND (COALESCE(error, '') LIKE 'reserved\_domain:%'
                 OR COALESCE(error, '') LIKE 'suppressed:%'
                 OR COALESCE(error, '') IN ('preference: opted_out', 'preference: inactive', 'preference: ambiguous', 'cancelled'))))
-  AND ($4::text IS NULL OR strpos(skymail_search_fold(recipient_email), skymail_search_fold($4::text)) > 0
-       OR strpos(skymail_search_fold(recipient_full_name), skymail_search_fold($4::text)) > 0)
+  AND ($4::text IS NULL OR strpos(skynotify_search_fold(recipient_email), skynotify_search_fold($4::text)) > 0
+       OR strpos(skynotify_search_fold(recipient_full_name), skynotify_search_fold($4::text)) > 0)
 `
 
 type CountMailQueueItemsByTaskIdParams struct {
@@ -937,22 +937,22 @@ FROM mail_tasks mt
          LEFT JOIN mail_form_sources fs ON fs.id = mt.form_source_id
 WHERE ($1::text IS NULL OR mail_task_status(mt.id) = $1::text)
   AND ($2::text IS NULL
-       OR strpos(skymail_search_fold(COALESCE(t.name, '')), skymail_search_fold($2::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold($2::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(t.subject, '')), skymail_search_fold($2::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(ml.name, '')), skymail_search_fold($2::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold($2::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(t.name, '')), skynotify_search_fold($2::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(t.key, '')), skynotify_search_fold($2::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(t.subject, '')), skynotify_search_fold($2::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(ml.name, '')), skynotify_search_fold($2::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(fs.form_title, '')), skynotify_search_fold($2::text)) > 0
        OR EXISTS (SELECT 1
                   FROM mail_approval_tasks mat
                            JOIN mail_approvals a ON a.id = mat.approval_id
                   WHERE mat.task_id = mt.id
-                    AND strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold($2::text)) > 0)
+                    AND strpos(skynotify_search_fold(COALESCE(a.submitter_name, '')), skynotify_search_fold($2::text)) > 0)
        OR (mt.mail_list_id IS NULL AND mt.form_source_id IS NULL AND mt.source_kind IS NULL
            AND EXISTS (SELECT 1
                        FROM mail_queue q
                        WHERE q.task_id = mt.id
-                         AND (strpos(skymail_search_fold(q.recipient_email), skymail_search_fold($2::text)) > 0
-                              OR strpos(skymail_search_fold(q.recipient_full_name), skymail_search_fold($2::text)) > 0))))
+                         AND (strpos(skynotify_search_fold(q.recipient_email), skynotify_search_fold($2::text)) > 0
+                              OR strpos(skynotify_search_fold(q.recipient_full_name), skynotify_search_fold($2::text)) > 0))))
   AND ($3::timestamptz IS NULL OR mt.created_at >= $3::timestamptz)
   AND ($4::timestamptz IS NULL OR mt.created_at < $4::timestamptz)
   AND ($5::text IS NULL OR mail_task_kind(mt.id) = $5::text)
@@ -1069,8 +1069,8 @@ const countMailingLists = `-- name: CountMailingLists :one
 SELECT count(*)
 FROM mailing_lists
 WHERE archived_at IS NULL
-  AND ($1::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($1::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(description, '')), skymail_search_fold($1::text)) > 0)
+  AND ($1::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold($1::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(description, '')), skynotify_search_fold($1::text)) > 0)
 `
 
 func (q *Queries) CountMailingLists(ctx context.Context, search *string) (int64, error) {
@@ -1161,7 +1161,7 @@ type CountRestoredQueueItemsRow struct {
 // After a restore from backup (docs/data-lifecycle.md, Backup and restore),
 // the queue as the dump held it: the rows still to go out, pending or
 // processing, that were queued before the restore instant. A row without
-// created_at counts as one of them: SkyMail stamps every row it queues, so
+// created_at counts as one of them: SkyNotify stamps every row it queues, so
 // only the dump can hold such a row. left_queued is the rest of the queue,
 // queued since, which is never touched. Counts and times only.
 func (q *Queries) CountRestoredQueueItems(ctx context.Context, before time.Time) (CountRestoredQueueItemsRow, error) {
@@ -1230,7 +1230,7 @@ FROM (SELECT lower(btrim(q.recipient_email)) AS address
         AND btrim(q.recipient_email) <> ''
         AND b.received_at >= now() - make_interval(days => $1::int)
         AND NOT EXISTS (SELECT 1 FROM mail_suppressions m WHERE m.address = lower(btrim(q.recipient_email)))
-        AND ($2::text IS NULL OR strpos(skymail_search_fold(btrim(q.recipient_email)), skymail_search_fold($2::text)) > 0)
+        AND ($2::text IS NULL OR strpos(skynotify_search_fold(btrim(q.recipient_email)), skynotify_search_fold($2::text)) > 0)
       GROUP BY 1
       HAVING count(DISTINCT b.queue_id) >= $3::int) a
 `
@@ -1355,9 +1355,9 @@ const countTemplates = `-- name: CountTemplates :one
 SELECT count(*)
 FROM templates
 WHERE archived_at IS NULL
-  AND ($1::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($1::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(key, '')), skymail_search_fold($1::text)) > 0
-       OR strpos(skymail_search_fold(subject), skymail_search_fold($1::text)) > 0)
+  AND ($1::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold($1::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(key, '')), skynotify_search_fold($1::text)) > 0
+       OR strpos(skynotify_search_fold(subject), skynotify_search_fold($1::text)) > 0)
 `
 
 func (q *Queries) CountTemplates(ctx context.Context, search *string) (int64, error) {
@@ -1777,7 +1777,7 @@ type CreateSingleMailTaskRow struct {
 // mail_task_content_sensitive() reads it first (20261020120000).
 // erase_after_send: a service's send that keeps no record of its recipient;
 // its row is erased when its outcome is written (20261031230000).
-// sent_by_service: a service or SkyMail queued it (mail_task_kind()).
+// sent_by_service: a service or SkyNotify queued it (mail_task_kind()).
 func (q *Queries) CreateSingleMailTask(ctx context.Context, arg CreateSingleMailTaskParams) (CreateSingleMailTaskRow, error) {
 	row := q.db.QueryRow(ctx, createSingleMailTask,
 		arg.RecipientFullName,
@@ -2270,8 +2270,8 @@ const getAllMailingLists = `-- name: GetAllMailingLists :many
 SELECT id, name, description, created_at, updated_at, archived_at, archived_by
 FROM mailing_lists
 WHERE archived_at IS NULL
-  AND ($3::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($3::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(description, '')), skymail_search_fold($3::text)) > 0)
+  AND ($3::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold($3::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(description, '')), skynotify_search_fold($3::text)) > 0)
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
@@ -2283,7 +2283,7 @@ type GetAllMailingListsParams struct {
 }
 
 // A NULL search lists every list; else those whose name or description
-// contains it, as skymail_search_fold() compares them (as do the counts and the other lifecycles).
+// contains it, as skynotify_search_fold() compares them (as do the counts and the other lifecycles).
 func (q *Queries) GetAllMailingLists(ctx context.Context, arg GetAllMailingListsParams) ([]MailingList, error) {
 	rows, err := q.db.Query(ctx, getAllMailingLists, arg.Limit, arg.Offset, arg.Search)
 	if err != nil {
@@ -2315,8 +2315,8 @@ func (q *Queries) GetAllMailingLists(ctx context.Context, arg GetAllMailingLists
 const getAllMailingListsIncludingArchived = `-- name: GetAllMailingListsIncludingArchived :many
 SELECT id, name, description, created_at, updated_at, archived_at, archived_by
 FROM mailing_lists
-WHERE ($3::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($3::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(description, '')), skymail_search_fold($3::text)) > 0)
+WHERE ($3::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold($3::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(description, '')), skynotify_search_fold($3::text)) > 0)
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
@@ -2359,9 +2359,9 @@ const getAllTemplates = `-- name: GetAllTemplates :many
 SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 FROM templates
 WHERE archived_at IS NULL
-  AND ($3::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($3::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(key, '')), skymail_search_fold($3::text)) > 0
-       OR strpos(skymail_search_fold(subject), skymail_search_fold($3::text)) > 0)
+  AND ($3::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold($3::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(key, '')), skynotify_search_fold($3::text)) > 0
+       OR strpos(skynotify_search_fold(subject), skynotify_search_fold($3::text)) > 0)
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
@@ -2373,7 +2373,7 @@ type GetAllTemplatesParams struct {
 }
 
 // A NULL search lists every template; else those whose name, key or subject
-// contains it, as skymail_search_fold() compares them (as do the counts and the other lifecycles).
+// contains it, as skynotify_search_fold() compares them (as do the counts and the other lifecycles).
 func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams) ([]Template, error) {
 	rows, err := q.db.Query(ctx, getAllTemplates, arg.Limit, arg.Offset, arg.Search)
 	if err != nil {
@@ -2419,9 +2419,9 @@ func (q *Queries) GetAllTemplates(ctx context.Context, arg GetAllTemplatesParams
 const getAllTemplatesIncludingArchived = `-- name: GetAllTemplatesIncludingArchived :many
 SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 FROM templates
-WHERE ($3::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($3::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(key, '')), skymail_search_fold($3::text)) > 0
-       OR strpos(skymail_search_fold(subject), skymail_search_fold($3::text)) > 0)
+WHERE ($3::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold($3::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(key, '')), skynotify_search_fold($3::text)) > 0
+       OR strpos(skynotify_search_fold(subject), skynotify_search_fold($3::text)) > 0)
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
@@ -2478,8 +2478,8 @@ const getArchivedMailingLists = `-- name: GetArchivedMailingLists :many
 SELECT id, name, description, created_at, updated_at, archived_at, archived_by
 FROM mailing_lists
 WHERE archived_at IS NOT NULL
-  AND ($3::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($3::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(description, '')), skymail_search_fold($3::text)) > 0)
+  AND ($3::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold($3::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(description, '')), skynotify_search_fold($3::text)) > 0)
 ORDER BY archived_at DESC
 LIMIT $1 OFFSET $2
 `
@@ -2522,9 +2522,9 @@ const getArchivedTemplates = `-- name: GetArchivedTemplates :many
 SELECT id, name, html_content, plain_text_content, react_email_content, created_at, updated_at, subject, archived_at, archived_by, key, system, published_version_id, contract_required_variables, operator_required_variables, seed_refused_at, seed_refused_rules, seed_refused_payload_sha256, content_sensitive, sensitive_variables, channel
 FROM templates
 WHERE archived_at IS NOT NULL
-  AND ($3::text IS NULL OR strpos(skymail_search_fold(name), skymail_search_fold($3::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(key, '')), skymail_search_fold($3::text)) > 0
-       OR strpos(skymail_search_fold(subject), skymail_search_fold($3::text)) > 0)
+  AND ($3::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold($3::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(key, '')), skynotify_search_fold($3::text)) > 0
+       OR strpos(skynotify_search_fold(subject), skynotify_search_fold($3::text)) > 0)
 ORDER BY archived_at DESC
 LIMIT $1 OFFSET $2
 `
@@ -2991,8 +2991,8 @@ WHERE task_id = $1
            AND (COALESCE(error, '') LIKE 'reserved\_domain:%'
                 OR COALESCE(error, '') LIKE 'suppressed:%'
                 OR COALESCE(error, '') IN ('preference: opted_out', 'preference: inactive', 'preference: ambiguous', 'cancelled'))))
-  AND ($6::text IS NULL OR strpos(skymail_search_fold(recipient_email), skymail_search_fold($6::text)) > 0
-       OR strpos(skymail_search_fold(recipient_full_name), skymail_search_fold($6::text)) > 0)
+  AND ($6::text IS NULL OR strpos(skynotify_search_fold(recipient_email), skynotify_search_fold($6::text)) > 0
+       OR strpos(skynotify_search_fold(recipient_full_name), skynotify_search_fold($6::text)) > 0)
 ORDER BY created_at DESC, id DESC
 LIMIT $2 OFFSET $3
 `
@@ -3026,7 +3026,7 @@ type GetMailQueueItemsByTaskIdRow struct {
 // failed rows that were not sent on purpose, as mail_task_status() reads them
 // (a reserved domain, a suppressed or unsubscribed address, a preference, a
 // cancelled send). A NULL search lists every recipient; else those whose
-// address or name contains it, as skymail_search_fold() compares them.
+// address or name contains it, as skynotify_search_fold() compares them.
 // suppressed_but_sent: account mail sent to a suppressed address, flagged.
 // undelivered: a report said the address does not exist (a hard bounce of
 // the row's own address) after the relay took the mail.
@@ -4914,12 +4914,12 @@ WHERE ($3::text IS NULL OR a.submitter_sub = $3::text)
         WHEN a.state IN ('pending', 'returned') AND a.deadline_at <= $5 THEN 'expired'
         ELSE a.state END))
   AND ($6::text IS NULL
-       OR strpos(skymail_search_fold(t.name), skymail_search_fold($6::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold($6::text)) > 0
-       OR strpos(skymail_search_fold(t.subject), skymail_search_fold($6::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(ml.name, '')), skymail_search_fold($6::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold($6::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold($6::text)) > 0)
+       OR strpos(skynotify_search_fold(t.name), skynotify_search_fold($6::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(t.key, '')), skynotify_search_fold($6::text)) > 0
+       OR strpos(skynotify_search_fold(t.subject), skynotify_search_fold($6::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(ml.name, '')), skynotify_search_fold($6::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(fs.form_title, '')), skynotify_search_fold($6::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(a.submitter_name, '')), skynotify_search_fold($6::text)) > 0)
 ORDER BY a.submitted_at DESC, a.id DESC
 LIMIT $1 OFFSET $2
 `
@@ -4956,7 +4956,7 @@ type ListMailApprovalsRow struct {
 // state it is in as of as_of: one undecided past its deadline is expired,
 // whether or not the sweep has written it yet. A NULL search keeps every
 // request; else those whose template's name, key or subject, list's name,
-// Forms form's title or requester's name contains it, as skymail_search_fold() compares them.
+// Forms form's title or requester's name contains it, as skynotify_search_fold() compares them.
 func (q *Queries) ListMailApprovals(ctx context.Context, arg ListMailApprovalsParams) ([]ListMailApprovalsRow, error) {
 	rows, err := q.db.Query(ctx, listMailApprovals,
 		arg.Limit,
@@ -5210,28 +5210,28 @@ WITH page AS (SELECT mt.id
                     OR EXISTS (SELECT 1
                                FROM templates t
                                WHERE t.id = mt.template_id
-                                 AND (strpos(skymail_search_fold(t.name), skymail_search_fold($5::text)) > 0
-                                     OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold($5::text)) > 0
-                                     OR strpos(skymail_search_fold(t.subject), skymail_search_fold($5::text)) > 0))
+                                 AND (strpos(skynotify_search_fold(t.name), skynotify_search_fold($5::text)) > 0
+                                     OR strpos(skynotify_search_fold(COALESCE(t.key, '')), skynotify_search_fold($5::text)) > 0
+                                     OR strpos(skynotify_search_fold(t.subject), skynotify_search_fold($5::text)) > 0))
                     OR EXISTS (SELECT 1
                                FROM mailing_lists ml
                                WHERE ml.id = mt.mail_list_id
-                                 AND strpos(skymail_search_fold(ml.name), skymail_search_fold($5::text)) > 0)
+                                 AND strpos(skynotify_search_fold(ml.name), skynotify_search_fold($5::text)) > 0)
                     OR EXISTS (SELECT 1
                                FROM mail_form_sources fs
                                WHERE fs.id = mt.form_source_id
-                                 AND strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold($5::text)) > 0)
+                                 AND strpos(skynotify_search_fold(COALESCE(fs.form_title, '')), skynotify_search_fold($5::text)) > 0)
                     OR EXISTS (SELECT 1
                                FROM mail_approval_tasks mat
                                         JOIN mail_approvals a ON a.id = mat.approval_id
                                WHERE mat.task_id = mt.id
-                                 AND strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold($5::text)) > 0)
+                                 AND strpos(skynotify_search_fold(COALESCE(a.submitter_name, '')), skynotify_search_fold($5::text)) > 0)
                     OR (mt.mail_list_id IS NULL AND mt.form_source_id IS NULL AND mt.source_kind IS NULL
                         AND EXISTS (SELECT 1
                                     FROM mail_queue q
                                     WHERE q.task_id = mt.id
-                                      AND (strpos(skymail_search_fold(q.recipient_email), skymail_search_fold($5::text)) > 0
-                                          OR strpos(skymail_search_fold(q.recipient_full_name), skymail_search_fold($5::text)) > 0))))
+                                      AND (strpos(skynotify_search_fold(q.recipient_email), skynotify_search_fold($5::text)) > 0
+                                          OR strpos(skynotify_search_fold(q.recipient_full_name), skynotify_search_fold($5::text)) > 0))))
                 AND ($6::timestamptz IS NULL OR mt.created_at >= $6::timestamptz)
                 AND ($7::timestamptz IS NULL OR mt.created_at < $7::timestamptz)
                 AND ($8::text IS NULL OR mail_task_kind(mt.id) = $8::text)
@@ -5381,7 +5381,7 @@ type ListMailTaskSendsRow struct {
 // search matches the template's name, key or subject, the list's name, the
 // Forms form's title, an approved send's requester, or, on a send to people
 // (no list, no Forms source, not a News send), a recipient's address or name,
-// as skymail_search_fold() compares them; created_from and created_before
+// as skynotify_search_fold() compares them; created_from and created_before
 // bound created_at; kind is mail_task_kind() (bulk, system, single). Newest
 // first, the order idx_mail_tasks_created_at_id keeps: the page is read down
 // the index, filtered on mail_tasks alone (every other table is asked through
@@ -5477,22 +5477,22 @@ WITH matching AS (SELECT mt.id,
                   WHERE ($4::uuid IS NULL OR mt.id = $4::uuid)
                     AND ($5::text IS NULL OR mail_task_status(mt.id) = $5::text)
   AND ($6::text IS NULL
-       OR strpos(skymail_search_fold(COALESCE(t.name, '')), skymail_search_fold($6::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(t.key, '')), skymail_search_fold($6::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(t.subject, '')), skymail_search_fold($6::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(ml.name, '')), skymail_search_fold($6::text)) > 0
-       OR strpos(skymail_search_fold(COALESCE(fs.form_title, '')), skymail_search_fold($6::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(t.name, '')), skynotify_search_fold($6::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(t.key, '')), skynotify_search_fold($6::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(t.subject, '')), skynotify_search_fold($6::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(ml.name, '')), skynotify_search_fold($6::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(fs.form_title, '')), skynotify_search_fold($6::text)) > 0
        OR EXISTS (SELECT 1
                   FROM mail_approval_tasks mat
                            JOIN mail_approvals a ON a.id = mat.approval_id
                   WHERE mat.task_id = mt.id
-                    AND strpos(skymail_search_fold(COALESCE(a.submitter_name, '')), skymail_search_fold($6::text)) > 0)
+                    AND strpos(skynotify_search_fold(COALESCE(a.submitter_name, '')), skynotify_search_fold($6::text)) > 0)
        OR (mt.mail_list_id IS NULL AND mt.form_source_id IS NULL AND mt.source_kind IS NULL
            AND EXISTS (SELECT 1
                        FROM mail_queue q
                        WHERE q.task_id = mt.id
-                         AND (strpos(skymail_search_fold(q.recipient_email), skymail_search_fold($6::text)) > 0
-                              OR strpos(skymail_search_fold(q.recipient_full_name), skymail_search_fold($6::text)) > 0))))
+                         AND (strpos(skynotify_search_fold(q.recipient_email), skynotify_search_fold($6::text)) > 0
+                              OR strpos(skynotify_search_fold(q.recipient_full_name), skynotify_search_fold($6::text)) > 0))))
   AND ($7::timestamptz IS NULL OR mt.created_at >= $7::timestamptz)
   AND ($8::timestamptz IS NULL OR mt.created_at < $8::timestamptz)
   AND ($9::text IS NULL OR mail_task_kind(mt.id) = $9::text)
@@ -6154,7 +6154,7 @@ type ListSoftBounceAddressesRow struct {
 }
 
 // The addresses that had threshold or more soft bounces in the last days
-// (hub ticket skymail-bounce-isleme 13; ADR 0073 decision 5): a soft bounce
+// (hub ticket skynotify-bounce-isleme 13; ADR 0073 decision 5): a soft bounce
 // never suppresses, so these are not on the list; the panel marks them. A
 // mail counts once however many reports it had; only reports that named the
 // row's own address count, of rows that still hold one (Account erasure
@@ -6646,7 +6646,7 @@ type LockBounceQueueRowRow struct {
 	SentAt         *time.Time          `json:"sent_at"`
 }
 
-// Bounces and the suppression list (hub spec skymail-bounce-isleme; README,
+// Bounces and the suppression list (hub spec skynotify-bounce-isleme; README,
 // "Geri dönen posta ve bastırma listesi").
 // The queue row a delivery status notification names, locked FOR SHARE until
 // the report is recorded: Account erasure locks the person's rows FOR UPDATE
@@ -6778,7 +6778,7 @@ func (q *Queries) LockMailFormSource(ctx context.Context, id uuid.UUID) (MailFor
 }
 
 const lockNewsSource = `-- name: LockNewsSource :exec
-SELECT pg_advisory_xact_lock(hashtextextended('skymail news ' || $1::text, 0))
+SELECT pg_advisory_xact_lock(hashtextextended('skynotify news ' || $1::text, 0))
 `
 
 // Holds a News record's sends back from each other until the transaction
@@ -6823,7 +6823,7 @@ func (q *Queries) LockOwnedMailFormSource(ctx context.Context, arg LockOwnedMail
 }
 
 const lockSendBudget = `-- name: LockSendBudget :one
-SELECT pg_try_advisory_xact_lock(hashtextextended('skymail-backend send budget', 0)) AS locked
+SELECT pg_try_advisory_xact_lock(hashtextextended('skynotify-backend send budget', 0)) AS locked
 `
 
 // Serialises the bulk lane's take across processes: under it a process reads
@@ -8921,7 +8921,7 @@ type TrackingTaskAccessRow struct {
 
 // system_lane: a row of the send is in the system lane (priority > 0, as
 // ProcessSystemQueueItems reads it). A tracked mail there is always one the
-// system sends (a service's single mail, SkyMail's own approval notice): a
+// system sends (a service's single mail, SkyNotify's own approval notice): a
 // person's tracked send is in the bulk lane, and the system lane is never
 // tracked as a person asks. Its people are read with the role only.
 func (q *Queries) TrackingTaskAccess(ctx context.Context, id uuid.UUID) (TrackingTaskAccessRow, error) {

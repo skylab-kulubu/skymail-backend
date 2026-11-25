@@ -71,7 +71,7 @@ func TestClaimTakesAtMostMaxRowsAndLeasesThemToTheProcess(t *testing.T) {
 	ctx := context.Background()
 	ids := queueOf(t, db, 5)
 
-	taken, err := db.ProcessSystemQueueItems(ctx, ProcessSystemQueueItemsParams{ClaimedBy: "skymail-a-1", MaxRows: 2})
+	taken, err := db.ProcessSystemQueueItems(ctx, ProcessSystemQueueItemsParams{ClaimedBy: "skynotify-a-1", MaxRows: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,8 +83,8 @@ func TestClaimTakesAtMostMaxRowsAndLeasesThemToTheProcess(t *testing.T) {
 		t.Errorf("took %s and %s, want the two due longest, %s and %s", taken[0].ID, taken[1].ID, ids[0], ids[1])
 	}
 	for i, row := range taken {
-		if row.ClaimedBy == nil || *row.ClaimedBy != "skymail-a-1" || row.ClaimedAt == nil {
-			t.Errorf("row %d claim = %v at %v, want skymail-a-1 now", i, row.ClaimedBy, row.ClaimedAt)
+		if row.ClaimedBy == nil || *row.ClaimedBy != "skynotify-a-1" || row.ClaimedAt == nil {
+			t.Errorf("row %d claim = %v at %v, want skynotify-a-1 now", i, row.ClaimedBy, row.ClaimedAt)
 		} else if age := time.Since(*row.ClaimedAt); age < -time.Minute || age > time.Minute {
 			t.Errorf("row %d claimed_at %v is not now", i, row.ClaimedAt)
 		}
@@ -99,7 +99,7 @@ func TestClaimTakesAtMostMaxRowsAndLeasesThemToTheProcess(t *testing.T) {
 	}
 
 	// Another process skips what the first holds and takes the rest.
-	rest, err := db.ProcessSystemQueueItems(ctx, ProcessSystemQueueItemsParams{ClaimedBy: "skymail-b-2", MaxRows: 10})
+	rest, err := db.ProcessSystemQueueItems(ctx, ProcessSystemQueueItemsParams{ClaimedBy: "skynotify-b-2", MaxRows: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestResetDeadJobsPutsBackOnlyRowsWhoseLeaseRanOut(t *testing.T) {
 	db := lifecycleStore(t)
 	ctx := context.Background()
 	ids := queueOf(t, db, 3)
-	if _, err := db.ProcessSystemQueueItems(ctx, ProcessSystemQueueItemsParams{ClaimedBy: "skymail-old-1", MaxRows: 3}); err != nil {
+	if _, err := db.ProcessSystemQueueItems(ctx, ProcessSystemQueueItemsParams{ClaimedBy: "skynotify-old-1", MaxRows: 3}); err != nil {
 		t.Fatal(err)
 	}
 	fresh, almost, stale := ids[0], ids[1], ids[2]
@@ -134,8 +134,8 @@ func TestResetDeadJobsPutsBackOnlyRowsWhoseLeaseRanOut(t *testing.T) {
 		t.Fatalf("reset %d rows, want only the stale one", reset)
 	}
 	for _, id := range []uuid.UUID{fresh, almost} {
-		if c := claimOf(t, db, id); c.Status != "processing" || c.ClaimedBy == nil || *c.ClaimedBy != "skymail-old-1" {
-			t.Errorf("row within its lease = %+v, want still processing for skymail-old-1", c)
+		if c := claimOf(t, db, id); c.Status != "processing" || c.ClaimedBy == nil || *c.ClaimedBy != "skynotify-old-1" {
+			t.Errorf("row within its lease = %+v, want still processing for skynotify-old-1", c)
 		}
 	}
 	if c := claimOf(t, db, stale); c.Status != "pending" || c.ClaimedBy != nil || c.ClaimedAt != nil {
@@ -143,7 +143,7 @@ func TestResetDeadJobsPutsBackOnlyRowsWhoseLeaseRanOut(t *testing.T) {
 	}
 
 	// The stale row is the next process's to take.
-	taken, err := db.ProcessSystemQueueItems(ctx, ProcessSystemQueueItemsParams{ClaimedBy: "skymail-new-2", MaxRows: 10})
+	taken, err := db.ProcessSystemQueueItems(ctx, ProcessSystemQueueItemsParams{ClaimedBy: "skynotify-new-2", MaxRows: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestOnlyTheClaimHoldingARowRecordsItsOutcome(t *testing.T) {
 	ctx := context.Background()
 	row := queueOf(t, db, 1)[0]
 
-	first := takeOne(t, db, "skymail-a-1")
+	first := takeOne(t, db, "skynotify-a-1")
 	expire(t, db, row)
 
 	// Put back, nobody's yet: the old claim records nothing.
@@ -254,10 +254,10 @@ func TestOnlyTheClaimHoldingARowRecordsItsOutcome(t *testing.T) {
 	}
 
 	// Taken by another process: the old claim still records nothing.
-	second := takeOne(t, db, "skymail-b-2")
+	second := takeOne(t, db, "skynotify-b-2")
 	stale(t, db, first)
-	if c := claimOf(t, db, row); c.Status != "processing" || c.ClaimedBy == nil || *c.ClaimedBy != "skymail-b-2" {
-		t.Fatalf("row after the stale outcomes = %+v, want processing for skymail-b-2", c)
+	if c := claimOf(t, db, row); c.Status != "processing" || c.ClaimedBy == nil || *c.ClaimedBy != "skynotify-b-2" {
+		t.Fatalf("row after the stale outcomes = %+v, want processing for skynotify-b-2", c)
 	}
 	if n := attemptsOf(t, db, row); n != 0 {
 		t.Fatalf("attempts = %d, want 0", n)
@@ -276,13 +276,13 @@ func TestOnlyTheClaimHoldingARowRecordsItsOutcome(t *testing.T) {
 	}
 
 	// Taken again and sent by its holder: sent, and it keeps who sent it.
-	third := takeOne(t, db, "skymail-b-2")
+	third := takeOne(t, db, "skynotify-b-2")
 	if n, err := db.SetMailQueueItemSent(ctx, SetMailQueueItemSentParams{
 		ID: row, ClaimedBy: *third.ClaimedBy, ClaimedAt: *third.ClaimedAt,
 	}); err != nil || n != 1 {
 		t.Fatalf("sent touched %d rows (%v), want 1", n, err)
 	}
-	if c := claimOf(t, db, row); c.Status != "sent" || c.ClaimedBy == nil || *c.ClaimedBy != "skymail-b-2" {
+	if c := claimOf(t, db, row); c.Status != "sent" || c.ClaimedBy == nil || *c.ClaimedBy != "skynotify-b-2" {
 		t.Fatalf("sent row = %+v", c)
 	}
 	// A sent row is final: a late failure from its own claim changes nothing.
@@ -301,9 +301,9 @@ func TestALateOutcomeOfTheSameProcessesEarlierClaimDoesNotLand(t *testing.T) {
 	ctx := context.Background()
 	row := queueOf(t, db, 1)[0]
 
-	first := takeOne(t, db, "skymail-a-1")
+	first := takeOne(t, db, "skynotify-a-1")
 	expire(t, db, row)
-	second := takeOne(t, db, "skymail-a-1")
+	second := takeOne(t, db, "skynotify-a-1")
 	if second.ClaimedAt.Equal(*first.ClaimedAt) {
 		t.Fatalf("both claims at %v", first.ClaimedAt)
 	}

@@ -1,13 +1,13 @@
 services:
-  skymail:
-    container_name: skymail
+  skynotify:
+    container_name: skynotify
     build:
       context: .
       dockerfile: Dockerfile
     ports:
       - "3000:3000"
     environment:
-      DATABASE_URL: postgres://skymail:${SKYMAIL_DB_PASSWORD:-postgres}@postgres:5432/skymail?sslmode=disable
+      DATABASE_URL: postgres://skynotify:${SKYNOTIFY_DB_PASSWORD:-postgres}@postgres:5432/skynotify?sslmode=disable
       APP_PORT: "3000"
       TRUSTED_PROXY_RANGES: ${TRUSTED_PROXY_RANGES:-}
     env_file:

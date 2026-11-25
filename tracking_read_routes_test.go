@@ -9,13 +9,13 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
 // The send's own sender (yusuf) reads its people only while
-// SKYMAIL_SENDER_SEES_RECIPIENTS is on (Yusuf, 2026-11-08; ADR-0074 decision
+// SKYNOTIFY_SENDER_SEES_RECIPIENTS is on (Yusuf, 2026-11-08; ADR-0074 decision
 // 9, addendum 2026-11-08); off, the default, the role alone does.
 func TestTrackingReadRoutesEnforceRolesSenderAndNinetyDays(t *testing.T) {
 	w, _ := trackedWorld(t, true)
@@ -43,7 +43,7 @@ func TestTrackingReadRoutesEnforceRolesSenderAndNinetyDays(t *testing.T) {
 			t.Errorf("summary contract: %s", raw)
 		}
 	}
-	approvalPeople["tracking_admin"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skymail:access", handlers.TrackingReadRole}}
+	approvalPeople["tracking_admin"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skynotify:access", handlers.TrackingReadRole}}
 	defer delete(approvalPeople, "tracking_admin")
 	for who, want := range map[string]int{"yusuf": 403, "baska": 403, "fatih": 403, "tracking_admin": 200} {
 		status, raw := w.call(who, "GET", base+"/recipients", nil, nil)
@@ -100,7 +100,7 @@ func TestTrackingReadRoutesEnforceRolesSenderAndNinetyDays(t *testing.T) {
 	if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_task_tracking_totals SET tracked_recipients=3 WHERE task_id=$1`, created.ID); err != nil {
 		t.Fatal(err)
 	}
-	approvalPeople["tracking_reader"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skymail:access", "skymail:mails:read", handlers.TrackingReadRole}}
+	approvalPeople["tracking_reader"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skynotify:access", "skynotify:mails:read", handlers.TrackingReadRole}}
 	defer delete(approvalPeople, "tracking_reader")
 	for who, wantWithheld := range map[string]bool{"baska": false, "tracking_reader": false} {
 		var small struct {
@@ -118,7 +118,7 @@ func TestTrackingReadRoutesEnforceRolesSenderAndNinetyDays(t *testing.T) {
 	}
 }
 
-// SKYMAIL_SENDER_SEES_RECIPIENTS=on gives the send's own sender its people
+// SKYNOTIFY_SENDER_SEES_RECIPIENTS=on gives the send's own sender its people
 // back, as before 2026-11-08; another person still needs the role. The
 // summary says to whom it would give them (recipients_readable).
 func TestTheSenderReadsItsPeopleWhileTheSwitchIsOn(t *testing.T) {
@@ -141,8 +141,8 @@ func TestTheSenderReadsItsPeopleWhileTheSwitchIsOn(t *testing.T) {
 			t.Fatal(err)
 		}
 		base := "/v1/mail_tasks/" + created.ID.String() + "/tracking"
-		approvalPeople["yusuf_okur"] = approvalPerson{sub: yusuf.sub, name: yusuf.name, email: yusuf.email, roles: append(append([]string{}, yusuf.roles...), "skymail:mails:read")}
-		approvalPeople["takip_okur"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skymail:access", "skymail:mails:read", handlers.TrackingReadRole}}
+		approvalPeople["yusuf_okur"] = approvalPerson{sub: yusuf.sub, name: yusuf.name, email: yusuf.email, roles: append(append([]string{}, yusuf.roles...), "skynotify:mails:read")}
+		approvalPeople["takip_okur"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skynotify:access", "skynotify:mails:read", handlers.TrackingReadRole}}
 		senderWant := fiber.StatusForbidden
 		if on {
 			senderWant = fiber.StatusOK
@@ -316,7 +316,7 @@ func TestTrackingReportsShowWhereTheLinksGo(t *testing.T) {
 	if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_task_links SET url=NULL,url_cleared_reason='expired' WHERE link_token=$1`, tokens[2]); err != nil {
 		t.Fatal(err)
 	}
-	approvalPeople["takip_okur"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skymail:access", "skymail:mails:read", handlers.TrackingReadRole}}
+	approvalPeople["takip_okur"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skynotify:access", "skynotify:mails:read", handlers.TrackingReadRole}}
 	defer delete(approvalPeople, "takip_okur")
 	base := "/v1/mail_tasks/" + created.ID.String() + "/tracking"
 

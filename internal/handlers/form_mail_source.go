@@ -15,11 +15,11 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 const formSourceLifetime = 30 * time.Minute
@@ -198,8 +198,8 @@ func formSourceRecipientInfos(rows []database.MailFormSourceRecipient) []mailer.
 	return to
 }
 
-// formSourceTracking is, while SkyMail tracks every person's send
-// (SKYMAIL_TRACKING_OPERATOR), whom of a Forms source's respondents the
+// formSourceTracking is, while SkyNotify tracks every person's send
+// (SKYNOTIFY_TRACKING_OPERATOR), whom of a Forms source's respondents the
 // send may track, asked before the transaction that locks the source: each
 // address looked up in Keycloak (exact verified primary e-mail; none is
 // tracked without an account), all of them at once within the people send's budget, then
@@ -289,7 +289,7 @@ func checkFormSourceTemplate(ctx context.Context, q *database.Queries, id uuid.U
 // CreateFormSource godoc
 //
 //	@Summary		Prepare an immutable Forms audience
-//	@Description	Only the configured Forms service account may create this source, after the existing bearer userinfo, SkyMail access, send-or-write permission and exact service identity checks. Forms derives owner_sub, form metadata and recipients from its authorized HTTP caller. No mail or approval is created. The source expires after 30 minutes unless its owner consumes it. The configured recipient count and existing HTTP body limits reject excess input without truncation. The response is metadata only, with no recipient addresses, and is not cacheable.
+//	@Description	Only the configured Forms service account may create this source, after the existing bearer userinfo, SkyNotify access, send-or-write permission and exact service identity checks. Forms derives owner_sub, form metadata and recipients from its authorized HTTP caller. No mail or approval is created. The source expires after 30 minutes unless its owner consumes it. The configured recipient count and existing HTTP body limits reject excess input without truncation. The response is metadata only, with no recipient addresses, and is not cacheable.
 //	@Tags			Mail
 //	@Param			source	body	requests.CreateFormMailSource	true	"Authorized Forms snapshot"
 //	@Accept			json
@@ -387,20 +387,20 @@ func (h *mailHandlerImpl) GetFormSource(c fiber.Ctx) error {
 // SendFormSource godoc
 //
 //	@Summary		Send to an immutable Forms audience
-//	@Description	The source owner holding current skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is tracked without an account) and core deciding, and the answer says tracking true. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): duyuru with a category by default; islem with transactional_statement true when the mail is about each respondent's own application: tracked as any Forms source send, queued in the bulk lane, sent from bilgi@ without List-Unsubscribe. The purpose is part of an exact retry.
+//	@Description	The source owner holding current skynotify:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyNotify tracks every person's send (SKYNOTIFY_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is tracked without an account) and core deciding, and the answer says tracking true. Purposes (SKYNOTIFY_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori"): duyuru with a category by default; islem with transactional_statement true when the mail is about each respondent's own application: tracked as any Forms source send, queued in the bulk lane, sent from bilgi@ without List-Unsubscribe. The purpose is part of an exact retry.
 //	@Tags			Mail
 //	@Param			send	body	requests.SendFormSource	true	"Prepared source and mail content"
 //	@Accept			json
 //	@Produce		json
 //	@Success		201	{object}	handlers.CreatedMailTask	"New task"
 //	@Success		200	{object}	handlers.CreatedMailTask	"Same task for an exact retry"
-//	@Failure		400	{object}	apperrors.Problem			"Invalid request or caller-supplied recipient/metadata fields. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team. A retry whose purpose differs is not the same request: 409 form_source.consumed"
-//	@Failure		403	{object}	apperrors.Problem			"Current skymail:mails:write permission required: skymail:mails:send opens single mails only, its holder submits the source for approval"
+//	@Failure		400	{object}	apperrors.Problem			"Invalid request or caller-supplied recipient/metadata fields. Purpose, checked in this order, while purposes are on (SKYNOTIFY_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYNOTIFY_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team. A retry whose purpose differs is not the same request: 409 form_source.consumed"
+//	@Failure		403	{object}	apperrors.Problem			"Current skynotify:mails:write permission required: skynotify:mails:send opens single mails only, its holder submits the source for approval"
 //	@Failure		404	{object}	apperrors.Problem			"No such source owned by the caller"
 //	@Failure		409	{object}	apperrors.Problem			"Source invalidated, consumed differently or busy"
 //	@Failure		410	{object}	apperrors.Problem			"Prepare the Forms audience again"
 //	@Failure		422	{object}	apperrors.Problem			"Template or variables unavailable or invalid"
-//	@Failure		503	{object}	apperrors.Problem			"Transactional sending unavailable; mail_task.preference_unavailable (Retry-After): a duyuru send while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing is queued, the source is not consumed"
+//	@Failure		503	{object}	apperrors.Problem			"Transactional sending unavailable; mail_task.preference_unavailable (Retry-After): a duyuru send while every duyuru send obeys the recipients' preferences (SKYNOTIFY_BULK_PREFERENCE), and core did not answer; nothing is queued, the source is not consumed"
 //	@Router			/mail_tasks/form-source [post]
 func (h *mailHandlerImpl) SendFormSource(c fiber.Ctx) error {
 	var p requests.SendFormSource
@@ -532,7 +532,7 @@ func (h *mailApprovalHandlerImpl) submitFormSource(c fiber.Ctx, caller approvalC
 			return err
 		}
 		now := h.now()
-		// A Forms source's send is tracked only while SkyMail tracks every
+		// A Forms source's send is tracked only while SkyNotify tracks every
 		// person's send: it has no box.
 		a, err := q.CreateMailApproval(c.Context(), database.CreateMailApprovalParams{
 			SubmitterSub: caller.sub, SubmitterName: caller.name, SubmitterEmail: caller.email, SubmitterEmailUnverified: caller.emailUnverified,
@@ -575,7 +575,7 @@ func (h *mailApprovalHandlerImpl) submitFormSource(c fiber.Ctx, caller approvalC
 }
 
 // queueToFormSource queues an approved request to a Forms source, locked:
-// tracked as the request is (a.TrackingRequested, while SkyMail tracks every
+// tracked as the request is (a.TrackingRequested, while SkyNotify tracks every
 // person's send), with what Keycloak and core said about its respondents
 // before the lock (preferences).
 func queueToFormSource(ctx context.Context, q *database.Queries, sends mailer.Queue, a database.MailApproval, preferences *mailer.TrackingPreferences) (uuid.UUID, error) {

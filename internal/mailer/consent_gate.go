@@ -10,8 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
-	"github.com/skylab-kulubu/skymail-backend/internal/consent"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/consent"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
 // The contact consents applied (KVKK aydınlatma s6 §5.8, §5.10, §5.14, rows
@@ -27,7 +27,7 @@ import (
 //     click ends the promotional consent. Always applied, whatever the
 //     switches say now, so that a promotional mail queued while they were
 //     on never goes to everyone;
-//   - with SKYMAIL_LIST_CONSENT on, a duyuru mail (s6 §5.14: "other
+//   - with SKYNOTIFY_LIST_CONSENT on, a duyuru mail (s6 §5.14: "other
 //     announcements only with consent"), whatever its send (an internal
 //     list, a Forms source's respondents, a person's mail to one address,
 //     an approved send; a list's queued before purposes too), to an address
@@ -105,10 +105,10 @@ type ConsentReader interface {
 
 // ConsentGate is the gate's configuration (ConsentGateFromEnv).
 type ConsentGate struct {
-	// Promotional is SKYMAIL_PROMOTIONAL: a duyuru send may say it is
+	// Promotional is SKYNOTIFY_PROMOTIONAL: a duyuru send may say it is
 	// promotional (commercial_content_absent false). Off, it is refused.
 	Promotional bool
-	// ListConsent is SKYMAIL_LIST_CONSENT: a duyuru mail's address without
+	// ListConsent is SKYNOTIFY_LIST_CONSENT: a duyuru mail's address without
 	// an account needs the announcement consent, whatever the send (named
 	// for its first scope, the list).
 	ListConsent bool
@@ -119,10 +119,10 @@ type ConsentGate struct {
 const (
 	// PromotionalEnv lets a duyuru send be promotional: off (the default,
 	// also when unset) or on.
-	PromotionalEnv = "SKYMAIL_PROMOTIONAL"
+	PromotionalEnv = "SKYNOTIFY_PROMOTIONAL"
 	// ListConsentEnv holds a duyuru mail's address without an account to
 	// the announcement consent: off (the default, also when unset) or on.
-	ListConsentEnv = "SKYMAIL_LIST_CONSENT"
+	ListConsentEnv = "SKYNOTIFY_LIST_CONSENT"
 )
 
 // ConsentGateFromEnv reads both switches; anything but off or on stops
@@ -143,13 +143,13 @@ func ConsentGateFromEnv(getenv func(string) string) (ConsentGate, error) {
 
 // CheckWith says whether the gate can run with lanes: a promotional mail
 // must carry its withdraw link both ways s6 §5.8 and RFC 8058 ask for, so
-// SKYMAIL_PROMOTIONAL=on needs SKYMAIL_MAIL_PURPOSE=on (a send names its
-// purpose, and the visible footer line is added), SKYMAIL_LIST_UNSUBSCRIBE=on
+// SKYNOTIFY_PROMOTIONAL=on needs SKYNOTIFY_MAIL_PURPOSE=on (a send names its
+// purpose, and the visible footer line is added), SKYNOTIFY_LIST_UNSUBSCRIBE=on
 // and a duyuru lane that is not off (List-Unsubscribe is written only
-// there). Anything less stops startup: SkyMail never says promotional sends
+// there). Anything less stops startup: SkyNotify never says promotional sends
 // are on while their mail would go out without its one-click way out.
 //
-// SKYMAIL_LIST_CONSENT=on needs SKYMAIL_MAIL_PURPOSE=on too: without
+// SKYNOTIFY_LIST_CONSENT=on needs SKYNOTIFY_MAIL_PURPOSE=on too: without
 // purposes no send can state that it is about the list's own event, so the
 // gate would hold every such mail to a guest.
 func (g ConsentGate) CheckWith(lanes SendLanes) error {
@@ -177,11 +177,11 @@ func WithConsentGate(gate ConsentGate) Option {
 	return func(m *mailerImpl) { m.consents = gate }
 }
 
-// PromotionalAvailable says SKYMAIL_PROMOTIONAL is on: a duyuru send may be
+// PromotionalAvailable says SKYNOTIFY_PROMOTIONAL is on: a duyuru send may be
 // promotional.
 func (m *mailerImpl) PromotionalAvailable() bool { return m.consents.Promotional }
 
-// ListConsentAvailable says SKYMAIL_LIST_CONSENT is on: every duyuru's
+// ListConsentAvailable says SKYNOTIFY_LIST_CONSENT is on: every duyuru's
 // address without an account needs the announcement consent.
 func (m *mailerImpl) ListConsentAvailable() bool { return m.consents.ListConsent }
 

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
 const pixel = base + "/t/o/AAAAAAAAAAAAAAAAAAAAAA"
@@ -27,14 +27,14 @@ func undecorate(t *testing.T, decorated string, clicks map[string]string) string
 // The pixel goes right after <body>, before anything a client could clip,
 // and only the hrefs that are a registered link become their click address.
 // Everything else — the doctype, the head, the styles, the attributes, other
-// links, a link the template marks data-skymail-notrack, text that looks like
+// links, a link the template marks data-skynotify-notrack, text that looks like
 // a link — is as it was, byte for byte. No sentence, no footer and no /t/x
 // link is added (T8).
 func TestDecorateAddsThePixelAndRewritesOnlyRegisteredLinks(t *testing.T) {
 	body := `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"><html lang="tr"><head><meta charset="UTF-8"><style>a[href^="https"]{color:#003694}</style><!--[if mso]><v:roundrect href="https://skylab.example/etkinlik"></v:roundrect><![endif]--></head><BODY style="margin:0" class='x'>
 <table role="presentation"><tr><td><a class="btn" style="color:red" href="https://skylab.example/etkinlik?a=1&amp;b=2" target="_blank">Katıl</a></td></tr></table>
 <p>Adres: https://skylab.example/etkinlik?a=1&amp;b=2</p>
-<a href="https://skylab.example/form" data-skymail-notrack>Form (işaretli)</a>
+<a href="https://skylab.example/form" data-skynotify-notrack>Form (işaretli)</a>
 <a href='https://skylab.example/form'>Form</a>
 <a href="mailto:yk@example.com">Yaz</a>
 <a href="https://skylab.example/kayitsiz">Kayıtsız</a>
@@ -53,7 +53,7 @@ func TestDecorateAddsThePixelAndRewritesOnlyRegisteredLinks(t *testing.T) {
 	for _, want := range []string{
 		`<a class="btn" style="color:red" href="` + clicks["https://skylab.example/etkinlik?a=1&b=2"] + `" target="_blank">Katıl</a>`,
 		`<a href="` + clicks["https://skylab.example/form"] + `">Form</a>`,
-		`<a href="https://skylab.example/form" data-skymail-notrack>Form (işaretli)</a>`,
+		`<a href="https://skylab.example/form" data-skynotify-notrack>Form (işaretli)</a>`,
 		`<a href="mailto:yk@example.com">Yaz</a>`,
 		`<a href="https://skylab.example/kayitsiz">Kayıtsız</a>`,
 		`<p>Adres: https://skylab.example/etkinlik?a=1&amp;b=2</p>`,

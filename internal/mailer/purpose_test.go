@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 // A mail's stream is its send's purpose (ADR 0072 decision 2), not its queue
@@ -48,15 +48,15 @@ func TestLaneOfReadsThePurpose(t *testing.T) {
 	}
 }
 
-// SKYMAIL_MAIL_PURPOSE is off unless it says on; anything else stops startup.
+// SKYNOTIFY_MAIL_PURPOSE is off unless it says on; anything else stops startup.
 func TestTheMailPurposeSwitch(t *testing.T) {
 	for value, want := range map[string]bool{"": false, "off": false, "OFF": false, "on": true, " On ": true} {
-		lanes, err := mailer.SendLanesFromEnv(getenv(map[string]string{"SKYMAIL_MAIL_PURPOSE": value}))
+		lanes, err := mailer.SendLanesFromEnv(getenv(map[string]string{"SKYNOTIFY_MAIL_PURPOSE": value}))
 		if err != nil || lanes.Purpose != want {
 			t.Errorf("%q: purpose %v (%v), want %v", value, lanes.Purpose, err, want)
 		}
 	}
-	if _, err := mailer.SendLanesFromEnv(getenv(map[string]string{"SKYMAIL_MAIL_PURPOSE": "yes"})); err == nil || !strings.Contains(err.Error(), "SKYMAIL_MAIL_PURPOSE") {
+	if _, err := mailer.SendLanesFromEnv(getenv(map[string]string{"SKYNOTIFY_MAIL_PURPOSE": "yes"})); err == nil || !strings.Contains(err.Error(), "SKYNOTIFY_MAIL_PURPOSE") {
 		t.Errorf("yes: %v, want startup stopped", err)
 	}
 }
@@ -83,7 +83,7 @@ func purposeJob(task uuid.UUID, priority mailer.Priority, htmlBody *string) data
 		Body: "Görüşme yerin değişti.", BodyHtml: htmlBody, ListUnsubscribeUrl: &link}
 }
 
-// With SKYMAIL_MAIL_PURPOSE on, an operator's islem send waits in the bulk
+// With SKYNOTIFY_MAIL_PURPOSE on, an operator's islem send waits in the bulk
 // lane and goes out of bilgi@, as JSON, without List-Unsubscribe or the
 // visible line, though its row carries a link; a duyuru single mail in the
 // system lane goes out of duyuru@ with both. Off, the purpose is not read:
@@ -93,7 +93,7 @@ func TestThePurposePicksTheMailbox(t *testing.T) {
 	islemTask, duyuruTask := uuid.New(), uuid.New()
 	sends := map[uuid.UUID]*string{islemTask: ptr(mailer.PurposeIslem), duyuruTask: ptr(mailer.PurposeDuyuru)}
 	env := graphEnv("on")
-	env["SKYMAIL_MAIL_PURPOSE"] = "on"
+	env["SKYNOTIFY_MAIL_PURPOSE"] = "on"
 	l := purposeLanes(t, env, sends)
 	sendEach(t, l.m, purposeJob(islemTask, mailer.PriorityBulk, html("<p>Görüşme yerin değişti.</p>")),
 		purposeJob(duyuruTask, mailer.PrioritySystem, html("<p>Ekim duyurusu</p>")))
@@ -140,7 +140,7 @@ func TestTheVisibleUnsubscribeLine(t *testing.T) {
 	captureMailerLogs(t)
 	task := uuid.New()
 	env := graphEnv("off")
-	env["SKYMAIL_MAIL_PURPOSE"] = "on"
+	env["SKYNOTIFY_MAIL_PURPOSE"] = "on"
 	withTemplateLink := "<html><body><p>Ekim</p><a href=\"" + coreLink + "\">Çık</a></body></html>"
 	l := purposeLanes(t, env, map[uuid.UUID]*string{task: ptr(mailer.PurposeDuyuru)})
 	plainOnly := purposeJob(task, mailer.PriorityBulk, nil)
@@ -172,7 +172,7 @@ func TestTheVisibleUnsubscribeLine(t *testing.T) {
 		t.Errorf("a mail without a link got the line: %s", got)
 	}
 
-	env["SKYMAIL_MAIL_PURPOSE"] = "off"
+	env["SKYNOTIFY_MAIL_PURPOSE"] = "off"
 	l = purposeLanes(t, env, nil)
 	mailer.SetTemplateKeys(l.m, func(context.Context, uuid.UUID) (*string, bool, error) { return ptr("free.basic"), false, nil })
 	sendEach(t, l.m, purposeJob(task, mailer.PriorityBulk, html("<p>Ekim</p>")))

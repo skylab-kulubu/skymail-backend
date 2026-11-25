@@ -13,20 +13,20 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
-// System tracking through the routes (SKYMAIL_TRACKING_SYSTEM, Yusuf
+// System tracking through the routes (SKYNOTIFY_TRACKING_SYSTEM, Yusuf
 // 2026-10-21): with it on, the mail services send — a service's single mail
-// (Keycloak, core, Forms), core's notifications, SkyMail's own approval
+// (Keycloak, core, Forms), core's notifications, SkyNotify's own approval
 // notices — is tracked in its own lane; a person's send is as before. Off,
 // nothing changes (TestAServicesSingleSendIsNeverTracked).
 
-// systemTrackedWorld is accountsWorld with SKYMAIL_TRACKING_SYSTEM on.
+// systemTrackedWorld is accountsWorld with SKYNOTIFY_TRACKING_SYSTEM on.
 func systemTrackedWorld(t *testing.T) (*approvalWorld, *routePreferences) {
 	t.Helper()
 	return systemTrackedWorldWith(t)
@@ -39,7 +39,7 @@ func systemTrackedWorldWith(t *testing.T, handlerOpts ...handlers.MailHandlerOpt
 	accounts := &laterAccounts{}
 	w := newApprovalWorldWith(t, 0, handlerOpts, mailer.WithTracking(mailer.Tracking{
 		Config: tracking.Config{Mode: tracking.ModeOn, System: tracking.ModeOn,
-			BaseURL: "https://api.example.test/api/skymail", CoreURL: "http://core.invalid"},
+			BaseURL: "https://api.example.test/api/skynotify", CoreURL: "http://core.invalid"},
 		Preferences: prefs,
 		Accounts:    accounts,
 	}))
@@ -73,7 +73,7 @@ func (w *approvalWorld) linkCount(task uuid.UUID) int {
 func TestAServicesSingleSendIsTrackedWithSystemTracking(t *testing.T) {
 	w, prefs := systemTrackedWorld(t)
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
-	auth := middlewares.NewAuthMiddleware("skymail", claimsUserinfo(t), middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", claimsUserinfo(t), middlewares.AudienceOff)
 	registerMailTaskRoutes(protectedAPI(app, auth, nil), auth, handlers.NewMailHandler(w.store, w.mail, w.directory))
 	serviceSub := uuid.NewString()
 	post := func(service, asks bool) createdSend {
@@ -86,7 +86,7 @@ func TestAServicesSingleSendIsTrackedWithSystemTracking(t *testing.T) {
 		if service {
 			sub = serviceSub
 		}
-		request.Header.Set("Authorization", "Bearer "+bearer(t, sub, service, "skymail:access", "skymail:mails:send"))
+		request.Header.Set("Authorization", "Bearer "+bearer(t, sub, service, "skynotify:access", "skynotify:mails:send"))
 		request.Header.Set("Content-Type", "application/json")
 		response, err := app.Test(request, fiber.TestConfig{Timeout: 30 * time.Second})
 		if err != nil {
@@ -148,10 +148,10 @@ func TestAServicesSingleSendIsTrackedWithSystemTracking(t *testing.T) {
 		}
 		return response.StatusCode
 	}
-	if status := read(serviceSub, true, "skymail:access", "skymail:mails:send"); status != fiber.StatusForbidden {
+	if status := read(serviceSub, true, "skynotify:access", "skynotify:mails:send"); status != fiber.StatusForbidden {
 		t.Errorf("the service read the people of the mail it sent: %d", status)
 	}
-	if status := read(uuid.NewString(), false, "skymail:access", handlers.TrackingReadRole); status != fiber.StatusOK {
+	if status := read(uuid.NewString(), false, "skynotify:access", handlers.TrackingReadRole); status != fiber.StatusOK {
 		t.Errorf("a person with %s: %d", handlers.TrackingReadRole, status)
 	}
 
@@ -167,7 +167,7 @@ func TestAServicesSingleSendIsTrackedWithSystemTracking(t *testing.T) {
 	}
 }
 
-// SkyMail's own notice to the approvers, with system tracking on, is
+// SkyNotify's own notice to the approvers, with system tracking on, is
 // tracked as a service's mail: each approver's account found by address,
 // core decides (it says preference_off for both here), in the system lane.
 // Keycloak and core are asked about every approver at once, before the
@@ -228,7 +228,7 @@ func TestNotificationsAreTrackedWithSystemTracking(t *testing.T) {
 		prefs := &notificationPreferences{}
 		w := newNotificationWorld(t, mailer.WithTracking(mailer.Tracking{
 			Config: tracking.Config{Mode: tracking.ModeOn, System: system,
-				BaseURL: "https://api.example.test/api/skymail", CoreURL: "http://core.invalid"},
+				BaseURL: "https://api.example.test/api/skynotify", CoreURL: "http://core.invalid"},
 			Preferences: prefs,
 		}))
 		for _, c := range []struct {

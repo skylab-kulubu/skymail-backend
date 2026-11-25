@@ -11,9 +11,9 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/unsubscribe"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/unsubscribe"
 )
 
 // unsubscribePanel is suppressionApp (three bounces) with Selin out of the
@@ -50,7 +50,7 @@ func callJSON(t *testing.T, app *fiber.App, method, target, body string) (int, s
 // The list holds both records, each with its reason and stream; reason
 // keeps one of them.
 func TestTheListShowsBouncesAndUnsubscribesTogether(t *testing.T) {
-	app, _, selin := unsubscribePanel(t, "skymail:access", handlers.SuppressionsManageRole)
+	app, _, selin := unsubscribePanel(t, "skynotify:access", handlers.SuppressionsManageRole)
 	response, body := call(t, app, fiber.MethodGet, "/v1/suppressions?_start=0&_end=100")
 	if response.StatusCode != fiber.StatusOK || response.Header.Get("X-Total-Count") != "5" {
 		t.Fatalf("GET = %d, total %q: %s", response.StatusCode, response.Header.Get("X-Total-Count"), body)
@@ -86,7 +86,7 @@ func TestTheListShowsBouncesAndUnsubscribesTogether(t *testing.T) {
 		t.Errorf("reason=other = %d, want 400", response.StatusCode)
 	}
 
-	reactivator, _, _ := unsubscribePanel(t, "skymail:access", handlers.UnsubscribesReactivateRole)
+	reactivator, _, _ := unsubscribePanel(t, "skynotify:access", handlers.UnsubscribesReactivateRole)
 	if response, _ := call(t, reactivator, fiber.MethodGet, "/v1/suppressions"); response.StatusCode != fiber.StatusOK {
 		t.Errorf("GET with the reactivate role = %d, want 200", response.StatusCode)
 	}
@@ -94,7 +94,7 @@ func TestTheListShowsBouncesAndUnsubscribesTogether(t *testing.T) {
 
 // DELETE removes a bounce only: an unsubscribe is 409 and stays.
 func TestAnUnsubscribeIsNotDeleted(t *testing.T) {
-	app, store, selin := unsubscribePanel(t, "skymail:access", handlers.SuppressionsManageRole)
+	app, store, selin := unsubscribePanel(t, "skynotify:access", handlers.SuppressionsManageRole)
 	status, body := callJSON(t, app, fiber.MethodDelete, "/v1/suppressions/"+selin, "")
 	if status != fiber.StatusConflict || !strings.Contains(body, "suppression.use_reactivate") {
 		t.Errorf("DELETE an unsubscribe = %d %s, want 409 suppression.use_reactivate", status, body)
@@ -116,11 +116,11 @@ func countRows(t *testing.T, store *database.Store, sql string) int {
 	return n
 }
 
-// Reversing an unsubscribe needs skymail:unsubscribes:reactivate and a
+// Reversing an unsubscribe needs skynotify:unsubscribes:reactivate and a
 // reason without an address; it is recorded with who and why, never the
 // address, and the reversals are listed with the same role.
 func TestReversingAnUnsubscribeNeedsItsRoleAndAReason(t *testing.T) {
-	manager, _, selin := unsubscribePanel(t, "skymail:access", handlers.SuppressionsManageRole)
+	manager, _, selin := unsubscribePanel(t, "skynotify:access", handlers.SuppressionsManageRole)
 	const reason = `{"reason": "Kişi bilgi kutusuna yazıp yeniden abone olmak istedi."}`
 	if status, _ := callJSON(t, manager, fiber.MethodPost, "/v1/suppressions/"+selin+"/reactivate", reason); status != fiber.StatusForbidden {
 		t.Errorf("reactivate with the manage role only = %d, want 403", status)
@@ -129,7 +129,7 @@ func TestReversingAnUnsubscribeNeedsItsRoleAndAReason(t *testing.T) {
 		t.Errorf("reactivations with the manage role only = %d, want 403", status)
 	}
 
-	app, store, selin := unsubscribePanel(t, "skymail:access", handlers.UnsubscribesReactivateRole)
+	app, store, selin := unsubscribePanel(t, "skynotify:access", handlers.UnsubscribesReactivateRole)
 	path := "/v1/suppressions/" + selin + "/reactivate"
 	for name, c := range map[string]struct {
 		body, code string
@@ -205,7 +205,7 @@ func TestTheUnsubscribeLinkOverTheDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := unsubscribe.Config{On: true, BaseURL: "https://api.yildizskylab.com/api/skymail", AccountURL: unsubscribe.DefaultAccountURL, Ring: ring}
+	cfg := unsubscribe.Config{On: true, BaseURL: "https://api.yildizskylab.com/api/skynotify", AccountURL: unsubscribe.DefaultAccountURL, Ring: ring}
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
 	handlers.NewUnsubscribePublicHandler(store, cfg).Register(app)
 	link, ok := cfg.Link("Selin@Uzak.Example.net")

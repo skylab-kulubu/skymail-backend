@@ -4,15 +4,15 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
 // A send's controls (hub ticket duyuru-haber 05, G4; README, "Kısma ve görev
 // düzeyinde işlemler"): pause, resume and cancel. Only a bulk send has them:
 // its rows wait in the bulk lane, while a single mail is sent at once. Who
-// may send to everyone (skymail:announcements:send) controls any send; who
-// may send to a list (skymail:mails:write) controls their own.
+// may send to everyone (skynotify:announcements:send) controls any send; who
+// may send to a list (skynotify:mails:write) controls their own.
 
 var (
 	errMailTaskNotBulk = apperrors.New("mail_task.not_bulk",
@@ -37,12 +37,12 @@ const (
 // PauseTask godoc
 //
 //	@Summary		Pause a send
-//	@Description	The bulk lane takes none of the send's rows until it is resumed; rows being sent finish. A paused send stays paused (200). The send's own sender with skymail:mails:write, or anyone with skymail:announcements:send. A send may also pause itself when its recipients fail past SKYMAIL_FAILURE_PAUSE_COUNT and SKYMAIL_FAILURE_PAUSE_PERCENT (paused_reason failure_rate).
+//	@Description	The bulk lane takes none of the send's rows until it is resumed; rows being sent finish. A paused send stays paused (200). The send's own sender with skynotify:mails:write, or anyone with skynotify:announcements:send. A send may also pause itself when its recipients fail past SKYNOTIFY_FAILURE_PAUSE_COUNT and SKYNOTIFY_FAILURE_PAUSE_PERCENT (paused_reason failure_rate).
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id	path		string	true	"Task ID"
 //	@Success		200	{object}	handlers.MailTaskItem
-//	@Failure		403	{object}	apperrors.Problem	"Forbidden: neither skymail:announcements:send nor the send's sender"
+//	@Failure		403	{object}	apperrors.Problem	"Forbidden: neither skynotify:announcements:send nor the send's sender"
 //	@Failure		404	{object}	apperrors.Problem	"Not Found"
 //	@Failure		409	{object}	apperrors.Problem	"mail_task.not_bulk, mail_task.cancelled or mail_task.finished"
 //	@Router			/mail_tasks/{id}/pause [post]

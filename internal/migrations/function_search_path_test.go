@@ -10,15 +10,15 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // The migration that makes every function in the schema find what it calls
 // whatever the caller's search_path.
 const functionSearchPath = uint(20260925120000)
 
-// A dump of SkyMail restores with pg_restore as it is. pg_restore empties
+// A dump of SkyNotify restores with pg_restore as it is. pg_restore empties
 // search_path while it loads the rows, and the templates' CHECKs call
 // contract_variables_valid(), which calls two other functions; the restored
 // database's functions then work with no search_path at all.
@@ -71,12 +71,12 @@ func TestADumpRestoresWithPlainPgRestore(t *testing.T) {
 			t.Fatalf("%s: %v\n%s", strings.Join(args, " "), err, out)
 		}
 	}
-	docker("pg_dump", "-U", "postgres", "-d", "skymailtest", "-Fc", "-f", "/tmp/skymail.dump")
+	docker("pg_dump", "-U", "postgres", "-d", "skynotifytest", "-Fc", "-f", "/tmp/skynotify.dump")
 	docker("createdb", "-U", "postgres", "restored")
 	docker("pg_restore", "-U", "postgres", "-d", "restored", "--no-owner", "--no-acl", "--exit-on-error", "--single-transaction",
-		"/tmp/skymail.dump")
+		"/tmp/skynotify.dump")
 
-	restored, err := pgx.Connect(ctx, strings.Replace(database.URL, "/skymailtest?", "/restored?", 1))
+	restored, err := pgx.Connect(ctx, strings.Replace(database.URL, "/skynotifytest?", "/restored?", 1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,11 +160,11 @@ func TestEveryFunctionPinsItsSearchPath(t *testing.T) {
 	}
 
 	// Every later migration pins its functions too, but for one:
-	// skymail_search_fold() (20261124200000) runs on every row a list search
-	// reads, and a SQL function with a SET is never inlined; it names
-	// pg_catalog's functions with their schema instead, so it needs no
-	// search_path.
-	if got, want := unpinned(), []string{"skymail_search_fold(text)"}; !slices.Equal(got, want) {
+	// skynotify_search_fold() (20261124200000, renamed in 20261125090000) runs
+	// on every row a list search reads, and a SQL function with a SET is never
+	// inlined; it names pg_catalog's functions with their schema instead, so it
+	// needs no search_path.
+	if got, want := unpinned(), []string{"skynotify_search_fold(text)"}; !slices.Equal(got, want) {
 		t.Fatalf("at the latest migration, functions with no search_path of their own = %v, want only %v; pin each with SET search_path = pg_catalog, public", got, want)
 	}
 }

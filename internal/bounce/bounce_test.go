@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/bounce"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/bounce"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 const fqdn = "mail.example.org"
@@ -256,7 +256,7 @@ func TestAReportThatMatchesNoSentRowChangesNothing(t *testing.T) {
 	}{
 		{name: "not a report", mime: fixture(t, "auto-reply.eml"), want: bounce.OutcomeNotDSN},
 		{name: "a plain-text bounce", mime: fixture(t, "plain-text-bounce.eml"), want: bounce.OutcomeNotDSN},
-		{name: "a mail SkyMail did not send", mime: fixture(t, "rotator-alarm.eml"), want: bounce.OutcomeUnmatched},
+		{name: "a mail SkyNotify did not send", mime: fixture(t, "rotator-alarm.eml"), want: bounce.OutcomeUnmatched},
 		{name: "another SMTP_FQDN", mime: bytes.ReplaceAll(raw, []byte("@mail.example.org>"), []byte("@mail.example.net>")), want: bounce.OutcomeUnmatched},
 		{name: "no such row", mime: bytes.ReplaceAll(raw, []byte(notFoundRow.String()), []byte(uuid.NewString())), want: bounce.OutcomeUnmatched},
 		{name: "a pending row", setup: `UPDATE mail_queue SET status = 'pending', sent_at = NULL WHERE id = $1`, mime: raw, want: bounce.OutcomeUnmatched},
@@ -413,7 +413,7 @@ func TestTheTablesRefuseWhatTheyMustNotHold(t *testing.T) {
 	}
 }
 
-// A dry run (the reader's SKYMAIL_BOUNCE_READER=dry-run) says what the
+// A dry run (the reader's SKYNOTIFY_BOUNCE_READER=dry-run) says what the
 // report would do and writes nothing: no bounce, no suppression. The same
 // report then processed for real does it.
 func TestADryRunSaysWhatAReportWouldDoAndWritesNothing(t *testing.T) {

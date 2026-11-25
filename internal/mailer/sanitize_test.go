@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
 const notrackBase = "https://mail.example.test"
@@ -15,9 +15,9 @@ const notrackBase = "https://mail.example.test"
 // data-pm-no-track). Only on a link, only empty or "true".
 func TestSanitizeKeepsNoTrackOnALink(t *testing.T) {
 	for _, body := range []string{
-		`<p><a href="https://zoom.example/j/1?pwd=kisisel" data-skymail-notrack="">Toplantı</a></p>`,
-		`<p><a href="https://zoom.example/j/1?pwd=kisisel" data-skymail-notrack="true">Toplantı</a></p>`,
-		`<p><a data-skymail-notrack href="https://zoom.example/j/1?pwd=kisisel">Toplantı</a></p>`,
+		`<p><a href="https://zoom.example/j/1?pwd=kisisel" data-skynotify-notrack="">Toplantı</a></p>`,
+		`<p><a href="https://zoom.example/j/1?pwd=kisisel" data-skynotify-notrack="true">Toplantı</a></p>`,
+		`<p><a data-skynotify-notrack href="https://zoom.example/j/1?pwd=kisisel">Toplantı</a></p>`,
 	} {
 		got := sanitizeEmailHTML(body)
 		if !strings.Contains(got, tracking.NoTrackAttribute) {
@@ -49,23 +49,23 @@ func TestSanitizePassesNoOtherAttribute(t *testing.T) {
 	}{
 		{
 			name:    "other data attributes on a link",
-			body:    `<a href="https://yildizskylab.com" data-skymail-track="x" data-pm-no-track="" data-x="1" data-skymail-notrack-x="">a</a>`,
-			notWant: []string{"data-skymail-track", "data-pm-no-track", "data-x", "data-skymail-notrack-x"},
+			body:    `<a href="https://yildizskylab.com" data-skynotify-track="x" data-pm-no-track="" data-x="1" data-skynotify-notrack-x="">a</a>`,
+			notWant: []string{"data-skynotify-track", "data-pm-no-track", "data-x", "data-skynotify-notrack-x"},
 		},
 		{
 			name:    "other attributes on a link",
-			body:    `<a href="https://yildizskylab.com" data-skymail-notrack="" style="color:red" class="c" id="i" title="t" onclick="x()" clicktracking="off">a</a>`,
+			body:    `<a href="https://yildizskylab.com" data-skynotify-notrack="" style="color:red" class="c" id="i" title="t" onclick="x()" clicktracking="off">a</a>`,
 			notWant: []string{"style", "class", "id=", "title", "onclick", "clicktracking"},
 		},
 		{
 			name:    "the mark off a link",
-			body:    `<p data-skymail-notrack="">p</p><strong data-skymail-notrack="true">s</strong><img src="https://x.example/p.gif" data-skymail-notrack="">`,
-			notWant: []string{"data-skymail-notrack", "<img"},
+			body:    `<p data-skynotify-notrack="">p</p><strong data-skynotify-notrack="true">s</strong><img src="https://x.example/p.gif" data-skynotify-notrack="">`,
+			notWant: []string{"data-skynotify-notrack", "<img"},
 		},
 		{
 			name:    "the mark with another value",
-			body:    `<a href="https://yildizskylab.com" data-skymail-notrack="javascript:x()">a</a><a href="https://yildizskylab.com/2" data-skymail-notrack="false">b</a>`,
-			notWant: []string{"data-skymail-notrack", "javascript"},
+			body:    `<a href="https://yildizskylab.com" data-skynotify-notrack="javascript:x()">a</a><a href="https://yildizskylab.com/2" data-skynotify-notrack="false">b</a>`,
+			notWant: []string{"data-skynotify-notrack", "javascript"},
 		},
 	}
 	for _, tt := range tests {

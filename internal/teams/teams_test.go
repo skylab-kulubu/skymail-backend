@@ -86,7 +86,7 @@ func TestALeaderGroupIsNeverLed(t *testing.T) {
 	}
 }
 
-// Core not answering, or answering off the contract, is no answer; SkyMail
+// Core not answering, or answering off the contract, is no answer; SkyNotify
 // never falls back to a reading of its own.
 func TestCoreNotAnsweringIsNoAnswer(t *testing.T) {
 	for name, tc := range map[string]struct {

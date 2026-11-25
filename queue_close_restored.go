@@ -10,15 +10,15 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/skylab-kulubu/skymail-backend/internal/config"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/config"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 // queueCloseRestoredCommandName runs one step of a restore from backup
 // instead of the server:
 //
-//	skymail-backend queue-close-restored --before <RFC3339> [--apply]
+//	skynotify-backend queue-close-restored --before <RFC3339> [--apply]
 //
 // A dump taken before an Account erasure brings back the mail still queued
 // when it was taken, mail to people erased since among it, and core's replay
@@ -27,7 +27,7 @@ import (
 // processing row queued before --before becomes failed with
 // restoreNotSentError; rows queued since are left to go out. Without --apply
 // it only counts. It reads the environment the server reads, so it runs in
-// SkyMail's own container through docker exec (docs/data-lifecycle.md, Backup
+// SkyNotify's own container through docker exec (docs/data-lifecycle.md, Backup
 // and restore).
 const queueCloseRestoredCommandName = "queue-close-restored"
 
@@ -57,7 +57,7 @@ func runQueueCloseRestored(args []string, getenv func(string) string, out io.Wri
 	before := flags.String("before", "", "the restore instant, RFC3339 (for example "+queueCloseRestoredExample+"): rows queued before it are closed")
 	apply := flags.Bool("apply", false, "close the rows; without it the command only counts them. Needs MAIL_SENDER=paused")
 	flags.Usage = func() {
-		fmt.Fprintf(out, "usage: skymail-backend %s --before <RFC3339> [--apply]\n", queueCloseRestoredCommandName)
+		fmt.Fprintf(out, "usage: skynotify-backend %s --before <RFC3339> [--apply]\n", queueCloseRestoredCommandName)
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -81,7 +81,7 @@ func runQueueCloseRestored(args []string, getenv func(string) string, out io.Wri
 	// runs in the service's container, so it sees the service's MAIL_SENDER.
 	paused, sender := senderState(getenv)
 	if *apply && !paused {
-		fmt.Fprintf(out, "%s: --apply refused: %s. Set MAIL_SENDER=paused on SkyMail and deploy first; a dry run works either way.\n",
+		fmt.Fprintf(out, "%s: --apply refused: %s. Set MAIL_SENDER=paused on SkyNotify and deploy first; a dry run works either way.\n",
 			queueCloseRestoredCommandName, sender)
 		return 1
 	}

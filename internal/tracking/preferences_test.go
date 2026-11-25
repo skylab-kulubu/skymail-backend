@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
 type staticToken struct {
@@ -90,7 +90,7 @@ func startCore(t *testing.T, answer func([]string) (int, any)) (*fakeCore, *http
 func reason(s string) *string { return &s }
 
 // The contract with core (ticket 16): POST
-// /internal/v1/communication-preferences/tracking:resolve with SkyMail's
+// /internal/v1/communication-preferences/tracking:resolve with SkyNotify's
 // service token and {"subs": [...]}, each person once; the answer has each
 // of them once, allowed or not with why.
 func TestCoreClientAsksCoreAboutEachPersonOnce(t *testing.T) {
@@ -238,7 +238,7 @@ func TestCoreClientWithoutATokenOrAnAnswer(t *testing.T) {
 	}
 }
 
-// A reason core gives is the row's skip reason; one SkyMail does not know is
+// A reason core gives is the row's skip reason; one SkyNotify does not know is
 // not_allowed.
 func TestSkipReasonOfCoresReason(t *testing.T) {
 	for core, want := range map[string]string{

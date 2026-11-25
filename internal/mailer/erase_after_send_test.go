@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 // A send that keeps no record (mail_tasks.erase_after_send, 20261031230000):
-// core's account deletion notices go to the person after SkyMail has run
+// core's account deletion notices go to the person after SkyNotify has run
 // their Erasure command, so nothing would ever erase them. The row goes out
 // as written and is erased the moment its outcome is: what Account erasure
 // leaves of mail to an erased person, no more.

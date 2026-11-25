@@ -52,7 +52,7 @@ func keyPair(t *testing.T) testPair {
 		}
 		template := &x509.Certificate{
 			SerialNumber: big.NewInt(1),
-			Subject:      pkix.Name{CommonName: "skymail-posta-test"},
+			Subject:      pkix.Name{CommonName: "skynotify-posta-test"},
 			NotBefore:    time.Now().Add(-time.Hour),
 			NotAfter:     time.Now().Add(24 * time.Hour),
 		}
@@ -186,7 +186,7 @@ func TestNewCredentialsReadsTheKeyAndTheCertificate(t *testing.T) {
 		"not a key":           {testTenant, testClient, base64.StdEncoding.EncodeToString([]byte("secret-ish bytes")), p.certValue()},
 		"not base64":          {testTenant, testClient, "%%%not-base64%%%", p.certValue()},
 		"a key as the cert":   {testTenant, testClient, p.keyValue(t), p.keyValue(t)},
-		"client not a GUID":   {testTenant, "skymail-posta", p.keyValue(t), p.certValue()},
+		"client not a GUID":   {testTenant, "skynotify-posta", p.keyValue(t), p.certValue()},
 		"tenant with a slash": {"evil/../x", testClient, p.keyValue(t), p.certValue()},
 	} {
 		t.Run(name, func(t *testing.T) {

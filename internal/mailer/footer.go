@@ -5,13 +5,13 @@ import (
 	"html"
 	"strings"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
 // The visible unsubscribe line (ADR 0072, industry comparison 10; hub ticket
 // abonelik-cikisi 03): Google and Yahoo want a bulk mail's body to carry a
 // visible unsubscribe link besides List-Unsubscribe, and Postmark adds one to
-// every broadcast mail itself. While SKYMAIL_MAIL_PURPOSE is on, a mail of the
+// every broadcast mail itself. While SKYNOTIFY_MAIL_PURPOSE is on, a mail of the
 // duyuru stream whose row has an unsubscribe link (list_unsubscribe_url) gets
 // a short line at its end with that link, in the HTML and in the plain text,
 // when that part does not carry the link already: a template that writes

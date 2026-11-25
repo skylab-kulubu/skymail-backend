@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
-// The send budget (SKYMAIL_RATE_PER_MINUTE, SKYMAIL_DAILY_RECIPIENT_BUDGET):
+// The send budget (SKYNOTIFY_RATE_PER_MINUTE, SKYNOTIFY_DAILY_RECIPIENT_BUDGET):
 // the relay's limits hold across every process, the bulk lane gets at most
 // BulkSharePercent of them, and a single mail a person is waiting for is never
 // held back or dropped for it.
@@ -311,7 +311,7 @@ func TestSingleMailGoesWhileAnotherProcessHoldsTheBudgetLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = holder.Rollback(context.Background()) })
-	if _, err := holder.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('skymail-backend send budget', 0))`); err != nil {
+	if _, err := holder.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('skynotify-backend send budget', 0))`); err != nil {
 		t.Fatal(err)
 	}
 

@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/dsn"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/dsn"
 )
 
 // The Microsoft Graph sendMail path (a lane with TransportGraph): POST
@@ -26,7 +26,7 @@ import (
 // 2026-10-20). Graph answers 202 with no body: it gives back neither the
 // message nor its Message-ID, and a mail's internetMessageId can be set on a
 // draft only, which Sent Items would keep. So the mail carries its queue row
-// in X-SkyMail-Queue-Id, <id@SMTP_FQDN> like SkyMail's Message-ID, and a
+// in X-SkyNotify-Queue-Id, <id@SMTP_FQDN> like SkyNotify's Message-ID, and a
 // bounce's returned headers name the row by it (dsn.QueueIDHeader). The
 // response's request-id is logged with the row, for Microsoft's support.
 //
@@ -83,7 +83,7 @@ func recipientOf(address *netmail.Address) graphRecipient {
 	return graphRecipient{EmailAddress: graphAddress{Name: address.Name, Address: address.Address}}
 }
 
-// queueHeader is the value of X-SkyMail-Queue-Id: the row as its Message-ID
+// queueHeader is the value of X-SkyNotify-Queue-Id: the row as its Message-ID
 // names it.
 func queueHeader(job database.MailQueue, fqdn string) string {
 	return fmt.Sprintf("<%s@%s>", job.ID.String(), fqdn)
@@ -144,7 +144,7 @@ const graphTooLargeError = "graph_rejected: the mail is over Graph's 4 MB reques
 
 // graphMIMERequest is the MIME sendMail body of job from lane's mailbox with
 // List-Unsubscribe: the mail as the SMTP path writes it (Reply-To, Message-ID,
-// X-SkyMail-Queue-Id, the plain text and the HTML), base64.
+// X-SkyNotify-Queue-Id, the plain text and the HTML), base64.
 func (s *emailSender) graphMIMERequest(ctx context.Context, job database.MailQueue, lane LaneConfig, unsubscribe string, attachments []Attachment) ([]byte, error) {
 	if _, err := recipientAddress(job); err != nil {
 		return nil, err

@@ -10,11 +10,11 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
-// The Template seed and SkyMail's editor both write Mail templates, and
+// The Template seed and SkyNotify's editor both write Mail templates, and
 // neither silently overwrites the other (ADR-0047). These tests reach the
 // seed's by-key upsert as the seed does.
 

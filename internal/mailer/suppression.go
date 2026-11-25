@@ -7,10 +7,10 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
-// The suppression list applied (hub spec skymail-bounce-isleme §4, ticket
+// The suppression list applied (hub spec skynotify-bounce-isleme §4, ticket
 // 05; README, "Geri dönen posta ve bastırma listesi"). An address a relay
 // refused for good (smtpReply.permanent) or a delivery status notification
 // reported as not existing (internal/bounce) is in mail_suppressions. When a
@@ -37,8 +37,8 @@ func suppressedError(s database.GetSuppressedAddressesRow) string {
 // Everything else — Forms, Mail onayı, lists — is suppressed.
 // The key alone is not enough: the template must also be a system template
 // (the Template seed's; the keys are not reserved, so anyone with
-// skymail:templates:write could otherwise send past the list with an
-// account.* key). Only skymail:templates:system, the seed's service account's,
+// skynotify:templates:write could otherwise send past the list with an
+// account.* key). Only skynotify:templates:system, the seed's service account's,
 // marks one (handlers.TemplatesSystemRole).
 func AccountMail(key *string, system bool) bool {
 	return system && key != nil && (strings.HasPrefix(*key, "keycloak.") || strings.HasPrefix(*key, "account."))

@@ -77,7 +77,7 @@ type token string
 
 func (t token) ServiceToken(context.Context) (string, error) { return string(t), nil }
 
-// The audience is read page by page with SkyMail's service token, and the
+// The audience is read page by page with SkyNotify's service token, and the
 // numbers are the last page's (each page counts the whole audience).
 func TestCoreReadsTheWholeAudience(t *testing.T) {
 	var asked []AudienceRequest

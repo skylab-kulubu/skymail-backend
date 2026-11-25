@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
+	"github.com/skylab-kulubu/skynotify-backend/internal/keycloak"
 )
 
 // Whether an address is someone's account (the recipient retention run): any
@@ -52,7 +52,7 @@ func TestHasAccountFindsAnyUserWithTheAddress(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	finder, ok := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skymail", "secret").(keycloak.AccountFinder)
+	finder, ok := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skynotify", "secret").(keycloak.AccountFinder)
 	if !ok {
 		t.Fatal("the Keycloak client is not an AccountFinder")
 	}

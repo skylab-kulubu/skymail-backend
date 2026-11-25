@@ -23,29 +23,29 @@ import (
 )
 
 // The Erasure command's caller and grant (account erasure spec §2.5): core's
-// own erasure client, holding SkyMail's erase role. core-erasure has only a
-// service account and asks for SkyMail's scope alone, so a token it sends to
-// SkyMail carries no other service's erase role.
+// own erasure client, holding SkyNotify's erase role. core-erasure has only a
+// service account and asks for SkyNotify's scope alone, so a token it sends to
+// SkyNotify carries no other service's erase role.
 const (
 	CallerClientID = "core-erasure"
-	EraseRole      = "skymail:account:erase"
+	EraseRole      = "skynotify:account:erase"
 )
 
 // The tracking withdrawal's caller and grant (hub ticket iletisim-servisi
 // 14c/17; design note 07 §4.6): core's own client, which already calls
-// SkyMail, holding SkyMail's withdraw role. core-erasure's erase role is
+// SkyNotify, holding SkyNotify's withdraw role. core-erasure's erase role is
 // not it: a token without this role is refused.
 const (
 	WithdrawCallerClientID = "core"
-	WithdrawRole           = "skymail:tracking:withdraw"
+	WithdrawRole           = "skynotify:tracking:withdraw"
 )
 
 var (
-	// ErrUnauthorized: no token, or one SkyMail cannot prove Keycloak
+	// ErrUnauthorized: no token, or one SkyNotify cannot prove Keycloak
 	// issued and is still valid — signature, issuer, expiry.
 	ErrUnauthorized = errors.New("erasure token not proven")
 	// ErrForbidden: a valid token, but not core-erasure's, not for
-	// SkyMail, or without the erase role on SkyMail's client.
+	// SkyNotify, or without the erase role on SkyNotify's client.
 	ErrForbidden = errors.New("erasure token lacks the erase grant")
 	// ErrKeysUnavailable: Keycloak's signing keys could not be read,
 	// so no token can be judged now.
@@ -61,11 +61,11 @@ type Caller struct {
 
 // Config says whose tokens the erase route takes.
 type Config struct {
-	// The exact iss: the realm URL SkyMail is configured with.
+	// The exact iss: the realm URL SkyNotify is configured with.
 	Issuer string
 	// Keycloak's JWKS: <realm URL>/protocol/openid-connect/certs.
 	JWKSURL string
-	// The client SkyMail's roles are on (skymail): the token's aud must name
+	// The client SkyNotify's roles are on (skynotify): the token's aud must name
 	// it, and the erase role must be under resource_access.<it>.
 	ResourceClient string
 	// CallerClientID is the azp a token must carry, and Role the role it
@@ -78,9 +78,9 @@ type Config struct {
 }
 
 // Verifier checks the erase route's bearer token locally against
-// Keycloak's published keys. The rest of SkyMail asks Keycloak's userinfo,
+// Keycloak's published keys. The rest of SkyNotify asks Keycloak's userinfo,
 // which proves a token is live but not whom it was issued to; this route has
-// to know the token is core-erasure's and meant for SkyMail (spec §2.5).
+// to know the token is core-erasure's and meant for SkyNotify (spec §2.5).
 type Verifier struct {
 	resourceClient string
 	callerClientID string

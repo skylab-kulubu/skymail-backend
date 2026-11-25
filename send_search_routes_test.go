@@ -12,11 +12,11 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 const (
@@ -150,7 +150,7 @@ func searchApp(t *testing.T) (*fiber.App, *database.Store) {
 		c.Locals("roles", strings.Split(c.Get("X-Test-Roles"), ","))
 		return c.Next()
 	})
-	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
 	registerMailTaskRoutes(api, auth, handlers.NewMailHandler(store, idleMailer{}, noGroups{}))
 	registerTemplateRoutes(api, auth, handlers.NewTemplateHandler(store))
 	// The list and request lists, as main.go routes them, without their
@@ -161,7 +161,7 @@ func searchApp(t *testing.T) (*fiber.App, *database.Store) {
 }
 
 const (
-	searchReader  = "skymail:mails:read,skymail:templates:read"
+	searchReader  = "skynotify:mails:read,skynotify:templates:read"
 	searchTracker = searchReader + "," + handlers.TrackingReadRole
 )
 
@@ -301,7 +301,7 @@ func TestSendListSearchFiltersAndSorts(t *testing.T) {
 			t.Errorf("%s: %d %s; want 400 validation.error", query, status, raw)
 		}
 	}
-	if status, _, _ := searchGet(t, app, "skymail:templates:read", "/v1/mail_tasks?q=bahar"); status != 403 {
+	if status, _, _ := searchGet(t, app, "skynotify:templates:read", "/v1/mail_tasks?q=bahar"); status != 403 {
 		t.Errorf("without mails:read: %d", status)
 	}
 }
@@ -344,7 +344,7 @@ func TestSendRecipientsSearchAndSkipped(t *testing.T) {
 
 func TestTemplateListAndApprovalSearch(t *testing.T) {
 	app, _ := searchApp(t)
-	approver := searchReader + ",skymail:lists:read," + handlers.MailApproverRole
+	approver := searchReader + ",skynotify:lists:read," + handlers.MailApproverRole
 
 	for _, tc := range []struct {
 		path string

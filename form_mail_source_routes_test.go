@@ -15,24 +15,24 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	migrationfiles "github.com/skylab-kulubu/skymail-backend/db/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	migrationfiles "github.com/skylab-kulubu/skynotify-backend/db/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
-// source-sender sends to Forms respondents directly (skymail:mails:write, as
-// ADMIN and YK hold it); source-single-sender holds only skymail:mails:send,
+// source-sender sends to Forms respondents directly (skynotify:mails:write, as
+// ADMIN and YK hold it); source-single-sender holds only skynotify:mails:send,
 // which opens single mails, so a Forms source goes for approval.
 func formSourcePerson(key string) (approvalPerson, bool) {
 	switch key {
 	case "source-sender":
-		return approvalPerson{sub: "88888888-8888-4888-8888-888888888888", name: "Source Sender", email: "sender@example.invalid", roles: []string{"skymail:access", "skymail:mails:write", "skymail:templates:read"}}, true
+		return approvalPerson{sub: "88888888-8888-4888-8888-888888888888", name: "Source Sender", email: "sender@example.invalid", roles: []string{"skynotify:access", "skynotify:mails:write", "skynotify:templates:read"}}, true
 	case "source-single-sender":
-		return approvalPerson{sub: "99999999-9999-4999-8999-999999999999", name: "Single Sender", email: "single@example.invalid", roles: []string{"skymail:access", "skymail:mails:send", "skymail:templates:read"}}, true
+		return approvalPerson{sub: "99999999-9999-4999-8999-999999999999", name: "Single Sender", email: "single@example.invalid", roles: []string{"skynotify:access", "skynotify:mails:send", "skynotify:templates:read"}}, true
 	}
 	p, ok := approvalPeople[key]
 	return p, ok
@@ -58,7 +58,7 @@ func newFormSourceWorld(t *testing.T, opts ...mailer.Option) *approvalWorld {
 		return c.Next()
 	})
 	h := handlers.NewMailHandler(w.store, w.mail, w.directory, handlers.WithFormSourceLimit(150), handlers.WithFormSourceClock(w.now))
-	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid", middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", "http://keycloak.invalid", middlewares.AudienceOff)
 	api.Post("/form_mail_sources", h.CreateFormSource)
 	api.Get("/form_mail_sources/:id", h.GetFormSource)
 	registerMailTaskRoutes(api, auth, h)
@@ -224,7 +224,7 @@ func TestFormSourceIntegrationApprovalPinsSnapshotAndResubmitKeepsSource(t *test
 	}
 }
 
-// A Forms source is a bulk audience: skymail:mails:send, which opens single
+// A Forms source is a bulk audience: skynotify:mails:send, which opens single
 // mails, does not send it at once (403); its holder submits the source for
 // approval and an approver's decision sends it.
 func TestFormSourceIntegrationSingleSendRoleGoesForApproval(t *testing.T) {
@@ -234,7 +234,7 @@ func TestFormSourceIntegrationSingleSendRoleGoesForApproval(t *testing.T) {
 	var refused apiError
 	_ = json.Unmarshal(raw, &refused)
 	if status != 403 || refused.Code != "server.forbidden" {
-		t.Fatalf("direct send with skymail:mails:send only=%d %s", status, refused.Code)
+		t.Fatalf("direct send with skynotify:mails:send only=%d %s", status, refused.Code)
 	}
 	var consumed bool
 	if err := w.store.Conn.QueryRow(context.Background(), `SELECT consumed_at IS NOT NULL FROM mail_form_sources WHERE id=$1`, source.ID).Scan(&consumed); err != nil || consumed {
@@ -487,7 +487,7 @@ func TestFormSourceIntegrationLegacyManualConstraintAndExpiry(t *testing.T) {
 
 // A free announcement to a Forms audience greets each respondent by name,
 // the fallback standing in for a respondent without one, and the descriptor
-// says how many have none (hub ticket skymail-serbest-duyuru-alici-adi 01).
+// says how many have none (hub ticket skynotify-serbest-duyuru-alici-adi 01).
 // A name of only white space or control characters is none, as the mailer
 // reads it, when the source is prepared and when it is read.
 func TestFormSourceIntegrationGreetsEachRespondentByName(t *testing.T) {

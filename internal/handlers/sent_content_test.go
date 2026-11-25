@@ -13,8 +13,8 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
 const (
@@ -165,9 +165,9 @@ func TestSentMailContentFollowsWhoMayReadIt(t *testing.T) {
 	markedTask, markedRow := seedContentSend(t, db, contentSend{sensitive: &yes, list: true, sentBy: contentSender, createdAt: recent})
 	maskNow(t, db)
 
-	reader := []string{"skymail:access", "skymail:mails:read"}
-	writer := []string{"skymail:access", "skymail:mails:read", "skymail:mails:write"}
-	system := []string{"skymail:access", "skymail:mails:read", SystemMailsReadRole}
+	reader := []string{"skynotify:access", "skynotify:mails:read"}
+	writer := []string{"skynotify:access", "skynotify:mails:read", "skynotify:mails:write"}
+	system := []string{"skynotify:access", "skynotify:mails:read", SystemMailsReadRole}
 
 	cases := []struct {
 		name      string
@@ -187,7 +187,7 @@ func TestSentMailContentFollowsWhoMayReadIt(t *testing.T) {
 		{"single shown, list sender", shownTask, shownRow, contentOther, writer, "restricted"},
 		{"single shown, its sender", shownTask, shownRow, contentSender, reader, "available"},
 		{"single shown, system reader", shownTask, shownRow, contentOther, system, "available"},
-		{"list send marked sensitive, system reader", markedTask, markedRow, contentOther, append(system, "skymail:mails:write"), "masked"},
+		{"list send marked sensitive, system reader", markedTask, markedRow, contentOther, append(system, "skynotify:mails:write"), "masked"},
 		{"list send marked sensitive, list sender", markedTask, markedRow, contentOther, writer, "masked"},
 		{"list send marked sensitive, reader", markedTask, markedRow, contentOther, reader, "restricted"},
 	}
@@ -218,7 +218,7 @@ func TestSentMailContentPastRetentionOrEmptiedIsExpired(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
 	app := contentApp(t, db, now)
-	writer := []string{"skymail:access", "skymail:mails:read", "skymail:mails:write"}
+	writer := []string{"skynotify:access", "skynotify:mails:read", "skynotify:mails:write"}
 
 	// Past 90 days but not swept yet: expired all the same.
 	oldTask, oldRow := seedContentSend(t, db, contentSend{list: true, sentBy: contentSender, createdAt: now.Add(-91 * 24 * time.Hour)})
@@ -265,8 +265,8 @@ func TestSendCarriesContentAccessAndHidesValuesItCannotShow(t *testing.T) {
 	listTask, _ := seedContentSend(t, db, contentSend{list: true, sentBy: contentSender, createdAt: recent})
 	singleTask, _ := seedContentSend(t, db, contentSend{sentBy: contentSender, createdAt: recent})
 	maskNow(t, db)
-	writer := []string{"skymail:access", "skymail:mails:read", "skymail:mails:write"}
-	reader := []string{"skymail:access", "skymail:mails:read"}
+	writer := []string{"skynotify:access", "skynotify:mails:read", "skynotify:mails:write"}
+	reader := []string{"skynotify:access", "skynotify:mails:read"}
 
 	type send struct {
 		ID               uuid.UUID       `json:"id"`

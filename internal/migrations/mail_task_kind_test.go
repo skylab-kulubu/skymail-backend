@@ -2,18 +2,17 @@ package migrations_test
 
 import (
 	"context"
-	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // The migration of the send list's kind and search.
 const mailTaskKind = uint(20261124200000)
 
-// Up adds sent_by_service, mail_task_kind() and skymail_search_fold(); a send
-// from before keeps its kind by its lane; down drops them; up again works.
+// Up adds sent_by_service, mail_task_kind() and the search fold function (its
+// name and checks: skynotify_tasima_test.go); a send from before keeps its
+// kind by its lane; down drops them; up again works.
 func TestMailTaskKindMigrationGoesUpAndDown(t *testing.T) {
 	database := testpostgres.StartDatabase(t)
 	ctx := context.Background()
@@ -57,22 +56,6 @@ func TestMailTaskKindMigrationGoesUpAndDown(t *testing.T) {
 	if err := database.Pool.QueryRow(ctx, `SELECT mail_task_kind('77000000-0000-4000-8000-000000000003')`).Scan(&erased); err != nil || erased != "system" {
 		t.Errorf("an erased send from before: %s %v; want system", erased, err)
 	}
-	// skymail_search_fold() is inlined: a SQL function with a SET is not.
-	var config []string
-	if err := database.Pool.QueryRow(ctx, `SELECT COALESCE(proconfig, '{}') FROM pg_proc WHERE proname = 'skymail_search_fold'`).Scan(&config); err != nil || len(config) != 0 {
-		t.Errorf("skymail_search_fold settings = %v %v; want none", config, err)
-	}
-	rows, err := database.Pool.Query(ctx, `EXPLAIN (VERBOSE, COSTS OFF) SELECT skymail_search_fold(name) FROM templates`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if plan := strings.Join(lines, "\n"); strings.Contains(plan, "skymail_search_fold") || !strings.Contains(plan, "translate") {
-		t.Errorf("not inlined:\n%s", plan)
-	}
 	if _, err := database.Pool.Exec(ctx, `DELETE FROM mail_tasks WHERE id = '77000000-0000-4000-8000-000000000003'`); err != nil {
 		t.Fatal(err)
 	}
@@ -83,10 +66,6 @@ func TestMailTaskKindMigrationGoesUpAndDown(t *testing.T) {
 	if lane, bulkLane := kinds(); lane != "single" || bulkLane != "system" {
 		t.Errorf("with sent_by_service: %s, %s; want single, system", lane, bulkLane)
 	}
-	var folded string
-	if err := database.Pool.QueryRow(ctx, `SELECT skymail_search_fold('IŞIK İŞ Ğ Ü Ö Ç ı')`).Scan(&folded); err != nil || folded != "işik iş ğ ü ö ç i" {
-		t.Errorf("fold = %q %v", folded, err)
-	}
 
 	if err := runner.Migrate(recipientRetention); err != nil {
 		t.Fatalf("down: %v", err)
@@ -94,7 +73,7 @@ func TestMailTaskKindMigrationGoesUpAndDown(t *testing.T) {
 	var left int
 	if err := database.Pool.QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM information_schema.columns WHERE table_name = 'mail_tasks' AND column_name = 'sent_by_service')
-		     + (SELECT count(*) FROM pg_proc WHERE proname IN ('mail_task_kind', 'skymail_search_fold'))`).Scan(&left); err != nil || left != 0 {
+		     + (SELECT count(*) FROM pg_proc WHERE proname = 'mail_task_kind' OR proname LIKE '%search_fold')`).Scan(&left); err != nil || left != 0 {
 		t.Errorf("after down: %d left %v", left, err)
 	}
 	if err := runner.Migrate(mailTaskKind); err != nil {

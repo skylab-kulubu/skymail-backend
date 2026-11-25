@@ -30,7 +30,7 @@ type Client interface {
 	// composite role is not followed.
 	ClientRoleMembers(ctx context.Context, clientID, role string) ([]*gocloak.User, error)
 	// ServiceToken is the service account's access token, as Admin REST
-	// gets it: what SkyMail shows core when it asks whom it may track.
+	// gets it: what SkyNotify shows core when it asks whom it may track.
 	ServiceToken(ctx context.Context) (string, error)
 	// GetUser reads one user by id (the Keycloak sub): enabled, e-mail and
 	// whether it is verified, names. A user that is not there is nil, nil.
@@ -61,7 +61,7 @@ type clientImpl struct {
 // clientID. Admin REST and the service account's token request go to
 // adminURL (KEYCLOAK_ADMIN_URL, e.g. Keycloak inside the Docker network) when
 // it is not empty, and to realmURL's base when it is. Keycloak names its
-// public address in iss whichever address issued the token, and SkyMail
+// public address in iss whichever address issued the token, and SkyNotify
 // never checks this token itself: Keycloak does.
 func NewClient(realmURL, adminURL, clientID, clientSecret string) Client {
 	parts := strings.SplitN(realmURL, "/realms/", 2)
@@ -95,7 +95,7 @@ func keycloakBase(raw string) string {
 	return base
 }
 
-// ParseAdminURL checks KEYCLOAK_ADMIN_URL and answers the base SkyMail sends
+// ParseAdminURL checks KEYCLOAK_ADMIN_URL and answers the base SkyNotify sends
 // Admin REST to: "" when it is unset or blank, otherwise an absolute http(s)
 // URL without trailing slashes or a /realms/<realm> suffix, e.g.
 // http://keycloak:8080. A context path is kept. The errors name the
@@ -120,7 +120,7 @@ func ParseAdminURL(raw string) (string, error) {
 	}
 	for _, segment := range strings.Split(u.Path, "/") {
 		if segment == "admin" || segment == "realms" {
-			return "", errors.New("KEYCLOAK_ADMIN_URL is Keycloak's base URL; SkyMail adds /admin/realms/<realm> itself")
+			return "", errors.New("KEYCLOAK_ADMIN_URL is Keycloak's base URL; SkyNotify adds /admin/realms/<realm> itself")
 		}
 	}
 	return base, nil

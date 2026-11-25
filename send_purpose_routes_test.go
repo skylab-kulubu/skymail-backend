@@ -12,18 +12,18 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 // A send's purpose and category (ADR 0072 decision 2; hub ticket
 // abonelik-cikisi 03), through the routes production registers, on the real
-// stores and queue: SKYMAIL_MAIL_PURPOSE on unless a test says otherwise.
+// stores and queue: SKYNOTIFY_MAIL_PURPOSE on unless a test says otherwise.
 
-// purposesOn is the mailer with SKYMAIL_MAIL_PURPOSE on and every lane off.
+// purposesOn is the mailer with SKYNOTIFY_MAIL_PURPOSE on and every lane off.
 func purposesOn() mailer.Option { return mailer.WithSendLanes(mailer.SendLanes{Purpose: true}) }
 
 // storedPurpose is what mail_tasks holds of a send's purpose.
@@ -102,7 +102,7 @@ func TestThePurposeRulesRefuseASend(t *testing.T) {
 		{"duyuru without a category", "yusuf", "/v1/mail_tasks", with(w.listSend(), map[string]any{"purpose": "duyuru"}), "mail_task.category_required"},
 		{"duyuru with a category core has not", "yusuf", "/v1/mail_tasks", with(w.listSend(), map[string]any{"purpose": "duyuru", "category": "club:bulten"}), "mail_task.category_invalid"},
 		{"a category without a purpose", "yusuf", "/v1/mail_tasks", with(w.listSend(), map[string]any{"category": "club:haber"}), "mail_task.purpose_required"},
-		{"a purpose SkyMail has not", "yusuf", "/v1/mail_tasks", with(w.listSend(), map[string]any{"purpose": "ticari", "category": "club:duyuru"}), "mail_task.purpose_invalid"},
+		{"a purpose SkyNotify has not", "yusuf", "/v1/mail_tasks", with(w.listSend(), map[string]any{"purpose": "ticari", "category": "club:duyuru"}), "mail_task.purpose_invalid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var failure apiError
@@ -248,7 +248,7 @@ func TestASendersPurposeIsWrittenAndReadBack(t *testing.T) {
 	}
 }
 
-// With every person's send tracked (SKYMAIL_TRACKING_OPERATOR; Yusuf: every
+// With every person's send tracked (SKYNOTIFY_TRACKING_OPERATOR; Yusuf: every
 // mail is tracked), an islem send is tracked as any operator's send: a Forms
 // source's respondents looked up and given tokens as for duyuru, an islem
 // request approved tracked, an islem single mail tracked in the bulk lane,
@@ -258,7 +258,7 @@ func TestAnIslemSendIsTrackedLikeAnyOperatorSend(t *testing.T) {
 	accounts := &laterAccounts{}
 	w := newFormSourceWorld(t, purposesOn(), mailer.WithTracking(mailer.Tracking{
 		Config: tracking.Config{Mode: tracking.ModeOn, Operator: tracking.ModeOn,
-			BaseURL: "https://api.example.test/api/skymail", CoreURL: "http://core.invalid"},
+			BaseURL: "https://api.example.test/api/skynotify", CoreURL: "http://core.invalid"},
 		Preferences: prefs,
 		Accounts:    accounts,
 	}))
@@ -313,7 +313,7 @@ func TestAnIslemSendIsTrackedLikeAnyOperatorSend(t *testing.T) {
 func TestAServicesSingleMailIsAlwaysIslem(t *testing.T) {
 	w := newApprovalWorldWithPool(t, 0, purposesOn())
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
-	auth := middlewares.NewAuthMiddleware("skymail", claimsUserinfo(t), middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", claimsUserinfo(t), middlewares.AudienceOff)
 	registerMailTaskRoutes(protectedAPI(app, auth, nil), auth, handlers.NewMailHandler(w.store, w.mail, w.directory))
 	send := w.listSend()
 	delete(send, "mail_list_id")
@@ -328,7 +328,7 @@ func TestAServicesSingleMailIsAlwaysIslem(t *testing.T) {
 	}{{"service", true, "islem", mailer.PrioritySystem, "system"}, {"person", false, "duyuru", mailer.PriorityBulk, "single"}} {
 		body, _ := json.Marshal(send)
 		request := httptest.NewRequest(http.MethodPost, "/v1/mail_tasks/single", bytes.NewReader(body))
-		request.Header.Set("Authorization", "Bearer "+bearer(t, uuid.NewString(), c.service, "skymail:access", "skymail:mails:send"))
+		request.Header.Set("Authorization", "Bearer "+bearer(t, uuid.NewString(), c.service, "skynotify:access", "skynotify:mails:send"))
 		request.Header.Set("Content-Type", "application/json")
 		response, err := app.Test(request, fiber.TestConfig{Timeout: 30 * time.Second})
 		if err != nil {
@@ -349,7 +349,7 @@ func TestAServicesSingleMailIsAlwaysIslem(t *testing.T) {
 	}
 }
 
-// SKYMAIL_MAIL_PURPOSE off (the default): the fields are ignored, nothing is
+// SKYNOTIFY_MAIL_PURPOSE off (the default): the fields are ignored, nothing is
 // written, a list's send goes as before; the tracking mode and the summary
 // say whether purposes are on.
 func TestPurposesOffIgnoreTheFields(t *testing.T) {
@@ -406,7 +406,7 @@ func TestAnApprovedRequestToAListIsNeverIslem(t *testing.T) {
 	}
 }
 
-// SKYMAIL_PROMOTIONAL on: a duyuru send may say it is promotional, and is
+// SKYNOTIFY_PROMOTIONAL on: a duyuru send may say it is promotional, and is
 // written so (the dispatcher then sends it only to those who consented,
 // internal/mailer/consent_gate.go); an islem send still may not; the
 // tracking mode says so.
@@ -434,7 +434,7 @@ func TestAPromotionalSendIsWrittenWhileTheSwitchIsOn(t *testing.T) {
 	}
 }
 
-// SKYMAIL_LIST_CONSENT on: a list send keeps its own event statement, with
+// SKYNOTIFY_LIST_CONSENT on: a list send keeps its own event statement, with
 // the send, and the tracking mode says list consents are on; to one person
 // the statement is dropped. Off, it is dropped everywhere.
 func TestTheOwnEventStatementIsKeptWhileListConsentIsOn(t *testing.T) {

@@ -10,11 +10,11 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
 )
 
 // An approved request tells its submitter how its sends went, in totals only,
-// without skymail:mails:read (hub ticket ekip-postasi 09): sent, skipped,
+// without skynotify:mails:read (hub ticket ekip-postasi 09): sent, skipped,
 // failed and pending over every send, one total for a request to people, and
 // no person in it. Opens and clicks follow GET /mail_tasks/{id}/tracking's
 // rule (ADR-0074 decision 9, addendum 2026-11-08): shown whatever the number
@@ -25,7 +25,7 @@ func TestAnApprovedRequestTellsHowItWentInTotalsOnly(t *testing.T) {
 	w := newApprovalWorld(t)
 	ctx := context.Background()
 	approvalPeople["takip_onayci"] = approvalPerson{sub: uuid.NewString(), name: "Takip Onaycısı", email: "takip@yildizskylab.com",
-		roles: []string{"skymail:access", "skymail:mails:approve", handlers.TrackingReadRole}}
+		roles: []string{"skynotify:access", "skynotify:mails:approve", handlers.TrackingReadRole}}
 	defer delete(approvalPeople, "takip_onayci")
 
 	type result struct {
@@ -186,7 +186,7 @@ func TestAResultThatCannotBeReadLeavesTheRequestReadable(t *testing.T) {
 		return status, answer.Result
 	}
 	approvalPeople["takip_onayci"] = approvalPerson{sub: uuid.NewString(), name: "Takip Onaycısı", email: "takip@yildizskylab.com",
-		roles: []string{"skymail:access", "skymail:mails:approve", handlers.TrackingReadRole}}
+		roles: []string{"skynotify:access", "skynotify:mails:approve", handlers.TrackingReadRole}}
 	defer delete(approvalPeople, "takip_onayci")
 
 	// The reports read the send's links: locked, tracking is unread.

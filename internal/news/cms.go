@@ -1,4 +1,4 @@
-// Package news makes a SkyMail send of a published News record (hub ticket
+// Package news makes a SkyNotify send of a published News record (hub ticket
 // duyuru-haber 06; SPEC §5.7, §5.8; README, "Haberden gönderim"): it reads
 // the record from inscribed (CMS), asks core who it goes to, and turns the
 // record into the club.news template's variables. The send itself is
@@ -74,7 +74,7 @@ type CMS struct {
 	http *http.Client
 }
 
-// NewCMS reads from inscribed at base (SKYMAIL_NEWS_CMS_URL: its address
+// NewCMS reads from inscribed at base (SKYNOTIFY_NEWS_CMS_URL: its address
 // without the /cms path, e.g. http://inscribed:8080 on the Docker network).
 // A nil client is a plain http.Client with a 10 second timeout.
 func NewCMS(base string, client *http.Client) *CMS {

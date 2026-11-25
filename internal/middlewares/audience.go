@@ -8,7 +8,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// AudienceMode is what /v1 does with a token whose aud does not name SkyMail's
+// AudienceMode is what /v1 does with a token whose aud does not name SkyNotify's
 // client (RFC 9068 §4: a resource server takes only tokens issued for it).
 // Keycloak's userinfo, which /v1 asks, proves a token is live but not whom it
 // was issued to (core-internal-auth spec §4.4, deviation 2).
@@ -29,7 +29,7 @@ const (
 const AudienceModeEnv = "V1_TOKEN_AUDIENCE_MODE"
 
 // AudienceMissingEvent is the event field of the line log and enforce write
-// for a token whose aud lacks SkyMail. The line carries only the caller's
+// for a token whose aud lacks SkyNotify. The line carries only the caller's
 // client (azp) and the mode: never the token, a subject, a name, an address
 // or an IP, so it can be counted per client from the service's logs.
 const AudienceMissingEvent = "v1_token_audience_missing"
@@ -52,7 +52,7 @@ func AudienceModeFromEnv(getenv func(string) string) (AudienceMode, error) {
 // tokenAudience reads the aud and azp of a token Keycloak's userinfo has just
 // accepted. Keycloak checked its signature, issuer and expiry, so the claims
 // are Keycloak's; they are read here, not verified again. A token that is not
-// a JWT has no aud SkyMail can read, and counts as lacking it.
+// a JWT has no aud SkyNotify can read, and counts as lacking it.
 func tokenAudience(tokenStr, clientID string) (forUs bool, azp string) {
 	claims := jwt.MapClaims{}
 	if _, _, err := jwt.NewParser().ParseUnverified(tokenStr, claims); err != nil {

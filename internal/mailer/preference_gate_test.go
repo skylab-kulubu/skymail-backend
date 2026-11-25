@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/consent"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/unsubscribe"
+	"github.com/skylab-kulubu/skynotify-backend/internal/consent"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/unsubscribe"
 )
 
 // fakeVerdicts is core's recipients:resolve: what each person chose,
@@ -88,19 +88,19 @@ func preferenceCore() *fakeVerdicts {
 	}
 }
 
-// skymailLinks is SkyMail's own link, on with a key.
-func skymailLinks(t *testing.T) unsubscribe.Config {
+// skynotifyLinks is SkyNotify's own link, on with a key.
+func skynotifyLinks(t *testing.T) unsubscribe.Config {
 	t.Helper()
 	ring, err := unsubscribe.NewRing(1, map[byte][]byte{1: []byte(strings.Repeat("k", 32))})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return unsubscribe.Config{On: true, BaseURL: "https://api.example.org/api/skymail", Ring: ring}
+	return unsubscribe.Config{On: true, BaseURL: "https://api.example.org/api/skynotify", Ring: ring}
 }
 
 func preferenceMailer(t *testing.T, db *database.Store, core *fakeVerdicts, on bool) mailer.Transactional {
 	t.Helper()
-	gate := mailer.PreferenceGate{On: on, Core: core, Links: skymailLinks(t)}
+	gate := mailer.PreferenceGate{On: on, Core: core, Links: skynotifyLinks(t)}
 	m := mailer.NewMailer(db, startFakeSMTP(t).config(), mailer.SenderOn,
 		mailer.WithSendLanes(mailer.SendLanes{Purpose: true}), mailer.WithPreferenceGate(gate))
 	mailer.PrepareTurns(m, 10)
@@ -138,8 +138,8 @@ func islemSend() mailer.SendPurpose {
 // checked; one who turned the category off is written failed, nothing
 // tried, preference: opted_out (skipped: the send does not read failed); an
 // address core matches to an account is asked by address and gets that
-// person's link; one core matches to none gets SkyMail's own link; an
-// address that left through SkyMail's link stays out. One question for the
+// person's link; one core matches to none gets SkyNotify's own link; an
+// address that left through SkyNotify's link stays out. One question for the
 // whole send, by sub where the send knows it.
 func TestADuyuruSendObeysCoreWhenItIsQueued(t *testing.T) {
 	logs := captureMailerLogs(t)
@@ -167,8 +167,8 @@ func TestADuyuruSendObeysCoreWhenItIsQueued(t *testing.T) {
 	if link := storedLink(t, db, task, "Uye@Example.com"); link != personLink(ayseSub.String()) {
 		t.Errorf("the account's address: link %q, want its person's", link)
 	}
-	if link := storedLink(t, db, task, "misafir@example.com"); !strings.HasPrefix(link, "https://api.example.org/api/skymail/u/") || checkedAt(t, db, task, "misafir@example.com") != nil {
-		t.Errorf("the address without an account: link %q, want SkyMail's own, no verdict", link)
+	if link := storedLink(t, db, task, "misafir@example.com"); !strings.HasPrefix(link, "https://api.example.org/api/skynotify/u/") || checkedAt(t, db, task, "misafir@example.com") != nil {
+		t.Errorf("the address without an account: link %q, want SkyNotify's own, no verdict", link)
 	}
 	if got := rowTo(t, db, task, "zeynep@example.com"); got.status != "failed" || got.error != "suppressed: unsubscribed" {
 		t.Errorf("Zeynep: %+v, want her unsubscribe record", got)
@@ -375,8 +375,8 @@ func TestATeamGoneSinceQueueingHoldsItsRows(t *testing.T) {
 	}
 }
 
-// SKYMAIL_BULK_PREFERENCE reads off or on; on needs purposes, the one-click
-// header on a duyuru lane that is not off, and SkyMail's own link with a
+// SKYNOTIFY_BULK_PREFERENCE reads off or on; on needs purposes, the one-click
+// header on a duyuru lane that is not off, and SkyNotify's own link with a
 // key.
 func TestPreferenceGateConfiguration(t *testing.T) {
 	for value, want := range map[string]bool{"": false, "off": false, "ON": true} {
@@ -390,19 +390,19 @@ func TestPreferenceGateConfiguration(t *testing.T) {
 	}
 	graph := map[mailer.Lane]mailer.LaneConfig{mailer.LaneDuyuru: {Transport: mailer.TransportGraph}}
 	all := mailer.SendLanes{Purpose: true, ListUnsubscribe: true, Lanes: graph}
-	links := skymailLinks(t)
+	links := skynotifyLinks(t)
 	for name, tc := range map[string]struct {
 		gate  mailer.PreferenceGate
 		lanes mailer.SendLanes
 		want  string
 	}{
-		"off needs nothing":     {mailer.PreferenceGate{}, mailer.SendLanes{}, ""},
-		"all there":             {mailer.PreferenceGate{On: true, Links: links}, all, ""},
-		"no purposes":           {mailer.PreferenceGate{On: true, Links: links}, mailer.SendLanes{ListUnsubscribe: true, Lanes: graph}, "SKYMAIL_MAIL_PURPOSE"},
-		"no List-Unsubscribe":   {mailer.PreferenceGate{On: true, Links: links}, mailer.SendLanes{Purpose: true, Lanes: graph}, "SKYMAIL_LIST_UNSUBSCRIBE"},
-		"the duyuru lane off":   {mailer.PreferenceGate{On: true, Links: links}, mailer.SendLanes{Purpose: true, ListUnsubscribe: true}, "SKYMAIL_SEND_DUYURU"},
-		"SkyMail's link off":    {mailer.PreferenceGate{On: true}, all, "SKYMAIL_UNSUBSCRIBE_LINK"},
-		"SkyMail's link no key": {mailer.PreferenceGate{On: true, Links: unsubscribe.Config{On: true, BaseURL: links.BaseURL, Ring: &unsubscribe.Ring{}}}, all, "SKYMAIL_UNSUBSCRIBE_KEY_V"},
+		"off needs nothing":       {mailer.PreferenceGate{}, mailer.SendLanes{}, ""},
+		"all there":               {mailer.PreferenceGate{On: true, Links: links}, all, ""},
+		"no purposes":             {mailer.PreferenceGate{On: true, Links: links}, mailer.SendLanes{ListUnsubscribe: true, Lanes: graph}, "SKYNOTIFY_MAIL_PURPOSE"},
+		"no List-Unsubscribe":     {mailer.PreferenceGate{On: true, Links: links}, mailer.SendLanes{Purpose: true, Lanes: graph}, "SKYNOTIFY_LIST_UNSUBSCRIBE"},
+		"the duyuru lane off":     {mailer.PreferenceGate{On: true, Links: links}, mailer.SendLanes{Purpose: true, ListUnsubscribe: true}, "SKYNOTIFY_SEND_DUYURU"},
+		"SkyNotify's link off":    {mailer.PreferenceGate{On: true}, all, "SKYNOTIFY_UNSUBSCRIBE_LINK"},
+		"SkyNotify's link no key": {mailer.PreferenceGate{On: true, Links: unsubscribe.Config{On: true, BaseURL: links.BaseURL, Ring: &unsubscribe.Ring{}}}, all, "SKYNOTIFY_UNSUBSCRIBE_KEY_V"},
 	} {
 		err := tc.gate.CheckWith(tc.lanes)
 		switch {

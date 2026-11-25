@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
 func env(values map[string]string) func(string) string {
@@ -14,9 +14,9 @@ func env(values map[string]string) func(string) string {
 // Unset, empty or off is off; nothing else is needed then.
 func TestConfigFromEnvIsOffByDefault(t *testing.T) {
 	for _, raw := range []string{"", " ", "off", " off "} {
-		cfg, err := tracking.ConfigFromEnv(env(map[string]string{"SKYMAIL_TRACKING": raw}))
+		cfg, err := tracking.ConfigFromEnv(env(map[string]string{"SKYNOTIFY_TRACKING": raw}))
 		if err != nil || cfg.Mode != tracking.ModeOff || cfg.On() {
-			t.Errorf("SKYMAIL_TRACKING=%q: %+v, %v; want off", raw, cfg, err)
+			t.Errorf("SKYNOTIFY_TRACKING=%q: %+v, %v; want off", raw, cfg, err)
 		}
 	}
 }
@@ -26,12 +26,12 @@ func TestConfigFromEnvIsOffByDefault(t *testing.T) {
 func TestConfigFromEnvRefusesAnyOtherMode(t *testing.T) {
 	for _, raw := range []string{"On", "ON", "true", "1", "yes", "enforce", "of"} {
 		_, err := tracking.ConfigFromEnv(env(map[string]string{
-			"SKYMAIL_TRACKING":          raw,
-			"SKYMAIL_TRACKING_BASE_URL": "https://api.yildizskylab.com/api/skymail",
-			"CORE_URL":                  "http://core:8080",
+			"SKYNOTIFY_TRACKING":          raw,
+			"SKYNOTIFY_TRACKING_BASE_URL": "https://api.yildizskylab.com/api/skynotify",
+			"CORE_URL":                    "http://core:8080",
 		}))
-		if err == nil || !strings.Contains(err.Error(), "SKYMAIL_TRACKING") {
-			t.Errorf("SKYMAIL_TRACKING=%q: %v, want an error naming the variable", raw, err)
+		if err == nil || !strings.Contains(err.Error(), "SKYNOTIFY_TRACKING") {
+			t.Errorf("SKYNOTIFY_TRACKING=%q: %v, want an error naming the variable", raw, err)
 		}
 	}
 }
@@ -40,20 +40,20 @@ func TestConfigFromEnvRefusesAnyOtherMode(t *testing.T) {
 // loses a trailing slash.
 func TestConfigFromEnvOnNeedsTheBaseAndCore(t *testing.T) {
 	cfg, err := tracking.ConfigFromEnv(env(map[string]string{
-		"SKYMAIL_TRACKING":          "on",
-		"SKYMAIL_TRACKING_BASE_URL": " https://api.yildizskylab.com/api/skymail/ ",
-		"CORE_URL":                  "http://core-backend:8080/",
+		"SKYNOTIFY_TRACKING":          "on",
+		"SKYNOTIFY_TRACKING_BASE_URL": " https://api.yildizskylab.com/api/skynotify/ ",
+		"CORE_URL":                    "http://core-backend:8080/",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.On() || cfg.BaseURL != "https://api.yildizskylab.com/api/skymail" || cfg.CoreURL != "http://core-backend:8080" {
+	if !cfg.On() || cfg.BaseURL != "https://api.yildizskylab.com/api/skynotify" || cfg.CoreURL != "http://core-backend:8080" {
 		t.Fatalf("config = %+v", cfg)
 	}
 
 	for name, values := range map[string]map[string]string{
-		"SKYMAIL_TRACKING_BASE_URL": {"SKYMAIL_TRACKING": "on", "CORE_URL": "http://core:8080"},
-		"CORE_URL":                  {"SKYMAIL_TRACKING": "on", "SKYMAIL_TRACKING_BASE_URL": "https://api.yildizskylab.com/api/skymail"},
+		"SKYNOTIFY_TRACKING_BASE_URL": {"SKYNOTIFY_TRACKING": "on", "CORE_URL": "http://core:8080"},
+		"CORE_URL":                    {"SKYNOTIFY_TRACKING": "on", "SKYNOTIFY_TRACKING_BASE_URL": "https://api.yildizskylab.com/api/skynotify"},
 	} {
 		if _, err := tracking.ConfigFromEnv(env(values)); err == nil || !strings.Contains(err.Error(), name) {
 			t.Errorf("on without %s: %v, want an error naming it", name, err)
@@ -67,19 +67,19 @@ func TestConfigFromEnvOnNeedsTheBaseAndCore(t *testing.T) {
 // error names the variable, never the value.
 func TestConfigFromEnvChecksTheAddresses(t *testing.T) {
 	for _, base := range []string{
-		"http://api.yildizskylab.com/api/skymail",
-		"api.yildizskylab.com/api/skymail",
-		"https://user:secret@api.yildizskylab.com/api/skymail",
-		"https://api.yildizskylab.com/api/skymail?x=1",
-		"https://api.yildizskylab.com/api/skymail#t",
-		"https:///api/skymail",
+		"http://api.yildizskylab.com/api/skynotify",
+		"api.yildizskylab.com/api/skynotify",
+		"https://user:secret@api.yildizskylab.com/api/skynotify",
+		"https://api.yildizskylab.com/api/skynotify?x=1",
+		"https://api.yildizskylab.com/api/skynotify#t",
+		"https:///api/skynotify",
 		"ftp://api.yildizskylab.com",
 	} {
 		_, err := tracking.ConfigFromEnv(env(map[string]string{
-			"SKYMAIL_TRACKING": "on", "SKYMAIL_TRACKING_BASE_URL": base, "CORE_URL": "http://core:8080",
+			"SKYNOTIFY_TRACKING": "on", "SKYNOTIFY_TRACKING_BASE_URL": base, "CORE_URL": "http://core:8080",
 		}))
-		if err == nil || !strings.Contains(err.Error(), "SKYMAIL_TRACKING_BASE_URL") || strings.Contains(err.Error(), "secret") {
-			t.Errorf("SKYMAIL_TRACKING_BASE_URL=%q: %v, want an error naming the variable and not the value", base, err)
+		if err == nil || !strings.Contains(err.Error(), "SKYNOTIFY_TRACKING_BASE_URL") || strings.Contains(err.Error(), "secret") {
+			t.Errorf("SKYNOTIFY_TRACKING_BASE_URL=%q: %v, want an error naming the variable and not the value", base, err)
 		}
 	}
 	for _, core := range []string{
@@ -90,7 +90,7 @@ func TestConfigFromEnvChecksTheAddresses(t *testing.T) {
 		"tcp://core:8080",
 	} {
 		_, err := tracking.ConfigFromEnv(env(map[string]string{
-			"SKYMAIL_TRACKING": "on", "SKYMAIL_TRACKING_BASE_URL": "https://api.yildizskylab.com/api/skymail", "CORE_URL": core,
+			"SKYNOTIFY_TRACKING": "on", "SKYNOTIFY_TRACKING_BASE_URL": "https://api.yildizskylab.com/api/skynotify", "CORE_URL": core,
 		}))
 		if err == nil || !strings.Contains(err.Error(), "CORE_URL") || strings.Contains(err.Error(), "secret") {
 			t.Errorf("CORE_URL=%q: %v, want an error naming the variable and not the value", core, err)
@@ -98,22 +98,22 @@ func TestConfigFromEnvChecksTheAddresses(t *testing.T) {
 	}
 	// Off, a bad value set beside it still stops startup: it would bite the
 	// day tracking is turned on.
-	if _, err := tracking.ConfigFromEnv(env(map[string]string{"SKYMAIL_TRACKING_BASE_URL": "http://x"})); err == nil {
-		t.Error("off with a bad SKYMAIL_TRACKING_BASE_URL: no error")
+	if _, err := tracking.ConfigFromEnv(env(map[string]string{"SKYNOTIFY_TRACKING_BASE_URL": "http://x"})); err == nil {
+		t.Error("off with a bad SKYNOTIFY_TRACKING_BASE_URL: no error")
 	}
 }
 
-// SKYMAIL_TRACKING_SYSTEM is off unless on; any other value stops startup.
-// It counts only with SKYMAIL_TRACKING on: on beside off is not an error
+// SKYNOTIFY_TRACKING_SYSTEM is off unless on; any other value stops startup.
+// It counts only with SKYNOTIFY_TRACKING on: on beside off is not an error
 // (turning tracking off must never stop startup), only nothing.
 func TestConfigFromEnvReadsSystemTracking(t *testing.T) {
 	on := map[string]string{
-		"SKYMAIL_TRACKING":          "on",
-		"SKYMAIL_TRACKING_BASE_URL": "https://api.yildizskylab.com/api/skymail",
-		"CORE_URL":                  "http://core:8080",
+		"SKYNOTIFY_TRACKING":          "on",
+		"SKYNOTIFY_TRACKING_BASE_URL": "https://api.yildizskylab.com/api/skynotify",
+		"CORE_URL":                    "http://core:8080",
 	}
 	with := func(values map[string]string, system string) map[string]string {
-		out := map[string]string{"SKYMAIL_TRACKING_SYSTEM": system}
+		out := map[string]string{"SKYNOTIFY_TRACKING_SYSTEM": system}
 		for k, v := range values {
 			out[k] = v
 		}
@@ -122,34 +122,34 @@ func TestConfigFromEnvReadsSystemTracking(t *testing.T) {
 	for _, raw := range []string{"", " ", "off", " off "} {
 		cfg, err := tracking.ConfigFromEnv(env(with(on, raw)))
 		if err != nil || cfg.System != tracking.ModeOff || cfg.SystemOn() || !cfg.On() {
-			t.Errorf("SKYMAIL_TRACKING_SYSTEM=%q: %+v, %v; want tracking on, system off", raw, cfg, err)
+			t.Errorf("SKYNOTIFY_TRACKING_SYSTEM=%q: %+v, %v; want tracking on, system off", raw, cfg, err)
 		}
 	}
 	cfg, err := tracking.ConfigFromEnv(env(with(on, " on ")))
 	if err != nil || !cfg.SystemOn() {
-		t.Errorf("SKYMAIL_TRACKING_SYSTEM=on: %+v, %v; want system on", cfg, err)
+		t.Errorf("SKYNOTIFY_TRACKING_SYSTEM=on: %+v, %v; want system on", cfg, err)
 	}
-	for _, tracked := range []map[string]string{{}, {"SKYMAIL_TRACKING": "off"}} {
+	for _, tracked := range []map[string]string{{}, {"SKYNOTIFY_TRACKING": "off"}} {
 		cfg, err := tracking.ConfigFromEnv(env(with(tracked, "on")))
 		if err != nil || cfg.System != tracking.ModeOn || cfg.SystemOn() || cfg.On() {
-			t.Errorf("SKYMAIL_TRACKING_SYSTEM=on with %v: %+v, %v; want it asked for, not on, no error", tracked, cfg, err)
+			t.Errorf("SKYNOTIFY_TRACKING_SYSTEM=on with %v: %+v, %v; want it asked for, not on, no error", tracked, cfg, err)
 		}
 	}
 	for _, raw := range []string{"On", "true", "1", "yes", "evet"} {
-		if _, err := tracking.ConfigFromEnv(env(with(on, raw))); err == nil || !strings.Contains(err.Error(), "SKYMAIL_TRACKING_SYSTEM") {
-			t.Errorf("SKYMAIL_TRACKING_SYSTEM=%q: %v, want an error naming the variable", raw, err)
+		if _, err := tracking.ConfigFromEnv(env(with(on, raw))); err == nil || !strings.Contains(err.Error(), "SKYNOTIFY_TRACKING_SYSTEM") {
+			t.Errorf("SKYNOTIFY_TRACKING_SYSTEM=%q: %v, want an error naming the variable", raw, err)
 		}
 	}
 }
 
-// SKYMAIL_TRACKING_OPERATOR, the same way: off unless on, any other value
-// stops startup, on beside SKYMAIL_TRACKING off is nothing and no error. It
+// SKYNOTIFY_TRACKING_OPERATOR, the same way: off unless on, any other value
+// stops startup, on beside SKYNOTIFY_TRACKING off is nothing and no error. It
 // is its own switch: system tracking neither needs nor turns it on.
 func TestConfigFromEnvReadsOperatorTracking(t *testing.T) {
 	on := map[string]string{
-		"SKYMAIL_TRACKING":          "on",
-		"SKYMAIL_TRACKING_BASE_URL": "https://api.yildizskylab.com/api/skymail",
-		"CORE_URL":                  "http://core:8080",
+		"SKYNOTIFY_TRACKING":          "on",
+		"SKYNOTIFY_TRACKING_BASE_URL": "https://api.yildizskylab.com/api/skynotify",
+		"CORE_URL":                    "http://core:8080",
 	}
 	with := func(values map[string]string, extra ...string) map[string]string {
 		out := map[string]string{}
@@ -162,28 +162,28 @@ func TestConfigFromEnvReadsOperatorTracking(t *testing.T) {
 		return out
 	}
 	for _, raw := range []string{"", " ", "off", " off "} {
-		cfg, err := tracking.ConfigFromEnv(env(with(on, "SKYMAIL_TRACKING_OPERATOR", raw)))
+		cfg, err := tracking.ConfigFromEnv(env(with(on, "SKYNOTIFY_TRACKING_OPERATOR", raw)))
 		if err != nil || cfg.Operator != tracking.ModeOff || cfg.OperatorOn() || !cfg.On() {
-			t.Errorf("SKYMAIL_TRACKING_OPERATOR=%q: %+v, %v; want tracking on, operator off", raw, cfg, err)
+			t.Errorf("SKYNOTIFY_TRACKING_OPERATOR=%q: %+v, %v; want tracking on, operator off", raw, cfg, err)
 		}
 	}
-	cfg, err := tracking.ConfigFromEnv(env(with(on, "SKYMAIL_TRACKING_OPERATOR", " on ")))
+	cfg, err := tracking.ConfigFromEnv(env(with(on, "SKYNOTIFY_TRACKING_OPERATOR", " on ")))
 	if err != nil || !cfg.OperatorOn() || cfg.SystemOn() {
-		t.Errorf("SKYMAIL_TRACKING_OPERATOR=on: %+v, %v; want operator on, system off", cfg, err)
+		t.Errorf("SKYNOTIFY_TRACKING_OPERATOR=on: %+v, %v; want operator on, system off", cfg, err)
 	}
-	cfg, err = tracking.ConfigFromEnv(env(with(on, "SKYMAIL_TRACKING_SYSTEM", "on")))
+	cfg, err = tracking.ConfigFromEnv(env(with(on, "SKYNOTIFY_TRACKING_SYSTEM", "on")))
 	if err != nil || cfg.OperatorOn() || !cfg.SystemOn() {
-		t.Errorf("SKYMAIL_TRACKING_SYSTEM=on alone: %+v, %v; want system on, operator off", cfg, err)
+		t.Errorf("SKYNOTIFY_TRACKING_SYSTEM=on alone: %+v, %v; want system on, operator off", cfg, err)
 	}
-	for _, tracked := range []map[string]string{{}, {"SKYMAIL_TRACKING": "off"}} {
-		cfg, err := tracking.ConfigFromEnv(env(with(tracked, "SKYMAIL_TRACKING_OPERATOR", "on")))
+	for _, tracked := range []map[string]string{{}, {"SKYNOTIFY_TRACKING": "off"}} {
+		cfg, err := tracking.ConfigFromEnv(env(with(tracked, "SKYNOTIFY_TRACKING_OPERATOR", "on")))
 		if err != nil || cfg.Operator != tracking.ModeOn || cfg.OperatorOn() || cfg.On() {
-			t.Errorf("SKYMAIL_TRACKING_OPERATOR=on with %v: %+v, %v; want it asked for, not on, no error", tracked, cfg, err)
+			t.Errorf("SKYNOTIFY_TRACKING_OPERATOR=on with %v: %+v, %v; want it asked for, not on, no error", tracked, cfg, err)
 		}
 	}
 	for _, raw := range []string{"On", "always", "true", "1", "evet"} {
-		if _, err := tracking.ConfigFromEnv(env(with(on, "SKYMAIL_TRACKING_OPERATOR", raw))); err == nil || !strings.Contains(err.Error(), "SKYMAIL_TRACKING_OPERATOR") {
-			t.Errorf("SKYMAIL_TRACKING_OPERATOR=%q: %v, want an error naming the variable", raw, err)
+		if _, err := tracking.ConfigFromEnv(env(with(on, "SKYNOTIFY_TRACKING_OPERATOR", raw))); err == nil || !strings.Contains(err.Error(), "SKYNOTIFY_TRACKING_OPERATOR") {
+			t.Errorf("SKYNOTIFY_TRACKING_OPERATOR=%q: %v, want an error naming the variable", raw, err)
 		}
 	}
 }

@@ -40,7 +40,7 @@ func audienceApp(t *testing.T, mode AudienceMode, userinfoBody string) (*fiber.A
 	realmURL := userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, userinfoBody)
 	reached := 0
 	app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-	app.Use(newAuthMiddleware("skymail", realmURL, mode, &logger).Authenticate)
+	app.Use(newAuthMiddleware("skynotify", realmURL, mode, &logger).Authenticate)
 	app.Get("/probe", func(c fiber.Ctx) error {
 		reached++
 		return c.SendStatus(fiber.StatusNoContent)
@@ -48,13 +48,13 @@ func audienceApp(t *testing.T, mode AudienceMode, userinfoBody string) (*fiber.A
 	return app, &reached, &logs
 }
 
-const skymailUserinfo = `{"sub":"` + audienceTestSubject + `","email":"` + audienceTestEmail + `","email_verified":true,` +
-	`"preferred_username":"ada.yilmaz","resource_access":{"skymail":{"roles":["skymail:access"]}}}`
+const skynotifyUserinfo = `{"sub":"` + audienceTestSubject + `","email":"` + audienceTestEmail + `","email_verified":true,` +
+	`"preferred_username":"ada.yilmaz","resource_access":{"skynotify":{"roles":["skynotify:access"]}}}`
 
 func formsToken(t *testing.T, aud any) string {
 	claims := map[string]any{
 		"iss": "https://e.yildizskylab.com/realms/e-skylab", "sub": audienceTestSubject, "azp": "forms",
-		"email": audienceTestEmail, "resource_access": map[string]any{"skymail": map[string]any{"roles": []string{"skymail:access"}}},
+		"email": audienceTestEmail, "resource_access": map[string]any{"skynotify": map[string]any{"roles": []string{"skynotify:access"}}},
 	}
 	if aud != nil {
 		claims["aud"] = aud
@@ -102,18 +102,18 @@ func TestAudienceModeFromEnv(t *testing.T) {
 	}
 }
 
-// off is SkyMail before this check: aud is not read, nothing is written.
+// off is SkyNotify before this check: aud is not read, nothing is written.
 func TestAudienceOffAcceptsAndWritesNothing(t *testing.T) {
 	t.Parallel()
 
 	for name, token := range map[string]string{
-		"no aud":      formsToken(t, nil),
-		"other aud":   formsToken(t, []string{"core", "account"}),
-		"not a JWT":   "opaque.token.value",
-		"skymail aud": formsToken(t, "skymail"),
+		"no aud":        formsToken(t, nil),
+		"other aud":     formsToken(t, []string{"core", "account"}),
+		"not a JWT":     "opaque.token.value",
+		"skynotify aud": formsToken(t, "skynotify"),
 	} {
 		t.Run(name, func(t *testing.T) {
-			app, reached, logs := audienceApp(t, AudienceOff, skymailUserinfo)
+			app, reached, logs := audienceApp(t, AudienceOff, skynotifyUserinfo)
 
 			if response := requestWithToken(t, app, token); response.StatusCode != fiber.StatusNoContent || *reached != 1 {
 				t.Fatalf("status = %d, handler = %d; want 204, 1", response.StatusCode, *reached)
@@ -126,7 +126,7 @@ func TestAudienceOffAcceptsAndWritesNothing(t *testing.T) {
 }
 
 // log accepts every token userinfo accepts, and writes one line per accepted
-// request whose aud does not name SkyMail: the caller's client and the mode,
+// request whose aud does not name SkyNotify: the caller's client and the mode,
 // nothing that identifies a person or carries the token.
 func TestAudienceLogAcceptsAndCountsTheMissingAudience(t *testing.T) {
 	t.Parallel()
@@ -136,16 +136,16 @@ func TestAudienceLogAcceptsAndCountsTheMissingAudience(t *testing.T) {
 		logged bool
 		azp    string
 	}{
-		"no aud":                {formsToken(t, nil), true, "forms"},
-		"other aud":             {formsToken(t, []string{"core", "account"}), true, "forms"},
-		"aud string, not ours":  {formsToken(t, "core"), true, "forms"},
-		"not a JWT":             {"opaque.token.value", true, "none"},
-		"no azp":                {accessToken(t, map[string]any{"sub": audienceTestSubject, "aud": "account"}), true, "none"},
-		"aud string skymail":    {formsToken(t, "skymail"), false, ""},
-		"aud array has skymail": {formsToken(t, []string{"core", "skymail"}), false, ""},
+		"no aud":                  {formsToken(t, nil), true, "forms"},
+		"other aud":               {formsToken(t, []string{"core", "account"}), true, "forms"},
+		"aud string, not ours":    {formsToken(t, "core"), true, "forms"},
+		"not a JWT":               {"opaque.token.value", true, "none"},
+		"no azp":                  {accessToken(t, map[string]any{"sub": audienceTestSubject, "aud": "account"}), true, "none"},
+		"aud string skynotify":    {formsToken(t, "skynotify"), false, ""},
+		"aud array has skynotify": {formsToken(t, []string{"core", "skynotify"}), false, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			app, reached, logs := audienceApp(t, AudienceLog, skymailUserinfo)
+			app, reached, logs := audienceApp(t, AudienceLog, skynotifyUserinfo)
 
 			if response := requestWithToken(t, app, tc.token); response.StatusCode != fiber.StatusNoContent || *reached != 1 {
 				t.Fatalf("status = %d, handler = %d; want 204, 1", response.StatusCode, *reached)
@@ -153,7 +153,7 @@ func TestAudienceLogAcceptsAndCountsTheMissingAudience(t *testing.T) {
 			lines := audienceLines(logs)
 			if !tc.logged {
 				if logs.Len() != 0 {
-					t.Fatalf("aud names skymail, yet wrote %s", logs.String())
+					t.Fatalf("aud names skynotify, yet wrote %s", logs.String())
 				}
 				return
 			}
@@ -194,8 +194,8 @@ func TestAudienceLogCountsOnlyAcceptedRequests(t *testing.T) {
 	}
 }
 
-// enforce is RFC 9068 §4: a token whose aud does not name SkyMail was not
-// issued for SkyMail, and gets 401 before any handler runs.
+// enforce is RFC 9068 §4: a token whose aud does not name SkyNotify was not
+// issued for SkyNotify, and gets 401 before any handler runs.
 func TestAudienceEnforceRefusesTheMissingAudience(t *testing.T) {
 	t.Parallel()
 
@@ -204,14 +204,14 @@ func TestAudienceEnforceRefusesTheMissingAudience(t *testing.T) {
 		status int
 		azp    string
 	}{
-		"no aud":                {formsToken(t, nil), fiber.StatusUnauthorized, "forms"},
-		"other aud":             {formsToken(t, []string{"core", "account"}), fiber.StatusUnauthorized, "forms"},
-		"not a JWT":             {"opaque.token.value", fiber.StatusUnauthorized, "none"},
-		"aud string skymail":    {formsToken(t, "skymail"), fiber.StatusNoContent, ""},
-		"aud array has skymail": {formsToken(t, []string{"core", "skymail"}), fiber.StatusNoContent, ""},
+		"no aud":                  {formsToken(t, nil), fiber.StatusUnauthorized, "forms"},
+		"other aud":               {formsToken(t, []string{"core", "account"}), fiber.StatusUnauthorized, "forms"},
+		"not a JWT":               {"opaque.token.value", fiber.StatusUnauthorized, "none"},
+		"aud string skynotify":    {formsToken(t, "skynotify"), fiber.StatusNoContent, ""},
+		"aud array has skynotify": {formsToken(t, []string{"core", "skynotify"}), fiber.StatusNoContent, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			app, reached, logs := audienceApp(t, AudienceEnforce, skymailUserinfo)
+			app, reached, logs := audienceApp(t, AudienceEnforce, skynotifyUserinfo)
 
 			response := requestWithToken(t, app, tc.token)
 			if response.StatusCode != tc.status {
@@ -240,8 +240,8 @@ func TestAudienceEnforceRefusesTheMissingAudience(t *testing.T) {
 	}
 }
 
-// A token without SkyMail's roles and without its audience is refused as not
-// SkyMail's (401), not as lacking a role (403).
+// A token without SkyNotify's roles and without its audience is refused as not
+// SkyNotify's (401), not as lacking a role (403).
 func TestAudienceEnforceComesBeforeTheRoleCheck(t *testing.T) {
 	t.Parallel()
 
@@ -252,7 +252,7 @@ func TestAudienceEnforceComesBeforeTheRoleCheck(t *testing.T) {
 	}
 }
 
-// The audience is the client SkyMail's roles are on (KEYCLOAK_CLIENT_ID), the
+// The audience is the client SkyNotify's roles are on (KEYCLOAK_CLIENT_ID), the
 // same one the erase route asks for.
 func TestAudienceIsTheConfiguredClient(t *testing.T) {
 	t.Parallel()
@@ -260,14 +260,14 @@ func TestAudienceIsTheConfiguredClient(t *testing.T) {
 	var logs bytes.Buffer
 	logger := zerolog.New(&logs)
 	app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-	body := `{"sub":"` + audienceTestSubject + `","resource_access":{"skymail-dev":{"roles":["skymail:access"]}}}`
-	app.Use(newAuthMiddleware("skymail-dev", userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body), AudienceEnforce, &logger).Authenticate)
+	body := `{"sub":"` + audienceTestSubject + `","resource_access":{"skynotify-dev":{"roles":["skynotify:access"]}}}`
+	app.Use(newAuthMiddleware("skynotify-dev", userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body), AudienceEnforce, &logger).Authenticate)
 	app.Get("/probe", func(c fiber.Ctx) error { return c.SendStatus(fiber.StatusNoContent) })
 
-	if response := requestWithToken(t, app, accessToken(t, map[string]any{"azp": "x", "aud": "skymail-dev"})); response.StatusCode != fiber.StatusNoContent {
-		t.Fatalf("aud skymail-dev: status = %d, want 204", response.StatusCode)
+	if response := requestWithToken(t, app, accessToken(t, map[string]any{"azp": "x", "aud": "skynotify-dev"})); response.StatusCode != fiber.StatusNoContent {
+		t.Fatalf("aud skynotify-dev: status = %d, want 204", response.StatusCode)
 	}
-	if response := requestWithToken(t, app, accessToken(t, map[string]any{"azp": "x", "aud": "skymail"})); response.StatusCode != fiber.StatusUnauthorized {
-		t.Fatalf("aud skymail: status = %d, want 401", response.StatusCode)
+	if response := requestWithToken(t, app, accessToken(t, map[string]any{"azp": "x", "aud": "skynotify"})); response.StatusCode != fiber.StatusUnauthorized {
+		t.Fatalf("aud skynotify: status = %d, want 401", response.StatusCode)
 	}
 }

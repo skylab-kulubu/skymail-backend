@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 // The bulk lane's guards (duyuru-haber 05, G3 and G4): a throttling reply of
@@ -115,7 +115,7 @@ func bulkOf(rows []database.MailQueue) []database.MailQueue {
 }
 
 // An SMTP 421 to a list's mail: the row goes back to pending with no attempt
-// counted, and no process takes a bulk row for SKYMAIL_THROTTLE_PAUSE, while a
+// counted, and no process takes a bulk row for SKYNOTIFY_THROTTLE_PAUSE, while a
 // login code queued then goes at once. Past the pause the list goes on.
 func TestAThrottlingReplyHoldsTheBulkLane(t *testing.T) {
 	captureMailerLogs(t)
@@ -185,7 +185,7 @@ func TestAThrottledSingleMailCountsItsAttemptAndHoldsTheBulkLane(t *testing.T) {
 	}
 }
 
-// Graph's 429 asks for longer than SKYMAIL_THROTTLE_PAUSE: the hold lasts as
+// Graph's 429 asks for longer than SKYNOTIFY_THROTTLE_PAUSE: the hold lasts as
 // long as Graph asked.
 func TestGraphsRetryAfterLengthensTheHold(t *testing.T) {
 	captureMailerLogs(t)
@@ -215,7 +215,7 @@ func TestGraphsRetryAfterLengthensTheHold(t *testing.T) {
 	}
 }
 
-// With the hold off (SKYMAIL_THROTTLE_PAUSE=0, or no guard) a 421 is retried
+// With the hold off (SKYNOTIFY_THROTTLE_PAUSE=0, or no guard) a 421 is retried
 // as before: an attempt counted, nothing held.
 func TestWithoutTheHoldA421IsAnAttempt(t *testing.T) {
 	captureMailerLogs(t)

@@ -11,13 +11,13 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
-const TrackingReadRole = "skymail:mails:tracking:read"
+const TrackingReadRole = "skynotify:mails:tracking:read"
 const trackingReadBudget = 2 * time.Second
 
 // TrackingSummary has no identities or target URLs. 90 days after the last
@@ -40,9 +40,9 @@ type TrackingSummary struct {
 // SenderSeesRecipientsEnv names the switch that gives a send's own sender
 // its people (ADR-0074 decision 9, addendum 2026-11-08; ADR-0075 addendum
 // 2026-11-08 item 10). Off, the default, the sender reads the counts only.
-const SenderSeesRecipientsEnv = "SKYMAIL_SENDER_SEES_RECIPIENTS"
+const SenderSeesRecipientsEnv = "SKYNOTIFY_SENDER_SEES_RECIPIENTS"
 
-// SenderSeesRecipientsFromEnv reads SKYMAIL_SENDER_SEES_RECIPIENTS: off
+// SenderSeesRecipientsFromEnv reads SKYNOTIFY_SENDER_SEES_RECIPIENTS: off
 // (unset) or on. Anything else stops startup: a typo must not open the
 // people to their senders.
 func SenderSeesRecipientsFromEnv(getenv func(string) string) (bool, error) {
@@ -57,7 +57,7 @@ func SenderSeesRecipientsFromEnv(getenv func(string) string) (bool, error) {
 }
 
 // WithSenderSeesRecipients gives a send's own sender its people
-// (SKYMAIL_SENDER_SEES_RECIPIENTS=on); without it the sender reads the
+// (SKYNOTIFY_SENDER_SEES_RECIPIENTS=on); without it the sender reads the
 // counts only.
 func WithSenderSeesRecipients(on bool) MailHandlerOption {
 	return func(h *mailHandlerImpl) { h.senderSeesRecipients = on }
@@ -94,7 +94,7 @@ type TrackingLinkCounts struct {
 // TrackingLinkTarget is where a tracked link goes (Yusuf, 2026-11-24: "her
 // şeyi görelim"). url is the full target as sent, one-time links and codes
 // included: nothing in it is masked (Yusuf, 2026-11-24: whoever holds
-// skymail:mails:read sees each mail in full). url is null once the link was
+// skynotify:mails:read sees each mail in full). url is null once the link was
 // emptied: url_cleared_reason expired (a year on) or erased (the send masked
 // or sensitive since, or Account erasure).
 type TrackingLinkTarget struct {
@@ -163,7 +163,7 @@ func readTrackingLinks(ctx context.Context, db *database.Store, task uuid.UUID) 
 // GetTracking godoc
 //
 //	@Summary		Tracking counts, per-link counts and hour/day series
-//	@Description	Requires skymail:mails:read. No identities or link tokens. Each link of clicks_by_link has its full target, url: as sent, one-time links and codes included (nothing masked); null once the link was emptied (url_cleared_reason expired or erased). After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts are shown to anyone with skymail:mails:read whatever its number of tracked recipients (Yusuf, 2026-11-24, K6); only mail the system sends (the system lane) tells of people: then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read; the send's own sender outside the system lane only while SKYMAIL_SENDER_SEES_RECIPIENTS=on) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4). recipients_readable says whether the caller may read the send's people.
+//	@Description	Requires skynotify:mails:read. No identities or link tokens. Each link of clicks_by_link has its full target, url: as sent, one-time links and codes included (nothing masked); null once the link was emptied (url_cleared_reason expired or erased). After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts are shown to anyone with skynotify:mails:read whatever its number of tracked recipients (Yusuf, 2026-11-24, K6); only mail the system sends (the system lane) tells of people: then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skynotify:mails:tracking:read; the send's own sender outside the system lane only while SKYNOTIFY_SENDER_SEES_RECIPIENTS=on) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4). recipients_readable says whether the caller may read the send's people.
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id	path		string	true	"Mail task ID"
@@ -246,12 +246,12 @@ func (h *mailHandlerImpl) mayReadTrackingPeople(c fiber.Ctx, task database.Track
 	return trackingPeopleReadable(contentCallerOf(c), middlewares.IsServiceAccount(c), task, h.senderSeesRecipients)
 }
 
-// trackingPeopleReadable is the rule: skymail:mails:tracking:read (YK, DK,
+// trackingPeopleReadable is the rule: skynotify:mails:tracking:read (YK, DK,
 // ADMIN) reads any send's people. The send's own sender reads them only
-// while SKYMAIL_SENDER_SEES_RECIPIENTS is on (senderSees); off, the default
+// while SKYNOTIFY_SENDER_SEES_RECIPIENTS is on (senderSees); off, the default
 // (Yusuf, 2026-11-08; ADR-0074 decision 9, addendum 2026-11-08), the sender
 // reads the counts only, Team mail's Leader and a Mail onayı requester alike.
-// A service is no sender here: the mail it sends (SKYMAIL_TRACKING_SYSTEM)
+// A service is no sender here: the mail it sends (SKYNOTIFY_TRACKING_SYSTEM)
 // is read with the role only. Nor is the person a system mail names as its
 // sender (a Mail onayı notice's requester or decider): the system lane's
 // mail is the system's, whose people only YK, DK and the admins see (KVKK
@@ -266,7 +266,7 @@ func trackingPeopleReadable(caller contentCaller, service bool, task database.Tr
 // GetTrackingRecipients godoc
 //
 //	@Summary		Recipient opening and click observations
-//	@Description	Requires skymail:mails:tracking:read. The send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role) reads it only while SKYMAIL_SENDER_SEES_RECIPIENTS=on; off, the default, the sender gets 403 and reads the counts (GET /mail_tasks/{id}/tracking). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 90 days after the last mail went out, even if retention has not run. Does not return tracking tokens. Each clicked link has its position and full target url, as sent (nothing masked).
+//	@Description	Requires skynotify:mails:tracking:read. The send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role) reads it only while SKYNOTIFY_SENDER_SEES_RECIPIENTS=on; off, the default, the sender gets 403 and reads the counts (GET /mail_tasks/{id}/tracking). Mail the system sends (account and transaction mail in the system lane, SkyNotify's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 90 days after the last mail went out, even if retention has not run. Does not return tracking tokens. Each clicked link has its position and full target url, as sent (nothing masked).
 //	@Tags			Mail
 //	@Produce		json
 //	@Param			id			path		string	true	"Mail task ID"

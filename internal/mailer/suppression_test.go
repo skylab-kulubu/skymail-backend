@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 // Templates whose key says what a send is: account mail (a system template,
@@ -145,9 +145,9 @@ func TestOnlyAccountMailGoesToASuppressedAddress(t *testing.T) {
 }
 
 // The key alone exempts nothing: a template keyed account.* or keycloak.* that
-// is not a system template (an operator's, made with skymail:templates:write)
+// is not a system template (an operator's, made with skynotify:templates:write)
 // is suppressed like any other, so the key cannot be used to send past the
-// list (review of skymail-backend #87).
+// list (review of skynotify-backend #87).
 func TestAnAccountKeyWithoutSystemIsSuppressed(t *testing.T) {
 	db := suppressionQueue(t)
 	m := mailer.NewMailer(db, startFakeSMTP(t).config(), mailer.SenderOn)
@@ -193,7 +193,7 @@ func TestAccountMailIsASystemTemplateWithAnAccountKey(t *testing.T) {
 	}
 }
 
-// The ticket's acceptance (hub ticket skymail-bounce-isleme 05): after one
+// The ticket's acceptance (hub ticket skynotify-bounce-isleme 05): after one
 // permanent refusal, a second send to the address does not reach the relay;
 // account mail still goes, flagged; once removed, the address is sent to
 // again. A refusal that is not of the address suppresses nothing.

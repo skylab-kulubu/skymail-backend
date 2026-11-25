@@ -13,10 +13,10 @@ import (
 )
 
 // The shared cases are one file kept in two repos: this copy, and
-// skymail-frontend's src/lib/mail-render/testdata/referenced-variables.json,
+// skynotify-frontend's src/lib/mail-render/testdata/referenced-variables.json,
 // whose test pins the same hash. Changing either copy fails its own repo's
 // test until both copies, and both hashes, change together.
-const sharedCasesSHA256 = "b54be25614fedd3054e85589e27ea596b97d2023dc37817058a32d4c08d2bbab"
+const sharedCasesSHA256 = "b2d9c205a26ebc97de48ad26e61e1ed377f84cf0f5c8bf9ba2b02c4a87cb311a"
 
 func TestTheSharedCasesAreTheOnesTheFrontendHolds(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "referenced-variables.json"))
@@ -24,7 +24,7 @@ func TestTheSharedCasesAreTheOnesTheFrontendHolds(t *testing.T) {
 		t.Fatal(err)
 	}
 	if sum := fmt.Sprintf("%x", sha256.Sum256(raw)); sum != sharedCasesSHA256 {
-		t.Fatalf("testdata/referenced-variables.json hashes to %s, not the %s both repos pin: change skymail-frontend's copy (src/lib/mail-render/testdata/referenced-variables.json) to match, then both pins", sum, sharedCasesSHA256)
+		t.Fatalf("testdata/referenced-variables.json hashes to %s, not the %s both repos pin: change skynotify-frontend's copy (src/lib/mail-render/testdata/referenced-variables.json) to match, then both pins", sum, sharedCasesSHA256)
 	}
 }
 
@@ -34,7 +34,7 @@ type referencedVariablesCase struct {
 	Expect []string `json:"expect"`
 }
 
-// The cases skymail-frontend's render module is held to as well, from the same
+// The cases skynotify-frontend's render module is held to as well, from the same
 // file: the panel shows a template's variables with one reading of a body and
 // the server refuses a save with another, so the two must not disagree.
 func TestReferencedVariablesFollowTheSharedRule(t *testing.T) {

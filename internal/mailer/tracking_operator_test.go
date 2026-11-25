@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
-// Operator tracking (SKYMAIL_TRACKING_OPERATOR, Yusuf 2026-10-21): every send
+// Operator tracking (SKYNOTIFY_TRACKING_OPERATOR, Yusuf 2026-10-21): every send
 // a person queues is tracked, with no box and no opting out, whatever its
 // template. A sensitive mail gets the pixel only. Any other gets a click
 // address on the links the send gives every recipient alike — written in the
@@ -35,7 +35,7 @@ const operatorHTML = `<!DOCTYPE html><html><body style="margin:0">
 <a href="https://skylab.example/u/{{.FullName}}/onay">Adına özel</a>
 <a href="{{.Link}}">Gönderimin bağlantısı</a>
 <a href="https://skylab.example/k/{{.Slug}}?ref=duyuru">Kısmi</a>
-<a href="https://skylab.example/gizli" data-skymail-notrack>Sayılmaz</a>
+<a href="https://skylab.example/gizli" data-skynotify-notrack>Sayılmaz</a>
 </body></html>`
 
 // operatorVariables is what the operator wrote once for every recipient: a
@@ -50,7 +50,7 @@ func operatorVariables() string {
 // never may.
 var (
 	operatorCounted = []string{"https://skylab.example/govde", "https://skylab.example/etkinlik", "https://skylab.example/kayit", "https://skylab.example/k/gecekodu?ref=duyuru"}
-	operatorNever   = []string{"form?e=", "/u/", "/gizli", "@", "%40", "Ay%c5%9fe", "Ayşe", ".invalid", "skymail-probe"}
+	operatorNever   = []string{"form?e=", "/u/", "/gizli", "@", "%40", "Ay%c5%9fe", "Ayşe", ".invalid", "skynotify-probe"}
 )
 
 func operatorQueue(t *testing.T) *database.Store {
@@ -109,7 +109,7 @@ func linkURLs(links []registeredLink) []string {
 	return out
 }
 
-// Off (the default), and on beside SKYMAIL_TRACKING off, nothing changes: a
+// Off (the default), and on beside SKYNOTIFY_TRACKING off, nothing changes: a
 // System or sensitive template is still never tracked as asked, and a
 // person's single mail still rewrites the link a variable filled.
 func TestOperatorTrackingIsOffUnlessBothFlagsAreOn(t *testing.T) {
@@ -124,7 +124,7 @@ func TestOperatorTrackingIsOffUnlessBothFlagsAreOn(t *testing.T) {
 		Config: tracking.Config{Mode: tracking.ModeOff, Operator: tracking.ModeOn},
 	}))
 	if alone.OperatorTrackingAlways() || alone.TrackingApplies(ctx, announcementTemplate, &announcementList) {
-		t.Error("SKYMAIL_TRACKING_OPERATOR=on with SKYMAIL_TRACKING off tracks")
+		t.Error("SKYNOTIFY_TRACKING_OPERATOR=on with SKYNOTIFY_TRACKING off tracks")
 	}
 
 	// A person's single mail that asked, as #85 made it: every link of the
@@ -241,7 +241,7 @@ func TestEveryPersonsSendIsTrackedWithOperatorTracking(t *testing.T) {
 	}
 
 	// A service's single mail is the system's, not the operator's: untracked
-	// while SKYMAIL_TRACKING_SYSTEM is off.
+	// while SKYNOTIFY_TRACKING_SYSTEM is off.
 	service, tracked, err := m.EnqueueSystemSingle(ctx, singleTo(formsReplyTemplate, "ayse@example.com", "Ayşe", formsVariables()), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -266,7 +266,7 @@ func TestEveryPersonsSendIsTrackedWithOperatorTracking(t *testing.T) {
 // personal link by) and to a group registers the body's link, the template's
 // written link, the link a send's variable fills and the one with a send's
 // variable in part; never the links .Email and .FullName make, the one marked
-// data-skymail-notrack, nor anything naming the recipient — not even the
+// data-skynotify-notrack, nor anything naming the recipient — not even the
 // {{.Email}} the body tried to slip in, which is text and stays text.
 func TestALinkMadeFromTheRecipientIsNeverRewrittenInAnOperatorsMail(t *testing.T) {
 	captureMailerLogs(t)
@@ -289,7 +289,7 @@ func TestALinkMadeFromTheRecipientIsNeverRewrittenInAnOperatorsMail(t *testing.T
 	checkOperatorLinks(t, "the group send", linksOf(t, db, group))
 	for _, task := range []uuid.UUID{single, group} {
 		for email, row := range trackedRows(t, db, task) {
-			if strings.Contains(row.bodyHTML, ".invalid") || strings.Contains(row.bodyHTML, "skymail-probe") {
+			if strings.Contains(row.bodyHTML, ".invalid") || strings.Contains(row.bodyHTML, "skynotify-probe") {
 				t.Errorf("%s's kept mail carries a probe recipient", email)
 			}
 		}

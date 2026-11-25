@@ -11,15 +11,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/consent"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/unsubscribe"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/consent"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/unsubscribe"
 )
 
 // The bulk preference check (ADR 0072 decisions 3 and 6; hub ticket
 // abonelik-cikisi 09; README, "Toplu postada tercih"). While
-// SKYMAIL_BULK_PREFERENCE is on, every send of the duyuru stream obeys the
+// SKYNOTIFY_BULK_PREFERENCE is on, every send of the duyuru stream obeys the
 // person's preference in core at the moment it is sent, and every mail of it
 // carries a one-click way out:
 //
@@ -30,7 +30,7 @@ import (
 //     link and the time it was checked; one core says no to is written
 //     failed, nothing tried, "preference: <reason>" (opted_out, inactive,
 //     ambiguous), and counted skipped; an address core matches to no account
-//     gets SkyMail's own link (unsubscribe.Config.Link). Core not answering
+//     gets SkyNotify's own link (unsubscribe.Config.Link). Core not answering
 //     writes nothing: the request is 503 mail_task.preference_unavailable
 //     (fail closed, ADR 0072); a team category core does not know is 400
 //     mail_task.category_unknown.
@@ -55,7 +55,7 @@ import (
 
 // PreferenceEnv switches the bulk preference check on: off (the default,
 // also when unset) or on.
-const PreferenceEnv = "SKYMAIL_BULK_PREFERENCE"
+const PreferenceEnv = "SKYNOTIFY_BULK_PREFERENCE"
 
 const (
 	// preferencePageTimeout bounds one recipients:resolve call when a send is
@@ -115,17 +115,17 @@ type PreferenceResolver interface {
 
 // PreferenceGate is the check's configuration (PreferenceGateFromEnv).
 type PreferenceGate struct {
-	// On is SKYMAIL_BULK_PREFERENCE.
+	// On is SKYNOTIFY_BULK_PREFERENCE.
 	On bool
 	// Core answers recipients:resolve; nil without CORE_URL, and then every
 	// duyuru send is refused 503.
 	Core PreferenceResolver
-	// Links is SkyMail's own unsubscribe link: an address core matches to no
+	// Links is SkyNotify's own unsubscribe link: an address core matches to no
 	// account gets it.
 	Links unsubscribe.Config
 }
 
-// PreferenceGateFromEnv reads SKYMAIL_BULK_PREFERENCE; anything but off or on
+// PreferenceGateFromEnv reads SKYNOTIFY_BULK_PREFERENCE; anything but off or on
 // stops startup.
 func PreferenceGateFromEnv(getenv func(string) string) (PreferenceGate, error) {
 	switch raw := strings.ToLower(strings.TrimSpace(getenv(PreferenceEnv))); raw {
@@ -140,10 +140,10 @@ func PreferenceGateFromEnv(getenv func(string) string) (PreferenceGate, error) {
 
 // CheckWith says whether the check can run with lanes and links: every
 // duyuru mail must leave with its way out, both in its body and in
-// List-Unsubscribe. So SKYMAIL_BULK_PREFERENCE=on needs SKYMAIL_MAIL_PURPOSE=on
+// List-Unsubscribe. So SKYNOTIFY_BULK_PREFERENCE=on needs SKYNOTIFY_MAIL_PURPOSE=on
 // (a send names its category, the footer line is added),
-// SKYMAIL_LIST_UNSUBSCRIBE=on and a duyuru lane that is not off (the header is
-// written only there), and SkyMail's own link on with a key (an address
+// SKYNOTIFY_LIST_UNSUBSCRIBE=on and a duyuru lane that is not off (the header is
+// written only there), and SkyNotify's own link on with a key (an address
 // without an account gets it). Anything less stops startup.
 func (g PreferenceGate) CheckWith(lanes SendLanes) error {
 	if !g.On {
@@ -157,7 +157,7 @@ func (g PreferenceGate) CheckWith(lanes SendLanes) error {
 	case lanes.Lane(LaneDuyuru).Transport == TransportOff:
 		return fmt.Errorf("%s=on needs %s=graph or xoauth2: List-Unsubscribe is written only on the duyuru lane", PreferenceEnv, sendEnv(LaneDuyuru))
 	case !g.Links.On || g.Links.BaseURL == "":
-		return fmt.Errorf("%s=on needs %s=on: an address without an account gets SkyMail's own link", PreferenceEnv, unsubscribe.LinkEnv)
+		return fmt.Errorf("%s=on needs %s=on: an address without an account gets SkyNotify's own link", PreferenceEnv, unsubscribe.LinkEnv)
 	case g.Links.Ring.Empty():
 		return fmt.Errorf("%s=on needs a key in %s<n> and %s", PreferenceEnv, unsubscribe.KeyEnvPrefix, unsubscribe.CurrentKeyEnv)
 	}
@@ -170,7 +170,7 @@ func WithPreferenceGate(gate PreferenceGate) Option {
 	return func(m *mailerImpl) { m.preferences = gate }
 }
 
-// PreferenceAvailable says SKYMAIL_BULK_PREFERENCE is on.
+// PreferenceAvailable says SKYNOTIFY_BULK_PREFERENCE is on.
 func (m *mailerImpl) PreferenceAvailable() bool { return m.preferences.On }
 
 // PreferenceVerdicts is what core said, before a send's transaction, about
@@ -230,7 +230,7 @@ func (m *mailerImpl) gatedPurpose(purpose *string) bool {
 // ResolvePreferences asks core about recipients of a duyuru send of purpose,
 // in pages of consent.ResolveBatch, within preferencePageTimeout each and
 // preferenceSendTimeout in all. Call it before the transaction the send is
-// queued in, and give the answer to Queue.WithPreferences: SkyMail never
+// queued in, and give the answer to Queue.WithPreferences: SkyNotify never
 // waits for core holding a transaction. Nil, with no error, when the check is
 // off or the send is not duyuru; ErrPreferenceUnavailable when core did not
 // answer, ErrPreferenceCategoryUnknown for a team core does not know. A
@@ -435,7 +435,7 @@ func (c *preferenceCache) decide(rows []checkedRow) preferenceVerdict {
 			c.needs[row.category][row.key] = row.recipient
 			v.waiting = append(v.waiting, row.gatedRow)
 		// No account any more (an address unverified since): its link and
-		// SkyMail's record still apply.
+		// SkyNotify's record still apply.
 		case !verdict.result.Matched:
 		case verdict.result.Allowed:
 			v.checked[verdict.at] = append(v.checked[verdict.at], row.id)
