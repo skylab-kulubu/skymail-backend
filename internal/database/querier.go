@@ -305,11 +305,25 @@ type Querier interface {
 	// undelivered: a report said the address does not exist (a hard bounce of
 	// the row's own address) after the relay took the mail.
 	GetMailQueueItemsByTaskId(ctx context.Context, arg GetMailQueueItemsByTaskIdParams) ([]GetMailQueueItemsByTaskIdRow, error)
+	// The Mail onayı request a send was queued from, and its submitter as the
+	// request names them (Silinmiş kullanıcı once erased). No row: a direct send.
+	GetMailTaskApprovalSource(ctx context.Context, taskID uuid.UUID) (GetMailTaskApprovalSourceRow, error)
 	GetMailTaskById(ctx context.Context, id uuid.UUID) (GetMailTaskByIdRow, error)
 	// What the task controls (pause, resume, cancel) need to know about a send:
 	// whether it is one (bulk: its rows are in the bulk lane), who sent it, and
 	// whether any of its rows are still to be sent.
 	GetMailTaskControl(ctx context.Context, id uuid.UUID) (GetMailTaskControlRow, error)
+	// What GET /mail_tasks/{id}/events reads from the send's own rows: who
+	// queued it and when, its recipients by outcome, when the last of them was
+	// answered, the permanent failures reported after sending (a hard bounce
+	// naming the row's own address). With no row, the times are the send's.
+	// skipped is what mail_task_status() does not count as a failure (a reserved
+	// domain, a suppressed address, core's no), cancelled apart; failed is the
+	// rest of the failed rows. retried counts the recipients tried more than
+	// once. last_outcome_at is the latest of a row's sending, claim (a failed
+	// row keeps the claim that failed it) and queueing: once no row is pending
+	// or processing, about when the send finished.
+	GetMailTaskEventFacts(ctx context.Context, id uuid.UUID) (GetMailTaskEventFactsRow, error)
 	GetMailTaskIdempotencyKey(ctx context.Context, arg GetMailTaskIdempotencyKeyParams) (GetMailTaskIdempotencyKeyRow, error)
 	// The key of a send's template and whether it is a system template, which
 	// together say whether it is account mail (mailer.AccountMail), and the
@@ -456,6 +470,8 @@ type Querier interface {
 	// mailer's own rule (mailer.HasRecipientName), not SQL's idea of white space.
 	ListMailFormSourceRecipientNames(ctx context.Context, sourceID uuid.UUID) ([]string, error)
 	ListMailFormSourceRecipients(ctx context.Context, sourceID uuid.UUID) ([]MailFormSourceRecipient, error)
+	// A send's own events, oldest first (GET /mail_tasks/{id}/events).
+	ListMailTaskEvents(ctx context.Context, taskID uuid.UUID) ([]ListMailTaskEventsRow, error)
 	// The links a tracked row's mail gets its click addresses for when it goes
 	// out: the send's links whose address is still kept.
 	ListMailTaskLinkTargets(ctx context.Context, taskID uuid.UUID) ([]ListMailTaskLinkTargetsRow, error)
@@ -661,6 +677,10 @@ type Querier interface {
 	RecordBounceReaderPoll(ctx context.Context, arg RecordBounceReaderPollParams) error
 	// Numbered after the request's last event; the caller holds its row lock.
 	RecordMailApprovalEvent(ctx context.Context, arg RecordMailApprovalEventParams) (MailApprovalEvent, error)
+	// Writes one of a send's own events (mail_task_events): a pause, a resume or
+	// a cancel, with who did it (null for SkyMail: a send its failure rate
+	// paused). count is a cancel's skipped recipients.
+	RecordMailTaskEvent(ctx context.Context, arg RecordMailTaskEventParams) error
 	// Keeps on a template that a Template seed was refused, and why. Refusing the
 	// content refused last time again keeps when it was first refused; other
 	// content starts over. Nothing that is sent changes, so updated_at stays.
@@ -717,6 +737,9 @@ type Querier interface {
 	// set, and the caller sees it in the contract set it returns.
 	RemoveOperatorRequiredVariable(ctx context.Context, arg RemoveOperatorRequiredVariableParams) (Template, error)
 	RemoveRecipientFromMailingListByID(ctx context.Context, arg RemoveRecipientFromMailingListByIDParams) error
+	// Puts a row back to pending for another attempt, and counts the retry in
+	// its send's retried event of the hour (mail_task_events): one row a send
+	// and hour, so GET /mail_tasks/{id}/events tells when the relay kept failing.
 	RescheduleMailQueueItem(ctx context.Context, arg RescheduleMailQueueItemParams) (int, error)
 	// Puts back to pending the processing rows whose lease has run out: the
 	// process that took them is gone, or a restored dump holds them so. A row

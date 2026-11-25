@@ -232,6 +232,14 @@ func TestWithoutTheHoldA421IsAnAttempt(t *testing.T) {
 	if row := guardRowOf(t, db, taken[0].ID); row.Attempts != 1 {
 		t.Fatalf("without the hold the 421 row is %+v, want an attempt counted", row)
 	}
+	var retries int
+	if err := db.Conn.QueryRow(ctx, `SELECT COALESCE(sum(count), 0) FROM mail_task_events
+		WHERE task_id = $1 AND kind = 'retried' AND actor_sub IS NULL`, taken[0].TaskID).Scan(&retries); err != nil {
+		t.Fatal(err)
+	}
+	if retries != 1 {
+		t.Fatalf("the retry of the 421 row counted %d retries in its send's events, want 1", retries)
+	}
 	if _, bulk := byLane(mailer.Turn(ctx, m)); bulk == 0 {
 		t.Fatal("without the hold the bulk lane stopped after a 421")
 	}
@@ -280,6 +288,14 @@ func TestASendPausesItselfPastItsFailureRate(t *testing.T) {
 		if paused := reason == "failure_rate"; paused != (i == 2) {
 			t.Fatalf("after %d failures paused_reason is %q", i+1, reason)
 		}
+	}
+	var events, byHand int
+	if err := db.Conn.QueryRow(ctx, `SELECT count(*), count(actor_sub) FROM mail_task_events
+		WHERE task_id = $1 AND kind = 'paused' AND reason = 'failure_rate'`, failing).Scan(&events, &byHand); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 || byHand != 0 {
+		t.Fatalf("the pause by the failure rate wrote %d events, %d with an actor; want one, by SkyMail", events, byHand)
 	}
 	other := enqueueList(t, m)
 	next := bulkOf(mailer.Turn(ctx, m))

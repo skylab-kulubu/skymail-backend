@@ -1391,6 +1391,36 @@ birlikte sayılanların en az `SKYMAIL_FAILURE_PAUSE_PERCENT`'i olursa gönderim
 `paused_reason = failure_rate` ile duraklar. Log: `event=send_paused_failure_rate`.
 Atlananlar (tercih, bastırma, rıza, ayrılmış alan adı, iptal) sayılmaz.
 
+**Gönderim olayları (B3).** `GET /v1/mail_tasks/{id}/events`
+(`skymail:mails:read`; her okuyan her gönderimin olaylarını görür) gönderimin
+geçmişini eskiden yeniye verir:
+
+| `kind` | Ne zaman | Ek alanlar |
+|---|---|---|
+| `approval_*` | gönderimin geldiği Mail onayı isteğinin olayları (`submitted`, `approved`, `rejected`…) | `actor`, `note`, `approval_id` |
+| `created` | gönderim oluşturuldu | `actor` (`person`, `service` ya da `system` = SkyMail) |
+| `queued` | ilk kuyruk satırı | `counts.recipients` |
+| `paused` | duraklatıldı | `actor` (hata oranında yok), `reason` `operator`/`failure_rate` |
+| `resumed` | sürdürüldü | `actor` |
+| `retried` | saat başına bir satır: o saatte planlanan yeniden denemeler | `at` ilk, `until` son deneme, `counts.retries` |
+| `cancelled` | iptal edildi | `actor`, `counts.cancelled` (atlanan bekleyenler) |
+| `finished` | bekleyen ya da gönderilmekte olan alıcı kalmadığında; son alıcının yanıt anı (iptalde iptal anı) | `counts.sent`, `failed`, `skipped`, `cancelled`, `retries` |
+| `bounced` | gönderildikten sonra "adres yok" raporu (kalıcı ret) | `at` son rapor, `counts.bounced` |
+
+- Aynı andaki olaylar tablodaki sırayla gelir. Hata gövdesi problem+json:
+  bilinmeyen gönderim 404, bozuk kimlik 400.
+- Duraklatma, sürdürme, iptal ve yeniden denemeler `mail_task_events`'e
+  (göç `20261125150000`) yazılır; öbürleri gönderimin kendi satırlarından
+  okunur. Göçten önceki duraklatma ve iptal yalnız gönderimin bugünkü
+  sütunlarından (`paused_by`, `cancelled_by`) görünür; o zamanki sürdürme ve
+  yeniden denemeler kaydedilmedi.
+- Kişi adı: olay kaydındaki ad; kayıtta ad yoksa (gönderen) Keycloak'tan 2 sn
+  içinde okunur, yetişmezse `null`. Silinmiş hesap ya da Keycloak'ta olmayan
+  hesap `Silinmiş kullanıcı` (`deleted: true`). Hesap silme `mail_task_events`
+  aktörünü ve gönderimin `paused_by`/`cancelled_by`'ını da değiştirir.
+- `erase_after_send` gönderiminde satırlar yanıt yazılınca silindiği için
+  `queued`/`finished` yoktur.
+
 **Görev düzeyinde işlemler (G4).**
 
 | Uç | Ne yapar |
@@ -1408,6 +1438,9 @@ Atlananlar (tercih, bastırma, rıza, ayrılmış alan adı, iptal) sayılmaz.
   duraklatılamaz ya da iptal edilemez (`409 mail_task.finished`).
 - Kim: `skymail:announcements:send` her gönderimi; `skymail:mails:write` yalnız
   kendi gönderdiğini (`sent_by`). Ötekine 403.
+- Her duraklatma, sürdürme ve iptal kimin yaptığıyla (`actor_sub`, token'daki
+  ad) `mail_task_events`'e yazılır; hata oranıyla duraklama SkyMail adına
+  (aktörsüz). Bir şey değiştirmeyen çağrı olay yazmaz.
 - İptal edilen satır atlanmış sayılır: gönderimi `failed` okutmaz
   (`mail_task_status()`). Bir alıcısı gitmiş, kalanı iptal edilmiş gönderim
   `sent` okunur, `cancelled_at` ile gösterilir.

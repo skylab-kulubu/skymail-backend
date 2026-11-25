@@ -267,7 +267,9 @@ func newEraser(ctx context.Context, tx pgx.Tx, erasure AccountErasure) (*eraser,
 		              UNION ALL
 		              SELECT actor_name FROM template_content_sensitive_events WHERE actor_sub = @subject
 		              UNION ALL
-		              SELECT actor_name FROM sent_content_views WHERE actor_sub = @subject),
+		              SELECT actor_name FROM sent_content_views WHERE actor_sub = @subject
+		              UNION ALL
+		              SELECT actor_name FROM mail_task_events WHERE actor_sub = @subject),
 		     full_names AS (SELECT DISTINCT lower(btrim(regexp_replace(name, '\s+', ' ', 'g'))) AS name
 		                    FROM held
 		                    WHERE name IS NOT NULL)
@@ -533,6 +535,16 @@ var keepNamesSteps = []erasureStep{
 		sql:   `UPDATE mail_tasks SET sent_by = @deleted_sub WHERE sent_by = @subject`,
 	},
 	{
+		name:  "send pausers",
+		count: AccountErasureActorColumnsReplaced,
+		sql:   `UPDATE mail_tasks SET paused_by = @deleted_sub WHERE paused_by = @subject`,
+	},
+	{
+		name:  "send cancellers",
+		count: AccountErasureActorColumnsReplaced,
+		sql:   `UPDATE mail_tasks SET cancelled_by = @deleted_sub WHERE cancelled_by = @subject`,
+	},
+	{
 		name:  "template archivers",
 		count: AccountErasureActorColumnsReplaced,
 		sql:   `UPDATE templates SET archived_by = @deleted_sub WHERE archived_by = @subject`,
@@ -688,6 +700,13 @@ var dropNamesSteps = []erasureStep{
 		name:  "openings of sensitive content",
 		count: AccountErasureActorColumnsReplaced,
 		sql: `UPDATE sent_content_views
+		      SET actor_sub = @deleted_sub, actor_name = @deleted_name
+		      WHERE actor_sub = @subject`,
+	},
+	{
+		name:  "send events",
+		count: AccountErasureActorColumnsReplaced,
+		sql: `UPDATE mail_task_events
 		      SET actor_sub = @deleted_sub, actor_name = @deleted_name
 		      WHERE actor_sub = @subject`,
 	},

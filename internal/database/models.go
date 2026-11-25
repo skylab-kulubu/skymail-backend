@@ -546,6 +546,20 @@ type MailTask struct {
 	SentByService *bool `json:"sent_by_service"`
 }
 
+// A send's pauses, resumes, cancels (who) and retries (counted by the hour); GET /v1/mail_tasks/{id}/events.
+type MailTaskEvent struct {
+	ID        int64      `json:"id"`
+	TaskID    uuid.UUID  `json:"task_id"`
+	Kind      string     `json:"kind"`
+	Reason    *string    `json:"reason"`
+	ActorSub  *string    `json:"actor_sub"`
+	ActorName *string    `json:"actor_name"`
+	Count     *int       `json:"count"`
+	Hour      *time.Time `json:"hour"`
+	CreatedAt time.Time  `json:"created_at"`
+	LastAt    time.Time  `json:"last_at"`
+}
+
 // A service's Idempotency-Key on POST /mail_tasks/single: the request's digest, the send it queued and its answer, replayed to a retry. No address. Kept 72 hours.
 type MailTaskIdempotencyKey struct {
 	SentBy         string `json:"sent_by"`

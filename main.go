@@ -682,6 +682,7 @@ func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, m
 	tasks.Get("/:id/tracking", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTracking)
 	tasks.Get("/:id/tracking/recipients", mail.GetTrackingRecipients)
 	tasks.Get("/:id/queue", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTaskQueueItems)
+	tasks.Get("/:id/events", auth.RequireAnyPermission("skymail:mails:read"), mail.ListTaskEvents)
 	// A send's controls (duyuru-haber 05 G4): the handler lets a
 	// skymail:mails:write caller control only their own sends.
 	control := auth.RequireAnyPermission("skymail:mails:write", handlers.AnnouncementsSendRole)
