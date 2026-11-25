@@ -129,10 +129,10 @@ func (h *mailHandlerImpl) GetRecipientHistory(c fiber.Ctx) error {
 	// No history leaves without the record of who read it.
 	actor := versionAuthor(c, database.TemplateAuthorKindOperator)
 	if err := h.db.RecordRecipientHistoryView(ctx, database.RecordRecipientHistoryViewParams{
-		Email:         address,
-		ActorSub:      actor.Sub,
-		ActorName:     actor.Name,
-		Results:       int(count),
+		Email:     address,
+		ActorSub:  actor.Sub,
+		ActorName: actor.Name,
+		Results:   int(count),
 	}); err != nil {
 		return err
 	}
