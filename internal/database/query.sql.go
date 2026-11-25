@@ -1101,6 +1101,20 @@ func (q *Queries) CountRecentNewsTests(ctx context.Context, arg CountRecentNewsT
 	return column_1, err
 }
 
+const countRecipientHistory = `-- name: CountRecipientHistory :one
+SELECT count(*)
+FROM mail_queue q
+WHERE lower(q.recipient_email) = lower($1::text)
+`
+
+// How many queue rows went to the address (X-Total-Count).
+func (q *Queries) CountRecipientHistory(ctx context.Context, email string) (int64, error) {
+	row := q.db.QueryRow(ctx, countRecipientHistory, email)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countRecipients = `-- name: CountRecipients :one
 SELECT count(*)
 FROM recipients
@@ -2089,6 +2103,31 @@ type DeleteOldMailTaskIdempotencyKeysParams struct {
 // content sweep's step.
 func (q *Queries) DeleteOldMailTaskIdempotencyKeys(ctx context.Context, arg DeleteOldMailTaskIdempotencyKeysParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteOldMailTaskIdempotencyKeys, arg.RetentionHours, arg.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteOldRecipientHistoryViews = `-- name: DeleteOldRecipientHistoryViews :execrows
+DELETE
+FROM recipient_history_views
+WHERE id IN (SELECT v.id
+             FROM recipient_history_views v
+             WHERE v.created_at < now() - make_interval(days => $1::int)
+             ORDER BY v.created_at
+             LIMIT $2::int FOR UPDATE SKIP LOCKED)
+`
+
+type DeleteOldRecipientHistoryViewsParams struct {
+	RetentionDays int `json:"retention_days"`
+	BatchSize     int `json:"batch_size"`
+}
+
+// Deletes up to batch_size records of who read a history, older than
+// retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
+func (q *Queries) DeleteOldRecipientHistoryViews(ctx context.Context, arg DeleteOldRecipientHistoryViewsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOldRecipientHistoryViews, arg.RetentionDays, arg.BatchSize)
 	if err != nil {
 		return 0, err
 	}
@@ -6054,6 +6093,168 @@ func (q *Queries) ListQueueRowsToMask(ctx context.Context, arg ListQueueRowsToMa
 	return items, nil
 }
 
+const listRecipientHistory = `-- name: ListRecipientHistory :many
+SELECT q.id,
+       q.task_id,
+       q.recipient_email,
+       q.recipient_full_name,
+       q.recipient_sub,
+       q.status,
+       q.error,
+       q.attempts,
+       q.created_at,
+       q.sent_at,
+       q.subject,
+       q.suppressed_but_sent,
+       (q.status = 'failed'
+           AND (COALESCE(q.error, '') LIKE 'reserved\_domain:%'
+               OR COALESCE(q.error, '') LIKE 'suppressed:%'
+               OR COALESCE(q.error, '') IN ('preference: opted_out', 'preference: inactive', 'preference: ambiguous',
+                                            'cancelled')))::boolean AS skipped,
+       EXISTS (SELECT 1
+               FROM mail_bounces b
+               WHERE b.queue_id = q.id
+                 AND b.kind = 'hard'
+                 AND b.recipient_matched)::boolean               AS undelivered,
+       (q.tracking_token IS NOT NULL OR q.tracking_disabled_at IS NOT NULL)::boolean AS tracked,
+       q.tracking_skip_reason,
+       ev.first_open_at,
+       ev.first_likely_human_open_at,
+       ev.open_count,
+       ev.click_count,
+       ev.last_clicked_at,
+       (mt.content_cleared_at IS NOT NULL OR (q.body = '' AND q.body_html IS NULL))::boolean AS content_gone,
+       mt.created_at                                             AS send_created_at,
+       mt.sent_by,
+       mail_task_kind(mt.id)                                     AS kind,
+       mt.purpose,
+       mt.category,
+       mt.template_id,
+       t.name                                                    AS template_name,
+       t.key                                                     AS template_key,
+       mt.mail_list_id,
+       ml.name                                                   AS mail_list_name
+FROM mail_queue q
+         JOIN mail_tasks mt ON mt.id = q.task_id
+         LEFT JOIN templates t ON t.id = mt.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = mt.mail_list_id
+         CROSS JOIN LATERAL (SELECT min(e.occurred_at) FILTER (WHERE e.kind = 'open') AS first_open_at,
+                                    min(e.occurred_at) FILTER (WHERE NOT e.automated_likely) AS first_likely_human_open_at,
+                                    count(e.id) FILTER (WHERE e.kind = 'open')::int AS open_count,
+                                    count(e.id) FILTER (WHERE e.kind = 'click')::int AS click_count,
+                                    max(e.occurred_at) FILTER (WHERE e.kind = 'click') AS last_clicked_at
+                             FROM mail_tracking_events e
+                             WHERE e.queue_id = q.id
+                               AND q.sent_at > now() - interval '90 days') ev
+WHERE lower(q.recipient_email) = lower($1::text)
+ORDER BY q.created_at DESC, q.id DESC
+LIMIT $3 OFFSET $2
+`
+
+type ListRecipientHistoryParams struct {
+	Email     string `json:"email"`
+	RowOffset int32  `json:"row_offset"`
+	RowLimit  int32  `json:"row_limit"`
+}
+
+type ListRecipientHistoryRow struct {
+	ID                     uuid.UUID           `json:"id"`
+	TaskID                 uuid.UUID           `json:"task_id"`
+	RecipientEmail         string              `json:"recipient_email"`
+	RecipientFullName      string              `json:"recipient_full_name"`
+	RecipientSub           *uuid.UUID          `json:"recipient_sub"`
+	Status                 NullMailQueueStatus `json:"status"`
+	Error                  *string             `json:"error"`
+	Attempts               int                 `json:"attempts"`
+	CreatedAt              *time.Time          `json:"created_at"`
+	SentAt                 *time.Time          `json:"sent_at"`
+	Subject                string              `json:"subject"`
+	SuppressedButSent      bool                `json:"suppressed_but_sent"`
+	Skipped                bool                `json:"skipped"`
+	Undelivered            bool                `json:"undelivered"`
+	Tracked                bool                `json:"tracked"`
+	TrackingSkipReason     *string             `json:"tracking_skip_reason"`
+	FirstOpenAt            interface{}         `json:"first_open_at"`
+	FirstLikelyHumanOpenAt interface{}         `json:"first_likely_human_open_at"`
+	OpenCount              int                 `json:"open_count"`
+	ClickCount             int                 `json:"click_count"`
+	LastClickedAt          interface{}         `json:"last_clicked_at"`
+	ContentGone            bool                `json:"content_gone"`
+	SendCreatedAt          time.Time           `json:"send_created_at"`
+	SentBy                 string              `json:"sent_by"`
+	Kind                   string              `json:"kind"`
+	Purpose                *string             `json:"purpose"`
+	Category               *string             `json:"category"`
+	TemplateID             *uuid.UUID          `json:"template_id"`
+	TemplateName           *string             `json:"template_name"`
+	TemplateKey            *string             `json:"template_key"`
+	MailListID             *uuid.UUID          `json:"mail_list_id"`
+	MailListName           *string             `json:"mail_list_name"`
+}
+
+// A person's mail history (GET /recipients/history): every queue row to the
+// address, compared whole and case-insensitively, newest first with the row
+// id breaking ties, down idx_mail_queue_recipient_address. Each row with its
+// send, its delivery (skipped: not sent on purpose, as mail_task_status()
+// reads it; undelivered: a report said the address does not exist after it
+// was sent) and its openings and clicks within the recipient's 90-day window
+// (tracking.EventRetentionDays), as ListTrackingRecipients counts them.
+// content_gone: the send's content was emptied (retention, a sensitive send
+// not kept) or the row's own body was (account erasure of what named
+// someone). No tracking token, unsubscribe link or body is selected.
+func (q *Queries) ListRecipientHistory(ctx context.Context, arg ListRecipientHistoryParams) ([]ListRecipientHistoryRow, error) {
+	rows, err := q.db.Query(ctx, listRecipientHistory, arg.Email, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRecipientHistoryRow
+	for rows.Next() {
+		var i ListRecipientHistoryRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.RecipientEmail,
+			&i.RecipientFullName,
+			&i.RecipientSub,
+			&i.Status,
+			&i.Error,
+			&i.Attempts,
+			&i.CreatedAt,
+			&i.SentAt,
+			&i.Subject,
+			&i.SuppressedButSent,
+			&i.Skipped,
+			&i.Undelivered,
+			&i.Tracked,
+			&i.TrackingSkipReason,
+			&i.FirstOpenAt,
+			&i.FirstLikelyHumanOpenAt,
+			&i.OpenCount,
+			&i.ClickCount,
+			&i.LastClickedAt,
+			&i.ContentGone,
+			&i.SendCreatedAt,
+			&i.SentBy,
+			&i.Kind,
+			&i.Purpose,
+			&i.Category,
+			&i.TemplateID,
+			&i.TemplateName,
+			&i.TemplateKey,
+			&i.MailListID,
+			&i.MailListName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSentContentViews = `-- name: ListSentContentViews :many
 SELECT id, queue_item_id, actor_sub, actor_name, masked_by, masked_variables, created_at
 FROM sent_content_views
@@ -7573,6 +7774,32 @@ func (q *Queries) RecordMailApprovalEvent(ctx context.Context, arg RecordMailApp
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const recordRecipientHistoryView = `-- name: RecordRecipientHistoryView :exec
+INSERT INTO recipient_history_views (address_sha256, actor_sub, actor_name, results)
+VALUES (encode(sha256(convert_to(lower(btrim($1::text)), 'UTF8')), 'hex'), $2::text,
+        $3::text, $4::int)
+`
+
+type RecordRecipientHistoryViewParams struct {
+	Email     string  `json:"email"`
+	ActorSub  *string `json:"actor_sub"`
+	ActorName *string `json:"actor_name"`
+	Results   int     `json:"results"`
+}
+
+// Records that someone read an address's mail history, before it is answered:
+// the address as the SHA-256 of it trimmed and lower-cased, as account
+// erasure hashes the person's addresses to find these records.
+func (q *Queries) RecordRecipientHistoryView(ctx context.Context, arg RecordRecipientHistoryViewParams) error {
+	_, err := q.db.Exec(ctx, recordRecipientHistoryView,
+		arg.Email,
+		arg.ActorSub,
+		arg.ActorName,
+		arg.Results,
+	)
+	return err
 }
 
 const recordSeedRefusal = `-- name: RecordSeedRefusal :exec

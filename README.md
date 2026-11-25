@@ -1391,6 +1391,31 @@ birlikte sayılanların en az `SKYMAIL_FAILURE_PAUSE_PERCENT`'i olursa gönderim
 `paused_reason = failure_rate` ile duraklar. Log: `event=send_paused_failure_rate`.
 Atlananlar (tercih, bastırma, rıza, ayrılmış alan adı, iptal) sayılmaz.
 
+**Kişi geçmişi (B2).** `GET /v1/recipients/history?email=` (`skymail:mails:read`;
+okuyan her adresin geçmişini görür) o adrese kuyruğa alınmış her postayı en
+yeniden eskiye döner (sayfalı `_start`/`_end`, `X-Total-Count`,
+`Cache-Control: no-store`). Adres bütün olarak ve büyük-küçük harf farkı
+gözetmeden karşılaştırılır (`lower()`, indeks
+`idx_mail_queue_recipient_address`, göç `20261125160100`).
+
+- Her satır: kuyruk satırı (`status`, `error`, `skipped`, `undelivered`,
+  `queued_at`, `sent_at`, `subject`), `content` (`available` ya da
+  `deleted`: içerik süpürmesi gönderimin içeriğini ya da hesap silme postanın
+  gövdesini boşaltmış), `tracking` (`tracked`, `first_open_at`,
+  `first_likely_human_open_at`, `opens`, `clicks`, `last_clicked_at`; alıcının
+  90 günlük penceresi içinde) ve `send` (`kind`, şablon, liste, gönderen,
+  oluşturulma). İçerik `GET /v1/mail_tasks/{task_id}/queue/{id}/content` ile açılır.
+- Her okuma yanıt verilmeden önce `recipient_history_views`'a yazılır: kim
+  (sub, token adı), ne zaman, kaç satır ve adresin SHA-256'sı (adres
+  saklanmaz). `SENT_CONTENT_VIEWS_RETENTION_DAYS` sonra içerik süpürmesi siler.
+  Hesap silme kişinin adreslerinin okumalarını siler (`history_views_deleted`)
+  ve okuyanı `Silinmiş kullanıcı` yapar.
+- Hesap silme ya da hesapsız alıcı saklaması adresi boşalttığı satır ve
+  `erase_after_send` gönderimi bulunmaz.
+- `email` geçerli bir adres olmalı (tek `@`, sekme/satır sonu/NUL yok, en çok
+  320 bayt); değilse `400 validation.error`. Kodlanmamış `+` boşluk gelir, `+`
+  diye okunur.
+
 **Görev düzeyinde işlemler (G4).**
 
 | Uç | Ne yapar |

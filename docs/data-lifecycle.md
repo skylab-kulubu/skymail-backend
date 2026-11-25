@@ -251,6 +251,12 @@ run does (see [Recipients without an account](#recipients-without-an-account)):
   whether a template's sends show their content.
 - `sent_content_views.actor_sub` with `actor_name` — who opened a sensitive
   send's masked content (see [Sent mail content](#sent-mail-content)).
+- `recipient_history_views` — who read an address's mail history (GET
+  `/v1/recipients/history`): `actor_sub` with `actor_name`, when, how many
+  rows the answer counted, and the address as `address_sha256` (SHA-256 of it
+  trimmed and lower-cased; no address is kept). Written before the history is
+  answered; deleted after `SENT_CONTENT_VIEWS_RETENTION_DAYS` by the content
+  sweep.
 - `mail_approvals.submitter_sub`, `submitter_name` and `submitter_email` — who
   submitted a request, and the name and verified address their token carried
   (`submitter_email_unverified` says the token carried an address Keycloak
@@ -783,6 +789,8 @@ person is cleared whole, never masked.
 | `mail_bounces` | of a `mail_queue` row to the person | kept with the cleared row: it holds no address, codes only |
 | `mail_suppression_removals` | `actor_sub` = S | Silinmiş kullanıcı |
 | `mail_unsubscribes` | `address` in E | deleted |
+| `recipient_history_views` | `address_sha256` of an address in E | deleted (`history_views_deleted`) |
+| `recipient_history_views` | `actor_sub` = S | `actor_sub` and `actor_name` Silinmiş kullanıcı |
 | `mail_unsubscribe_reactivations` | `actor_sub` = S | Silinmiş kullanıcı |
 | `mail_unsubscribe_reactivations.reason` | names E or N | `[silindi]` |
 | `inbox_items` | `user_id` = S | deleted, whatever their age |
@@ -827,7 +835,7 @@ bastırma listesi").
   `tracking_events_deleted`, `tracking_links_cleared`,
   `suppressions_deleted`, `inbox_items_deleted`,
   `inbox_items_naming_deleted`, `unsubscribes_deleted`,
-  `attachments_deleted`. The counts
+  `attachments_deleted`, `history_views_deleted`. The counts
   are what the completing call did; work committed by an earlier `202` call
   is not in them. A repeat, or a concurrent duplicate, returns the stored
   body without doing the work again. Other answers: `202` (above),

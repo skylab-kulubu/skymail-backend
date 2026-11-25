@@ -363,6 +363,7 @@ func TestEraseAccountRemovesThePersonAndLeavesEveryoneElse(t *testing.T) {
 		AccountErasureSuppressionsDeleted:       2,
 		AccountErasureUnsubscribesDeleted:       1,
 		AccountErasureAttachmentsDeleted:        2,
+		AccountErasureHistoryViewsDeleted:       0,
 	}
 	if counts := receiptCounts(t, receipt); !reflect.DeepEqual(counts, wantCounts) {
 		t.Errorf("counts = %v\nwant     %v", counts, wantCounts)

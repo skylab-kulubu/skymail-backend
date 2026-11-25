@@ -3287,3 +3287,95 @@ WHERE (queue_id, position) IN (SELECT a.queue_id, a.position
                                         JOIN mail_tasks mt ON mt.id = q.task_id
                                WHERE mt.content_cleared_at IS NOT NULL
                                LIMIT sqlc.arg(batch_size)::int FOR UPDATE OF a SKIP LOCKED);
+
+-- A person's mail history (GET /recipients/history): every queue row to the
+-- address, compared whole and case-insensitively, newest first with the row
+-- id breaking ties, down idx_mail_queue_recipient_address. Each row with its
+-- send, its delivery (skipped: not sent on purpose, as mail_task_status()
+-- reads it; undelivered: a report said the address does not exist after it
+-- was sent) and its openings and clicks within the recipient's 90-day window
+-- (tracking.EventRetentionDays), as ListTrackingRecipients counts them.
+-- content_gone: the send's content was emptied (retention, a sensitive send
+-- not kept) or the row's own body was (account erasure of what named
+-- someone). No tracking token, unsubscribe link or body is selected.
+-- name: ListRecipientHistory :many
+SELECT q.id,
+       q.task_id,
+       q.recipient_email,
+       q.recipient_full_name,
+       q.recipient_sub,
+       q.status,
+       q.error,
+       q.attempts,
+       q.created_at,
+       q.sent_at,
+       q.subject,
+       q.suppressed_but_sent,
+       (q.status = 'failed'
+           AND (COALESCE(q.error, '') LIKE 'reserved\_domain:%'
+               OR COALESCE(q.error, '') LIKE 'suppressed:%'
+               OR COALESCE(q.error, '') IN ('preference: opted_out', 'preference: inactive', 'preference: ambiguous',
+                                            'cancelled')))::boolean AS skipped,
+       EXISTS (SELECT 1
+               FROM mail_bounces b
+               WHERE b.queue_id = q.id
+                 AND b.kind = 'hard'
+                 AND b.recipient_matched)::boolean               AS undelivered,
+       (q.tracking_token IS NOT NULL OR q.tracking_disabled_at IS NOT NULL)::boolean AS tracked,
+       q.tracking_skip_reason,
+       ev.first_open_at,
+       ev.first_likely_human_open_at,
+       ev.open_count,
+       ev.click_count,
+       ev.last_clicked_at,
+       (mt.content_cleared_at IS NOT NULL OR (q.body = '' AND q.body_html IS NULL))::boolean AS content_gone,
+       mt.created_at                                             AS send_created_at,
+       mt.sent_by,
+       mail_task_kind(mt.id)                                     AS kind,
+       mt.purpose,
+       mt.category,
+       mt.template_id,
+       t.name                                                    AS template_name,
+       t.key                                                     AS template_key,
+       mt.mail_list_id,
+       ml.name                                                   AS mail_list_name
+FROM mail_queue q
+         JOIN mail_tasks mt ON mt.id = q.task_id
+         LEFT JOIN templates t ON t.id = mt.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = mt.mail_list_id
+         CROSS JOIN LATERAL (SELECT min(e.occurred_at) FILTER (WHERE e.kind = 'open') AS first_open_at,
+                                    min(e.occurred_at) FILTER (WHERE NOT e.automated_likely) AS first_likely_human_open_at,
+                                    count(e.id) FILTER (WHERE e.kind = 'open')::int AS open_count,
+                                    count(e.id) FILTER (WHERE e.kind = 'click')::int AS click_count,
+                                    max(e.occurred_at) FILTER (WHERE e.kind = 'click') AS last_clicked_at
+                             FROM mail_tracking_events e
+                             WHERE e.queue_id = q.id
+                               AND q.sent_at > now() - interval '90 days') ev
+WHERE lower(q.recipient_email) = lower(sqlc.arg(email)::text)
+ORDER BY q.created_at DESC, q.id DESC
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
+
+-- How many queue rows went to the address (X-Total-Count).
+-- name: CountRecipientHistory :one
+SELECT count(*)
+FROM mail_queue q
+WHERE lower(q.recipient_email) = lower(sqlc.arg(email)::text);
+
+-- Records that someone read an address's mail history, before it is answered:
+-- the address as the SHA-256 of it trimmed and lower-cased, as account
+-- erasure hashes the person's addresses to find these records.
+-- name: RecordRecipientHistoryView :exec
+INSERT INTO recipient_history_views (address_sha256, actor_sub, actor_name, results)
+VALUES (encode(sha256(convert_to(lower(btrim(sqlc.arg(email)::text)), 'UTF8')), 'hex'), sqlc.narg(actor_sub)::text,
+        sqlc.narg(actor_name)::text, sqlc.arg(results)::int);
+
+-- Deletes up to batch_size records of who read a history, older than
+-- retention_days (SENT_CONTENT_VIEWS_RETENTION_DAYS).
+-- name: DeleteOldRecipientHistoryViews :execrows
+DELETE
+FROM recipient_history_views
+WHERE id IN (SELECT v.id
+             FROM recipient_history_views v
+             WHERE v.created_at < now() - make_interval(days => sqlc.arg(retention_days)::int)
+             ORDER BY v.created_at
+             LIMIT sqlc.arg(batch_size)::int FOR UPDATE SKIP LOCKED);
