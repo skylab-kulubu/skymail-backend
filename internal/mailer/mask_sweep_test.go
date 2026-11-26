@@ -12,10 +12,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // maskSends is a migrated database to which add queues sensitive sends, done
@@ -131,7 +131,7 @@ func TestAPanicMaskingOneSendIsThatSendsFailure(t *testing.T) {
 }
 
 // Five sends failing one after another stop the run; with no send masked the
-// fault may be SkyMail's, so none of the failures is counted (#63 Ek 2, Y3).
+// fault may be SkyNotify's, so none of the failures is counted (#63 Ek 2, Y3).
 func TestSendsFailingOneAfterAnotherTripTheBreaker(t *testing.T) {
 	s := newMaskSends(t)
 	tasks := s.add(7)
@@ -207,14 +207,14 @@ func TestBrokenSendsAtTheHeadOfTheQueueHoldNoOtherBack(t *testing.T) {
 	}
 }
 
-// A fault across SkyMail fails every masking for a while: its runs mask
+// A fault across SkyNotify fails every masking for a while: its runs mask
 // nothing and count nothing. Once it is over, a run that masks a send counts
 // only its own failures, never the ones the fault left waiting: the sends
 // are not emptied for it (#63 Ek 4, A2).
-func TestAFaultAcrossSkyMailCountsNothingOnceItIsOver(t *testing.T) {
+func TestAFaultAcrossSkyNotifyCountsNothingOnceItIsOver(t *testing.T) {
 	s := newMaskSends(t)
 	waiting := s.add(2)
-	stop := mailer.SetMaskSendHook(func(uuid.UUID) { panic("SkyMail is broken") })
+	stop := mailer.SetMaskSendHook(func(uuid.UUID) { panic("SkyNotify is broken") })
 	for run := 1; run <= 3; run++ {
 		if result := s.run(time.Millisecond); result.Failed != 2 || !result.FailuresUnconfirmed {
 			t.Fatalf("run %d during the fault = %+v", run, result)
@@ -244,14 +244,14 @@ func TestAFaultAcrossSkyMailCountsNothingOnceItIsOver(t *testing.T) {
 	}
 }
 
-// After a fault across SkyMail, a run that masks a send and sees another
+// After a fault across SkyNotify, a run that masks a send and sees another
 // fail again counts that one failure only: a send the run did not try keeps
 // its failures from the fault uncounted (#65 review, K1).
 func TestARunCountsOnlyTheSendsItTried(t *testing.T) {
 	s := newMaskSends(t)
 	sends := s.add(2)
 	held, again := sends[0], sends[1]
-	stop := mailer.SetMaskSendHook(func(uuid.UUID) { panic("SkyMail is broken") })
+	stop := mailer.SetMaskSendHook(func(uuid.UUID) { panic("SkyNotify is broken") })
 	if result := s.run(time.Millisecond); result.Failed != 2 || !result.FailuresUnconfirmed {
 		t.Fatalf("run during the fault = %+v", result)
 	}

@@ -27,17 +27,17 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/erasuretoken"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/accessgate"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/erasuretoken"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // PUT /internal/v1/account-erasures/{request_id}: core's Erasure command for
-// SkyMail (ADR-0051; account erasure spec §2).
+// SkyNotify (ADR-0051; account erasure spec §2).
 
 const (
 	erasureIssuer   = "https://e.yildizskylab.com/realms/e-skylab"
@@ -47,7 +47,7 @@ const (
 	erasurePersonal = "deniz@example.com"
 )
 
-// erasureLogs captures everything SkyMail logs during a test, so a test can
+// erasureLogs captures everything SkyNotify logs during a test, so a test can
 // say that no path wrote the person's subject or addresses.
 type erasureLogs struct {
 	mu  sync.Mutex
@@ -118,11 +118,11 @@ func (k *erasureKeycloak) claims() jwt.MapClaims {
 		"iss": erasureIssuer,
 		"sub": erasureCaller,
 		"azp": "core-erasure",
-		"aud": []any{"skymail"},
+		"aud": []any{"skynotify"},
 		"exp": time.Now().Add(5 * time.Minute).Unix(),
 		"iat": time.Now().Unix(),
 		"resource_access": map[string]any{
-			"skymail": map[string]any{"roles": []any{"skymail:account:erase"}},
+			"skynotify": map[string]any{"roles": []any{"skynotify:account:erase"}},
 		},
 	}
 }
@@ -185,7 +185,7 @@ func newErasureRoute(t *testing.T, store handlers.AccountErasureStore, gate acce
 	verifier := erasuretoken.NewVerifier(erasuretoken.Config{
 		Issuer:         erasureIssuer,
 		JWKSURL:        keycloak.jwksURL,
-		ResourceClient: "skymail",
+		ResourceClient: "skynotify",
 	})
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
 	registerInternalRoutes(app, handlers.NewAccountErasureHandler(store, verifier, gate), handlers.TrackingWithdrawalHandler{})
@@ -288,10 +288,10 @@ func TestErasureRouteRefusesWhoeverIsNotCoreErasure(t *testing.T) {
 		"wrong azp":      func(c jwt.MapClaims) { c["azp"] = "core" },
 		"wrong audience": func(c jwt.MapClaims) { c["aud"] = []any{"skycms"} },
 		"no erase role": func(c jwt.MapClaims) {
-			c["resource_access"] = map[string]any{"skymail": map[string]any{"roles": []any{"skymail:access", "skymail:mails:send"}}}
+			c["resource_access"] = map[string]any{"skynotify": map[string]any{"roles": []any{"skynotify:access", "skynotify:mails:send"}}}
 		},
 		"erase role on another client": func(c jwt.MapClaims) {
-			c["resource_access"] = map[string]any{"core-erasure": map[string]any{"roles": []any{"skymail:account:erase"}}}
+			c["resource_access"] = map[string]any{"core-erasure": map[string]any{"roles": []any{"skynotify:account:erase"}}}
 		},
 		"another service's erase role": func(c jwt.MapClaims) {
 			c["resource_access"] = map[string]any{"skycms": map[string]any{"roles": []any{"cms:account:erase"}}}
@@ -308,7 +308,7 @@ func TestErasureRouteRefusesWhoeverIsNotCoreErasure(t *testing.T) {
 	for _, header := range [][2]string{
 		{"X-Forwarded-For", "203.0.113.7"},
 		{"X-Forwarded-Proto", "https"},
-		{"X-Forwarded-Host", "skymail-api.yildizskylab.com"},
+		{"X-Forwarded-Host", "api.yildizskylab.com"},
 		{"X-Real-Ip", "203.0.113.7"},
 		{"Forwarded", "for=203.0.113.7;proto=https"},
 	} {
@@ -476,21 +476,21 @@ func TestErasureRouteRefusesAMalformedCommandWithoutEchoingIt(t *testing.T) {
 	}
 }
 
-// startAccessRedis runs a Redis whose skymail-reader user has the reader ACL
+// startAccessRedis runs a Redis whose skynotify-reader user has the reader ACL
 // of the account-access Redis — GET, MGET and connection commands on the
 // namespace, nothing else — and returns a writer client standing in for
-// core and the reader client SkyMail's gate uses.
+// core and the reader client SkyNotify's gate uses.
 func startAccessRedis(t *testing.T) (writer, reader *redis.Client) {
 	t.Helper()
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}
-	name := fmt.Sprintf("skymail-redis-test-%d", time.Now().UnixNano())
+	name := fmt.Sprintf("skynotify-redis-test-%d", time.Now().UnixNano())
 	out, err := exec.Command("docker", "run", "-d", "--rm", "--name", name, "-p", "127.0.0.1::6379", "redis:7-alpine",
 		"redis-server", "--save", "", "--appendonly", "no",
 		"--user", "default", "off",
 		"--user", "core-writer", "on", ">writer-test", "~skylab:account-access:v1:*", "resetchannels", "-@all", "+@connection", "+get", "+mget", "+set",
-		"--user", "skymail-reader", "on", ">reader-test", "~skylab:account-access:v1:*", "resetchannels", "-@all", "+@connection", "+get", "+mget",
+		"--user", "skynotify-reader", "on", ">reader-test", "~skylab:account-access:v1:*", "resetchannels", "-@all", "+@connection", "+get", "+mget",
 	).CombinedOutput()
 	if err != nil {
 		t.Skipf("docker run redis: %v %s", err, out)
@@ -512,7 +512,7 @@ func startAccessRedis(t *testing.T) (writer, reader *redis.Client) {
 		}
 	}
 	writer = redis.NewClient(&redis.Options{Addr: hostport, Username: "core-writer", Password: "writer-test"})
-	reader = redis.NewClient(&redis.Options{Addr: hostport, Username: "skymail-reader", Password: "reader-test", MaxRetries: -1})
+	reader = redis.NewClient(&redis.Options{Addr: hostport, Username: "skynotify-reader", Password: "reader-test", MaxRetries: -1})
 	t.Cleanup(func() { _ = writer.Close(); _ = reader.Close() })
 	for writer.Ping(context.Background()).Err() != nil {
 		if time.Now().After(deadline) {
@@ -564,7 +564,7 @@ func TestErasureRouteErasesOnceAndRepeatsItsAnswer(t *testing.T) {
 	if err := writer.Set(ctx, accessgate.MarkerKey(erasureSubject), accessgate.MarkerValue, 0).Err(); err != nil {
 		t.Fatal(err)
 	}
-	// The reader ACL cannot write: SkyMail only ever reads the marker.
+	// The reader ACL cannot write: SkyNotify only ever reads the marker.
 	if err := reader.Set(ctx, accessgate.MarkerKey(erasureSubject), "0", 0).Err(); err == nil {
 		t.Fatal("the reader could write a marker")
 	}
@@ -659,10 +659,10 @@ func countingSMTP(t *testing.T) (mailer.SMTPConfig, *atomic.Int32) {
 		}
 	}()
 	return mailer.SMTPConfig{
-		FromEmail: "skymail@example.com",
+		FromEmail: "skynotify@example.com",
 		Host:      "127.0.0.1",
 		Port:      listener.Addr().(*net.TCPAddr).Port,
-		User:      "skymail",
+		User:      "skynotify",
 		Password:  "test",
 		FQDN:      "example.com",
 	}, dials
@@ -670,7 +670,7 @@ func countingSMTP(t *testing.T) (mailer.SMTPConfig, *atomic.Int32) {
 
 // A restore brings the queue back as the dump held it: mail to the person a
 // worker had taken (processing, its lease long run out by the time the dump
-// is restored) and mail still waiting (pending). SkyMail
+// is restored) and mail still waiting (pending). SkyNotify
 // starts with MAIL_SENDER=paused and core replays the erasure (account erasure
 // spec §8). The replay has to finish with 200 — not wait with 202 on a row no
 // worker will ever finish — and nothing may reach the person.

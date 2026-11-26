@@ -73,7 +73,7 @@ func WithQueueLease(lease time.Duration) Option {
 func newClaimant() string {
 	host, err := os.Hostname()
 	if err != nil || host == "" {
-		host = "skymail"
+		host = "skynotify"
 	}
 	suffix := make([]byte, 4)
 	if _, err := rand.Read(suffix); err != nil {

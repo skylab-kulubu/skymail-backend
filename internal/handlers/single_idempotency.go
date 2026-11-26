@@ -10,9 +10,9 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
 )
 
 // A service's Idempotency-Key on POST /v1/mail_tasks/single (hub tickets
@@ -52,7 +52,7 @@ type singleKey struct {
 }
 
 // singleIdempotency reads the request's Idempotency-Key: nil without one. A
-// person's token may not send one: its send is a person's, and SkyMail keeps
+// person's token may not send one: its send is a person's, and SkyNotify keeps
 // no person's key.
 func singleIdempotency(c fiber.Ctx, service bool, sentBy string, params requests.SendSingleMail) (*singleKey, error) {
 	key := c.Get(IdempotencyKeyHeader)

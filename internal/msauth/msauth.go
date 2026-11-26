@@ -1,13 +1,13 @@
-// Package msauth gets Microsoft Entra ID access tokens for SkyMail's own
-// application (skymail-posta) with the OAuth 2.0 client credentials grant and
+// Package msauth gets Microsoft Entra ID access tokens for SkyNotify's own
+// application (skynotify-posta) with the OAuth 2.0 client credentials grant and
 // a certificate (RFC 7523 client assertion): no client secret exists. The
-// mail senders (Graph sendMail, SMTP XOAUTH2; hub ticket skymail-bounce-isleme
+// mail senders (Graph sendMail, SMTP XOAUTH2; hub ticket skynotify-bounce-isleme
 // 10) and the NDR reader (ticket 04) share it.
 //
 // The assertion is signed PS256 with the certificate's SHA-256 thumbprint in
 // x5t#S256, as Microsoft recommends; if the token endpoint refuses that, RS256
 // with the SHA-1 thumbprint in x5t, as the ops wizard's token_al does
-// (ops/wizards/skymail-posta-app-kaydi.sh). Tokens are cached per scope and
+// (ops/wizards/skynotify-posta-app-kaydi.sh). Tokens are cached per scope and
 // fetched again before they expire.
 //
 // Nothing here logs or returns key material or a token in an error: the
@@ -39,7 +39,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// The scopes SkyMail asks for: Microsoft Graph (sendMail, reading the sender
+// The scopes SkyNotify asks for: Microsoft Graph (sendMail, reading the sender
 // mailboxes' inboxes) and Exchange Online (SMTP XOAUTH2).
 const (
 	ScopeGraph    = "https://graph.microsoft.com/.default"

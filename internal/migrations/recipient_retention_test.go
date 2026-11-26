@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // The migrations before and of the recipient retention run.

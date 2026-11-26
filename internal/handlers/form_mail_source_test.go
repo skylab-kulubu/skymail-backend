@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 func TestFormSourceCanonicalConsumeHashBindsTargetContentAndTracking(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
 // contentViewsAnswer is GET /mail_tasks/{id}/content-views as an audit
@@ -28,7 +28,7 @@ func contentViewsAs(t *testing.T, app *fiber.App, task uuid.UUID, query string) 
 	t.Helper()
 	request := httptest.NewRequest(fiber.MethodGet, "/mail_tasks/"+task.String()+"/content-views"+query, nil)
 	request.Header.Set("X-Test-Sub", uuid.NewString())
-	request.Header.Set("X-Test-Roles", strings.Join([]string{"skymail:access", AuditReadRole}, ","))
+	request.Header.Set("X-Test-Roles", strings.Join([]string{"skynotify:access", AuditReadRole}, ","))
 	response, err := app.Test(request)
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +51,7 @@ func contentViewsAs(t *testing.T, app *fiber.App, task uuid.UUID, query string) 
 	return answer
 }
 
-// Who opened a masked mail (hub ticket skymail-frontend-rewrite 32): every
+// Who opened a masked mail (hub ticket skynotify-frontend-rewrite 32): every
 // opening, newest first, with the queue row and how it was masked; never the
 // recipient. Paged with X-Total-Count; an erased account reads as Silinmiş
 // kullanıcı.
@@ -59,7 +59,7 @@ func TestContentViewsListWhoOpenedAMaskedMailNewestFirst(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	now := time.Now().UTC().Truncate(time.Second)
 	app := contentApp(t, db, now)
-	system := []string{"skymail:access", "skymail:mails:read", SystemMailsReadRole}
+	system := []string{"skynotify:access", "skynotify:mails:read", SystemMailsReadRole}
 	task, row := seedRenderedSend(t, db, keycloakLike("keycloak.reset-password", "service-account-keycloak-mailer", now.Add(-time.Hour)))
 	other, _ := seedRenderedSend(t, db, keycloakLike("keycloak.verify-email", "service-account-keycloak-mailer", now.Add(-time.Hour)))
 

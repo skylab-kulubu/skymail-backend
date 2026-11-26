@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/consent"
+	"github.com/skylab-kulubu/skynotify-backend/internal/consent"
 )
 
 type token string

@@ -14,12 +14,12 @@ const (
 	// is counted on: a bound on mail_task_links per send.
 	MaxLinksPerSend = 100
 	// NoTrackAttribute marks an <a> a template does not want counted.
-	NoTrackAttribute = "data-skymail-notrack"
+	NoTrackAttribute = "data-skynotify-notrack"
 )
 
 // Links are the addresses of body's <a> tags a click may be counted on, in
 // the order they first appear, each once, as a browser reads them: entities
-// decoded, blanks around trimmed. An <a> marked data-skymail-notrack is left
+// decoded, blanks around trimmed. An <a> marked data-skynotify-notrack is left
 // out, and so is every address Trackable refuses. Nothing outside an <a>
 // (stylesheets, images, text, conditional comments) is a link.
 func Links(body, baseURL string) []string {
@@ -48,7 +48,7 @@ func Links(body, baseURL string) []string {
 }
 
 // anchorAttributes reads the current <a>'s first href, trimmed, and whether
-// it is marked data-skymail-notrack.
+// it is marked data-skynotify-notrack.
 func anchorAttributes(z *html.Tokenizer) (href string, notrack bool) {
 	found := false
 	for more := true; more; {
@@ -76,7 +76,7 @@ func CommonLinks(bodies []string, baseURL string) []string {
 // LiteralLinks are the addresses of the <a> tags a template's HTML writes
 // out as they are: an href no template action ({{…}}) is part of, which
 // every mail of the template carries the same, whatever its variables. An
-// <a> marked data-skymail-notrack is left out, and so is every address
+// <a> marked data-skynotify-notrack is left out, and so is every address
 // Trackable refuses. A link a variable fills or changes — a password reset,
 // an e-mail verification or a login link, any address with a variable in
 // it — is never among them, so it can never carry a secret to /t/. The
@@ -147,7 +147,7 @@ func commonLinks(bodies []string, baseURL string, only map[string]bool) []string
 // or https address with a host, no user or password, no blank or control
 // character, at most MaxLinkLength long; not an unsubscribe or communication
 // preference link (core's /v1/communication-preferences/unsubscribe, the
-// account center's /communication-preferences), and not one of SkyMail's own
+// account center's /communication-preferences), and not one of SkyNotify's own
 // /t/ addresses. The address a click redirects to is always one that passed
 // here.
 func Trackable(raw, baseURL string) bool {

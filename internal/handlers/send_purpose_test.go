@@ -6,10 +6,10 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
 )
 
 func strp(s string) *string { return &s }
@@ -18,7 +18,7 @@ func boolp(b bool) *bool    { return &b }
 // The rules of a send's purpose (ADR 0072 decision 2; Yusuf, 2026-10-21):
 // islem only to people or a Forms source, with the statement, without a
 // category; duyuru with one of core's categories; commercial content
-// declared only on a duyuru send while SKYMAIL_PROMOTIONAL is on; a body that names none gets its default
+// declared only on a duyuru send while SKYNOTIFY_PROMOTIONAL is on; a body that names none gets its default
 // from the caller; off, nothing is read. Tracking is not the purpose's.
 func TestChoosePurpose(t *testing.T) {
 	islem := requests.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true)}
@@ -44,11 +44,11 @@ func TestChoosePurpose(t *testing.T) {
 		{"commercial content declared, duyuru", true, false, false, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), CommercialContentAbsent: boolp(false)}, targetAudience, mailer.SendPurpose{}, errCommercialContent},
 		{"commercial content declared, islem", true, false, false, requests.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true), CommercialContentAbsent: boolp(false)}, targetPeople, mailer.SendPurpose{}, errCommercialContent},
 		{"commercial content declared without a purpose", true, false, false, requests.SendPurpose{CommercialContentAbsent: boolp(false)}, targetPeople, mailer.SendPurpose{}, errPurposeRequired},
-		{"promotional, SKYMAIL_PROMOTIONAL on: a duyuru send keeps it", true, true, false, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), CommercialContentAbsent: boolp(false)}, targetAudience,
+		{"promotional, SKYNOTIFY_PROMOTIONAL on: a duyuru send keeps it", true, true, false, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), CommercialContentAbsent: boolp(false)}, targetAudience,
 			mailer.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), CommercialContentAbsent: boolp(false)}, nil},
-		{"promotional to one person, SKYMAIL_PROMOTIONAL on", true, true, false, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:haber"), CommercialContentAbsent: boolp(false)}, targetPeople,
+		{"promotional to one person, SKYNOTIFY_PROMOTIONAL on", true, true, false, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:haber"), CommercialContentAbsent: boolp(false)}, targetPeople,
 			mailer.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:haber"), CommercialContentAbsent: boolp(false)}, nil},
-		{"promotional islem, SKYMAIL_PROMOTIONAL on", true, true, false, requests.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true), CommercialContentAbsent: boolp(false)}, targetPeople, mailer.SendPurpose{}, errCommercialContent},
+		{"promotional islem, SKYNOTIFY_PROMOTIONAL on", true, true, false, requests.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true), CommercialContentAbsent: boolp(false)}, targetPeople, mailer.SendPurpose{}, errCommercialContent},
 		{"promotional, purposes off", false, true, false, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), CommercialContentAbsent: boolp(false)}, targetAudience, mailer.SendPurpose{}, nil},
 		{"own event statement, list consent on, to a list", true, false, true, requests.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), OwnEventStatement: boolp(true)}, targetAudience,
 			mailer.SendPurpose{Purpose: strp("duyuru"), Category: strp("club:duyuru"), OwnEventStatement: boolp(true)}, nil},
@@ -79,7 +79,7 @@ func TestChoosePurpose(t *testing.T) {
 }
 
 // While every duyuru send obeys the recipients' preferences
-// (SKYMAIL_BULK_PREFERENCE; abonelik-cikisi 09), a duyuru send that names its
+// (SKYNOTIFY_BULK_PREFERENCE; abonelik-cikisi 09), a duyuru send that names its
 // purpose states whether its main purpose is promotion; islem never does,
 // and a body that names no purpose (an older client) still gets its default.
 func TestChoosePurposeNeedsTheCommercialStatement(t *testing.T) {
@@ -98,7 +98,7 @@ func TestChoosePurposeNeedsTheCommercialStatement(t *testing.T) {
 	promotional := duyuru
 	promotional.CommercialContentAbsent = boolp(false)
 	if _, err := choosePurpose(true, true, false, true, promotional, targetAudience); err != nil {
-		t.Errorf("stated promotional, SKYMAIL_PROMOTIONAL on: %v", err)
+		t.Errorf("stated promotional, SKYNOTIFY_PROMOTIONAL on: %v", err)
 	}
 	if _, err := choosePurpose(true, false, false, true, requests.SendPurpose{Purpose: strp("islem"), TransactionalStatement: boolp(true)}, targetPeople); err != nil {
 		t.Errorf("islem: %v", err)

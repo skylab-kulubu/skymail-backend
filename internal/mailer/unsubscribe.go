@@ -6,15 +6,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/unsubscribe"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/unsubscribe"
 )
 
 // The unsubscribe record applied (ADR 0072 decision 5; hub ticket
 // abonelik-cikisi 02; README, "Tek tık çıkış ucu"). An address that left the
-// duyuru stream through SkyMail's link is in mail_unsubscribes. Only mail of
+// duyuru stream through SkyNotify's link is in mail_unsubscribes. Only mail of
 // that stream stops: a send whose sender lane is duyuru (LaneOf: its purpose
-// while SKYMAIL_MAIL_PURPOSE is on, else its queue priority). Account mail and the bilgi lane's (Forms
+// while SKYNOTIFY_MAIL_PURPOSE is on, else its queue priority). Account mail and the bilgi lane's (Forms
 // confirmations, notices) are sent as before, and the bounce list applies to
 // every stream as ever: an address in both is held by both.
 //
@@ -22,7 +22,7 @@ import (
 // is written failed with unsubscribedError and never reaches the relay or
 // the send budget; and when the dispatcher takes the duyuru rows, so an
 // address that left after its mail was queued gets none of it either. It is
-// applied whatever SKYMAIL_UNSUBSCRIBE_LINK says: turning the link off never
+// applied whatever SKYNOTIFY_UNSUBSCRIBE_LINK says: turning the link off never
 // mails an address that left.
 
 // unsubscribedError is the error of a recipient skipped for the record.

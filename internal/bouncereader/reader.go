@@ -11,9 +11,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog"
-	"github.com/skylab-kulubu/skymail-backend/internal/bounce"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/msauth"
+	"github.com/skylab-kulubu/skynotify-backend/internal/bounce"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/msauth"
 )
 
 // PollInterval is how often the reader reads the mailboxes (hub spec §2:
@@ -94,7 +94,7 @@ func WithLogger(logger zerolog.Logger) Option { return func(r *Reader) { r.logge
 func WithInterval(interval time.Duration) Option { return func(r *Reader) { r.every = interval } }
 
 // New is the reader of config's mailboxes; fqdn is SMTP_FQDN, the domain of
-// SkyMail's Message-IDs.
+// SkyNotify's Message-IDs.
 func New(store *database.Store, fqdn string, config Config, opts ...Option) *Reader {
 	r := &Reader{
 		store:  store,

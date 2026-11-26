@@ -29,7 +29,7 @@ const EventRetention = EventRetentionDays * 24 * time.Hour
 // It no longer limits who sees a send's counts (Yusuf, 2026-11-24, K6).
 const TotalsMinRecipients = 10
 
-// RetentionMode is what the retention run does: SKYMAIL_TRACKING_RETENTION.
+// RetentionMode is what the retention run does: SKYNOTIFY_TRACKING_RETENTION.
 type RetentionMode string
 
 const (
@@ -47,11 +47,11 @@ const (
 )
 
 // RetentionModeEnv names the variable that holds the mode.
-const RetentionModeEnv = "SKYMAIL_TRACKING_RETENTION"
+const RetentionModeEnv = "SKYNOTIFY_TRACKING_RETENTION"
 
-// RetentionModeFromEnv reads SKYMAIL_TRACKING_RETENTION: off (or unset),
+// RetentionModeFromEnv reads SKYNOTIFY_TRACKING_RETENTION: off (or unset),
 // dry-run, apply or purge. Anything else stops startup, so a typo never turns
-// destruction on or off. purge needs SKYMAIL_TRACKING off: it says there is
+// destruction on or off. purge needs SKYNOTIFY_TRACKING off: it says there is
 // no tracking left, and new mail must not be tracked under it.
 func RetentionModeFromEnv(getenv func(string) string, cfg Config) (RetentionMode, error) {
 	raw := strings.TrimSpace(getenv(RetentionModeEnv))
@@ -65,14 +65,14 @@ func RetentionModeFromEnv(getenv func(string) string, cfg Config) (RetentionMode
 		return "", fmt.Errorf("%s must be off, dry-run, apply or purge, not %q", RetentionModeEnv, raw)
 	}
 	if mode == RetentionPurge && cfg.On() {
-		return "", fmt.Errorf("%s=purge needs SKYMAIL_TRACKING=off: turn tracking off before deleting all of it", RetentionModeEnv)
+		return "", fmt.Errorf("%s=purge needs SKYNOTIFY_TRACKING=off: turn tracking off before deleting all of it", RetentionModeEnv)
 	}
 	return mode, nil
 }
 
 // RetentionMaxRowsEnv names the brake: the most tokens, events or links
 // one apply may change before it changes nothing (refused_large).
-const RetentionMaxRowsEnv = "SKYMAIL_TRACKING_RETENTION_MAX_ROWS"
+const RetentionMaxRowsEnv = "SKYNOTIFY_TRACKING_RETENTION_MAX_ROWS"
 
 // DefaultRetentionMaxRows is the brake when RetentionMaxRowsEnv is unset.
 const DefaultRetentionMaxRows = 50000
@@ -81,7 +81,7 @@ const DefaultRetentionMaxRows = 50000
 // turn it off.
 const maxRetentionMaxRows = 10000000
 
-// RetentionMaxRowsFromEnv reads SKYMAIL_TRACKING_RETENTION_MAX_ROWS, a whole
+// RetentionMaxRowsFromEnv reads SKYNOTIFY_TRACKING_RETENTION_MAX_ROWS, a whole
 // number from 1 to 10,000,000; unset is DefaultRetentionMaxRows. Raising it
 // for one release clears a backlog the brake refused. Anything else stops
 // startup.

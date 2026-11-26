@@ -77,12 +77,12 @@ sözleşmeyi okur.
 ## Kişinin kendi uçları
 
 Yalnız kişinin kendi token'ı: Keycloak `userinfo`'su kabul etmeli, `aud`'unda
-`skymail` olmalı (`V1_TOKEN_AUDIENCE_MODE`'dan bağımsız; yoksa `401`) ve kişi
+`skynotify` olmalı (`V1_TOKEN_AUDIENCE_MODE`'dan bağımsız; yoksa `401`) ve kişi
 token'ı olmalı (servis hesabı token'ı, `client_id` = `azp`:
-`403 auth.person_required`). **Rol istemez**; `skymail:access` konsolun
+`403 auth.person_required`). **Rol istemez**; `skynotify:access` konsolun
 kapısıdır, kutunun değil. Hesap erişim kapısı (`ACCOUNT_ACCESS_GATE_MODE`)
 `/v1`'deki gibi uygulanır. Hesap Merkezi BFF'inin ve sky-app'in token'larına
-`aud=skymail` Keycloak'ta eklenir (bilet 04).
+`aud=skynotify` Keycloak'ta eklenir (bilet 04).
 
 | Uç | Ne yapar | Yanıt |
 |---|---|---|

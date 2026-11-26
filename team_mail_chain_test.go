@@ -17,12 +17,12 @@ import (
 	"github.com/gofiber/fiber/v3/middleware/recover"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/teams"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/accessgate"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/teams"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 // Team mail's own chain (ADR-0067 addendum of 2026-11-08; hub tickets
@@ -32,8 +32,8 @@ import (
 // one fails there (500) or on its own checks, never with the chain's 401 or
 // 403.
 
-// The callers: a Leader with no SkyMail role, a member who leads nothing and
-// has no role, a member with skymail:access, and a service account.
+// The callers: a Leader with no SkyNotify role, a member who leads nothing and
+// has no role, a member with skynotify:access, and a service account.
 var (
 	chainLeader  = uuid.MustParse("a1a1a1a1-1111-4111-8111-111111111111")
 	chainMember  = uuid.MustParse("b2b2b2b2-2222-4222-8222-222222222222")
@@ -92,7 +92,7 @@ func newChainWorld(t *testing.T, teamSend bool, gate accessgate.Reader) *chainWo
 		chainCaptain.String(): {{ID: chainTeam, Path: "/UYELER/ARGE/WEBLAB/FRONTEND", Code: "FRONTEND"}},
 	}}, tokens: map[string]string{}}
 	person := func(sub uuid.UUID, aud ...string) jwt.MapClaims {
-		return jwt.MapClaims{"sub": sub.String(), "azp": "skymail-frontend", "aud": aud}
+		return jwt.MapClaims{"sub": sub.String(), "azp": "skynotify-frontend", "aud": aud}
 	}
 	bodies := map[string]string{}
 	add := func(name string, claims jwt.MapClaims, roles ...string) {
@@ -100,18 +100,18 @@ func newChainWorld(t *testing.T, teamSend bool, gate accessgate.Reader) *chainWo
 		w.tokens[name] = token
 		raw, _ := json.Marshal(map[string]any{
 			"sub": claims["sub"], "name": name, "email": name + "@yildizskylab.com", "email_verified": true,
-			"resource_access": map[string]any{"skymail": map[string]any{"roles": roles}},
+			"resource_access": map[string]any{"skynotify": map[string]any{"roles": roles}},
 		})
 		bodies[token] = string(raw)
 	}
-	add("leader", person(chainLeader, "skymail"))
+	add("leader", person(chainLeader, "skynotify"))
 	add("leader-other-aud", person(chainLeader, "account"))
-	add("member", person(chainMember, "skymail"))
-	add("staff", person(chainStaff, "skymail"), "skymail:access", "skymail:templates:read", "skymail:mails:read")
-	add("access-only", person(chainMember, "skymail", "skymail-access-only"), "skymail:access")
-	add("captain", person(chainCaptain, "skymail"), "skymail:access")
-	add("approving-leader", person(chainLeader, "skymail", "approver"), "skymail:mails:approve")
-	add("service", jwt.MapClaims{"sub": chainService.String(), "azp": "core", "client_id": "core", "aud": []string{"skymail"}})
+	add("member", person(chainMember, "skynotify"))
+	add("staff", person(chainStaff, "skynotify"), "skynotify:access", "skynotify:templates:read", "skynotify:mails:read")
+	add("access-only", person(chainMember, "skynotify", "skynotify-access-only"), "skynotify:access")
+	add("captain", person(chainCaptain, "skynotify"), "skynotify:access")
+	add("approving-leader", person(chainLeader, "skynotify", "approver"), "skynotify:mails:approve")
+	add("service", jwt.MapClaims{"sub": chainService.String(), "azp": "core", "client_id": "core", "aud": []string{"skynotify"}})
 
 	userinfo := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		body, ok := bodies[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
@@ -129,7 +129,7 @@ func newChainWorld(t *testing.T, teamSend bool, gate accessgate.Reader) *chainWo
 		leaders = w.leaders
 	}
 	directory := &approverDirectory{groups: map[string][]*gocloak.User{chainTeam.String(): {elif.user(), baska.user()}}}
-	auth := middlewares.NewAuthMiddleware("skymail", userinfo.URL, middlewares.AudienceLog)
+	auth := middlewares.NewAuthMiddleware("skynotify", userinfo.URL, middlewares.AudienceLog)
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
 	app.Use(recover.New())
 	registerPersonAndAPIRoutes(app, auth, gate, leaders, apiHandlers{
@@ -139,7 +139,7 @@ func newChainWorld(t *testing.T, teamSend bool, gate accessgate.Reader) *chainWo
 		template:      handlers.NewTemplateHandler(nil),
 		list:          handlers.NewListHandler(nil, directory),
 		mail:          handlers.NewMailHandler(nil, nil, directory),
-		approval:      handlers.NewMailApprovalHandler(nil, nil, directory, handlers.MailApprovalOptions{ClientID: "skymail"}),
+		approval:      handlers.NewMailApprovalHandler(nil, nil, directory, handlers.MailApprovalOptions{ClientID: "skynotify"}),
 		notification:  handlers.NewNotificationHandler(nil, nil, nil),
 		suppression:   handlers.NewSuppressionHandler(nil),
 		newsSend:      handlers.NewNewsSendHandler(nil, nil, nil, nil, handlers.NewsSendOptions{}),
@@ -169,7 +169,7 @@ func (w *chainWorld) call(who, method, path, body string) (int, []byte) {
 	return response.StatusCode, raw
 }
 
-// The routes a Leader without skymail:access reaches, each with a body that
+// The routes a Leader without skynotify:access reaches, each with a body that
 // gets past the handler's own first checks where it has one.
 var teamSeatRoutes = map[string]string{
 	"GET /v1/me/team_audiences":            "",
@@ -199,8 +199,8 @@ func concrete(path string) string {
 	return path
 }
 
-// A Leader without skymail:access reaches Team mail's routes (and, as
-// anyone, their own inbox) and no other SkyMail route: every route of the
+// A Leader without skynotify:access reaches Team mail's routes (and, as
+// anyone, their own inbox) and no other SkyNotify route: every route of the
 // table, walked.
 func TestALeaderWithoutRolesReachesOnlyTeamMail(t *testing.T) {
 	w := newChainWorld(t, true, nil)
@@ -258,15 +258,15 @@ func TestALeaderWithoutRolesSeesTheirTeamsAndTheFreeTemplateOnly(t *testing.T) {
 	}
 	// A submission that is not Team mail is refused before anything else.
 	status, raw = w.call("leader", fiber.MethodPost, "/v1/mail_approvals", `{"template_id":"`+uuid.NewString()+`","mail_list_id":"`+uuid.NewString()+`"}`)
-	if status != fiber.StatusForbidden || !strings.Contains(string(raw), "skymail:access") {
+	if status != fiber.StatusForbidden || !strings.Contains(string(raw), "skynotify:access") {
 		t.Fatalf("a list submission = %d %s", status, raw)
 	}
 }
 
 // Leading nothing and having no role is 403; core not answering refuses
-// only a caller without skymail:access, who waits for core (503,
-// Retry-After). A member with skymail:access never waits for core.
-func TestTheSeatIsSkymailAccessOrCoresLeadership(t *testing.T) {
+// only a caller without skynotify:access, who waits for core (503,
+// Retry-After). A member with skynotify:access never waits for core.
+func TestTheSeatIsSkyNotifyAccessOrCoresLeadership(t *testing.T) {
 	w := newChainWorld(t, true, nil)
 	if status, raw := w.call("member", fiber.MethodGet, "/v1/me/team_audiences", ""); status != fiber.StatusForbidden {
 		t.Fatalf("a member leading nothing = %d %s", status, raw)
@@ -288,23 +288,23 @@ func TestTheSeatIsSkymailAccessOrCoresLeadership(t *testing.T) {
 		t.Fatalf("core down, the Leader = %d %q %s", response.StatusCode, response.Header.Get("Retry-After"), raw)
 	}
 	calls := w.leaders.calls
-	// skymail:access: past the seat without asking core (the handler then
+	// skynotify:access: past the seat without asking core (the handler then
 	// fails on no database, 500, which is not the chain's).
 	if status, raw := w.call("staff", fiber.MethodGet, "/v1/mail_approvals", ""); status == fiber.StatusServiceUnavailable || status == fiber.StatusForbidden {
-		t.Fatalf("core down, a member with skymail:access = %d %s", status, raw)
+		t.Fatalf("core down, a member with skynotify:access = %d %s", status, raw)
 	}
 	if w.leaders.calls != calls {
-		t.Fatal("core was asked about a member with skymail:access")
+		t.Fatal("core was asked about a member with skynotify:access")
 	}
-	// The rest of SkyMail does not depend on core at all.
+	// The rest of SkyNotify does not depend on core at all.
 	if status, raw := w.call("staff", fiber.MethodGet, "/v1/templates", ""); status == fiber.StatusServiceUnavailable || status == fiber.StatusForbidden {
 		t.Fatalf("core down, templates = %d %s", status, raw)
 	}
 }
 
-// Without skymail:access the token must be a person's own, issued for
-// SkyMail: another aud is 401, a service account's token 403.
-func TestTheSeatWithoutRolesTakesAPersonsTokenForSkyMail(t *testing.T) {
+// Without skynotify:access the token must be a person's own, issued for
+// SkyNotify: another aud is 401, a service account's token 403.
+func TestTheSeatWithoutRolesTakesAPersonsTokenForSkyNotify(t *testing.T) {
 	w := newChainWorld(t, true, nil)
 	if status, raw := w.call("leader-other-aud", fiber.MethodGet, "/v1/me/team_audiences", ""); status != fiber.StatusUnauthorized {
 		t.Fatalf("another aud = %d %s", status, raw)
@@ -374,8 +374,8 @@ func TestTeamSendNeedsCorePurposesAndPreferences(t *testing.T) {
 	}
 }
 
-// The free announcement's frame is read without skymail:templates:read by a
-// Leader, with skymail:access or without; not by anyone else.
+// The free announcement's frame is read without skynotify:templates:read by a
+// Leader, with skynotify:access or without; not by anyone else.
 func TestTheFreeTemplateIsReadByLeaders(t *testing.T) {
 	w := newChainWorld(t, true, nil)
 	path := "/v1/templates/by-key/" + handlers.FreeTemplateKey
@@ -391,7 +391,7 @@ func TestTheFreeTemplateIsReadByLeaders(t *testing.T) {
 	}
 }
 
-// An approver's role without skymail:access counts for nothing: the Leader
+// An approver's role without skynotify:access counts for nothing: the Leader
 // decides no request.
 func TestAnApproverRoleWithoutAccessDecidesNothing(t *testing.T) {
 	w := newChainWorld(t, true, nil)

@@ -33,7 +33,7 @@ func userinfoStub(t *testing.T, status int, contentType, body string) string {
 func authApp(realmURL string) (*fiber.App, *int) {
 	reached := 0
 	app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-	app.Use(NewAuthMiddleware("skymail", realmURL, AudienceOff).Authenticate)
+	app.Use(NewAuthMiddleware("skynotify", realmURL, AudienceOff).Authenticate)
 	app.Get("/probe", func(c fiber.Ctx) error {
 		reached++
 		return c.SendStatus(fiber.StatusNoContent)
@@ -130,7 +130,7 @@ func TestUnreadableUserinfoBodyStaysInternalError(t *testing.T) {
 func TestAcceptedTokenReachesTheHandler(t *testing.T) {
 	t.Parallel()
 
-	body := `{"sub":"11111111-1111-4111-8111-111111111111","resource_access":{"skymail":{"roles":["skymail:access"]}}}`
+	body := `{"sub":"11111111-1111-4111-8111-111111111111","resource_access":{"skynotify":{"roles":["skynotify:access"]}}}`
 	app, reached := authApp(userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body))
 
 	response := requestWithToken(t, app, "good.token.value")
@@ -177,16 +177,16 @@ func TestAuthenticatedNameIsTheTokensNameOrUsername(t *testing.T) {
 		want   any
 	}{
 		"person":          {`"name":"Ada Yılmaz","preferred_username":"ada.yilmaz"`, "Ada Yılmaz"},
-		"service account": {`"preferred_username":"service-account-skymail-seed"`, "service-account-skymail-seed"},
+		"service account": {`"preferred_username":"service-account-skynotify-seed"`, "service-account-skynotify-seed"},
 		"blank name":      {`"name":"  ","preferred_username":"ada.yilmaz"`, "ada.yilmaz"},
 		"neither":         {`"email":"ada@yildizskylab.com"`, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			body := `{"sub":"11111111-1111-4111-8111-111111111111",` + tc.claims +
-				`,"resource_access":{"skymail":{"roles":["skymail:access"]}}}`
+				`,"resource_access":{"skynotify":{"roles":["skynotify:access"]}}}`
 			var got any
 			app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-			app.Use(NewAuthMiddleware("skymail", userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body), AudienceOff).Authenticate)
+			app.Use(NewAuthMiddleware("skynotify", userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body), AudienceOff).Authenticate)
 			app.Get("/probe", func(c fiber.Ctx) error {
 				got = c.Locals("user_name")
 				return c.SendStatus(fiber.StatusNoContent)
@@ -203,7 +203,7 @@ func TestAuthenticatedNameIsTheTokensNameOrUsername(t *testing.T) {
 }
 
 // A Mail onayı decision is mailed to whoever submitted the request, also when
-// SkyMail itself expires it days later with no token to ask, so the address
+// SkyNotify itself expires it days later with no token to ask, so the address
 // the token carried is kept at submission — only one Keycloak has verified:
 // an unverified one is taken as none, and "user_email_unverified" says why.
 func TestAuthenticatedEmailIsTheTokensVerifiedEmail(t *testing.T) {
@@ -218,14 +218,14 @@ func TestAuthenticatedEmailIsTheTokensVerifiedEmail(t *testing.T) {
 		"unverified": {`"name":"Ada Yılmaz","email":"ada@yildizskylab.com","email_verified":false`, nil, true},
 		"unsaid":     {`"name":"Ada Yılmaz","email":"ada@yildizskylab.com"`, nil, true},
 		"blank":      {`"name":"Ada Yılmaz","email":" ","email_verified":true`, nil, nil},
-		"missing":    {`"preferred_username":"service-account-skymail-seed"`, nil, nil},
+		"missing":    {`"preferred_username":"service-account-skynotify-seed"`, nil, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			body := `{"sub":"11111111-1111-4111-8111-111111111111",` + tc.claims +
-				`,"resource_access":{"skymail":{"roles":["skymail:access"]}}}`
+				`,"resource_access":{"skynotify":{"roles":["skynotify:access"]}}}`
 			var got, unverified any
 			app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-			app.Use(NewAuthMiddleware("skymail", userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body), AudienceOff).Authenticate)
+			app.Use(NewAuthMiddleware("skynotify", userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body), AudienceOff).Authenticate)
 			app.Get("/probe", func(c fiber.Ctx) error {
 				got = c.Locals("user_email")
 				unverified = c.Locals("user_email_unverified")

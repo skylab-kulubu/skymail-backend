@@ -10,12 +10,12 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/health"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/health"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // Against a real PostgreSQL: while the database takes no connections,
-// `skymail-backend healthcheck` (GET /ready?gate=skip) fails and /ready
+// `skynotify-backend healthcheck` (GET /ready?gate=skip) fails and /ready
 // answers 503; when it takes them again, both pass again without a restart.
 func TestHealthcheckFollowsThePostgresDatabase(t *testing.T) {
 	postgres := testpostgres.StartDatabase(t)
@@ -45,7 +45,7 @@ func TestHealthcheckFollowsThePostgresDatabase(t *testing.T) {
 	}
 	waitFor(t, "the first healthy check", func() bool { code, _ := check(); return code == 0 })
 
-	admin, err := pgx.Connect(context.Background(), strings.Replace(postgres.URL, "/skymailtest?", "/postgres?", 1))
+	admin, err := pgx.Connect(context.Background(), strings.Replace(postgres.URL, "/skynotifytest?", "/postgres?", 1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,16 +56,16 @@ func TestHealthcheckFollowsThePostgresDatabase(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// The database goes away for SkyMail: no new connection, the open ones
+	// The database goes away for SkyNotify: no new connection, the open ones
 	// ended.
-	exec(`ALTER DATABASE skymailtest ALLOW_CONNECTIONS false`)
-	exec(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'skymailtest'`)
+	exec(`ALTER DATABASE skynotifytest ALLOW_CONNECTIONS false`)
+	exec(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'skynotifytest'`)
 	code, why := check()
 	if code != 1 || !strings.Contains(why, "503") {
 		t.Fatalf("database away: exit %d %q, want 1 and a 503", code, why)
 	}
 
-	exec(`ALTER DATABASE skymailtest ALLOW_CONNECTIONS true`)
+	exec(`ALTER DATABASE skynotifytest ALLOW_CONNECTIONS true`)
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		code, why = check()

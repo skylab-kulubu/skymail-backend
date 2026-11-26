@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 	"github.com/wneessen/go-mail"
 )
 
@@ -148,7 +148,7 @@ func plainSMTP(m mailer.Transactional) {
 
 func relayConfig(relay *scriptedRelay) mailer.SMTPConfig {
 	return mailer.SMTPConfig{
-		FromEmail: "skymail@example.com",
+		FromEmail: "skynotify@example.com",
 		Host:      "127.0.0.1",
 		Port:      relay.listener.Addr().(*net.TCPAddr).Port,
 		FQDN:      "example.com",
@@ -314,7 +314,7 @@ func TestCancellingASendEndsItsSMTPConversation(t *testing.T) {
 
 // A mail the relay took is sent, whatever happens to what go-mail says after
 // it (NOOP, RSET, QUIT): one of them failing, stalling or being cut off is no
-// failed send (a retry would mail the person twice). SkyMail sends no NOOP.
+// failed send (a retry would mail the person twice). SkyNotify sends no NOOP.
 func TestASendIsDoneOnceTheRelayTookTheMail(t *testing.T) {
 	for _, stallOn := range afterTheMail {
 		t.Run(stallOn, func(t *testing.T) {
@@ -354,7 +354,7 @@ func TestASendIsDoneOnceTheRelayTookTheMail(t *testing.T) {
 				t.Fatalf("the relay took %d mails, want 1", n)
 			}
 			if relay.saw("NOOP") {
-				t.Fatal("the send said NOOP; SkyMail's client is WithoutNoop")
+				t.Fatal("the send said NOOP; SkyNotify's client is WithoutNoop")
 			}
 		})
 	}

@@ -11,8 +11,8 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/requestid"
 	"github.com/rs/zerolog"
-	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/accessgate"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
 )
 
 type gateReader struct {

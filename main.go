@@ -21,34 +21,34 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/docs"
-	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/bounce"
-	"github.com/skylab-kulubu/skymail-backend/internal/bouncereader"
-	"github.com/skylab-kulubu/skymail-backend/internal/config"
-	"github.com/skylab-kulubu/skymail-backend/internal/consent"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/erasuretoken"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/health"
-	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/news"
-	"github.com/skylab-kulubu/skymail-backend/internal/teams"
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
-	"github.com/skylab-kulubu/skymail-backend/internal/unsubscribe"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/docs"
+	"github.com/skylab-kulubu/skynotify-backend/internal/accessgate"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/bounce"
+	"github.com/skylab-kulubu/skynotify-backend/internal/bouncereader"
+	"github.com/skylab-kulubu/skynotify-backend/internal/config"
+	"github.com/skylab-kulubu/skynotify-backend/internal/consent"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/erasuretoken"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/health"
+	"github.com/skylab-kulubu/skynotify-backend/internal/keycloak"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/news"
+	"github.com/skylab-kulubu/skynotify-backend/internal/teams"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/unsubscribe"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 	"github.com/yokeTH/gofiber-scalar/scalar/v3"
 )
 
 var swaggerDocument = sync.OnceValue(docs.SwaggerInfo.ReadDoc)
 
-//	@title			Skymail
+//	@title			SkyNotify
 //	@version		1.0
-//	@description	This is the API documentation for Skymail.
+//	@description	This is the API documentation for SkyNotify.
 
 //	@tag.name			Templates
 //	@tag.description	Email template management operations
@@ -60,15 +60,15 @@ var swaggerDocument = sync.OnceValue(docs.SwaggerInfo.ReadDoc)
 //	@tag.description	Mail onayı: sends submitted by members without send permission, held until an approver decides them
 
 //	@tag.name			Team mail
-//	@tag.description	Ekip postası: a Leader's announcement to Teams core says they lead, through Mail onayı (SKYMAIL_TEAM_SEND)
+//	@tag.description	Ekip postası: a Leader's announcement to Teams core says they lead, through Mail onayı (SKYNOTIFY_TEAM_SEND)
 
 //	@contact.name	Enes Genç
 //	@contact.url	https://enesgenc.dev
 //	@contact.email	hello@enesgenc.dev
 
 // @schemes	https
-// @host		skymail-api.yildizskylab.com
-// @BasePath	/v1
+// @host		api.yildizskylab.com
+// @BasePath	/api/skynotify/v1
 func main() {
 	// A maintenance command or the container's health check instead of the
 	// server: they need none of the server's startup, migrations included.
@@ -124,13 +124,13 @@ func main() {
 		log.Fatal().Err(err).Msg("invalid bulk lane guard configuration")
 	}
 	// Which mailbox each kind of mail goes out from and how: every lane off
-	// (SMTP_FROM over SMTP AUTH, as always) unless SKYMAIL_SEND_<LANE> says
+	// (SMTP_FROM over SMTP AUTH, as always) unless SKYNOTIFY_SEND_<LANE> says
 	// graph or xoauth2 (README, sender lanes).
 	sendLanes, err := mailer.SendLanesFromEnv(config.Value)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid sender lane configuration")
 	}
-	// The NDR reader: off unless SKYMAIL_BOUNCE_READER says dry-run or on,
+	// The NDR reader: off unless SKYNOTIFY_BOUNCE_READER says dry-run or on,
 	// and then with the sender mailboxes and the application's GRAPH_*
 	// (README, "Geri dönen posta ve bastırma listesi").
 	bounceReaderConfig, err := bouncereader.ConfigFromEnv(config.Value)
@@ -159,19 +159,19 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid sent content views retention configuration")
 	}
-	// Open and click tracking: off unless SKYMAIL_TRACKING=on, and then only
+	// Open and click tracking: off unless SKYNOTIFY_TRACKING=on, and then only
 	// with the public /t/ address and core to ask (README, tracking).
 	trackingConfig, err := trackingConfigFromEnv(config.Value)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid open and click tracking configuration")
 	}
-	// Who reads a send's people: skymail:mails:tracking:read; its own sender
-	// too only while SKYMAIL_SENDER_SEES_RECIPIENTS=on (README, tracking).
+	// Who reads a send's people: skynotify:mails:tracking:read; its own sender
+	// too only while SKYNOTIFY_SENDER_SEES_RECIPIENTS=on (README, tracking).
 	senderSeesRecipients, err := handlers.SenderSeesRecipientsFromEnv(config.Value)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid open and click tracking configuration")
 	}
-	// Its retention run: off unless SKYMAIL_TRACKING_RETENTION says
+	// Its retention run: off unless SKYNOTIFY_TRACKING_RETENTION says
 	// dry-run, apply or purge (README, tracking retention).
 	trackingRetention, err := tracking.RetentionModeFromEnv(config.Value, trackingConfig)
 	if err != nil {
@@ -182,7 +182,7 @@ func main() {
 		log.Fatal().Err(err).Msg("invalid open and click tracking retention configuration")
 	}
 	// The retention of recipients without an account: dry-run unless
-	// SKYMAIL_RECIPIENT_RETENTION says off or apply (README, "Hesapsız
+	// SKYNOTIFY_RECIPIENT_RETENTION says off or apply (README, "Hesapsız
 	// alıcıların saklaması").
 	recipientRetention, err := database.RecipientRetentionModeFromEnv(config.Value)
 	if err != nil {
@@ -192,14 +192,14 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid recipient retention configuration")
 	}
-	// SkyMail's own one-click unsubscribe link: off unless
-	// SKYMAIL_UNSUBSCRIBE_LINK=on; its key ring (README, "Tek tık çıkış ucu").
+	// SkyNotify's own one-click unsubscribe link: off unless
+	// SKYNOTIFY_UNSUBSCRIBE_LINK=on; its key ring (README, "Tek tık çıkış ucu").
 	unsubscribeConfig, err := unsubscribe.ConfigFromEnv(config.Value)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid unsubscribe link configuration")
 	}
 	// The contact consents (README, "Tanıtım postası ve hesapsız liste
-	// alıcısı"): SKYMAIL_PROMOTIONAL and SKYMAIL_LIST_CONSENT, off unless on;
+	// alıcısı"): SKYNOTIFY_PROMOTIONAL and SKYNOTIFY_LIST_CONSENT, off unless on;
 	// either on needs CORE_URL.
 	consentGate, err := mailer.ConsentGateFromEnv(config.Value)
 	if err != nil {
@@ -213,11 +213,11 @@ func main() {
 		log.Fatal().Err(err).Msg("invalid News send configuration")
 	}
 	if (consentGate.Promotional || consentGate.ListConsent) && trackingConfig.CoreURL == "" {
-		log.Fatal().Msg("SKYMAIL_PROMOTIONAL=on and SKYMAIL_LIST_CONSENT=on need CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
+		log.Fatal().Msg("SKYNOTIFY_PROMOTIONAL=on and SKYNOTIFY_LIST_CONSENT=on need CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
 	}
 	// The bulk preference check (README, "Toplu postada tercih"):
-	// SKYMAIL_BULK_PREFERENCE, off unless on; on needs purposes, the one-click
-	// header, SkyMail's own link with a key, and CORE_URL.
+	// SKYNOTIFY_BULK_PREFERENCE, off unless on; on needs purposes, the one-click
+	// header, SkyNotify's own link with a key, and CORE_URL.
 	preferenceGate, err := mailer.PreferenceGateFromEnv(config.Value)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid bulk preference configuration")
@@ -227,9 +227,9 @@ func main() {
 		log.Fatal().Err(err).Msg("invalid bulk preference configuration")
 	}
 	if preferenceGate.On && trackingConfig.CoreURL == "" {
-		log.Fatal().Msg("SKYMAIL_BULK_PREFERENCE=on needs CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
+		log.Fatal().Msg("SKYNOTIFY_BULK_PREFERENCE=on needs CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
 	}
-	// Team mail (README, "Ekip postası"): SKYMAIL_TEAM_SEND, off unless on.
+	// Team mail (README, "Ekip postası"): SKYNOTIFY_TEAM_SEND, off unless on.
 	teamSend, err := teams.SwitchFromEnv(config.Value)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid Team mail configuration")
@@ -274,15 +274,15 @@ func main() {
 	kcClient := keycloak.NewClient(cfg.KeycloakRealmURL, keycloakAdminURL, cfg.KeycloakServiceClientID, cfg.KeycloakServiceClientSecret)
 
 	log.Info().Str("mode", string(trackingConfig.Mode)).Str("base_url", trackingConfig.BaseURL).Str("core_url", trackingConfig.CoreURL).
-		Msg("open and click tracking (SKYMAIL_TRACKING)")
+		Msg("open and click tracking (SKYNOTIFY_TRACKING)")
 	logSystemTracking(trackingConfig)
 	logOperatorTracking(trackingConfig)
 	log.Info().Bool("on", senderSeesRecipients).
-		Msg("a send's own sender reads its people (SKYMAIL_SENDER_SEES_RECIPIENTS; off: the counts only)")
+		Msg("a send's own sender reads its people (SKYNOTIFY_SENDER_SEES_RECIPIENTS; off: the counts only)")
 	log.Info().Str("mode", string(trackingRetention)).Int("event_retention_days", tracking.EventRetentionDays).Int64("max_rows", trackingRetentionMaxRows).
-		Msg("open and click tracking retention (SKYMAIL_TRACKING_RETENTION)")
+		Msg("open and click tracking retention (SKYNOTIFY_TRACKING_RETENTION)")
 	log.Info().Str("mode", string(recipientRetention)).Int("content_retention_days", contentRetentionDays).Int64("max_rows", recipientRetentionMaxRows).
-		Msg("recipient retention (SKYMAIL_RECIPIENT_RETENTION)")
+		Msg("recipient retention (SKYNOTIFY_RECIPIENT_RETENTION)")
 	logSendLanes(sendLanes)
 	logBounceReader(bounceReaderConfig)
 	logUnsubscribeLink(unsubscribeConfig)
@@ -293,15 +293,15 @@ func main() {
 		preferenceGate.Core = coreClient
 	}
 	log.Info().Bool("promotional", consentGate.Promotional).Bool("list_consent", consentGate.ListConsent).Bool("core", consentGate.Core != nil).
-		Msg("contact consents (SKYMAIL_PROMOTIONAL, SKYMAIL_LIST_CONSENT)")
+		Msg("contact consents (SKYNOTIFY_PROMOTIONAL, SKYNOTIFY_LIST_CONSENT)")
 	log.Info().Bool("bulk_preference", preferenceGate.On).Bool("core", preferenceGate.Core != nil).
-		Msg("bulk preference check (SKYMAIL_BULK_PREFERENCE)")
+		Msg("bulk preference check (SKYNOTIFY_BULK_PREFERENCE)")
 	// Which Teams a person leads is core's to say; nil while Team mail is off.
 	var teamLeaders teams.Reader
 	if teamSend {
 		teamLeaders = teams.NewCore(trackingConfig.CoreURL, kcClient, nil)
 	}
-	log.Info().Bool("team_send", teamSend).Msg("Team mail (SKYMAIL_TEAM_SEND)")
+	log.Info().Bool("team_send", teamSend).Msg("Team mail (SKYNOTIFY_TEAM_SEND)")
 	db := database.NewStore(conn)
 	mailerService := mailer.NewMailer(db, mailer.SMTPConfig{
 		FromEmail: cfg.SMTPFrom,
@@ -353,7 +353,7 @@ func main() {
 	mailHandler := handlers.NewMailHandler(db, mailerService, kcClient, handlers.WithContentRetentionDays(contentRetentionDays), handlers.WithFormSourceLimit(formsSourceConfig.MaxRecipients), handlers.WithSenderSeesRecipients(senderSeesRecipients))
 	approvalHandler := handlers.NewMailApprovalHandler(db, mailerService, kcClient, handlers.MailApprovalOptions{
 		ClientID: cfg.KeycloakClientID,
-		UIURL:    config.Value("SKYMAIL_UI_URL"),
+		UIURL:    config.Value("SKYNOTIFY_UI_URL"),
 		Teams:    teamLeaders,
 
 		SenderSeesRecipients: senderSeesRecipients,
@@ -486,11 +486,11 @@ func logBounceReader(config bouncereader.Config) {
 			line = line.Str("certificate_x5t_s256", creds.Thumbprint()).Time("certificate_not_after", creds.NotAfter())
 			if time.Until(creds.NotAfter()) <= 0 {
 				log.Warn().Time("certificate_not_after", creds.NotAfter()).
-					Msg("bounce reader: the skymail-posta certificate has expired: Entra refuses its tokens, the reader cannot read the mailboxes; renew it (ops/wizards/skymail-posta-app-kaydi.sh)")
+					Msg("bounce reader: the skynotify-posta certificate has expired: Entra refuses its tokens, the reader cannot read the mailboxes; renew it (ops/wizards/skynotify-posta-app-kaydi.sh)")
 			}
 		}
 	}
-	line.Msg("bounce reader (SKYMAIL_BOUNCE_READER, SKYMAIL_BOUNCE_MAILBOXES)")
+	line.Msg("bounce reader (SKYNOTIFY_BOUNCE_READER, SKYNOTIFY_BOUNCE_MAILBOXES)")
 }
 
 // logSendLanes writes how each sender lane sends: its transport and From,
@@ -510,7 +510,7 @@ func logSendLanes(lanes mailer.SendLanes) {
 	line = line.Bool("list_unsubscribe", lanes.ListUnsubscribe)
 	line = line.Bool("mail_purpose", lanes.Purpose)
 	if lanes.ListUnsubscribe && lanes.Lane(mailer.LaneDuyuru).Transport == mailer.TransportOff {
-		log.Warn().Msg("sender lanes: SKYMAIL_LIST_UNSUBSCRIBE is on but the duyuru lane is off: no mail carries List-Unsubscribe until SKYMAIL_SEND_DUYURU is graph or xoauth2")
+		log.Warn().Msg("sender lanes: SKYNOTIFY_LIST_UNSUBSCRIBE is on but the duyuru lane is off: no mail carries List-Unsubscribe until SKYNOTIFY_SEND_DUYURU is graph or xoauth2")
 	}
 	if creds := lanes.Credentials; creds != nil {
 		line = line.Str("graph_client_id", creds.ClientID).Str("certificate_x5t_s256", creds.Thumbprint()).
@@ -518,19 +518,19 @@ func logSendLanes(lanes mailer.SendLanes) {
 		switch left := time.Until(creds.NotAfter()); {
 		case left <= 0:
 			log.Warn().Time("certificate_not_after", creds.NotAfter()).
-				Msg("sender lanes: the skymail-posta certificate has expired: Entra refuses its tokens, the lanes that are on cannot send; renew it (ops/wizards/skymail-posta-app-kaydi.sh)")
+				Msg("sender lanes: the skynotify-posta certificate has expired: Entra refuses its tokens, the lanes that are on cannot send; renew it (ops/wizards/skynotify-posta-app-kaydi.sh)")
 		case left < 30*24*time.Hour:
 			log.Warn().Time("certificate_not_after", creds.NotAfter()).
-				Msg("sender lanes: the skymail-posta certificate expires within 30 days; renew it (ops/wizards/skymail-posta-app-kaydi.sh)")
+				Msg("sender lanes: the skynotify-posta certificate expires within 30 days; renew it (ops/wizards/skynotify-posta-app-kaydi.sh)")
 		}
 	}
-	line.Msg("sender lanes (SKYMAIL_SEND_HESAP, SKYMAIL_SEND_BILGI, SKYMAIL_SEND_DUYURU, SKYMAIL_LIST_UNSUBSCRIBE, SKYMAIL_MAIL_PURPOSE)")
+	line.Msg("sender lanes (SKYNOTIFY_SEND_HESAP, SKYNOTIFY_SEND_BILGI, SKYNOTIFY_SEND_DUYURU, SKYNOTIFY_LIST_UNSUBSCRIBE, SKYNOTIFY_MAIL_PURPOSE)")
 }
 
 // logSystemTracking says at startup whether the mail services send is
-// tracked (SKYMAIL_TRACKING_SYSTEM): mode is what applies, on only with
-// SKYMAIL_TRACKING on. Asked for with tracking off, it warns: nothing is
-// tracked, and SkyMail starts all the same.
+// tracked (SKYNOTIFY_TRACKING_SYSTEM): mode is what applies, on only with
+// SKYNOTIFY_TRACKING on. Asked for with tracking off, it warns: nothing is
+// tracked, and SkyNotify starts all the same.
 func logSystemTracking(cfg tracking.Config) {
 	mode := tracking.ModeOff
 	if cfg.SystemOn() {
@@ -541,12 +541,12 @@ func logSystemTracking(cfg tracking.Config) {
 		event = log.Warn()
 	}
 	event.Str("mode", string(mode)).Str("requested", string(cfg.System)).
-		Msg("open and click tracking of system mail (SKYMAIL_TRACKING_SYSTEM; on only with SKYMAIL_TRACKING=on)")
+		Msg("open and click tracking of system mail (SKYNOTIFY_TRACKING_SYSTEM; on only with SKYNOTIFY_TRACKING=on)")
 }
 
 // logOperatorTracking says at startup whether every send a person queues is
-// tracked (SKYMAIL_TRACKING_OPERATOR), as logSystemTracking does for the
-// mail services send: mode is what applies, on only with SKYMAIL_TRACKING on.
+// tracked (SKYNOTIFY_TRACKING_OPERATOR), as logSystemTracking does for the
+// mail services send: mode is what applies, on only with SKYNOTIFY_TRACKING on.
 func logOperatorTracking(cfg tracking.Config) {
 	mode := tracking.ModeOff
 	if cfg.OperatorOn() {
@@ -557,7 +557,7 @@ func logOperatorTracking(cfg tracking.Config) {
 		event = log.Warn()
 	}
 	event.Str("mode", string(mode)).Str("requested", string(cfg.Operator)).
-		Msg("open and click tracking of every operator send (SKYMAIL_TRACKING_OPERATOR; on only with SKYMAIL_TRACKING=on)")
+		Msg("open and click tracking of every operator send (SKYNOTIFY_TRACKING_OPERATOR; on only with SKYNOTIFY_TRACKING=on)")
 }
 
 // trackingConfigFromEnv validates tracking before any service starts. Routes
@@ -578,7 +578,7 @@ func erasureTokenConfig(cfg config.Config) erasuretoken.Config {
 }
 
 // withdrawalTokenConfig is how the tracking withdrawal route checks core's
-// token: as the erase route's, but core's own client with SkyMail's
+// token: as the erase route's, but core's own client with SkyNotify's
 // withdraw role (ticket 17), never core-erasure's.
 func withdrawalTokenConfig(cfg config.Config) erasuretoken.Config {
 	tokens := erasureTokenConfig(cfg)
@@ -603,14 +603,14 @@ type apiHandlers struct {
 }
 
 // registerPersonAndAPIRoutes serves a person's own routes and Team mail's,
-// each in its own chain, then /v1 behind skymail:access. Order matters:
+// each in its own chain, then /v1 behind skynotify:access. Order matters:
 // a route of the earlier chains ends its chain, so /v1's never runs for it.
 func registerPersonAndAPIRoutes(app *fiber.App, auth middlewares.AuthMiddleware, gate accessgate.Reader, leaders teams.Reader, h apiHandlers) {
 	// Before protectedAPI: /v1/me is a person's own, with no role, and must
-	// not go through /v1's skymail:access chain.
+	// not go through /v1's skynotify:access chain.
 	registerInboxRoutes(app, auth, gate, h.inbox)
 	registerEmailDeliveryRoutes(app, auth, gate, h.emailDelivery)
-	// Before protectedAPI too: a Leader without skymail:access reaches
+	// Before protectedAPI too: a Leader without skynotify:access reaches
 	// these, and only these.
 	registerTeamMailRoutes(app, auth, gate, leaders, h.team, h.approval, h.template)
 
@@ -619,15 +619,15 @@ func registerPersonAndAPIRoutes(app *fiber.App, auth middlewares.AuthMiddleware,
 	registerTemplateRoutes(api, auth, h.template)
 
 	lists := api.Group("/mailing_lists")
-	lists.Post("/", auth.RequireAnyPermission("skymail:lists:write"), h.list.CreateList)
-	lists.Get("/", auth.RequireAnyPermission("skymail:lists:read"), h.list.GetLists)
-	lists.Get("/:id", auth.RequireAnyPermission("skymail:lists:read"), h.list.GetList)
-	lists.Patch("/:id", auth.RequireAnyPermission("skymail:lists:write"), h.list.UpdateList)
-	lists.Delete("/:id", auth.RequireAnyPermission("skymail:lists:write"), h.list.DeleteList)
-	lists.Post("/:id/restore", auth.RequireAnyPermission("skymail:lists:write"), h.list.RestoreList)
-	lists.Post("/:id/recipients", auth.RequireAnyPermission("skymail:lists:write"), h.list.AddRecipient)
-	lists.Get("/:id/recipients", auth.RequireAnyPermission("skymail:lists:read"), h.list.GetRecipients)
-	lists.Delete("/:id/recipients/:recipientId", auth.RequireAnyPermission("skymail:lists:write"), h.list.RemoveRecipient)
+	lists.Post("/", auth.RequireAnyPermission("skynotify:lists:write"), h.list.CreateList)
+	lists.Get("/", auth.RequireAnyPermission("skynotify:lists:read"), h.list.GetLists)
+	lists.Get("/:id", auth.RequireAnyPermission("skynotify:lists:read"), h.list.GetList)
+	lists.Patch("/:id", auth.RequireAnyPermission("skynotify:lists:write"), h.list.UpdateList)
+	lists.Delete("/:id", auth.RequireAnyPermission("skynotify:lists:write"), h.list.DeleteList)
+	lists.Post("/:id/restore", auth.RequireAnyPermission("skynotify:lists:write"), h.list.RestoreList)
+	lists.Post("/:id/recipients", auth.RequireAnyPermission("skynotify:lists:write"), h.list.AddRecipient)
+	lists.Get("/:id/recipients", auth.RequireAnyPermission("skynotify:lists:read"), h.list.GetRecipients)
+	lists.Delete("/:id/recipients/:recipientId", auth.RequireAnyPermission("skynotify:lists:write"), h.list.RemoveRecipient)
 
 	registerFormMailSourceRoutes(api, auth, h.mail, h.formsSource)
 	registerMailTaskRoutes(api, auth, h.mail)
@@ -639,58 +639,58 @@ func registerPersonAndAPIRoutes(app *fiber.App, auth middlewares.AuthMiddleware,
 
 func registerTemplateRoutes(api fiber.Router, auth middlewares.AuthMiddleware, template handlers.TemplateHandler) {
 	templates := api.Group("/templates")
-	templates.Post("/", auth.RequireAnyPermission("skymail:templates:write"), template.CreateTemplate)
-	templates.Get("/", auth.RequireAnyPermission("skymail:templates:read"), template.GetTemplates)
-	templates.Get("/:id", auth.RequireAnyPermission("skymail:templates:read"), template.GetTemplate)
-	templates.Patch("/:id", auth.RequireAnyPermission("skymail:templates:write"), template.UpdateTemplate)
-	templates.Delete("/:id", auth.RequireAnyPermission("skymail:templates:write"), template.DeleteTemplate)
-	templates.Get("/by-key/:key", auth.RequireAnyPermission("skymail:templates:read"), template.GetTemplateByKey)
-	templates.Put("/by-key/:key", auth.RequireAnyPermission("skymail:templates:write"), template.UpsertTemplateByKey)
-	templates.Post("/:id/restore", auth.RequireAnyPermission("skymail:templates:write"), template.RestoreTemplate)
-	templates.Get("/:id/versions", auth.RequireAnyPermission("skymail:templates:read"), template.ListTemplateVersions)
-	templates.Get("/:id/versions/:versionId", auth.RequireAnyPermission("skymail:templates:read"), template.GetTemplateVersion)
-	templates.Post("/:id/required-variables", auth.RequireAnyPermission("skymail:templates:write"), template.AddRequiredVariable)
-	templates.Delete("/:id/required-variables/:name", auth.RequireAnyPermission("skymail:templates:write"), template.RemoveRequiredVariable)
-	templates.Post("/:id/drafts", auth.RequireAnyPermission("skymail:templates:write"), template.SaveTemplateDraft)
-	templates.Post("/:id/versions/:versionId/publish", auth.RequireAnyPermission("skymail:templates:write"), template.PublishTemplateVersion)
-	templates.Post("/:id/versions/:versionId/restore", auth.RequireAnyPermission("skymail:templates:write"), template.RestoreTemplateVersion)
-	templates.Post("/:id/versions/:versionId/discard", auth.RequireAnyPermission("skymail:templates:write"), template.DiscardTemplateVersion)
-	templates.Put("/:id/content-sensitive", auth.RequireAnyPermission("skymail:templates:write"), template.SetContentSensitive)
-	templates.Get("/:id/content-sensitive/events", auth.RequireAnyPermission("skymail:templates:read"), template.ListContentSensitiveEvents)
+	templates.Post("/", auth.RequireAnyPermission("skynotify:templates:write"), template.CreateTemplate)
+	templates.Get("/", auth.RequireAnyPermission("skynotify:templates:read"), template.GetTemplates)
+	templates.Get("/:id", auth.RequireAnyPermission("skynotify:templates:read"), template.GetTemplate)
+	templates.Patch("/:id", auth.RequireAnyPermission("skynotify:templates:write"), template.UpdateTemplate)
+	templates.Delete("/:id", auth.RequireAnyPermission("skynotify:templates:write"), template.DeleteTemplate)
+	templates.Get("/by-key/:key", auth.RequireAnyPermission("skynotify:templates:read"), template.GetTemplateByKey)
+	templates.Put("/by-key/:key", auth.RequireAnyPermission("skynotify:templates:write"), template.UpsertTemplateByKey)
+	templates.Post("/:id/restore", auth.RequireAnyPermission("skynotify:templates:write"), template.RestoreTemplate)
+	templates.Get("/:id/versions", auth.RequireAnyPermission("skynotify:templates:read"), template.ListTemplateVersions)
+	templates.Get("/:id/versions/:versionId", auth.RequireAnyPermission("skynotify:templates:read"), template.GetTemplateVersion)
+	templates.Post("/:id/required-variables", auth.RequireAnyPermission("skynotify:templates:write"), template.AddRequiredVariable)
+	templates.Delete("/:id/required-variables/:name", auth.RequireAnyPermission("skynotify:templates:write"), template.RemoveRequiredVariable)
+	templates.Post("/:id/drafts", auth.RequireAnyPermission("skynotify:templates:write"), template.SaveTemplateDraft)
+	templates.Post("/:id/versions/:versionId/publish", auth.RequireAnyPermission("skynotify:templates:write"), template.PublishTemplateVersion)
+	templates.Post("/:id/versions/:versionId/restore", auth.RequireAnyPermission("skynotify:templates:write"), template.RestoreTemplateVersion)
+	templates.Post("/:id/versions/:versionId/discard", auth.RequireAnyPermission("skynotify:templates:write"), template.DiscardTemplateVersion)
+	templates.Put("/:id/content-sensitive", auth.RequireAnyPermission("skynotify:templates:write"), template.SetContentSensitive)
+	templates.Get("/:id/content-sensitive/events", auth.RequireAnyPermission("skynotify:templates:read"), template.ListContentSensitiveEvents)
 }
 
 func registerFormMailSourceRoutes(api fiber.Router, auth middlewares.AuthMiddleware, mail handlers.MailHandler, cfg middlewares.FormsSourceConfig) {
 	sources := api.Group("/form_mail_sources")
-	sources.Post("/", auth.RequireAnyPermission("skymail:mails:send", "skymail:mails:write"), middlewares.RequireFormsSourceService(cfg), mail.CreateFormSource)
+	sources.Post("/", auth.RequireAnyPermission("skynotify:mails:send", "skynotify:mails:write"), middlewares.RequireFormsSourceService(cfg), mail.CreateFormSource)
 	sources.Get("/:id", mail.GetFormSource)
 }
 
 func registerMailTaskRoutes(api fiber.Router, auth middlewares.AuthMiddleware, mail handlers.MailHandler) {
 	tasks := api.Group("/mail_tasks")
-	tasks.Post("/", auth.RequireAnyPermission("skymail:mails:write"), mail.CreateTask)
-	tasks.Post("/single", auth.RequireAnyPermission("skymail:mails:send", "skymail:mails:write"), mail.SendSingle)
+	tasks.Post("/", auth.RequireAnyPermission("skynotify:mails:write"), mail.CreateTask)
+	tasks.Post("/single", auth.RequireAnyPermission("skynotify:mails:send", "skynotify:mails:write"), mail.SendSingle)
 	// Forms respondents are a bulk audience like a list: a direct send takes
-	// skymail:mails:write. skymail:mails:send opens single mails only; its
+	// skynotify:mails:write. skynotify:mails:send opens single mails only; its
 	// holder submits the source for approval (POST /mail_approvals).
-	tasks.Post("/form-source", auth.RequireAnyPermission("skymail:mails:write"), mail.SendFormSource)
-	tasks.Get("/", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTasks)
+	tasks.Post("/form-source", auth.RequireAnyPermission("skynotify:mails:write"), mail.SendFormSource)
+	tasks.Get("/", auth.RequireAnyPermission("skynotify:mails:read"), mail.GetTasks)
 	// Before /:id, which would otherwise take "summary" for a task id.
-	tasks.Get("/summary", auth.RequireAnyPermission("skymail:mails:read"), mail.GetSummary)
-	// A setting, not a send: anyone who may use SkyMail (skymail:access).
+	tasks.Get("/summary", auth.RequireAnyPermission("skynotify:mails:read"), mail.GetSummary)
+	// A setting, not a send: anyone who may use SkyNotify (skynotify:access).
 	tasks.Get("/tracking-mode", mail.GetTrackingMode)
-	tasks.Get("/:id", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTask)
-	tasks.Get("/:id/tracking", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTracking)
+	tasks.Get("/:id", auth.RequireAnyPermission("skynotify:mails:read"), mail.GetTask)
+	tasks.Get("/:id/tracking", auth.RequireAnyPermission("skynotify:mails:read"), mail.GetTracking)
 	tasks.Get("/:id/tracking/recipients", mail.GetTrackingRecipients)
-	tasks.Get("/:id/queue", auth.RequireAnyPermission("skymail:mails:read"), mail.GetTaskQueueItems)
+	tasks.Get("/:id/queue", auth.RequireAnyPermission("skynotify:mails:read"), mail.GetTaskQueueItems)
 	// A send's controls (duyuru-haber 05 G4): the handler lets a
-	// skymail:mails:write caller control only their own sends.
-	control := auth.RequireAnyPermission("skymail:mails:write", handlers.AnnouncementsSendRole)
+	// skynotify:mails:write caller control only their own sends.
+	control := auth.RequireAnyPermission("skynotify:mails:write", handlers.AnnouncementsSendRole)
 	tasks.Post("/:id/pause", control, mail.PauseTask)
 	tasks.Post("/:id/resume", control, mail.ResumeTask)
 	tasks.Post("/:id/cancel", control, mail.CancelTask)
 	// Who may see the content itself the handler decides from the send and
 	// the caller's roles (handlers.SystemMailsReadRole).
-	tasks.Get("/:id/queue/:itemId/content", auth.RequireAnyPermission("skymail:mails:read"), mail.GetQueueItemContent)
+	tasks.Get("/:id/queue/:itemId/content", auth.RequireAnyPermission("skynotify:mails:read"), mail.GetQueueItemContent)
 	// Who opened a masked mail: the audit role alone (handlers.AuditReadRole),
 	// not the roles that open the content, nor mails:read.
 	tasks.Get("/:id/content-views", auth.RequireAnyPermission(handlers.AuditReadRole), mail.ListContentViews)
@@ -912,10 +912,10 @@ func recipientRetentionOnce(ctx context.Context, db *database.Store, opts databa
 		Msg("recipient retention run (receipt in recipient_retention_runs)")
 }
 
-// registerMailApprovalRoutes serves Mail onayı. Anyone who can use SkyMail —
-// the /v1 gate is skymail:access — follows their own requests. Submitting one
-// takes reading what it submits, skymail:templates:read and for a list
-// skymail:lists:read (Yusuf, 2026-09-24); the handler checks them, since only
+// registerMailApprovalRoutes serves Mail onayı. Anyone who can use SkyNotify —
+// the /v1 gate is skynotify:access — follows their own requests. Submitting one
+// takes reading what it submits, skynotify:templates:read and for a list
+// skynotify:lists:read (Yusuf, 2026-09-24); the handler checks them, since only
 // the body says which. Deciding one takes the approver's role, and the handler
 // keeps a submitter's actions to the submitter.
 func registerMailApprovalRoutes(api fiber.Router, auth middlewares.AuthMiddleware, approvals handlers.MailApprovalHandler) {
@@ -934,10 +934,10 @@ func registerMailApprovalRoutes(api fiber.Router, auth middlewares.AuthMiddlewar
 
 // registerSuppressionRoutes serves the suppression list and the unsubscribe
 // record (README, "Geri dönen posta ve bastırma listesi", "Tek tık çıkış
-// ucu"): a bounce is removed with skymail:suppressions:manage, which also
+// ucu"): a bounce is removed with skynotify:suppressions:manage, which also
 // reads the bounce rate, the NDR reader's state and the addresses with
 // repeated soft bounces, an
-// unsubscribe reversed only with skymail:unsubscribes:reactivate, which also
+// unsubscribe reversed only with skynotify:unsubscribes:reactivate, which also
 // reads the reversals; either role reads the list.
 func registerSuppressionRoutes(api fiber.Router, auth middlewares.AuthMiddleware, suppressions handlers.SuppressionHandler) {
 	group := api.Group("/suppressions")
@@ -951,20 +951,20 @@ func registerSuppressionRoutes(api fiber.Router, auth middlewares.AuthMiddleware
 
 // registerNotificationRoutes serves POST /notifications to services (hub
 // ticket iletisim-servisi 03): a service account's token with
-// skymail:notifications:send, never a person's. The notification types are
+// skynotify:notifications:send, never a person's. The notification types are
 // read as templates are and written by the Template seed.
 func registerNotificationRoutes(api fiber.Router, auth middlewares.AuthMiddleware, notifications handlers.NotificationHandler) {
 	api.Post("/notifications", auth.RequireAnyPermission(handlers.NotificationsSendRole), middlewares.RequireServiceAccount(), notifications.Send)
 	types := api.Group("/notification_types")
-	types.Get("/", auth.RequireAnyPermission("skymail:templates:read"), notifications.ListTypes)
-	types.Get("/:key", auth.RequireAnyPermission("skymail:templates:read"), notifications.GetType)
-	types.Put("/:key", auth.RequireAnyPermission("skymail:templates:write"), notifications.PutType)
+	types.Get("/", auth.RequireAnyPermission("skynotify:templates:read"), notifications.ListTypes)
+	types.Get("/:key", auth.RequireAnyPermission("skynotify:templates:read"), notifications.GetType)
+	types.Put("/:key", auth.RequireAnyPermission("skynotify:templates:write"), notifications.PutType)
 }
 
 // registerInboxRoutes serves a person's own inbox (hub ticket
 // iletisim-servisi 05; ADR 0070) at /v1/me/inbox: a person's own token issued
-// for SkyMail (aud skymail), no role, the account access gate as on /v1. Each
-// route ends its chain, so /v1's skymail:access chain, registered after
+// for SkyNotify (aud skynotify), no role, the account access gate as on /v1. Each
+// route ends its chain, so /v1's skynotify:access chain, registered after
 // these, never runs for them.
 func registerInboxRoutes(app *fiber.App, auth middlewares.AuthMiddleware, gate accessgate.Reader, inbox handlers.InboxHandler) {
 	me := app.Group("/v1/me/inbox")
@@ -982,15 +982,15 @@ func registerInboxRoutes(app *fiber.App, auth middlewares.AuthMiddleware, gate a
 // registerEmailDeliveryRoutes serves a person's own e-mail delivery (hub
 // ticket rabbitmq-olaylar 10) at /v1/me/email-delivery: which of their own
 // addresses mail does not reach, with the inbox's chain (a person's own token
-// issued for SkyMail, no role, the account access gate), registered before
-// /v1's skymail:access chain as the inbox is.
+// issued for SkyNotify, no role, the account access gate), registered before
+// /v1's skynotify:access chain as the inbox is.
 func registerEmailDeliveryRoutes(app *fiber.App, auth middlewares.AuthMiddleware, gate accessgate.Reader, delivery handlers.EmailDeliveryHandler) {
 	app.Get("/v1/me/email-delivery", auth.AuthenticatePerson, middlewares.AccountAccessGate(gate), delivery.Get)
 }
 
 // checkTeamSend says whether Team mail can run: on, it needs CORE_URL (core
-// says who leads which Team), SKYMAIL_MAIL_PURPOSE=on (each Team's send is
-// written with its own category) and SKYMAIL_BULK_PREFERENCE=on (a member
+// says who leads which Team), SKYNOTIFY_MAIL_PURPOSE=on (each Team's send is
+// written with its own category) and SKYNOTIFY_BULK_PREFERENCE=on (a member
 // who turned a Team's category off gets none of its mail; ADR-0072 decision
 // 3). Anything less stops startup.
 func checkTeamSend(on bool, coreURL string, lanes mailer.SendLanes, preferences mailer.PreferenceGate) error {
@@ -998,23 +998,23 @@ func checkTeamSend(on bool, coreURL string, lanes mailer.SendLanes, preferences 
 	case !on:
 		return nil
 	case coreURL == "":
-		return errors.New("SKYMAIL_TEAM_SEND=on needs CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
+		return errors.New("SKYNOTIFY_TEAM_SEND=on needs CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
 	case !lanes.Purpose:
-		return errors.New("SKYMAIL_TEAM_SEND=on needs SKYMAIL_MAIL_PURPOSE=on: each Team's send carries its own category")
+		return errors.New("SKYNOTIFY_TEAM_SEND=on needs SKYNOTIFY_MAIL_PURPOSE=on: each Team's send carries its own category")
 	case !preferences.On:
-		return errors.New("SKYMAIL_TEAM_SEND=on needs SKYMAIL_BULK_PREFERENCE=on: a member who turned a Team's category off gets none of its mail")
+		return errors.New("SKYNOTIFY_TEAM_SEND=on needs SKYNOTIFY_BULK_PREFERENCE=on: a member who turned a Team's category off gets none of its mail")
 	}
 	return nil
 }
 
 // registerTeamMailRoutes serves Team mail (ADR-0067 addendum of 2026-11-08;
 // hub tickets ekip-postasi 03 and 04) in a chain of its own, registered
-// before /v1's skymail:access chain as the inbox is: the token
-// (AuthenticateTeamSender), the account access gate, then skymail:access or a
+// before /v1's skynotify:access chain as the inbox is: the token
+// (AuthenticateTeamSender), the account access gate, then skynotify:access or a
 // Team core says the caller leads (RequireAccessOrTeamLeader, core's answer
-// kept a minute). A Leader without skymail:access reaches these routes and
-// nothing else of SkyMail; the handlers keep them to Team mail and the free
-// announcement. Anyone with skymail:access goes through as on /v1, and
+// kept a minute). A Leader without skynotify:access reaches these routes and
+// nothing else of SkyNotify; the handlers keep them to Team mail and the free
+// announcement. Anyone with skynotify:access goes through as on /v1, and
 // never waits for core here. Off (leaders nil), only GET
 // /v1/me/team_audiences is served, 404 team_mail.off, and every other route
 // stays on /v1 as before.
@@ -1037,16 +1037,16 @@ func registerTeamMailRoutes(app *fiber.App, auth middlewares.AuthMiddleware, gat
 }
 
 // freeTemplateOrTemplatesRead reads a template by key with
-// skymail:templates:read, as /v1 does. The free announcement's frame
+// skynotify:templates:read, as /v1 does. The free announcement's frame
 // (handlers.FreeTemplateKey), which Team mail sends without that role, is
-// read without it too by a Leader: one without skymail:access (the seat
+// read without it too by a Leader: one without skynotify:access (the seat
 // asked core already), or one with it whom core names (its answer kept a
 // minute; core not answering is 503 for this read only).
 func freeTemplateOrTemplatesRead(leaders teams.Reader, read fiber.Handler) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		roles, _ := c.Locals("roles").([]string)
 		switch {
-		case slices.Contains(roles, "skymail:templates:read"):
+		case slices.Contains(roles, "skynotify:templates:read"):
 			return read(c)
 		case c.Params("key") != handlers.FreeTemplateKey:
 			return apperrors.ErrForbidden
@@ -1121,7 +1121,7 @@ func expireMailApprovals(ctx context.Context, approvals handlers.MailApprovalHan
 }
 
 // defaultTrustedProxyRanges covers the private and loopback space a container
-// network hands out. The proxy in front of Skymail is itself a container whose
+// network hands out. The proxy in front of SkyNotify is itself a container whose
 // address inside that network is reassigned whenever it is recreated, so trust
 // is expressed as ranges and never as one address.
 const defaultTrustedProxyRanges = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1/128,fc00::/7"
@@ -1192,7 +1192,7 @@ func registerPublicRoutes(app *fiber.App, gate accessgate.Reader, readiness *hea
 		Use(scalar.New(scalar.Config{
 			FileContentString: document,
 			Path:              "",
-			Title:             "Skymail API Documentation",
+			Title:             "SkyNotify API Documentation",
 		}))
 }
 
@@ -1210,7 +1210,7 @@ func protectedAPI(app *fiber.App, auth middlewares.AuthMiddleware, gate accessga
 	api := app.Group("/v1")
 	api.Use(auth.Authenticate)
 	api.Use(middlewares.AccountAccessGate(gate))
-	api.Use(auth.RequireAnyPermission("skymail:access"))
+	api.Use(auth.RequireAnyPermission("skynotify:access"))
 	return api
 }
 
@@ -1221,7 +1221,7 @@ func unavailable(c fiber.Ctx) error {
 }
 
 func newFiberConfig(vld fiber.StructValidator, trustedProxies []string) fiber.Config {
-	// The reverse proxy in front of Skymail discards a caller-supplied
+	// The reverse proxy in front of SkyNotify discards a caller-supplied
 	// X-Forwarded-For and writes its own, so ProxyHeader is only safe to read
 	// when the connection came from one of those proxies. Without TrustProxy
 	// Fiber ignores the header entirely and ctx.IP() reports the proxy.

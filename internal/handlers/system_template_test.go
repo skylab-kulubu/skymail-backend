@@ -12,9 +12,9 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 // recordingMailerStub remembers which template a send resolved to, which is the
@@ -274,7 +274,7 @@ func TestUpsertByKeyIsIdempotentAndUnarchives(t *testing.T) {
 
 // core sends welcome and certificate mail by uuid and never looks at the
 // response — internal/mail/mail.go and certificate.go both discard it — so if
-// the template that SKYMAIL_WELCOME_TEMPLATE_ID or SKYMAIL_CERTIFICATE_TEMPLATE_ID
+// the template that SKYNOTIFY_WELCOME_TEMPLATE_ID or SKYNOTIFY_CERTIFICATE_TEMPLATE_ID
 // points at is archived, the mail stops with nothing to see. This pins what the
 // real mailer does in that case: it refuses and writes no task.
 func TestEnqueueSingleRefusesArchivedTemplate(t *testing.T) {

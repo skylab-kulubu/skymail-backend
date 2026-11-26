@@ -6,12 +6,12 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
 )
 
 // MailApprovalResult is how an approved request's sends went, in totals only:
-// its submitter reads it without skymail:mails:read, which the send's own
+// its submitter reads it without skynotify:mails:read, which the send's own
 // screens take (hub ticket ekip-postasi 09). No person is in it, and a request
 // to people, one send each, has one total, never a row per send: a row each
 // would tell each person's delivery. Opens and clicks are summed by the rule

@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 // dsnRelay speaks plain SMTP, offers DSN (or not) in its EHLO and keeps the
@@ -108,7 +108,7 @@ func (r *dsnRelay) commands() []string {
 func sendThroughDSNRelay(t *testing.T, relay *dsnRelay, opts ...mailer.Option) []string {
 	t.Helper()
 	m := mailer.NewMailer(nil, mailer.SMTPConfig{
-		FromEmail: "skymail@example.com",
+		FromEmail: "skynotify@example.com",
 		Host:      "127.0.0.1",
 		Port:      relay.listener.Addr().(*net.TCPAddr).Port,
 		FQDN:      "example.com",
@@ -129,7 +129,7 @@ func sendThroughDSNRelay(t *testing.T, relay *dsnRelay, opts ...mailer.Option) [
 // asked nothing, and without the reader nothing changes.
 func TestTheReaderAsksForAFailureReportWithTheHeadersOnly(t *testing.T) {
 	got := sendThroughDSNRelay(t, startDSNRelay(t, true), mailer.WithDSNRequest(true))
-	if len(got) != 2 || got[0] != "MAIL FROM:<skymail@example.com> BODY=8BITMIME RET=HDRS" || got[1] != "RCPT TO:<alici@example.com> NOTIFY=FAILURE" {
+	if len(got) != 2 || got[0] != "MAIL FROM:<skynotify@example.com> BODY=8BITMIME RET=HDRS" || got[1] != "RCPT TO:<alici@example.com> NOTIFY=FAILURE" {
 		t.Errorf("with the reader, a DSN relay was sent %q", got)
 	}
 	if got := sendThroughDSNRelay(t, startDSNRelay(t, false), mailer.WithDSNRequest(true)); len(got) != 2 || strings.Contains(strings.Join(got, " "), "RET=") || strings.Contains(strings.Join(got, " "), "NOTIFY=") {

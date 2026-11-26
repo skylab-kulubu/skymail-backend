@@ -34,7 +34,7 @@ import (
 //     decides its data. A block given dot where dot is the mailer's data reads
 //     like the text around it; any other block is read like a define.
 //
-// skymail-frontend's render module counts with the same rule (its
+// skynotify-frontend's render module counts with the same rule (its
 // go-template.ts), and the two are held to the same cases in
 // testdata/referenced-variables.json.
 func ReferencedVariables(html string) ([]string, error) {

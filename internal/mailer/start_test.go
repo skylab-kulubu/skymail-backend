@@ -13,10 +13,10 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // fakeSMTP counts the connections a worker makes and hangs up on each, so a
@@ -49,10 +49,10 @@ func startFakeSMTP(t *testing.T) *fakeSMTP {
 
 func (s *fakeSMTP) config() mailer.SMTPConfig {
 	return mailer.SMTPConfig{
-		FromEmail: "skymail@example.com",
+		FromEmail: "skynotify@example.com",
 		Host:      "127.0.0.1",
 		Port:      s.listener.Addr().(*net.TCPAddr).Port,
-		User:      "skymail",
+		User:      "skynotify",
 		Password:  "test",
 		FQDN:      "example.com",
 	}
@@ -115,7 +115,7 @@ func restoredQueue(t *testing.T) *database.Store {
 		INSERT INTO mail_queue (id, task_id, recipient_full_name, recipient_email, subject, body, status, next_attempt_at,
 		                        claimed_at, claimed_by) VALUES
 		    ('50000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-000000000001', 'Alıcı Bir', 'alici1@example.com',
-		     'Konu', 'Gövde', 'processing', NOW() - INTERVAL '1 minute', NOW() - INTERVAL '1 hour', 'skymail-before-the-dump'),
+		     'Konu', 'Gövde', 'processing', NOW() - INTERVAL '1 minute', NOW() - INTERVAL '1 hour', 'skynotify-before-the-dump'),
 		    ('50000000-0000-4000-8000-000000000002', '40000000-0000-4000-8000-000000000001', 'Alıcı İki', 'alici2@example.com',
 		     'Konu', 'Gövde', 'pending', NOW() - INTERVAL '1 minute', NULL, NULL);`); err != nil {
 		t.Fatal(err)
@@ -158,7 +158,7 @@ func startMailer(t *testing.T, m mailer.Mailer, workers int) {
 	m.Start(ctx, workers)
 }
 
-// MAIL_SENDER=paused is how a restore starts SkyMail: the queue a dump brought
+// MAIL_SENDER=paused is how a restore starts SkyNotify: the queue a dump brought
 // back holds mail to people erased since, and nothing may go out until core
 // has replayed its erasures.
 func TestPausedStartResetsProcessingRowsAndSendsNothing(t *testing.T) {

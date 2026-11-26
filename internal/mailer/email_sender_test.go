@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 // answeringRelay speaks plain SMTP and answers one command with a reply of
@@ -111,7 +111,7 @@ func (r *answeringRelay) taken() []string {
 
 func answeringConfig(r *answeringRelay) mailer.SMTPConfig {
 	return mailer.SMTPConfig{
-		FromEmail: "skymail@example.com",
+		FromEmail: "skynotify@example.com",
 		Host:      "127.0.0.1",
 		Port:      r.listener.Addr().(*net.TCPAddr).Port,
 		FQDN:      "example.com",

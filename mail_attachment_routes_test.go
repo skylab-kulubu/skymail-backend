@@ -114,7 +114,7 @@ func TestAServicesSingleMailCarriesItsAttachment(t *testing.T) {
 
 	// The report: name, type and size, never the file.
 	request := httptest.NewRequest(http.MethodGet, "/v1/mail_tasks/"+first.created.ID.String()+"/queue", nil)
-	request.Header.Set("Authorization", "Bearer "+bearer(t, uuid.NewString(), false, "skymail:access", "skymail:mails:read"))
+	request.Header.Set("Authorization", "Bearer "+bearer(t, uuid.NewString(), false, "skynotify:access", "skynotify:mails:read"))
 	response, err := app.Test(request, fiber.TestConfig{Timeout: 30 * time.Second})
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +157,7 @@ func TestAServicesSingleMailCarriesItsAttachment(t *testing.T) {
 }
 
 // Refused attachments queue nothing: a person's token, too many, a type
-// SkyMail does not take, a file not of its type, over 512 KB.
+// SkyNotify does not take, a file not of its type, over 512 KB.
 func TestRefusedAttachmentsQueueNothing(t *testing.T) {
 	app, w := singleSendWorld(t)
 	png := map[string]any{"filename": "qr.png", "content_type": "image/png",
@@ -201,7 +201,7 @@ func TestABulkSendTakesNoAttachment(t *testing.T) {
 	post := func(path string, body map[string]any) (int, []byte) {
 		raw, _ := json.Marshal(body)
 		request := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
-		request.Header.Set("Authorization", "Bearer "+bearer(t, uuid.NewString(), false, "skymail:access", "skymail:mails:write"))
+		request.Header.Set("Authorization", "Bearer "+bearer(t, uuid.NewString(), false, "skynotify:access", "skynotify:mails:write"))
 		request.Header.Set("Content-Type", "application/json")
 		response, err := app.Test(request, fiber.TestConfig{Timeout: 30 * time.Second})
 		if err != nil {

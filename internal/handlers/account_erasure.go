@@ -17,9 +17,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/erasuretoken"
+	"github.com/skylab-kulubu/skynotify-backend/internal/accessgate"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/erasuretoken"
 )
 
 // AccountErasureStore is Postgres for the erase route.
@@ -29,13 +29,13 @@ type AccountErasureStore interface {
 }
 
 // ErasureTokenVerifier proves the route's bearer token is core-erasure's,
-// for SkyMail, with the erase role.
+// for SkyNotify, with the erase role.
 type ErasureTokenVerifier interface {
 	Verify(ctx context.Context, authorization string) (erasuretoken.Caller, error)
 }
 
 // AccountErasureHandler serves PUT /internal/v1/account-erasures/{request_id}:
-// core's Erasure command for SkyMail (ADR-0051; account erasure spec §2).
+// core's Erasure command for SkyNotify (ADR-0051; account erasure spec §2).
 // It is idempotent on the request id: a repeat answers the stored 200.
 type AccountErasureHandler struct {
 	store  AccountErasureStore
@@ -121,7 +121,7 @@ func (h AccountErasureHandler) Erase(c fiber.Ctx) error {
 	}
 
 	// A compromised caller must not erase someone who never asked: core has
-	// blocked the person before it sends the command, and SkyMail reads that
+	// blocked the person before it sends the command, and SkyNotify reads that
 	// block itself. With the gate off, as in sandbox, it cannot.
 	if h.gate == nil {
 		return erasureUnavailable(c, logID, erasureSubjectBlockUnverified, erasureGateOffRetryAfter)
@@ -212,7 +212,7 @@ func parseErasureCommand(contentType string, body []byte) (erasureCommand, bool)
 	if command.requestID, ok = parseCanonicalishUUID(requestID); !ok {
 		return erasureCommand{}, false
 	}
-	// Keycloak subjects are lower-case hyphenated UUIDs, and SkyMail stores
+	// Keycloak subjects are lower-case hyphenated UUIDs, and SkyNotify stores
 	// them as they come: another spelling would match no row.
 	subject, ok := jsonString(fields["subject_id"])
 	parsed, err := uuid.Parse(subject)

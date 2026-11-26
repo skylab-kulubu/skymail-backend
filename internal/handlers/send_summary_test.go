@@ -16,10 +16,10 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/keycloak"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 // The club is in Turkey: "today" on the home screen is a Turkish operator's
@@ -574,12 +574,12 @@ func TestSendListAndDetailKeepTheFieldsTheOldPanelReads(t *testing.T) {
 
 	// Asked by the send's sender, who may read its content and so its values.
 	app := contentApp(t, db, now)
-	status, body := getAs(t, app, "/mail_tasks", contentSender, "skymail:access", "skymail:mails:read")
+	status, body := getAs(t, app, "/mail_tasks", contentSender, "skynotify:access", "skynotify:mails:read")
 	var rows []map[string]any
 	if err := json.Unmarshal(body, &rows); status != fiber.StatusOK || err != nil || len(rows) != 1 {
 		t.Fatalf("list = %d %s", status, body)
 	}
-	status, body = getAs(t, app, "/mail_tasks/"+id.String(), contentSender, "skymail:access", "skymail:mails:read")
+	status, body = getAs(t, app, "/mail_tasks/"+id.String(), contentSender, "skynotify:access", "skynotify:mails:read")
 	var detail map[string]any
 	if err := json.Unmarshal(body, &detail); status != fiber.StatusOK || err != nil {
 		t.Fatalf("detail = %d %s", status, body)
@@ -599,7 +599,7 @@ func TestSendListAndDetailKeepTheFieldsTheOldPanelReads(t *testing.T) {
 	known := map[string]bool{"created_at": true, "status": true, "recipient_counts": true, "template_key": true, "audience": true,
 		"content_access": true, "content_expires_at": true, "tracking": true,
 		"purpose": true, "category": true, "transactional_statement": true, "commercial_content_absent": true, "own_event_statement": true,
-		"paused_at": true, "paused_reason": true, "cancelled_at": true}
+		"paused_at": true, "paused_reason": true, "cancelled_at": true, "kind": true}
 	for field := range want {
 		known[field] = true
 	}
@@ -608,6 +608,9 @@ func TestSendListAndDetailKeepTheFieldsTheOldPanelReads(t *testing.T) {
 			if row[field] != value {
 				t.Errorf("%s: %s = %#v, want %#v", name, field, row[field], value)
 			}
+		}
+		if row["kind"] != SendKindBulk {
+			t.Errorf("%s: kind = %#v, want bulk (a list send)", name, row["kind"])
 		}
 		createdAt, err := time.Parse(time.RFC3339Nano, fmt.Sprint(row["created_at"]))
 		if err != nil || !createdAt.Equal(now.Add(-time.Hour)) {

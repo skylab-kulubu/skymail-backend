@@ -87,39 +87,59 @@ SELECT *
 FROM templates
 WHERE id = $1;
 
+-- A NULL search lists every template; else those whose name, key or subject
+-- contains it, as skynotify_search_fold() compares them (as do the counts and the other lifecycles).
 -- name: GetAllTemplates :many
 SELECT *
 FROM templates
 WHERE archived_at IS NULL
+  AND (sqlc.narg(search)::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(key, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(subject), skynotify_search_fold(sqlc.narg(search)::text)) > 0)
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2;
 
 -- name: CountTemplates :one
 SELECT count(*)
 FROM templates
-WHERE archived_at IS NULL;
+WHERE archived_at IS NULL
+  AND (sqlc.narg(search)::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(key, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(subject), skynotify_search_fold(sqlc.narg(search)::text)) > 0);
 
 -- name: GetArchivedTemplates :many
 SELECT *
 FROM templates
 WHERE archived_at IS NOT NULL
+  AND (sqlc.narg(search)::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(key, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(subject), skynotify_search_fold(sqlc.narg(search)::text)) > 0)
 ORDER BY archived_at DESC
 LIMIT $1 OFFSET $2;
 
 -- name: CountArchivedTemplates :one
 SELECT count(*)
 FROM templates
-WHERE archived_at IS NOT NULL;
+WHERE archived_at IS NOT NULL
+  AND (sqlc.narg(search)::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(key, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(subject), skynotify_search_fold(sqlc.narg(search)::text)) > 0);
 
 -- name: GetAllTemplatesIncludingArchived :many
 SELECT *
 FROM templates
+WHERE (sqlc.narg(search)::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(key, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(subject), skynotify_search_fold(sqlc.narg(search)::text)) > 0)
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2;
 
 -- name: CountAllTemplatesIncludingArchived :one
 SELECT count(*)
-FROM templates;
+FROM templates
+WHERE (sqlc.narg(search)::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(key, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(subject), skynotify_search_fold(sqlc.narg(search)::text)) > 0);
 
 -- name: UpdateTemplate :one
 UPDATE templates
@@ -524,39 +544,53 @@ SELECT *
 FROM mailing_lists
 WHERE id = $1;
 
+-- A NULL search lists every list; else those whose name or description
+-- contains it, as skynotify_search_fold() compares them (as do the counts and the other lifecycles).
 -- name: GetAllMailingLists :many
 SELECT *
 FROM mailing_lists
 WHERE archived_at IS NULL
+  AND (sqlc.narg(search)::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(description, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0)
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2;
 
 -- name: CountMailingLists :one
 SELECT count(*)
 FROM mailing_lists
-WHERE archived_at IS NULL;
+WHERE archived_at IS NULL
+  AND (sqlc.narg(search)::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(description, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0);
 
 -- name: GetArchivedMailingLists :many
 SELECT *
 FROM mailing_lists
 WHERE archived_at IS NOT NULL
+  AND (sqlc.narg(search)::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(description, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0)
 ORDER BY archived_at DESC
 LIMIT $1 OFFSET $2;
 
 -- name: CountArchivedMailingLists :one
 SELECT count(*)
 FROM mailing_lists
-WHERE archived_at IS NOT NULL;
+WHERE archived_at IS NOT NULL
+  AND (sqlc.narg(search)::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(description, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0);
 
 -- name: GetAllMailingListsIncludingArchived :many
 SELECT *
 FROM mailing_lists
+WHERE (sqlc.narg(search)::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(description, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0)
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2;
 
 -- name: CountAllMailingListsIncludingArchived :one
 SELECT count(*)
-FROM mailing_lists;
+FROM mailing_lists
+WHERE (sqlc.narg(search)::text IS NULL OR strpos(skynotify_search_fold(name), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(description, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0);
 
 -- name: UpdateMailingList :one
 UPDATE mailing_lists
@@ -945,7 +979,7 @@ SELECT statement_timestamp()::timestamptz AS now;
 -- the bulk lane skips that turn, so a process stuck holding it never holds up
 -- another's dispatcher (nor its single mail). The system lane never takes it.
 -- name: LockSendBudget :one
-SELECT pg_try_advisory_xact_lock(hashtextextended('skymail-backend send budget', 0)) AS locked;
+SELECT pg_try_advisory_xact_lock(hashtextextended('skynotify-backend send budget', 0)) AS locked;
 
 -- The send windows a budget reads at one instant: the minutes starting at or
 -- after minute_since (the current minute and the one before it) and the
@@ -1010,7 +1044,7 @@ WHERE id = sqlc.arg(id)
 -- After a restore from backup (docs/data-lifecycle.md, Backup and restore),
 -- the queue as the dump held it: the rows still to go out, pending or
 -- processing, that were queued before the restore instant. A row without
--- created_at counts as one of them: SkyMail stamps every row it queues, so
+-- created_at counts as one of them: SkyNotify stamps every row it queues, so
 -- only the dump can hold such a row. left_queued is the rest of the queue,
 -- queued since, which is never touched. Counts and times only.
 -- name: CountRestoredQueueItems :one
@@ -1217,7 +1251,7 @@ WHERE task_id = sqlc.arg(task_id)
   AND url IS NOT NULL
 ORDER BY position;
 
--- A tracked row whose mail goes out while SKYMAIL_TRACKING is off: it goes
+-- A tracked row whose mail goes out while SKYNOTIFY_TRACKING is off: it goes
 -- out clean and its token is closed, so nothing is recorded for it should the
 -- flag be turned on again.
 -- name: CloseQueueTrackingFlagOff :execrows
@@ -1243,7 +1277,11 @@ FROM mail_tasks;
 
 -- A send's recipients, newest first. A list send's rows come from one insert
 -- and share a created_at, so the id breaks the tie: pages neither repeat nor
--- skip a recipient. A NULL status lists every recipient.
+-- skip a recipient. A NULL status lists every recipient. skipped keeps the
+-- failed rows that were not sent on purpose, as mail_task_status() reads them
+-- (a reserved domain, a suppressed or unsubscribed address, a preference, a
+-- cancelled send). A NULL search lists every recipient; else those whose
+-- address or name contains it, as skynotify_search_fold() compares them.
 -- suppressed_but_sent: account mail sent to a suppressed address, flagged.
 -- undelivered: a report said the address does not exist (a hard bounce of
 -- the row's own address) after the relay took the mail.
@@ -1258,6 +1296,13 @@ SELECT id, channel, recipient_full_name, recipient_email, status, error, attempt
 FROM mail_queue
 WHERE task_id = $1
   AND (sqlc.narg(status)::mail_queue_status IS NULL OR status = sqlc.narg(status)::mail_queue_status)
+  AND (sqlc.arg(skipped)::boolean IS FALSE
+       OR (status = 'failed'
+           AND (COALESCE(error, '') LIKE 'reserved\_domain:%'
+                OR COALESCE(error, '') LIKE 'suppressed:%'
+                OR COALESCE(error, '') IN ('preference: opted_out', 'preference: inactive', 'preference: ambiguous', 'cancelled'))))
+  AND (sqlc.narg(search)::text IS NULL OR strpos(skynotify_search_fold(recipient_email), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(recipient_full_name), skynotify_search_fold(sqlc.narg(search)::text)) > 0)
 ORDER BY created_at DESC, id DESC
 LIMIT $2 OFFSET $3;
 
@@ -1265,7 +1310,14 @@ LIMIT $2 OFFSET $3;
 SELECT count(*)
 FROM mail_queue
 WHERE task_id = $1
-  AND (sqlc.narg(status)::mail_queue_status IS NULL OR status = sqlc.narg(status)::mail_queue_status);
+  AND (sqlc.narg(status)::mail_queue_status IS NULL OR status = sqlc.narg(status)::mail_queue_status)
+  AND (sqlc.arg(skipped)::boolean IS FALSE
+       OR (status = 'failed'
+           AND (COALESCE(error, '') LIKE 'reserved\_domain:%'
+                OR COALESCE(error, '') LIKE 'suppressed:%'
+                OR COALESCE(error, '') IN ('preference: opted_out', 'preference: inactive', 'preference: ambiguous', 'cancelled'))))
+  AND (sqlc.narg(search)::text IS NULL OR strpos(skynotify_search_fold(recipient_email), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(recipient_full_name), skynotify_search_fold(sqlc.narg(search)::text)) > 0);
 
 
 -- One recipient's mail as it is kept — as sent, or masked by the content
@@ -1352,8 +1404,8 @@ WHERE id = sqlc.arg(id);
 
 -- Counts the failure of each send that failed in a run that masked some other
 -- send — the fault was the send's — and only that run's: a failure from a run
--- that masked none (the fault may have been SkyMail's) is never counted, so a
--- fault across SkyMail empties nothing once it is over. Those it leaves go
+-- that masked none (the fault may have been SkyNotify's) is never counted, so a
+-- fault across SkyNotify empties nothing once it is over. Those it leaves go
 -- (content_mask_unconfirmed = 0): they would hold the send's retry at a day,
 -- and an image from before this rule would count them all (#65 review, B2).
 -- Returns each send and its count.
@@ -1575,6 +1627,7 @@ RETURNING mail_tasks.id, sent_by, template_id, mail_list_id, body_variables, cre
 -- mail_task_content_sensitive() reads it first (20261020120000).
 -- erase_after_send: a service's send that keeps no record of its recipient;
 -- its row is erased when its outcome is written (20261031230000).
+-- sent_by_service: a service or SkyNotify queued it (mail_task_kind()).
 -- name: CreateSingleMailTask :one
 WITH active_template AS (
     SELECT templates.id,
@@ -1585,11 +1638,11 @@ WITH active_template AS (
 ), inserted_task AS (
     INSERT INTO mail_tasks (sent_by, template_id, body_variables, content_sensitive_at_send, tracking_requested,
                             purpose, category, transactional_statement, commercial_content_absent,
-                            erase_after_send)
+                            erase_after_send, sent_by_service)
         SELECT sqlc.arg(sent_by), id, sqlc.arg(body_variables), content_sensitive, sqlc.arg(tracking_requested)::boolean,
                sqlc.narg(purpose)::text, sqlc.narg(category)::text,
                sqlc.narg(transactional_statement)::boolean, sqlc.narg(commercial_content_absent)::boolean,
-               sqlc.arg(erase_after_send)::boolean
+               sqlc.arg(erase_after_send)::boolean, sqlc.narg(sent_by_service)::boolean
         FROM active_template
         RETURNING *
 )
@@ -1617,32 +1670,91 @@ SELECT (SELECT count(*) FROM mail_queue WHERE status = 'pending')    AS pending,
 -- next_attempt_at is not used: every row older than the retry migration holds
 -- that migration's timestamp in it.
 -- Days are calendar days in time_zone; the series ends on as_of's day and has
--- one row per day, zero-filled.
+-- one row per day, zero-filled. Each day's mail is split by stream, in this
+-- order: duyuru (the send's purpose: a News send too, whose template is a
+-- System one), system (a System template's mail), duyuru again for a send
+-- without a purpose whose row is in the bulk lane (the rule of before), and
+-- islem (any other).
 -- name: GetDailySentCounts :many
 WITH today AS (SELECT (sqlc.arg(as_of)::timestamptz AT TIME ZONE sqlc.arg(time_zone)::text)::date AS day),
      days AS (SELECT today.day - back AS day
               FROM today,
-                   generate_series(0, sqlc.arg(days)::int - 1) AS back)
+                   generate_series(0, sqlc.arg(days)::int - 1) AS back),
+     sent_rows AS (SELECT q.created_at,
+                     CASE
+                         WHEN mt.purpose = 'duyuru' THEN 'duyuru'
+                         WHEN COALESCE(t.system, false) THEN 'system'
+                         WHEN mt.purpose IS NULL AND q.priority <= 0 THEN 'duyuru'
+                         ELSE 'islem'
+                         END AS stream
+              FROM mail_queue q
+                       JOIN mail_tasks mt ON mt.id = q.task_id
+                       LEFT JOIN templates t ON t.id = mt.template_id
+              WHERE q.status = 'sent'
+                AND q.created_at >= ((SELECT min(day) FROM days)::timestamp AT TIME ZONE sqlc.arg(time_zone)::text))
 SELECT d.day::date        AS day,
-       count(q.created_at) AS sent
+       count(s.created_at) AS sent,
+       count(s.created_at) FILTER (WHERE s.stream = 'duyuru') AS duyuru,
+       count(s.created_at) FILTER (WHERE s.stream = 'islem')  AS islem,
+       count(s.created_at) FILTER (WHERE s.stream = 'system') AS system
 FROM days d
-         LEFT JOIN mail_queue q
-                   ON q.status = 'sent'
-                       AND q.created_at >= (d.day::timestamp AT TIME ZONE sqlc.arg(time_zone)::text)
-                       AND q.created_at < ((d.day + 1)::timestamp AT TIME ZONE sqlc.arg(time_zone)::text)
+         LEFT JOIN sent_rows s
+                   ON s.created_at >= (d.day::timestamp AT TIME ZONE sqlc.arg(time_zone)::text)
+                       AND s.created_at < ((d.day + 1)::timestamp AT TIME ZONE sqlc.arg(time_zone)::text)
 GROUP BY d.day
 ORDER BY d.day;
 
 -- A send as every screen shows it — the home screen, the send list and a
 -- send's own page: the task, the template it used, who it went to, its status
 -- as mail_task_status derives it, and its recipients by status. A NULL task_id
--- lists every send and a NULL status every status. The page is cut first so
--- only its rows are counted.
+-- lists every send and a NULL filter keeps every send (GET /mail_tasks):
+-- search matches the template's name, key or subject, the list's name, the
+-- Forms form's title, an approved send's requester, or, on a send to people
+-- (no list, no Forms source, not a News send), a recipient's address or name,
+-- as skynotify_search_fold() compares them; created_from and created_before
+-- bound created_at; kind is mail_task_kind() (bulk, system, single). Newest
+-- first, the order idx_mail_tasks_created_at_id keeps: the page is read down
+-- the index, filtered on mail_tasks alone (every other table is asked through
+-- EXISTS), and cut before anything is counted, so the first page costs as
+-- little with 50,000 sends as with 50. ListMailTaskSendsSorted is the other
+-- orders, with the same filters and columns.
 -- name: ListMailTaskSends :many
 WITH page AS (SELECT mt.id
               FROM mail_tasks mt
               WHERE (sqlc.narg(task_id)::uuid IS NULL OR mt.id = sqlc.narg(task_id)::uuid)
                 AND (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(status)::text)
+                AND (sqlc.narg(search)::text IS NULL
+                    OR EXISTS (SELECT 1
+                               FROM templates t
+                               WHERE t.id = mt.template_id
+                                 AND (strpos(skynotify_search_fold(t.name), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+                                     OR strpos(skynotify_search_fold(COALESCE(t.key, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+                                     OR strpos(skynotify_search_fold(t.subject), skynotify_search_fold(sqlc.narg(search)::text)) > 0))
+                    OR EXISTS (SELECT 1
+                               FROM mailing_lists ml
+                               WHERE ml.id = mt.mail_list_id
+                                 AND strpos(skynotify_search_fold(ml.name), skynotify_search_fold(sqlc.narg(search)::text)) > 0)
+                    OR EXISTS (SELECT 1
+                               FROM mail_form_sources fs
+                               WHERE fs.id = mt.form_source_id
+                                 AND strpos(skynotify_search_fold(COALESCE(fs.form_title, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0)
+                    OR EXISTS (SELECT 1
+                               FROM mail_approval_tasks mat
+                                        JOIN mail_approvals a ON a.id = mat.approval_id
+                               WHERE mat.task_id = mt.id
+                                 AND strpos(skynotify_search_fold(COALESCE(a.submitter_name, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0)
+                    OR (mt.mail_list_id IS NULL AND mt.form_source_id IS NULL AND mt.source_kind IS NULL
+                        AND EXISTS (SELECT 1
+                                    FROM mail_queue q
+                                    WHERE q.task_id = mt.id
+                                      AND (strpos(skynotify_search_fold(q.recipient_email), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+                                          OR strpos(skynotify_search_fold(q.recipient_full_name), skynotify_search_fold(sqlc.narg(search)::text)) > 0))))
+                AND (sqlc.narg(created_from)::timestamptz IS NULL OR mt.created_at >= sqlc.narg(created_from)::timestamptz)
+                AND (sqlc.narg(created_before)::timestamptz IS NULL OR mt.created_at < sqlc.narg(created_before)::timestamptz)
+                AND (sqlc.narg(kind)::text IS NULL OR mail_task_kind(mt.id) = sqlc.narg(kind)::text)
+                AND (sqlc.narg(template_id)::uuid IS NULL OR mt.template_id = sqlc.narg(template_id)::uuid)
+                AND (sqlc.narg(list_id)::uuid IS NULL OR mt.mail_list_id = sqlc.narg(list_id)::uuid)
+                AND (sqlc.narg(sent_by)::text IS NULL OR mt.sent_by = sqlc.narg(sent_by)::text)
               ORDER BY mt.created_at DESC, mt.id DESC
               LIMIT $1 OFFSET $2)
 SELECT mt.id,
@@ -1683,7 +1795,8 @@ SELECT mt.id,
        mt.paused_at,
        mt.paused_reason,
        mt.cancelled_at,
-       rc.cancelled
+       rc.cancelled,
+       mail_task_kind(mt.id)        AS kind
 FROM page
          JOIN mail_tasks mt ON mt.id = page.id
          LEFT JOIN templates t ON mt.template_id = t.id
@@ -1716,6 +1829,167 @@ FROM page
                                    LIMIT 1)
 ORDER BY mt.created_at DESC, mt.id DESC;
 
+-- ListMailTaskSends in another order (GET /mail_tasks _sort=open_rate or
+-- _order=asc): the same filters and the same columns, ordered as sort and
+-- ascending say. sort open_rate orders by the share of tracked recipients
+-- who likely opened (GET /mail_tasks/{id}/tracking's
+-- unique_likely_human_opens / tracked_recipients, the retained totals once
+-- its events are gone), sends with no rate last. Every matching send is
+-- read to order them; the default order uses ListMailTaskSends.
+-- name: ListMailTaskSendsSorted :many
+WITH matching AS (SELECT mt.id,
+                         mt.created_at,
+                         mt.tracking_requested,
+                         mt.tracking_closed_at
+                  FROM mail_tasks mt
+         LEFT JOIN templates t ON t.id = mt.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = mt.mail_list_id
+         LEFT JOIN mail_form_sources fs ON fs.id = mt.form_source_id
+                  WHERE (sqlc.narg(task_id)::uuid IS NULL OR mt.id = sqlc.narg(task_id)::uuid)
+                    AND (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(status)::text)
+  AND (sqlc.narg(search)::text IS NULL
+       OR strpos(skynotify_search_fold(COALESCE(t.name, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(t.key, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(t.subject, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(ml.name, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(fs.form_title, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR EXISTS (SELECT 1
+                  FROM mail_approval_tasks mat
+                           JOIN mail_approvals a ON a.id = mat.approval_id
+                  WHERE mat.task_id = mt.id
+                    AND strpos(skynotify_search_fold(COALESCE(a.submitter_name, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0)
+       OR (mt.mail_list_id IS NULL AND mt.form_source_id IS NULL AND mt.source_kind IS NULL
+           AND EXISTS (SELECT 1
+                       FROM mail_queue q
+                       WHERE q.task_id = mt.id
+                         AND (strpos(skynotify_search_fold(q.recipient_email), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+                              OR strpos(skynotify_search_fold(q.recipient_full_name), skynotify_search_fold(sqlc.narg(search)::text)) > 0))))
+  AND (sqlc.narg(created_from)::timestamptz IS NULL OR mt.created_at >= sqlc.narg(created_from)::timestamptz)
+  AND (sqlc.narg(created_before)::timestamptz IS NULL OR mt.created_at < sqlc.narg(created_before)::timestamptz)
+  AND (sqlc.narg(kind)::text IS NULL OR mail_task_kind(mt.id) = sqlc.narg(kind)::text)
+  AND (sqlc.narg(template_id)::uuid IS NULL OR mt.template_id = sqlc.narg(template_id)::uuid)
+  AND (sqlc.narg(list_id)::uuid IS NULL OR mt.mail_list_id = sqlc.narg(list_id)::uuid)
+  AND (sqlc.narg(sent_by)::text IS NULL OR mt.sent_by = sqlc.narg(sent_by)::text)),
+     -- The open rate is read only for sort open_rate, and only for the
+     -- matching sends that were tracked (tracking_requested is set on every
+     -- tracked send), in one pass each over their rows and their events:
+     -- per-send subqueries would cost the planner past jit_above_cost.
+     rated_tasks AS (SELECT id
+                     FROM matching
+                     WHERE sqlc.arg(sort)::text = 'open_rate'
+                       AND tracking_requested),
+     tracked AS (SELECT q.task_id,
+                        count(*) FILTER (WHERE q.tracking_token IS NOT NULL OR q.tracking_disabled_at IS NOT NULL) AS tracked,
+                        max(q.sent_at) AS last_sent_at
+                 FROM mail_queue q
+                 WHERE q.task_id IN (SELECT id FROM rated_tasks)
+                 GROUP BY q.task_id),
+     opened AS (SELECT e.task_id, count(DISTINCT e.queue_id) AS opened
+                FROM mail_tracking_events e
+                         JOIN mail_queue q ON q.id = e.queue_id
+                WHERE e.task_id IN (SELECT id FROM rated_tasks)
+                  AND NOT e.automated_likely
+                  AND q.sent_at > now() - interval '90 days'
+                GROUP BY e.task_id),
+     rated AS (SELECT m.id,
+                      m.created_at,
+                      CASE
+                          WHEN sqlc.arg(sort)::text <> 'open_rate' OR NOT m.tracking_requested THEN NULL
+                          -- As GET /mail_tasks/{id}/tracking reads it: the retained
+                          -- totals once tracking closed or 90 days after the last mail.
+                          WHEN m.tracking_closed_at IS NOT NULL
+                              OR COALESCE(tr.last_sent_at, m.created_at) <= now() - interval '90 days'
+                              THEN tt.unique_likely_human_opens::float8 / NULLIF(tt.tracked_recipients, 0)
+                          ELSE COALESCE(op.opened, 0)::float8 / NULLIF(tr.tracked, 0)
+                          END AS open_rate
+               FROM matching m
+                        LEFT JOIN tracked tr ON tr.task_id = m.id
+                        LEFT JOIN opened op ON op.task_id = m.id
+                        LEFT JOIN mail_task_tracking_totals tt ON tt.task_id = m.id),
+     page AS (SELECT id, created_at, open_rate
+              FROM rated
+              ORDER BY CASE WHEN sqlc.arg(ascending)::boolean THEN open_rate END ASC NULLS LAST,
+                       CASE WHEN NOT sqlc.arg(ascending)::boolean THEN open_rate END DESC NULLS LAST,
+                       CASE WHEN sqlc.arg(ascending)::boolean THEN created_at END,
+                       CASE WHEN sqlc.arg(ascending)::boolean THEN id END,
+                       created_at DESC, id DESC
+              LIMIT $1 OFFSET $2)
+SELECT mt.id,
+       mt.sent_by,
+       mt.template_id,
+       mt.mail_list_id,
+       mt.form_source_id, fs.form_id, fs.form_title, fs.prepared_at AS form_prepared_at, fs.recipient_count AS form_recipient_count,
+       mt.body_variables,
+       mt.created_at,
+       t.name                       AS template_name,
+       t.key                        AS template_key,
+       ml.name                      AS mail_list_name,
+       (ml.id IS NOT NULL)::boolean AS internal_mail_list,
+       mail_task_status(mt.id)      AS status,
+       rc.pending,
+       rc.processing,
+       rc.sent,
+       rc.failed,
+       rc.suppressed,
+       rc.opted_out,
+       rc.unsubscribed,
+       rc.inactive,
+       rc.ambiguous,
+       rc.suppressed_but_sent,
+       rc.undelivered,
+       single.recipient_full_name   AS single_recipient_full_name,
+       single.recipient_email       AS single_recipient_email,
+       mail_task_bulk(mt.id)::boolean              AS bulk,
+       mail_task_content_sensitive(mt.id)::boolean AS content_sensitive,
+       mt.content_cleared_at,
+       mt.content_masked_at,
+       mt.tracking_requested,
+       mt.purpose,
+       mt.category,
+       mt.transactional_statement,
+       mt.commercial_content_absent,
+       mt.own_event_statement,
+       mt.paused_at,
+       mt.paused_reason,
+       mt.cancelled_at,
+       rc.cancelled,
+       mail_task_kind(mt.id)        AS kind
+FROM page
+         JOIN mail_tasks mt ON mt.id = page.id
+         LEFT JOIN templates t ON mt.template_id = t.id
+         LEFT JOIN mailing_lists ml ON mt.mail_list_id = ml.id
+         LEFT JOIN mail_form_sources fs ON fs.id = mt.form_source_id
+         CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE q.status = 'pending')    AS pending,
+                                    count(*) FILTER (WHERE q.status = 'processing') AS processing,
+                                    count(*) FILTER (WHERE q.status = 'sent')       AS sent,
+                                    count(*) FILTER (WHERE q.status = 'failed')     AS failed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error LIKE 'suppressed:%') AS suppressed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: opted_out') AS opted_out,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'suppressed: unsubscribed') AS unsubscribed,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: inactive') AS inactive,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'preference: ambiguous') AS ambiguous,
+                                    count(*) FILTER (WHERE q.status = 'failed' AND q.error = 'cancelled') AS cancelled,
+                                    count(*) FILTER (WHERE q.suppressed_but_sent) AS suppressed_but_sent,
+                                    count(*) FILTER (WHERE EXISTS (SELECT 1
+                                                                   FROM mail_bounces b
+                                                                   WHERE b.queue_id = q.id
+                                                                     AND b.kind = 'hard'
+                                                                     AND b.recipient_matched)) AS undelivered
+                             FROM mail_queue q
+                             WHERE q.task_id = mt.id) rc
+         LEFT JOIN mail_queue single
+                   ON single.id = (SELECT q.id
+                                   FROM mail_queue q
+                                   WHERE mt.mail_list_id IS NULL
+                                     AND q.task_id = mt.id
+                                   ORDER BY q.created_at, q.id
+                                   LIMIT 1)
+ORDER BY CASE WHEN sqlc.arg(ascending)::boolean THEN page.open_rate END ASC NULLS LAST,
+         CASE WHEN NOT sqlc.arg(ascending)::boolean THEN page.open_rate END DESC NULLS LAST,
+         CASE WHEN sqlc.arg(ascending)::boolean THEN page.created_at END,
+         CASE WHEN sqlc.arg(ascending)::boolean THEN page.id END,
+         page.created_at DESC, page.id DESC;
+
 -- Sends by the status mail_task_status derives, over every send: the same
 -- numbers CountMailTaskSends gives for each status filter.
 -- name: CountMailTasksByStatus :one
@@ -1724,10 +1998,40 @@ SELECT count(*) FILTER (WHERE s.status = 'failed')  AS failed,
        count(*) FILTER (WHERE s.status = 'sent')    AS sent
 FROM (SELECT mail_task_status(mt.id) AS status FROM mail_tasks mt) s;
 
+-- The sends ListMailTaskSends lists under the same filters, every page. It
+-- joins the other tables rather than asking them through EXISTS, as the page
+-- does: with no LIMIT to stop early, per-send subqueries cost the planner
+-- past jit_above_cost, and JIT compiling took longer than the count.
 -- name: CountMailTaskSends :one
 SELECT count(*)
 FROM mail_tasks mt
-WHERE (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(status)::text);
+         LEFT JOIN templates t ON t.id = mt.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = mt.mail_list_id
+         LEFT JOIN mail_form_sources fs ON fs.id = mt.form_source_id
+WHERE (sqlc.narg(status)::text IS NULL OR mail_task_status(mt.id) = sqlc.narg(status)::text)
+  AND (sqlc.narg(search)::text IS NULL
+       OR strpos(skynotify_search_fold(COALESCE(t.name, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(t.key, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(t.subject, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(ml.name, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(fs.form_title, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR EXISTS (SELECT 1
+                  FROM mail_approval_tasks mat
+                           JOIN mail_approvals a ON a.id = mat.approval_id
+                  WHERE mat.task_id = mt.id
+                    AND strpos(skynotify_search_fold(COALESCE(a.submitter_name, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0)
+       OR (mt.mail_list_id IS NULL AND mt.form_source_id IS NULL AND mt.source_kind IS NULL
+           AND EXISTS (SELECT 1
+                       FROM mail_queue q
+                       WHERE q.task_id = mt.id
+                         AND (strpos(skynotify_search_fold(q.recipient_email), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+                              OR strpos(skynotify_search_fold(q.recipient_full_name), skynotify_search_fold(sqlc.narg(search)::text)) > 0))))
+  AND (sqlc.narg(created_from)::timestamptz IS NULL OR mt.created_at >= sqlc.narg(created_from)::timestamptz)
+  AND (sqlc.narg(created_before)::timestamptz IS NULL OR mt.created_at < sqlc.narg(created_before)::timestamptz)
+  AND (sqlc.narg(kind)::text IS NULL OR mail_task_kind(mt.id) = sqlc.narg(kind)::text)
+  AND (sqlc.narg(template_id)::uuid IS NULL OR mt.template_id = sqlc.narg(template_id)::uuid)
+  AND (sqlc.narg(list_id)::uuid IS NULL OR mt.mail_list_id = sqlc.narg(list_id)::uuid)
+  AND (sqlc.narg(sent_by)::text IS NULL OR mt.sent_by = sqlc.narg(sent_by)::text);
 
 
 -- A new Mail onayı request, pending until its deadline. Every later write of
@@ -1919,7 +2223,9 @@ WHERE a.id = $1;
 -- Requests newest submission first, the id breaking ties. A NULL submitter
 -- lists everyone's and a NULL state every state. A request is filtered by the
 -- state it is in as of as_of: one undecided past its deadline is expired,
--- whether or not the sweep has written it yet.
+-- whether or not the sweep has written it yet. A NULL search keeps every
+-- request; else those whose template's name, key or subject, list's name,
+-- Forms form's title or requester's name contains it, as skynotify_search_fold() compares them.
 -- name: ListMailApprovals :many
 SELECT sqlc.embed(a),
        t.name                             AS template_name,
@@ -1949,16 +2255,33 @@ WHERE (sqlc.narg(submitter_sub)::text IS NULL OR a.submitter_sub = sqlc.narg(sub
   AND (sqlc.narg(state)::mail_approval_state IS NULL OR sqlc.narg(state)::mail_approval_state = (CASE
         WHEN a.state IN ('pending', 'returned') AND a.deadline_at <= sqlc.arg(as_of) THEN 'expired'
         ELSE a.state END))
+  AND (sqlc.narg(search)::text IS NULL
+       OR strpos(skynotify_search_fold(t.name), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(t.key, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(t.subject), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(ml.name, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(fs.form_title, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(a.submitter_name, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0)
 ORDER BY a.submitted_at DESC, a.id DESC
 LIMIT $1 OFFSET $2;
 
 -- name: CountMailApprovals :one
 SELECT count(*)
 FROM mail_approvals a
+         JOIN templates t ON t.id = a.template_id
+         LEFT JOIN mailing_lists ml ON ml.id = a.mail_list_id
+         LEFT JOIN mail_form_sources fs ON fs.id = a.form_source_id
 WHERE (sqlc.narg(submitter_sub)::text IS NULL OR a.submitter_sub = sqlc.narg(submitter_sub)::text)
   AND (sqlc.narg(state)::mail_approval_state IS NULL OR sqlc.narg(state)::mail_approval_state = (CASE
         WHEN a.state IN ('pending', 'returned') AND a.deadline_at <= sqlc.arg(as_of) THEN 'expired'
-        ELSE a.state END));
+        ELSE a.state END))
+  AND (sqlc.narg(search)::text IS NULL
+       OR strpos(skynotify_search_fold(t.name), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(t.key, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(t.subject), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(ml.name, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(fs.form_title, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0
+       OR strpos(skynotify_search_fold(COALESCE(a.submitter_name, '')), skynotify_search_fold(sqlc.narg(search)::text)) > 0);
 
 -- name: ListMailApprovalEvents :many
 SELECT *
@@ -2049,7 +2372,7 @@ WHERE e.queue_id = sqlc.arg(queue_id) AND e.kind = 'click'
 
 -- system_lane: a row of the send is in the system lane (priority > 0, as
 -- ProcessSystemQueueItems reads it). A tracked mail there is always one the
--- system sends (a service's single mail, SkyMail's own approval notice): a
+-- system sends (a service's single mail, SkyNotify's own approval notice): a
 -- person's tracked send is in the bulk lane, and the system lane is never
 -- tracked as a person asks. Its people are read with the role only.
 -- name: TrackingTaskAccess :one
@@ -2385,7 +2708,7 @@ WHERE id IN (SELECT i.id
              WHERE i.expires_at <= sqlc.arg(at)::timestamptz
              ORDER BY i.expires_at, i.id
              LIMIT sqlc.arg(batch_size)::int FOR UPDATE SKIP LOCKED);
--- Bounces and the suppression list (hub spec skymail-bounce-isleme; README,
+-- Bounces and the suppression list (hub spec skynotify-bounce-isleme; README,
 -- "Geri dönen posta ve bastırma listesi").
 
 -- The queue row a delivery status notification names, locked FOR SHARE until
@@ -2809,7 +3132,7 @@ SELECT ((SELECT count(*)
            AS total;
 
 -- The addresses that had threshold or more soft bounces in the last days
--- (hub ticket skymail-bounce-isleme 13; ADR 0073 decision 5): a soft bounce
+-- (hub ticket skynotify-bounce-isleme 13; ADR 0073 decision 5): a soft bounce
 -- never suppresses, so these are not on the list; the panel marks them. A
 -- mail counts once however many reports it had; only reports that named the
 -- row's own address count, of rows that still hold one (Account erasure
@@ -2855,7 +3178,7 @@ FROM (SELECT lower(btrim(q.recipient_email)) AS address
         AND btrim(q.recipient_email) <> ''
         AND b.received_at >= now() - make_interval(days => sqlc.arg(days)::int)
         AND NOT EXISTS (SELECT 1 FROM mail_suppressions m WHERE m.address = lower(btrim(q.recipient_email)))
-        AND (sqlc.narg(search)::text IS NULL OR strpos(lower(btrim(q.recipient_email)), lower(sqlc.narg(search)::text)) > 0)
+        AND (sqlc.narg(search)::text IS NULL OR strpos(skynotify_search_fold(btrim(q.recipient_email)), skynotify_search_fold(sqlc.narg(search)::text)) > 0)
       GROUP BY 1
       HAVING count(DISTINCT b.queue_id) >= sqlc.arg(threshold)::int) a;
 
@@ -2880,7 +3203,7 @@ WHERE id = sqlc.arg(id);
 -- ends: the send that checks who already got the record's mail and queues
 -- the rest is the only one doing so (idx_mail_queue_news_once is the net).
 -- name: LockNewsSource :exec
-SELECT pg_advisory_xact_lock(hashtextextended('skymail news ' || sqlc.arg(source_ref)::text, 0));
+SELECT pg_advisory_xact_lock(hashtextextended('skynotify news ' || sqlc.arg(source_ref)::text, 0));
 
 -- The send of a News record to an audience that holds a new one back, if
 -- there is one: a send not cancelled (open or done), else a cancelled one

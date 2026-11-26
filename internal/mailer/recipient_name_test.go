@@ -9,14 +9,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
 // The recipient name cases are one file kept in two repos: this copy, and
-// skymail-frontend's src/lib/mail-render/testdata/recipient-name.json, whose
+// skynotify-frontend's src/lib/mail-render/testdata/recipient-name.json, whose
 // test pins the same hash. The panel's preview fills the tags as the mailer
 // does, so the two must not disagree.
-const recipientNameCasesSHA256 = "46ad04b6204b6ffb29353cd715ea4001f7cdfd2b485ab2d74b8b62058d774a54"
+const recipientNameCasesSHA256 = "c65787fd7242ae42884d05b60980706fa16e2b86d4c6095fa231258e154b8f6b"
 
 type recipientNameCase struct {
 	Name     string `json:"name"`
@@ -32,7 +32,7 @@ func recipientNameCases(t *testing.T) (text, markup []recipientNameCase) {
 		t.Fatal(err)
 	}
 	if sum := fmt.Sprintf("%x", sha256.Sum256(raw)); sum != recipientNameCasesSHA256 {
-		t.Fatalf("testdata/recipient-name.json hashes to %s, not the %s both repos pin: change skymail-frontend's copy (src/lib/mail-render/testdata/recipient-name.json) to match, then both pins", sum, recipientNameCasesSHA256)
+		t.Fatalf("testdata/recipient-name.json hashes to %s, not the %s both repos pin: change skynotify-frontend's copy (src/lib/mail-render/testdata/recipient-name.json) to match, then both pins", sum, recipientNameCasesSHA256)
 	}
 	var fixture struct {
 		Text   []recipientNameCase `json:"text"`

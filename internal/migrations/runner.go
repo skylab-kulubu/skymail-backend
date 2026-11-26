@@ -14,7 +14,7 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5"
-	dbmigrations "github.com/skylab-kulubu/skymail-backend/db/migrations"
+	dbmigrations "github.com/skylab-kulubu/skynotify-backend/db/migrations"
 )
 
 const LegacyBaselineVersion = uint(20260919180000)
@@ -25,7 +25,7 @@ const LegacyBaselineVersion = uint(20260919180000)
 // task starting while another migrates reads the version golang-migrate has
 // marked dirty for the migration in progress, or an empty database the other
 // is filling, and refuses to start.
-const LockName = "skymail-backend migrations"
+const LockName = "skynotify-backend migrations"
 
 const (
 	// LockWait bounds the wait for another process's migrations. Past it

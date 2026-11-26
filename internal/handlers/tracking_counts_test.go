@@ -3,7 +3,7 @@ package handlers
 import (
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
 // A send's counts tell of people only in mail the system sends (KVKK notice

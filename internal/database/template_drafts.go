@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/ptr"
+	"github.com/skylab-kulubu/skynotify-backend/internal/ptr"
 )
 
 // VersionContent is what a Mail template version holds apart from who wrote

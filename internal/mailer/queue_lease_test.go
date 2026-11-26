@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // relay stands in for SMTP: it counts the mail each process hands it, per
@@ -279,10 +279,10 @@ func TestASendToAStalledRelayEndsWithinTheBudget(t *testing.T) {
 	relay := silentRelay(t)
 
 	m := mailer.NewMailer(db, mailer.SMTPConfig{
-		FromEmail: "skymail@example.com",
+		FromEmail: "skynotify@example.com",
 		Host:      "127.0.0.1",
 		Port:      relay.Addr().(*net.TCPAddr).Port,
-		User:      "skymail",
+		User:      "skynotify",
 		Password:  "test",
 		FQDN:      "example.com",
 	}, mailer.SenderOn)

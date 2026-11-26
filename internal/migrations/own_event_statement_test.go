@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // The migration that keeps a list send's own event statement (KVKK s6 row

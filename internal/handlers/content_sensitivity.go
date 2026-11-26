@@ -9,15 +9,15 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/ptr"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/ptr"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
 )
 
 // The templates whose sends carry a credential — a login or verification
 // code, a password reset or account link, a ticket's code — are locked
-// sensitive: whoever holds skymail:system-mails:read would otherwise read
+// sensitive: whoever holds skynotify:system-mails:read would otherwise read
 // everyone's codes and links. Their content is kept and shown masked (every
 // code and one-time link replaced on the server), whatever their row says;
 // the panel and the seed cannot make them shown unmasked, and a write that
@@ -25,12 +25,12 @@ import (
 // the database holds the same in template_key_content_locked() (migration
 // 20261013140000), and a test keeps the two together.
 //
-// What sends to SkyMail today (origin/main of every repo, 2026-10-12):
+// What sends to SkyNotify today (origin/main of every repo, 2026-10-12):
 //   - e-skylab-keycloak SPI: keycloak.verify-email, keycloak.reset-password,
 //     keycloak.update-email, keycloak.idp-link, keycloak.personal-email-confirm
 //     (a 6-digit code) and keycloak.generic (any other Keycloak mail, an
 //     e-mail login code or link among them);
-//   - account center (skymail-frontend emails/): account.security-alert,
+//   - account center (skynotify-frontend emails/): account.security-alert,
 //     account.primary-email-changed, account.deletion-requested (cancel
 //     link), account.deletion-completed;
 //   - core-backend: core.contact-consent-confirm (confirmation link), and the
@@ -42,7 +42,7 @@ import (
 // Shown, and so not here: core.welcome, core.certificate (its VerifyURL is
 // public), club.team-membership, forms.* (form ids, no token), mail.approval-*
 // (links need a sign-in), ops.send-failed, event.updated, event.cancelled,
-// free.basic. YıldızPlace mails its login link over its own SMTP, not SkyMail;
+// free.basic. YıldızPlace mails its login link over its own SMTP, not SkyNotify;
 // auth., login. and otp. are reserved for such flows when they move here.
 var (
 	lockedSensitiveKeyPrefixes = []string{"keycloak.", "account.", "auth.", "login.", "otp."}

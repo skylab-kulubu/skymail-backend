@@ -19,18 +19,18 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 // POST /v1/notifications through the chain production registers: userinfo
-// (a stub that answers the bearer's own claims), skymail:access, the role,
+// (a stub that answers the bearer's own claims), skynotify:access, the role,
 // the service account check, the handler, the real database and queue. No
 // dispatcher is started.
 
@@ -99,7 +99,7 @@ func claimsUserinfo(t *testing.T) string {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"sub":             claims.Sub,
-			"resource_access": map[string]any{"skymail": map[string]any{"roles": claims.Roles}},
+			"resource_access": map[string]any{"skynotify": map[string]any{"roles": claims.Roles}},
 		})
 	}))
 	t.Cleanup(server.Close)
@@ -137,7 +137,7 @@ func newNotificationWorld(t *testing.T, opts ...mailer.Option) *notificationWorl
 	}}
 
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
-	auth := middlewares.NewAuthMiddleware("skymail", claimsUserinfo(t), middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", claimsUserinfo(t), middlewares.AudienceOff)
 	// As main registers them: the person's own routes before /v1's chain.
 	registerInboxRoutes(app, auth, nil, handlers.NewInboxHandler(store))
 	api := protectedAPI(app, auth, nil)
@@ -160,7 +160,7 @@ func bearer(t *testing.T, sub string, service bool, roles ...string) string {
 	return token
 }
 
-var coreRoles = []string{"skymail:access", handlers.NotificationsSendRole}
+var coreRoles = []string{"skynotify:access", handlers.NotificationsSendRole}
 
 type sent struct {
 	status   int
@@ -422,14 +422,14 @@ func TestConcurrentRequestsWithOneKeyQueueOnce(t *testing.T) {
 	}
 }
 
-// Only a service account's token with skymail:notifications:send may send.
+// Only a service account's token with skynotify:notifications:send may send.
 func TestOnlyAServiceAccountWithTheRoleSendsNotifications(t *testing.T) {
 	w := newNotificationWorld(t)
 	body := notification("core.certificate", recipient(personAyse, "ayse@example.com"))
 	if s := w.post(bearer(t, personAyse.String(), false, coreRoles...), "k1", body); s.status != fiber.StatusForbidden || s.error.Code != "auth.service_account_required" {
 		t.Errorf("a person's token: %d %s", s.status, s.raw)
 	}
-	if s := w.post(bearer(t, coreService, true, "skymail:access", "skymail:mails:send"), "k2", body); s.status != fiber.StatusForbidden || s.error.Code != "server.forbidden" {
+	if s := w.post(bearer(t, coreService, true, "skynotify:access", "skynotify:mails:send"), "k2", body); s.status != fiber.StatusForbidden || s.error.Code != "server.forbidden" {
 		t.Errorf("no role: %d %s", s.status, s.raw)
 	}
 	if n := w.count(`SELECT count(*) FROM notifications`); n != 0 {
@@ -460,7 +460,7 @@ func TestAnUnknownTypeOrOneWithoutItsEmailIsRefused(t *testing.T) {
 // The Template seed states a type; it is read back as written.
 func TestTheSeedStatesANotificationType(t *testing.T) {
 	w := newNotificationWorld(t)
-	seed := bearer(t, formsBot, false, "skymail:access", "skymail:templates:write", "skymail:templates:read")
+	seed := bearer(t, formsBot, false, "skynotify:access", "skynotify:templates:write", "skynotify:templates:read")
 	call := func(method, path string, body any) (int, []byte) {
 		var reader io.Reader
 		if body != nil {
@@ -596,7 +596,7 @@ func TestAnUnsubscribeURLGoesOnlyWithAnOptionalBulkType(t *testing.T) {
 	}
 }
 
-// While every duyuru mail must carry its way out (SKYMAIL_BULK_PREFERENCE;
+// While every duyuru mail must carry its way out (SKYNOTIFY_BULK_PREFERENCE;
 // abonelik-cikisi 09), an e-mail recipient of an optional bulk-lane type
 // needs core's unsubscribe_url; one the e-mail does not go to does not, nor
 // does a required type's.

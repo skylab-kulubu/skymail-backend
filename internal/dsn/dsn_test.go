@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/dsn"
+	"github.com/skylab-kulubu/skynotify-backend/internal/dsn"
 )
 
 // The fixtures are synthetic: shaped like Exchange Online's and Postfix's
@@ -81,7 +81,7 @@ func TestParseReadsTheMachinePartOfAReport(t *testing.T) {
 		{
 			// A mail sent through Microsoft Graph (hub ticket 10): its
 			// Message-ID, the report's In-Reply-To and References are
-			// Exchange's own; the returned headers' X-SkyMail-Queue-Id names
+			// Exchange's own; the returned headers' X-SkyNotify-Queue-Id names
 			// the row.
 			file:    "exchange-graph-sent.eml",
 			queueID: "7e2d1c0b-3a49-4f5e-8d6c-1b2a3c4d5e6f",
@@ -155,9 +155,9 @@ func TestParseRefusesWhatIsNotAReport(t *testing.T) {
 	})
 }
 
-// A report about a mail SkyMail did not send names no queue row: the
+// A report about a mail SkyNotify did not send names no queue row: the
 // returned headers decide, even when the report's In-Reply-To names one.
-func TestQueueIDNeedsSkyMailsMessageID(t *testing.T) {
+func TestQueueIDNeedsSkyNotifysMessageID(t *testing.T) {
 	report, err := parseFile(t, "rotator-alarm.eml")
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +170,7 @@ func TestQueueIDNeedsSkyMailsMessageID(t *testing.T) {
 		name, header string
 		ok           bool
 	}{
-		{"SkyMail's", "<6f1d2c3b-4a59-4e8f-9b7a-0c1d2e3f4a5b@mail.example.org>", true},
+		{"SkyNotify's", "<6f1d2c3b-4a59-4e8f-9b7a-0c1d2e3f4a5b@mail.example.org>", true},
 		{"domain in capitals", "<6F1D2C3B-4A59-4E8F-9B7A-0C1D2E3F4A5B@Mail.Example.Org>", true},
 		{"another domain", "<6f1d2c3b-4a59-4e8f-9b7a-0c1d2e3f4a5b@mail.example.org.evil.example>", false},
 		{"a subdomain", "<6f1d2c3b-4a59-4e8f-9b7a-0c1d2e3f4a5b@x.mail.example.org>", false},
@@ -192,7 +192,7 @@ func TestQueueIDNeedsSkyMailsMessageID(t *testing.T) {
 	}
 }
 
-// The returned headers' X-SkyMail-Queue-Id names the row as their
+// The returned headers' X-SkyNotify-Queue-Id names the row as their
 // Message-ID does, under the same rules (<uuid@SMTP_FQDN>); the returned
 // headers still decide over the report's own In-Reply-To.
 func TestQueueIDReadsTheQueueHeader(t *testing.T) {

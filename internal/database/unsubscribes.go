@@ -10,7 +10,7 @@ import (
 // The unsubscribe record (README, "Tek tık çıkış ucu"): who reverses one is
 // recorded in mail_unsubscribe_reactivations.
 const (
-	// UnsubscribeSourceLink is an unsubscribe SkyMail's link wrote: the
+	// UnsubscribeSourceLink is an unsubscribe SkyNotify's link wrote: the
 	// one-click POST or the page's button.
 	UnsubscribeSourceLink = "link"
 	// ReactivatedByRecipient is the person, on their link's page; the row
@@ -21,7 +21,7 @@ const (
 	ReactivatedByOperator = "operator"
 )
 
-// Unsubscribe records address (normalized) out of stream from SkyMail's
+// Unsubscribe records address (normalized) out of stream from SkyNotify's
 // link. It can be repeated: an address already out keeps its first record,
 // and created is false.
 func (s *Store) Unsubscribe(ctx context.Context, address, stream string) (created bool, err error) {

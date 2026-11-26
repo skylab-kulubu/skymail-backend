@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // The fixture starts postgres, whose image declares VOLUME
@@ -59,7 +59,7 @@ func containerVolumes(t *testing.T, databaseURL string) []string {
 		t.Fatalf("database url %q has no port to identify the container by", databaseURL)
 	}
 
-	names, err := exec.Command("docker", "ps", "--filter", "name=skymail-postgres-test-", "--format", "{{.Names}}").Output()
+	names, err := exec.Command("docker", "ps", "--filter", "name=skynotify-postgres-test-", "--format", "{{.Names}}").Output()
 	if err != nil {
 		t.Fatalf("list fixture containers: %v", err)
 	}

@@ -96,25 +96,25 @@ func newTokenWorld(t *testing.T) *tokenWorld {
 	w.verifier = NewVerifier(Config{
 		Issuer:         testIssuer,
 		JWKSURL:        server.URL,
-		ResourceClient: "skymail",
+		ResourceClient: "skynotify",
 		Now:            func() time.Time { return w.now },
 	})
 	return w
 }
 
 // coreErasureClaims is what Keycloak puts in core-erasure's client
-// credentials token for scope account-erase-skymail.
+// credentials token for scope account-erase-skynotify.
 func (w *tokenWorld) coreErasureClaims() jwt.MapClaims {
 	return jwt.MapClaims{
 		"iss": testIssuer,
 		"sub": "8d4f2c1e-0000-4000-8000-00000000c0re",
 		"azp": "core-erasure",
-		"aud": []any{"skymail"},
+		"aud": []any{"skynotify"},
 		"exp": w.now.Add(5 * time.Minute).Unix(),
 		"iat": w.now.Add(-time.Second).Unix(),
 		"typ": "Bearer",
 		"resource_access": map[string]any{
-			"skymail": map[string]any{"roles": []any{"skymail:account:erase"}},
+			"skynotify": map[string]any{"roles": []any{"skynotify:account:erase"}},
 		},
 	}
 }
@@ -152,7 +152,7 @@ func TestErasureTokenFromCoreErasureIsAccepted(t *testing.T) {
 
 	// A lone audience is a string; the scheme is case-insensitive.
 	claims := w.coreErasureClaims()
-	claims["aud"] = "skymail"
+	claims["aud"] = "skynotify"
 	if _, err := w.verify("bearer " + w.sign(claims, "sig-1", w.key, jwt.SigningMethodRS256)); err != nil {
 		t.Errorf("string audience: %v", err)
 	}
@@ -205,15 +205,15 @@ func TestErasureTokenThatIsNotProvenIsUnauthorized(t *testing.T) {
 func TestErasureTokenWithoutTheEraseGrantIsForbidden(t *testing.T) {
 	w := newTokenWorld(t)
 	for name, change := range map[string]func(jwt.MapClaims){
-		"another caller":  func(c jwt.MapClaims) { c["azp"] = "core" },
-		"no caller":       func(c jwt.MapClaims) { delete(c, "azp") },
-		"not for SkyMail": func(c jwt.MapClaims) { c["aud"] = []any{"skycms", "forms"} },
-		"no audience":     func(c jwt.MapClaims) { delete(c, "aud") },
+		"another caller":    func(c jwt.MapClaims) { c["azp"] = "core" },
+		"no caller":         func(c jwt.MapClaims) { delete(c, "azp") },
+		"not for SkyNotify": func(c jwt.MapClaims) { c["aud"] = []any{"skycms", "forms"} },
+		"no audience":       func(c jwt.MapClaims) { delete(c, "aud") },
 		"no erase role": func(c jwt.MapClaims) {
-			c["resource_access"] = map[string]any{"skymail": map[string]any{"roles": []any{"skymail:access"}}}
+			c["resource_access"] = map[string]any{"skynotify": map[string]any{"roles": []any{"skynotify:access"}}}
 		},
 		"role on the caller": func(c jwt.MapClaims) {
-			c["resource_access"] = map[string]any{"core-erasure": map[string]any{"roles": []any{"skymail:account:erase"}}}
+			c["resource_access"] = map[string]any{"core-erasure": map[string]any{"roles": []any{"skynotify:account:erase"}}}
 		},
 		"another service's role": func(c jwt.MapClaims) {
 			c["resource_access"] = map[string]any{"skycms": map[string]any{"roles": []any{"cms:account:erase"}}}
@@ -221,7 +221,7 @@ func TestErasureTokenWithoutTheEraseGrantIsForbidden(t *testing.T) {
 		"no resource access": func(c jwt.MapClaims) { delete(c, "resource_access") },
 		"realm role only": func(c jwt.MapClaims) {
 			delete(c, "resource_access")
-			c["realm_access"] = map[string]any{"roles": []any{"skymail:account:erase"}}
+			c["realm_access"] = map[string]any{"roles": []any{"skynotify:account:erase"}}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -295,7 +295,7 @@ func TestErasureTokenKeysAreRefreshedWhenOld(t *testing.T) {
 	}
 }
 
-// The tracking withdrawal's verifier takes core's own token with SkyMail's
+// The tracking withdrawal's verifier takes core's own token with SkyNotify's
 // withdraw role, and only that: core-erasure's erase grant is not it, and
 // the withdraw role on another caller is not it either (ticket 17).
 func TestWithdrawalTokenNeedsCoreAndTheWithdrawRole(t *testing.T) {
@@ -303,7 +303,7 @@ func TestWithdrawalTokenNeedsCoreAndTheWithdrawRole(t *testing.T) {
 	withdrawal := NewVerifier(Config{
 		Issuer:         testIssuer,
 		JWKSURL:        w.verifier.keys.url,
-		ResourceClient: "skymail",
+		ResourceClient: "skynotify",
 		CallerClientID: WithdrawCallerClientID,
 		Role:           WithdrawRole,
 		Now:            func() time.Time { return w.now },
@@ -311,7 +311,7 @@ func TestWithdrawalTokenNeedsCoreAndTheWithdrawRole(t *testing.T) {
 	coreClaims := func() jwt.MapClaims {
 		claims := w.coreErasureClaims()
 		claims["azp"] = "core"
-		claims["resource_access"] = map[string]any{"skymail": map[string]any{"roles": []any{"skymail:tracking:withdraw"}}}
+		claims["resource_access"] = map[string]any{"skynotify": map[string]any{"roles": []any{"skynotify:tracking:withdraw"}}}
 		return claims
 	}
 	if _, err := withdrawal.Verify(context.Background(), w.bearer(coreClaims())); err != nil {
@@ -326,10 +326,10 @@ func TestWithdrawalTokenNeedsCoreAndTheWithdrawRole(t *testing.T) {
 		}(),
 		"core with the erase role": func() jwt.MapClaims {
 			c := coreClaims()
-			c["resource_access"] = map[string]any{"skymail": map[string]any{"roles": []any{"skymail:account:erase"}}}
+			c["resource_access"] = map[string]any{"skynotify": map[string]any{"roles": []any{"skynotify:account:erase"}}}
 			return c
 		}(),
-		"core, not for SkyMail": func() jwt.MapClaims {
+		"core, not for SkyNotify": func() jwt.MapClaims {
 			c := coreClaims()
 			c["aud"] = []any{"core"}
 			return c

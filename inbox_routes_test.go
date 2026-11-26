@@ -15,8 +15,8 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/accessgate"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
 )
 
 // The in-app inbox (hub ticket iletisim-servisi 05) through the chain
@@ -45,8 +45,8 @@ func newInboxWorld(t *testing.T) *notificationWorld {
 }
 
 // personToken is a person's token as Keycloak issues it to Account center or
-// sky-app: no client_id, aud as given (skymail when the client's audience
-// mapper adds it), no role on SkyMail.
+// sky-app: no client_id, aud as given (skynotify when the client's audience
+// mapper adds it), no role on SkyNotify.
 func personToken(t *testing.T, sub uuid.UUID, aud ...string) string {
 	t.Helper()
 	claims := jwt.MapClaims{"sub": sub.String(), "azp": "account-center", "aud": aud}
@@ -90,7 +90,7 @@ func (w *notificationWorld) call(token, method, path string) (int, []byte) {
 
 func (w *notificationWorld) inbox(person uuid.UUID, query string) handlers.InboxPage {
 	w.t.Helper()
-	status, raw := w.call(personToken(w.t, person, "skymail"), http.MethodGet, "/v1/me/inbox"+query)
+	status, raw := w.call(personToken(w.t, person, "skynotify"), http.MethodGet, "/v1/me/inbox"+query)
 	var page handlers.InboxPage
 	if status != fiber.StatusOK || json.Unmarshal(raw, &page) != nil {
 		w.t.Fatalf("GET /v1/me/inbox%s: %d %s", query, status, raw)
@@ -100,7 +100,7 @@ func (w *notificationWorld) inbox(person uuid.UUID, query string) handlers.Inbox
 
 func (w *notificationWorld) counts(person uuid.UUID) handlers.InboxCounts {
 	w.t.Helper()
-	status, raw := w.call(personToken(w.t, person, "skymail"), http.MethodGet, "/v1/me/inbox/counts")
+	status, raw := w.call(personToken(w.t, person, "skynotify"), http.MethodGet, "/v1/me/inbox/counts")
 	var counts handlers.InboxCounts
 	if status != fiber.StatusOK || json.Unmarshal(raw, &counts) != nil {
 		w.t.Fatalf("counts: %d %s", status, raw)
@@ -110,7 +110,7 @@ func (w *notificationWorld) counts(person uuid.UUID) handlers.InboxCounts {
 
 func (w *notificationWorld) mark(person uuid.UUID, item uuid.UUID, mark string) (int, handlers.InboxItem) {
 	w.t.Helper()
-	status, raw := w.call(personToken(w.t, person, "skymail"), http.MethodPost, "/v1/me/inbox/"+item.String()+"/"+mark)
+	status, raw := w.call(personToken(w.t, person, "skynotify"), http.MethodPost, "/v1/me/inbox/"+item.String()+"/"+mark)
 	var got handlers.InboxItem
 	if status == fiber.StatusOK {
 		if err := json.Unmarshal(raw, &got); err != nil {
@@ -186,7 +186,7 @@ func TestAPersonSeesAndMarksOnlyTheirOwnItems(t *testing.T) {
 			t.Errorf("%s on no item: %d, want 404", mark, status)
 		}
 	}
-	if status, _ := w.call(personToken(t, personAyse, "skymail"), http.MethodPost, "/v1/me/inbox/not-a-uuid/read"); status != fiber.StatusNotFound {
+	if status, _ := w.call(personToken(t, personAyse, "skynotify"), http.MethodPost, "/v1/me/inbox/not-a-uuid/read"); status != fiber.StatusNotFound {
 		t.Errorf("read of a malformed id: %d, want 404", status)
 	}
 	if after := w.inbox(personMehmet, ""); !reflect.DeepEqual(after, mehmet) {
@@ -244,7 +244,7 @@ func TestCountsFollowTheMarksAndBulkMarksTouchOnlyTheCaller(t *testing.T) {
 	}
 
 	mehmetBefore := w.inbox(personMehmet, "?archived=include")
-	token := personToken(t, personAyse, "skymail")
+	token := personToken(t, personAyse, "skynotify")
 	if status, raw := w.call(token, http.MethodPost, "/v1/me/inbox/read-all"); status != fiber.StatusOK || string(raw) != `{"updated":2}` {
 		t.Fatalf("read-all: %d %s", status, raw)
 	}
@@ -264,7 +264,7 @@ func TestCountsFollowTheMarksAndBulkMarksTouchOnlyTheCaller(t *testing.T) {
 	}
 
 	// seen-all on Mehmet's inbox.
-	if status, raw := w.call(personToken(t, personMehmet, "skymail"), http.MethodPost, "/v1/me/inbox/seen-all"); status != fiber.StatusOK || string(raw) != `{"updated":3}` {
+	if status, raw := w.call(personToken(t, personMehmet, "skynotify"), http.MethodPost, "/v1/me/inbox/seen-all"); status != fiber.StatusOK || string(raw) != `{"updated":3}` {
 		t.Fatalf("seen-all: %d %s", status, raw)
 	}
 	if got := w.counts(personMehmet); got != (handlers.InboxCounts{Unseen: 0, Unread: 3}) {
@@ -327,7 +327,7 @@ func TestTheInboxPagesNewestFirstWithAStableCursor(t *testing.T) {
 		t.Errorf("one full page: %d items, cursor %v", len(page.Items), page.NextCursor)
 	}
 
-	token := personToken(t, personAyse, "skymail")
+	token := personToken(t, personAyse, "skynotify")
 	for _, query := range []string{"?limit=0", "?limit=101", "?limit=x", "?archived=all", "?cursor=bm90LWEtY3Vyc29y", "?cursor=%%%"} {
 		if status, raw := w.call(token, http.MethodGet, "/v1/me/inbox"+query); status != fiber.StatusBadRequest {
 			t.Errorf("GET %s: %d %s, want 400", query, status, raw)
@@ -335,9 +335,9 @@ func TestTheInboxPagesNewestFirstWithAStableCursor(t *testing.T) {
 	}
 }
 
-// Only a person's own token issued for SkyMail opens the inbox; it needs no
-// role, so /v1's skymail:access chain must not run for it.
-func TestOnlyAPersonsOwnTokenForSkyMailOpensTheInbox(t *testing.T) {
+// Only a person's own token issued for SkyNotify opens the inbox; it needs no
+// role, so /v1's skynotify:access chain must not run for it.
+func TestOnlyAPersonsOwnTokenForSkyNotifyOpensTheInbox(t *testing.T) {
 	w := newInboxWorld(t)
 	for _, c := range []struct {
 		name   string
@@ -345,11 +345,11 @@ func TestOnlyAPersonsOwnTokenForSkyMailOpensTheInbox(t *testing.T) {
 		status int
 		code   string
 	}{
-		{"a person's token for SkyMail, no role", personToken(t, personAyse, "skymail"), fiber.StatusOK, ""},
-		{"a person's token for SkyMail and others", personToken(t, personAyse, "account", "skymail"), fiber.StatusOK, ""},
+		{"a person's token for SkyNotify, no role", personToken(t, personAyse, "skynotify"), fiber.StatusOK, ""},
+		{"a person's token for SkyNotify and others", personToken(t, personAyse, "account", "skynotify"), fiber.StatusOK, ""},
 		{"a person's token for another service", personToken(t, personAyse, "account"), fiber.StatusUnauthorized, "server.unauthorized"},
 		{"a person's token with no aud", personToken(t, personAyse), fiber.StatusUnauthorized, "server.unauthorized"},
-		{"a service's token", serviceToken(t, "skymail"), fiber.StatusForbidden, "auth.person_required"},
+		{"a service's token", serviceToken(t, "skynotify"), fiber.StatusForbidden, "auth.person_required"},
 		{"no token", "", fiber.StatusUnauthorized, "server.unauthorized"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -370,7 +370,7 @@ func TestOnlyAPersonsOwnTokenForSkyMailOpensTheInbox(t *testing.T) {
 func serviceToken(t *testing.T, aud ...string) string {
 	t.Helper()
 	claims := jwt.MapClaims{"sub": coreService, "azp": "core", "client_id": "core", "aud": aud,
-		"test_roles": []string{"skymail:access", handlers.NotificationsSendRole}}
+		"test_roles": []string{"skynotify:access", handlers.NotificationsSendRole}}
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte("fixture-only"))
 	if err != nil {
 		t.Fatal(err)
@@ -539,7 +539,7 @@ func TestTheSameIdempotencyKeyWritesTheInboxOnce(t *testing.T) {
 // type goes to the inbox, parsing, its link an in-app path.
 func TestTheSeedStatesATypesInboxText(t *testing.T) {
 	w := newInboxWorld(t)
-	seed := bearer(t, formsBot, false, "skymail:access", "skymail:templates:write", "skymail:templates:read")
+	seed := bearer(t, formsBot, false, "skynotify:access", "skynotify:templates:write", "skynotify:templates:read")
 	put := func(body map[string]any) (int, handlers.NotificationType, string) {
 		t.Helper()
 		raw, _ := json.Marshal(body)

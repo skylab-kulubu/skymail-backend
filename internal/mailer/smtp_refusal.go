@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/dsn"
+	"github.com/skylab-kulubu/skynotify-backend/internal/dsn"
 	"github.com/wneessen/go-mail"
 )
 

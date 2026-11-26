@@ -35,7 +35,7 @@ func TestEachLaneTakeReadsItsOwnIndex(t *testing.T) {
 		processSystemQueueItems: "idx_mail_queue_pending_system",
 		processBulkQueueItems:   "idx_mail_queue_pending_bulk",
 	} {
-		rows, err := conn.Query(ctx, "EXPLAIN "+query, "skymail-a-1", 3)
+		rows, err := conn.Query(ctx, "EXPLAIN "+query, "skynotify-a-1", 3)
 		if err != nil {
 			t.Fatal(err)
 		}

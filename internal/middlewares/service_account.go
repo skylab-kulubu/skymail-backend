@@ -2,7 +2,7 @@ package middlewares
 
 import (
 	"github.com/gofiber/fiber/v3"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
 )
 
 var errServiceAccountRequired = apperrors.New(

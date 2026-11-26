@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 	"github.com/wneessen/go-mail"
 )
 

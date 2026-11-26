@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 const eraseAfterSend = uint(20261031230000)

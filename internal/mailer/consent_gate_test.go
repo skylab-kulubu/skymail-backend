@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/consent"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/consent"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 // fakeConsents is core's consent audience and address directory.
@@ -73,7 +73,7 @@ func promotionalAudience() *fakeConsents {
 		consent.PurposePromotional: {
 			{Email: "ayse@example.com", TextVersion: "tanitim-v1", WithdrawURL: ayseWithdraw},
 			{Email: "ayse@example.com", TextVersion: "tanitim-v1", WithdrawURL: "https://api.example.org/v1/consents/withdraw?token=second"},
-			// A link List-Unsubscribe cannot carry: no consent for SkyMail.
+			// A link List-Unsubscribe cannot carry: no consent for SkyNotify.
 			{Email: "baris@example.com", TextVersion: "tanitim-v1", WithdrawURL: "http://api.example.org/v1/consents/withdraw?token=baris"},
 			{Email: "deniz@example.com", TextVersion: "tanitim-v1", WithdrawURL: denizWithdraw},
 		},
@@ -416,7 +416,7 @@ func enqueueToList(t *testing.T, m mailer.Transactional, list uuid.UUID) uuid.UU
 	return task
 }
 
-// With SKYMAIL_LIST_CONSENT on, a list's duyuru goes to an address that is
+// With SKYNOTIFY_LIST_CONSENT on, a list's duyuru goes to an address that is
 // an account's and to one whose announcement consent is open on a text that
 // covers announcements; any other is written failed, "duyuru rızası yok".
 // Core is asked for the accounts with club:duyuru, whatever the send's
@@ -457,8 +457,8 @@ func TestAListAnnouncementToAnAddressWithoutAnAccountNeedsTheConsent(t *testing.
 	}
 }
 
-// purposesOn is SKYMAIL_MAIL_PURPOSE on, every lane off: what
-// SKYMAIL_LIST_CONSENT=on needs, as production runs it.
+// purposesOn is SKYNOTIFY_MAIL_PURPOSE on, every lane off: what
+// SKYNOTIFY_LIST_CONSENT=on needs, as production runs it.
 func purposesOn() mailer.Option { return mailer.WithSendLanes(mailer.SendLanes{Purpose: true}) }
 
 // queueToOne queues a mail to one person as POST /v1/mail_tasks/single does:
@@ -485,7 +485,7 @@ func queueToOne(t *testing.T, m mailer.Transactional, template uuid.UUID, purpos
 	return task
 }
 
-// With SKYMAIL_LIST_CONSENT on the rule a list's duyuru follows holds for
+// With SKYNOTIFY_LIST_CONSENT on the rule a list's duyuru follows holds for
 // every duyuru (KVKK s6 §5.14; hub ticket kvkk-s6-yayin-oncesi 23): a send
 // to a Forms source's respondents and a person's mail to one address go to
 // an address without an account only with its announcement consent;
@@ -639,7 +639,7 @@ func TestAnAnnouncementToOneAddressWaitsForCore(t *testing.T) {
 	}
 }
 
-// SKYMAIL_LIST_CONSENT off (the default): a list's mail goes to every
+// SKYNOTIFY_LIST_CONSENT off (the default): a list's mail goes to every
 // address as before, and core is not asked.
 func TestListConsentOffSendsAsBefore(t *testing.T) {
 	captureMailerLogs(t)
@@ -687,18 +687,18 @@ func TestAListAnnouncementWithoutCoreWaits(t *testing.T) {
 	}
 }
 
-// SKYMAIL_PROMOTIONAL and SKYMAIL_LIST_CONSENT are off unless they say on;
+// SKYNOTIFY_PROMOTIONAL and SKYNOTIFY_LIST_CONSENT are off unless they say on;
 // anything else stops startup.
 func TestTheConsentSwitches(t *testing.T) {
 	gate, err := mailer.ConsentGateFromEnv(getenv(map[string]string{}))
 	if err != nil || gate.Promotional || gate.ListConsent {
 		t.Errorf("unset: %+v %v, want both off", gate, err)
 	}
-	gate, err = mailer.ConsentGateFromEnv(getenv(map[string]string{"SKYMAIL_PROMOTIONAL": " On ", "SKYMAIL_LIST_CONSENT": "on"}))
+	gate, err = mailer.ConsentGateFromEnv(getenv(map[string]string{"SKYNOTIFY_PROMOTIONAL": " On ", "SKYNOTIFY_LIST_CONSENT": "on"}))
 	if err != nil || !gate.Promotional || !gate.ListConsent {
 		t.Errorf("on: %+v %v", gate, err)
 	}
-	for _, name := range []string{"SKYMAIL_PROMOTIONAL", "SKYMAIL_LIST_CONSENT"} {
+	for _, name := range []string{"SKYNOTIFY_PROMOTIONAL", "SKYNOTIFY_LIST_CONSENT"} {
 		if _, err := mailer.ConsentGateFromEnv(getenv(map[string]string{name: "yes"})); err == nil || !strings.Contains(err.Error(), name) {
 			t.Errorf("%s=yes: %v, want startup stopped", name, err)
 		}
@@ -747,8 +747,8 @@ func TestAListsOwnEventMailNeedsNoConsent(t *testing.T) {
 	}
 }
 
-// SKYMAIL_PROMOTIONAL=on needs purposes, List-Unsubscribe and a duyuru lane
-// that writes it, SKYMAIL_LIST_CONSENT=on purposes; anything less stops
+// SKYNOTIFY_PROMOTIONAL=on needs purposes, List-Unsubscribe and a duyuru lane
+// that writes it, SKYNOTIFY_LIST_CONSENT=on purposes; anything less stops
 // startup. Off asks for nothing.
 func TestPromotionalNeedsItsWayOut(t *testing.T) {
 	graph := map[mailer.Lane]mailer.LaneConfig{mailer.LaneDuyuru: {Transport: mailer.TransportGraph}}
@@ -760,12 +760,12 @@ func TestPromotionalNeedsItsWayOut(t *testing.T) {
 		want  string
 	}{
 		{"off", mailer.ConsentGate{}, mailer.SendLanes{}, ""},
-		{"list consent without purposes", mailer.ConsentGate{ListConsent: true}, mailer.SendLanes{}, "SKYMAIL_MAIL_PURPOSE"},
+		{"list consent without purposes", mailer.ConsentGate{ListConsent: true}, mailer.SendLanes{}, "SKYNOTIFY_MAIL_PURPOSE"},
 		{"list consent with purposes", mailer.ConsentGate{ListConsent: true}, mailer.SendLanes{Purpose: true}, ""},
 		{"all there", mailer.ConsentGate{Promotional: true}, mailer.SendLanes{Purpose: true, ListUnsubscribe: true, Lanes: graph}, ""},
-		{"no purposes", mailer.ConsentGate{Promotional: true}, mailer.SendLanes{ListUnsubscribe: true, Lanes: graph}, "SKYMAIL_MAIL_PURPOSE"},
-		{"no List-Unsubscribe", mailer.ConsentGate{Promotional: true}, mailer.SendLanes{Purpose: true, Lanes: graph}, "SKYMAIL_LIST_UNSUBSCRIBE"},
-		{"the duyuru lane off", mailer.ConsentGate{Promotional: true}, mailer.SendLanes{Purpose: true, ListUnsubscribe: true, Lanes: off}, "SKYMAIL_SEND_DUYURU"},
+		{"no purposes", mailer.ConsentGate{Promotional: true}, mailer.SendLanes{ListUnsubscribe: true, Lanes: graph}, "SKYNOTIFY_MAIL_PURPOSE"},
+		{"no List-Unsubscribe", mailer.ConsentGate{Promotional: true}, mailer.SendLanes{Purpose: true, Lanes: graph}, "SKYNOTIFY_LIST_UNSUBSCRIBE"},
+		{"the duyuru lane off", mailer.ConsentGate{Promotional: true}, mailer.SendLanes{Purpose: true, ListUnsubscribe: true, Lanes: off}, "SKYNOTIFY_SEND_DUYURU"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.gate.CheckWith(tc.lanes)

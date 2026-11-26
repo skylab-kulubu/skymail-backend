@@ -22,7 +22,7 @@ type SendNews struct {
 	Preheader string `json:"preheader" validate:"max=300"`
 	// Required and true: the sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10): a short thanks to a sponsor or its logo is allowed.
 	CommercialContentAbsent *bool `json:"commercial_content_absent"`
-	// Open and click tracking, by the rules of every person's send (SKYMAIL_TRACKING, SKYMAIL_TRACKING_OPERATOR).
+	// Open and click tracking, by the rules of every person's send (SKYNOTIFY_TRACKING, SKYNOTIFY_TRACKING_OPERATOR).
 	Tracking bool `json:"tracking"`
 	NoAttachments
 }

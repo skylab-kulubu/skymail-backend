@@ -17,23 +17,23 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/news"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/news"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 // POST /v1/news_sends through the chain production registers (userinfo
-// stub, skymail:access, skymail:announcements:send), the handler, the real
+// stub, skynotify:access, skynotify:announcements:send), the handler, the real
 // database and queue, with an in-memory CMS and core. No dispatcher runs.
 
 const yk = "0c0c0c0c-0000-4000-8000-0000000000aa"
 
-var announcerRoles = []string{"skymail:access", handlers.AnnouncementsSendRole}
+var announcerRoles = []string{"skynotify:access", handlers.AnnouncementsSendRole}
 
 type fakeCMS struct {
 	mu      sync.Mutex
@@ -126,7 +126,7 @@ func newNewsWorld(t *testing.T, enabled bool) *newsWorld {
 	}}
 
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
-	auth := middlewares.NewAuthMiddleware("skymail", newsUserinfo(t), middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", newsUserinfo(t), middlewares.AudienceOff)
 	api := protectedAPI(app, auth, nil)
 	m := mailer.NewMailer(store, mailer.SMTPConfig{}, mailer.SenderOn, mailer.WithSendLanes(mailer.SendLanes{Purpose: true}))
 	registerNewsSendRoutes(api, auth, handlers.NewNewsSendHandler(store, m, cms, audiences,
@@ -155,7 +155,7 @@ func newsUserinfo(t *testing.T) string {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"sub": claims.Sub, "email": claims.Email, "email_verified": claims.Email != "", "name": claims.Name,
-			"resource_access": map[string]any{"skymail": map[string]any{"roles": claims.Roles}},
+			"resource_access": map[string]any{"skynotify": map[string]any{"roles": claims.Roles}},
 		})
 	}))
 	t.Cleanup(server.Close)
@@ -165,7 +165,7 @@ func newsUserinfo(t *testing.T) string {
 // personBearer is a person's token with a verified address.
 func personBearer(t *testing.T, sub, email, name string, roles ...string) string {
 	t.Helper()
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": sub, "azp": "skymail-ui", "test_roles": roles,
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": sub, "azp": "skynotify-ui", "test_roles": roles,
 		"test_email": email, "test_name": name}).SignedString([]byte("fixture-only"))
 	if err != nil {
 		t.Fatal(err)
@@ -368,7 +368,7 @@ func TestNewsSendRefusals(t *testing.T) {
 		status int
 		code   string
 	}{
-		"no role":            {bearer(t, yk, false, "skymail:access", "skymail:mails:write"), newsSend("kayitlar", "members"), fiber.StatusForbidden, ""},
+		"no role":            {bearer(t, yk, false, "skynotify:access", "skynotify:mails:write"), newsSend("kayitlar", "members"), fiber.StatusForbidden, ""},
 		"no statement":       {token, statement, fiber.StatusBadRequest, "news_send.commercial_statement_required"},
 		"false statement":    {token, falseStatement, fiber.StatusBadRequest, "news_send.commercial_statement_required"},
 		"members with teams": {token, membersWithTeams, fiber.StatusBadRequest, "news_send.teams_invalid"},
@@ -410,7 +410,7 @@ func TestNewsSendRefusals(t *testing.T) {
 func TestNewsSendPreviewIsTheSendsMail(t *testing.T) {
 	w := newNewsWorld(t, true)
 	w.seedTemplate()
-	preparer := personBearer(t, yk, "hazirlayan@example.org", "Hazırlayan Kişi", "skymail:access", "skymail:mails:write")
+	preparer := personBearer(t, yk, "hazirlayan@example.org", "Hazırlayan Kişi", "skynotify:access", "skynotify:mails:write")
 
 	preview := w.postTo("/v1/news_sends/preview", preparer, newsSend("kayitlar", "teams", "/UYELER/ARGE/WEBLAB"))
 	if preview.status != fiber.StatusOK {
@@ -451,7 +451,7 @@ func TestNewsSendPreviewIsTheSendsMail(t *testing.T) {
 func TestNewsSendTestGoesToTheCallerOnly(t *testing.T) {
 	w := newNewsWorld(t, true)
 	w.seedTemplate()
-	preparer := personBearer(t, yk, "hazirlayan@example.org", "Hazırlayan Kişi", "skymail:access", "skymail:mails:write")
+	preparer := personBearer(t, yk, "hazirlayan@example.org", "Hazırlayan Kişi", "skynotify:access", "skynotify:mails:write")
 
 	body := newsSend("kayitlar", "members")
 	body["recipient_email"] = "baskasi@example.org"
@@ -480,10 +480,10 @@ func TestNewsSendTestGoesToTheCallerOnly(t *testing.T) {
 	if n := w.count(`SELECT count(*) FROM mail_queue WHERE recipient_email <> 'hazirlayan@example.org'`) + w.count(`SELECT count(*) FROM mail_tasks WHERE source_ref IS NOT NULL`); n != 0 {
 		t.Fatalf("a test reached someone else or became a News send: %d", n)
 	}
-	if s := w.postTo("/v1/news_sends/test", personBearer(t, yk, "", "", "skymail:access", "skymail:mails:write"), body); s.status != fiber.StatusConflict || s.error.Code != "news_send.no_test_address" {
+	if s := w.postTo("/v1/news_sends/test", personBearer(t, yk, "", "", "skynotify:access", "skynotify:mails:write"), body); s.status != fiber.StatusConflict || s.error.Code != "news_send.no_test_address" {
 		t.Fatalf("no verified address: %d %s", s.status, s.raw)
 	}
-	if s := w.postTo("/v1/news_sends/test", personBearer(t, yk, "a@example.org", "", "skymail:access"), body); s.status != fiber.StatusForbidden {
+	if s := w.postTo("/v1/news_sends/test", personBearer(t, yk, "a@example.org", "", "skynotify:access"), body); s.status != fiber.StatusForbidden {
 		t.Fatalf("without a role: %d %s", s.status, s.raw)
 	}
 }
@@ -493,7 +493,7 @@ func TestNewsSendTestGoesToTheCallerOnly(t *testing.T) {
 func TestNewsSendCountIsWhoASendWouldReach(t *testing.T) {
 	w := newNewsWorld(t, true)
 	w.seedTemplate()
-	preparer := personBearer(t, yk, "hazirlayan@example.org", "", "skymail:access", "skymail:mails:write")
+	preparer := personBearer(t, yk, "hazirlayan@example.org", "", "skynotify:access", "skynotify:mails:write")
 	count := func(audienceType string, teams ...string) handlers.NewsSendCount {
 		t.Helper()
 		body := newsSend("kayitlar", audienceType, teams...)
@@ -580,7 +580,7 @@ func TestNewsSendIsOnceUnderConcurrentRequests(t *testing.T) {
 	}
 }
 
-// An address SkyMail suppressed is written failed without the record's
+// An address SkyNotify suppressed is written failed without the record's
 // source, so a later send of it asks again; a canonical slug past 200
 // characters is refused, not a server error.
 func TestNewsSendSuppressedAddressAndLongSlug(t *testing.T) {
@@ -617,7 +617,7 @@ func TestACancelledNewsSendGoesAgainOnlyToWhoDidNotGetIt(t *testing.T) {
 	w.seedTemplate()
 	ctx := context.Background()
 	token := bearer(t, yk, false, announcerRoles...)
-	preparer := personBearer(t, yk, "hazirlayan@example.org", "", "skymail:access", "skymail:mails:write")
+	preparer := personBearer(t, yk, "hazirlayan@example.org", "", "skynotify:access", "skynotify:mails:write")
 	count := func() handlers.NewsSendCount {
 		t.Helper()
 		s := w.postTo("/v1/news_sends/count", preparer, map[string]any{"slug": "kayitlar", "audience": map[string]any{"type": "members"}})

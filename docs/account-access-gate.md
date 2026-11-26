@@ -1,6 +1,6 @@
-# SkyMail account-access gate
+# SkyNotify account-access gate
 
-SkyMail checks the shared permanent account denylist after Keycloak `userinfo`
+SkyNotify checks the shared permanent account denylist after Keycloak `userinfo`
 authentication and before any permission middleware or `/v1` handler. This
 applies equally to human and client-credentials subjects. A blocked subject gets
 a generic `401`. Redis, timeout, missing or mismatched contract, and malformed
@@ -18,13 +18,13 @@ The gate has only two modes:
 
 Use the shared dedicated Redis deployment, never the CMS or Forms cache. It must
 run a pinned Redis version with `maxmemory-policy noeviction`, AOF persistence,
-`appendfsync always`, authenticated TLS, and a read-only SkyMail ACL. That ACL
+`appendfsync always`, authenticated TLS, and a read-only SkyNotify ACL. That ACL
 must be limited to connection/read operations plus the following key prefixes:
 
 - `skylab:account-access:v1:contract`
 - `skylab:account-access:v1:blocked:*`
 
-SkyMail requires only `GET` and `MGET`; do not grant write, expiry, delete,
+SkyNotify requires only `GET` and `MGET`; do not grant write, expiry, delete,
 unlink, flush, or administrative commands. Mount the client certificate, private
 key, and CA certificate read-only at the configured paths.
 
@@ -56,6 +56,6 @@ subject_block_unverifiable` with `Retry-After: 300` and erases nothing. See
    side effect; a Redis outage must return `503`.
 4. Keep `/health` and `/docs` available during Redis failure.
 
-After the first real deletion, disabling the reader is unsafe. Take SkyMail out
+After the first real deletion, disabling the reader is unsafe. Take SkyNotify out
 of rotation and ship a forward fix instead. Redis recovery writes all permanent
 markers first and the contract key last.

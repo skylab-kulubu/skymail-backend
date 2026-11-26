@@ -98,7 +98,7 @@ func TestCredentialTemplatesAreLockedSensitive(t *testing.T) {
 	app := templateVersionsApp(t, db)
 
 	for _, key := range []string{
-		// Every credential mail that sends to SkyMail today.
+		// Every credential mail that sends to SkyNotify today.
 		"keycloak.verify-email", "keycloak.reset-password", "keycloak.update-email", "keycloak.idp-link",
 		"keycloak.personal-email-confirm", "keycloak.generic",
 		"account.security-alert", "account.primary-email-changed", "account.deletion-requested", "account.deletion-completed",
@@ -117,7 +117,7 @@ func TestCredentialTemplatesAreLockedSensitive(t *testing.T) {
 		}
 	}
 	for _, key := range []string{
-		// Shown: what sends to SkyMail today without a credential.
+		// Shown: what sends to SkyNotify today without a credential.
 		"free.basic", "core.welcome", "core.certificate", "club.team-membership", "event.updated", "event.cancelled",
 		"event.registration-full", "event.attendance-recorded",
 		"mail.approval-requested", "mail.approval-resolved", "ops.send-failed",
@@ -201,10 +201,10 @@ func TestLockedTemplateContentIsMaskedWhateverItsRowSays(t *testing.T) {
 		t.Fatal(err)
 	}
 	maskNow(t, db)
-	if answer := contentAs(t, app, task, row, contentOther, "skymail:access", "skymail:mails:read", SystemMailsReadRole); answer.Access != "masked" || answer.MaskedBy == nil {
+	if answer := contentAs(t, app, task, row, contentOther, "skynotify:access", "skynotify:mails:read", SystemMailsReadRole); answer.Access != "masked" || answer.MaskedBy == nil {
 		t.Errorf("content = %+v, want masked", answer)
 	}
-	status, body := getAs(t, app, "/mail_tasks/"+task.String(), contentSender, "skymail:access", "skymail:mails:read")
+	status, body := getAs(t, app, "/mail_tasks/"+task.String(), contentSender, "skynotify:access", "skynotify:mails:read")
 	var send struct {
 		ContentAccess string `json:"content_access"`
 	}
@@ -221,7 +221,7 @@ func TestANewSingleTemplateCarryingACodeOrALinkIsMaskedByDefault(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
 	app := contentApp(t, db, now)
-	system := []string{"skymail:access", "skymail:mails:read", "skymail:mails:write", SystemMailsReadRole}
+	system := []string{"skynotify:access", "skynotify:mails:read", "skynotify:mails:write", SystemMailsReadRole}
 	values := map[string]string{
 		"code":  "583014",
 		"otp":   "771290",

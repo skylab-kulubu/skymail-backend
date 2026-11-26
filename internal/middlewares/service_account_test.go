@@ -17,7 +17,7 @@ func TestRequireServiceAccountRefusesAPersonsToken(t *testing.T) {
 	sub := uuid.NewString()
 	for _, mutation := range []string{"none", "person", "client id of another client", "userinfo mismatch", "no sub"} {
 		t.Run(mutation, func(t *testing.T) {
-			claims := jwt.MapClaims{"sub": sub, "azp": "core", "client_id": "core", "aud": []string{"skymail"}}
+			claims := jwt.MapClaims{"sub": sub, "azp": "core", "client_id": "core", "aud": []string{"skynotify"}}
 			switch mutation {
 			case "person":
 				claims["azp"] = "account-center"
@@ -30,13 +30,13 @@ func TestRequireServiceAccountRefusesAPersonsToken(t *testing.T) {
 				delete(claims, "sub")
 			}
 			realm := userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON,
-				`{"sub":"`+sub+`","resource_access":{"skymail":{"roles":["skymail:notifications:send"]}}}`)
+				`{"sub":"`+sub+`","resource_access":{"skynotify":{"roles":["skynotify:notifications:send"]}}}`)
 			token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte("fixture-only"))
 			if err != nil {
 				t.Fatal(err)
 			}
 			app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-			app.Use(NewAuthMiddleware("skymail", realm, AudienceOff).Authenticate)
+			app.Use(NewAuthMiddleware("skynotify", realm, AudienceOff).Authenticate)
 			app.Post("/notifications", RequireServiceAccount(), func(c fiber.Ctx) error { return c.SendStatus(fiber.StatusNoContent) })
 			req := httptest.NewRequest(http.MethodPost, "/notifications", nil)
 			req.Header.Set("Authorization", "Bearer "+token)

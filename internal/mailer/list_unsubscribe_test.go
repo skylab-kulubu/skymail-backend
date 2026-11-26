@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 // coreLink is an unsubscribe link as core signs it.
@@ -17,10 +17,10 @@ const coreLink = "https://api.example.org/v1/communication-preferences/unsubscri
 // graphEnv is every lane on Graph, as production sends, with the switch.
 func graphEnv(listUnsubscribe string) map[string]string {
 	env := decidedEnv()
-	env["SKYMAIL_SEND_DUYURU"] = "graph"
-	env["SKYMAIL_FROM_DUYURU"] = "SKY LAB Duyurular <duyuru@bildirim.example.org>"
+	env["SKYNOTIFY_SEND_DUYURU"] = "graph"
+	env["SKYNOTIFY_FROM_DUYURU"] = "SKY LAB Duyurular <duyuru@bildirim.example.org>"
 	if listUnsubscribe != "" {
-		env["SKYMAIL_LIST_UNSUBSCRIBE"] = listUnsubscribe
+		env["SKYNOTIFY_LIST_UNSUBSCRIBE"] = listUnsubscribe
 	}
 	return env
 }
@@ -72,7 +72,7 @@ func sendEach(t *testing.T, m mailer.Transactional, jobs ...database.MailQueue) 
 
 // With the switch on, a bulk mail core gave a link for goes out of duyuru@ as
 // MIME with both RFC 8058 headers, its plain text and HTML, Reply-To and
-// X-SkyMail-Queue-Id; Graph's JSON could not carry them. A bulk mail without
+// X-SkyNotify-Queue-Id; Graph's JSON could not carry them. A bulk mail without
 // a link stays JSON with no copy in Sent Items, and hesap@ and bilgi@ never
 // carry the headers whatever their row holds.
 func TestABulkMailWithALinkGoesAsMIMEWithListUnsubscribe(t *testing.T) {
@@ -103,7 +103,7 @@ func TestABulkMailWithALinkGoesAsMIMEWithListUnsubscribe(t *testing.T) {
 		"Reply-To":              "<info@example.org>",
 		"Subject":               "Ekim duyurusu",
 		"Message-Id":            queueID,
-		"X-Skymail-Queue-Id":    queueID,
+		"X-SkyNotify-Queue-Id":  queueID,
 	} {
 		if got := msg.Header.Get(header); got != want {
 			t.Errorf("%s: %q, want %q", header, got, want)
@@ -141,7 +141,7 @@ func TestABulkMailWithALinkGoesAsMIMEWithListUnsubscribe(t *testing.T) {
 // Off (the default) every Graph mail is JSON as before, the row's link or not.
 func TestTheSwitchOffSendsEveryMailAsBefore(t *testing.T) {
 	for _, value := range []string{"", "off", "OFF"} {
-		t.Run("SKYMAIL_LIST_UNSUBSCRIBE="+value, func(t *testing.T) {
+		t.Run("SKYNOTIFY_LIST_UNSUBSCRIBE="+value, func(t *testing.T) {
 			captureMailerLogs(t)
 			j := newLaneJobs()
 			l := newLaneMailer(t, graphEnv(value), j.keys)
@@ -164,7 +164,7 @@ func TestTheXOAUTH2LaneCarriesListUnsubscribe(t *testing.T) {
 			captureMailerLogs(t)
 			j := newLaneJobs()
 			env := decidedEnv()
-			env["SKYMAIL_LIST_UNSUBSCRIBE"] = tc.value
+			env["SKYNOTIFY_LIST_UNSUBSCRIBE"] = tc.value
 			l := newLaneMailer(t, env, j.keys)
 			sendEach(t, l.m, j.withLink, j.withoutLink)
 			mails := l.relay.taken()
@@ -192,7 +192,7 @@ func TestTheOldPathNeverCarriesListUnsubscribe(t *testing.T) {
 	captureMailerLogs(t)
 	j := newLaneJobs()
 	env := graphEnv("on")
-	env["SKYMAIL_SEND_DUYURU"] = "off"
+	env["SKYNOTIFY_SEND_DUYURU"] = "off"
 	l := newLaneMailer(t, env, j.keys)
 	relay := startAnsweringRelay(t, "", "")
 	m := mailer.NewMailer(nil, answeringConfig(relay), mailer.SenderOn, mailer.WithSendLanes(mustLanes(t, env)))

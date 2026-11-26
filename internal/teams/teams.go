@@ -3,8 +3,8 @@
 //
 // Core says it (GET /internal/v1/users/{sub}/teams, core
 // docs/team-delegation.md "A person's Teams"), read from Keycloak's current
-// membership with ADR-0065's rule: SkyMail reads neither Keycloak nor the
-// token for it, and when core does not answer there is no Team mail; SkyMail
+// membership with ADR-0065's rule: SkyNotify reads neither Keycloak nor the
+// token for it, and when core does not answer there is no Team mail; SkyNotify
 // never falls back to a reading of its own.
 package teams
 
@@ -22,12 +22,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
 )
 
 // SwitchEnv opens Team mail: off (the default, also when unset) or on. It is
-// SkyMail's own switch, not core's TEAM_DELEGATION.
-const SwitchEnv = "SKYMAIL_TEAM_SEND"
+// SkyNotify's own switch, not core's TEAM_DELEGATION.
+const SwitchEnv = "SKYNOTIFY_TEAM_SEND"
 
 // PersonTeamsPath is core's route; %s is the person's sub.
 const PersonTeamsPath = "/internal/v1/users/%s/teams"
@@ -51,7 +51,7 @@ const (
 )
 
 // ErrLeadershipUnavailable refuses Team mail when core did not say which
-// Teams the person leads. Nothing else of SkyMail depends on core here.
+// Teams the person leads. Nothing else of SkyNotify depends on core here.
 var ErrLeadershipUnavailable = apperrors.New("team_mail.leadership_unavailable",
 	"core did not say which Teams you lead, so Team mail cannot go on right now. Nothing was changed. Try again in a moment.",
 	http.StatusServiceUnavailable).WithRetryAfter(RetryAfter)
@@ -82,7 +82,7 @@ type Reader interface {
 	LedNow(ctx context.Context, sub string) ([]Team, error)
 }
 
-// SwitchFromEnv reads SKYMAIL_TEAM_SEND; anything but off or on stops
+// SwitchFromEnv reads SKYNOTIFY_TEAM_SEND; anything but off or on stops
 // startup.
 func SwitchFromEnv(getenv func(string) string) (bool, error) {
 	switch raw := strings.ToLower(strings.TrimSpace(getenv(SwitchEnv))); raw {
@@ -95,13 +95,13 @@ func SwitchFromEnv(getenv func(string) string) (bool, error) {
 	}
 }
 
-// TokenSource is SkyMail's service account token (KEYCLOAK_SERVICE_CLIENT_ID,
+// TokenSource is SkyNotify's service account token (KEYCLOAK_SERVICE_CLIENT_ID,
 // core's client role audience:read).
 type TokenSource interface {
 	ServiceToken(ctx context.Context) (string, error)
 }
 
-// Core asks core with SkyMail's service account token.
+// Core asks core with SkyNotify's service account token.
 type Core struct {
 	base   string
 	tokens TokenSource
@@ -238,7 +238,7 @@ func leaderRows(rows []answerRow) ([]Team, error) {
 
 // LeaderGroupPath says path is a Leader group's own (its last part LIDERLER
 // or KOORDINATORLER): a group that is never a Team, and never Team mail's
-// audience on its own. Core never answers one; SkyMail holds it too.
+// audience on its own. Core never answers one; SkyNotify holds it too.
 func LeaderGroupPath(path string) bool {
 	last := path[strings.LastIndex(path, "/")+1:]
 	return last == "LIDERLER" || last == "KOORDINATORLER"
