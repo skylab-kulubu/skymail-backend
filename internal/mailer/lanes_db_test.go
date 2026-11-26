@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/msauth"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/msauth"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // The workers read a mail's lane from its send's template in the database:
@@ -56,7 +56,7 @@ func TestWorkersSendEachRowByItsLane(t *testing.T) {
 	login, list := queue(loginTask, mailer.PrioritySystem), queue(listTask, mailer.PriorityBulk)
 
 	env := decidedEnv()
-	env["SKYMAIL_SEND_DUYURU"] = "off"
+	env["SKYNOTIFY_SEND_DUYURU"] = "off"
 	lanes := mustLanes(t, env)
 	entra, graph, relay := startFakeEntra(t), startFakeGraph(t), startAnsweringRelay(t, "", "")
 	m := mailer.NewMailer(db, answeringConfig(relay), mailer.SenderOn, mailer.WithSendLanes(lanes))

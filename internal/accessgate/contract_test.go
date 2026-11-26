@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
+	"github.com/skylab-kulubu/skynotify-backend/internal/accessgate"
 )
 
 func TestMarkerKeyMatchesSharedGoldenVector(t *testing.T) {

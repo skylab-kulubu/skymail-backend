@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
 // Open and click tracking's withdrawal and retention (hub ticket
@@ -308,7 +308,7 @@ func retentionCounts(r *TrackingRetentionReport) TrackingRetentionCounts {
 	return r.Counts
 }
 
-// The retention run (SKYMAIL_TRACKING_RETENTION). 90 days (EventRetention)
+// The retention run (SKYNOTIFY_TRACKING_RETENTION). 90 days (EventRetention)
 // after a recipient's mail went out, their send's counts without people are
 // kept — every send's (KVKK notice s6), one of fewer than 10 tracked
 // recipients only within a year of its creation — then their token closes

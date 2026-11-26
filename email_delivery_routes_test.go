@@ -18,12 +18,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/accessgate"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/accessgate"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // GET /v1/me/email-delivery (hub ticket rabbitmq-olaylar 10) through the
@@ -89,18 +89,18 @@ func newDeliveryWorld(t *testing.T) *deliveryWorld {
 	}
 	store := database.NewStore(postgres.Pool)
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler})
-	auth := middlewares.NewAuthMiddleware("skymail", echoUserinfo(t), middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", echoUserinfo(t), middlewares.AudienceOff)
 	registerInboxRoutes(app, auth, nil, handlers.NewInboxHandler(store))
 	registerEmailDeliveryRoutes(app, auth, nil, handlers.NewEmailDeliveryHandler(store))
 	protectedAPI(app, auth, nil)
 	return &deliveryWorld{t: t, store: store, app: app}
 }
 
-// deliveryToken is a person's token for SkyMail whose userinfo carries
+// deliveryToken is a person's token for SkyNotify whose userinfo carries
 // userinfo; claims go into the token itself.
 func deliveryToken(t *testing.T, sub uuid.UUID, userinfo map[string]any, claims map[string]any) string {
 	t.Helper()
-	all := jwt.MapClaims{"sub": sub.String(), "azp": "account-center", "aud": []string{"skymail"}, "test_userinfo": userinfo}
+	all := jwt.MapClaims{"sub": sub.String(), "azp": "account-center", "aud": []string{"skynotify"}, "test_userinfo": userinfo}
 	for k, v := range claims {
 		all[k] = v
 	}
@@ -253,8 +253,8 @@ func TestEmailDeliveryServesOnlyTheCallersOwnSuppressions(t *testing.T) {
 	}
 }
 
-// Only a person's own token issued for SkyMail reads it, as the inbox.
-func TestOnlyAPersonsOwnTokenForSkyMailReadsEmailDelivery(t *testing.T) {
+// Only a person's own token issued for SkyNotify reads it, as the inbox.
+func TestOnlyAPersonsOwnTokenForSkyNotifyReadsEmailDelivery(t *testing.T) {
 	w := newDeliveryWorld(t)
 	for _, c := range []struct {
 		name   string
@@ -262,10 +262,10 @@ func TestOnlyAPersonsOwnTokenForSkyMailReadsEmailDelivery(t *testing.T) {
 		status int
 		code   string
 	}{
-		{"a person's token for SkyMail, no role", personToken(t, personAyse, "skymail"), fiber.StatusOK, ""},
+		{"a person's token for SkyNotify, no role", personToken(t, personAyse, "skynotify"), fiber.StatusOK, ""},
 		{"a person's token for another service", personToken(t, personAyse, "account"), fiber.StatusUnauthorized, "server.unauthorized"},
 		{"a person's token with no aud", personToken(t, personAyse), fiber.StatusUnauthorized, "server.unauthorized"},
-		{"a service's token", serviceToken(t, "skymail"), fiber.StatusForbidden, "auth.person_required"},
+		{"a service's token", serviceToken(t, "skynotify"), fiber.StatusForbidden, "auth.person_required"},
 		{"no token", "", fiber.StatusUnauthorized, "server.unauthorized"},
 	} {
 		t.Run(c.name, func(t *testing.T) {

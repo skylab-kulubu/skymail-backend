@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
 // The two probe recipients differ in each field's length, first and last

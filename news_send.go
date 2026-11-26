@@ -8,20 +8,20 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/news"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/news"
 )
 
 // NewsCMSURLEnv is inscribed's address for a News send's read, without the
 // /cms path (http://inscribed:8080 on the Docker network, or the public
 // https://api.yildizskylab.com/api/cms's base https://api.yildizskylab.com/api).
-const NewsCMSURLEnv = "SKYMAIL_NEWS_CMS_URL"
+const NewsCMSURLEnv = "SKYNOTIFY_NEWS_CMS_URL"
 
 // NewsImageHostsEnv names the hosts a News record's cover may come from,
 // comma-separated; each also allows its subdomains. Unset: yildizskylab.com.
-const NewsImageHostsEnv = "SKYMAIL_NEWS_IMAGE_HOSTS"
+const NewsImageHostsEnv = "SKYNOTIFY_NEWS_IMAGE_HOSTS"
 
 // newsSendConfig is what a News send needs (README, "Haberden gönderim").
 type newsSendConfig struct {
@@ -29,10 +29,10 @@ type newsSendConfig struct {
 	CMSURL  string
 }
 
-// newsSendConfigFromEnv reads SKYMAIL_NEWS_SEND, SKYMAIL_NEWS_READ_MORE,
-// SKYMAIL_NEWS_CMS_URL and SKYMAIL_NEWS_IMAGE_HOSTS. On needs the CMS's
-// address, coreURL (CORE_URL), SKYMAIL_LIST_UNSUBSCRIBE and
-// SKYMAIL_MAIL_PURPOSE on (lanes): a News mail never goes without its
+// newsSendConfigFromEnv reads SKYNOTIFY_NEWS_SEND, SKYNOTIFY_NEWS_READ_MORE,
+// SKYNOTIFY_NEWS_CMS_URL and SKYNOTIFY_NEWS_IMAGE_HOSTS. On needs the CMS's
+// address, coreURL (CORE_URL), SKYNOTIFY_LIST_UNSUBSCRIBE and
+// SKYNOTIFY_MAIL_PURPOSE on (lanes): a News mail never goes without its
 // one-click unsubscribe header, nor a send without its purpose, category and
 // the sender's statement. Without any of them startup stops, as it does for
 // a value other than the ones named.
@@ -81,10 +81,10 @@ func newsSendConfigFromEnv(getenv func(string) string, coreURL string, lanes mai
 		return cfg, errors.New(handlers.NewsSendEnv + "=on needs CORE_URL, core's address on the Docker network (e.g. http://core-backend:8080)")
 	}
 	if !lanes.ListUnsubscribe {
-		return cfg, errors.New(handlers.NewsSendEnv + "=on needs SKYMAIL_LIST_UNSUBSCRIBE=on: a News mail goes with its one-click unsubscribe header (List-Unsubscribe, RFC 8058)")
+		return cfg, errors.New(handlers.NewsSendEnv + "=on needs SKYNOTIFY_LIST_UNSUBSCRIBE=on: a News mail goes with its one-click unsubscribe header (List-Unsubscribe, RFC 8058)")
 	}
 	if !lanes.Purpose {
-		return cfg, errors.New(handlers.NewsSendEnv + "=on needs SKYMAIL_MAIL_PURPOSE=on: a News send is written with its purpose, category and commercial statement")
+		return cfg, errors.New(handlers.NewsSendEnv + "=on needs SKYNOTIFY_MAIL_PURPOSE=on: a News send is written with its purpose, category and commercial statement")
 	}
 	return cfg, nil
 }
@@ -92,15 +92,15 @@ func newsSendConfigFromEnv(getenv func(string) string, coreURL string, lanes mai
 func logNewsSend(cfg newsSendConfig) {
 	log.Info().Bool("on", cfg.Options.Enabled).Str("read_more", cfg.Options.ReadMore).Str("cms_url", cfg.CMSURL).
 		Strs("image_hosts", cfg.Options.ImageHosts).
-		Msg("News sends (SKYMAIL_NEWS_SEND, SKYMAIL_NEWS_READ_MORE, SKYMAIL_NEWS_CMS_URL, SKYMAIL_NEWS_IMAGE_HOSTS)")
+		Msg("News sends (SKYNOTIFY_NEWS_SEND, SKYNOTIFY_NEWS_READ_MORE, SKYNOTIFY_NEWS_CMS_URL, SKYNOTIFY_NEWS_IMAGE_HOSTS)")
 }
 
 // registerNewsSendRoutes serves POST /v1/news_sends (hub ticket duyuru-haber
-// 06): a person with skymail:announcements:send mails a published News
+// 06): a person with skynotify:announcements:send mails a published News
 // record directly. Its preview, test mail and live count (bilet 07, 08) are
-// also for who prepares a send to submit (skymail:mails:write).
+// also for who prepares a send to submit (skynotify:mails:write).
 func registerNewsSendRoutes(api fiber.Router, auth middlewares.AuthMiddleware, sends handlers.NewsSendHandler) {
-	prepares := auth.RequireAnyPermission(handlers.AnnouncementsSendRole, "skymail:mails:write")
+	prepares := auth.RequireAnyPermission(handlers.AnnouncementsSendRole, "skynotify:mails:write")
 	group := api.Group("/news_sends")
 	group.Get("/availability", sends.Availability)
 	group.Post("/preview", prepares, sends.Preview)

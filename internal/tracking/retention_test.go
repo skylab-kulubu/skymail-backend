@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
 // KVKK notice s6, 2026-10-23: a person's openings and clicks are kept 90
@@ -48,10 +48,10 @@ func TestRetentionModeFromEnv(t *testing.T) {
 // roll-back. It needs tracking off, or new mail would be tracked again while
 // the purge says there is none.
 func TestRetentionPurgeNeedsTrackingOff(t *testing.T) {
-	on := tracking.Config{Mode: tracking.ModeOn, BaseURL: "https://api.yildizskylab.com/api/skymail", CoreURL: "http://core:8080"}
+	on := tracking.Config{Mode: tracking.ModeOn, BaseURL: "https://api.yildizskylab.com/api/skynotify", CoreURL: "http://core:8080"}
 	if _, err := tracking.RetentionModeFromEnv(env(map[string]string{tracking.RetentionModeEnv: "purge"}), on); err == nil ||
-		!strings.Contains(err.Error(), "SKYMAIL_TRACKING") {
-		t.Fatalf("purge with tracking on: %v, want an error naming SKYMAIL_TRACKING", err)
+		!strings.Contains(err.Error(), "SKYNOTIFY_TRACKING") {
+		t.Fatalf("purge with tracking on: %v, want an error naming SKYNOTIFY_TRACKING", err)
 	}
 	for _, raw := range []string{"off", "dry-run", "apply"} {
 		if _, err := tracking.RetentionModeFromEnv(env(map[string]string{tracking.RetentionModeEnv: raw}), on); err != nil {
@@ -60,7 +60,7 @@ func TestRetentionPurgeNeedsTrackingOff(t *testing.T) {
 	}
 }
 
-// SKYMAIL_TRACKING_RETENTION_MAX_ROWS sets the brake: unset is 50000, a
+// SKYNOTIFY_TRACKING_RETENTION_MAX_ROWS sets the brake: unset is 50000, a
 // whole number from 1 to 10000000 otherwise; anything else stops startup.
 func TestRetentionMaxRowsFromEnv(t *testing.T) {
 	for raw, want := range map[string]int64{"": 50000, " ": 50000, "1": 1, " 250000 ": 250000, "10000000": 10000000} {

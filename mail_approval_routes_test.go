@@ -19,14 +19,14 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/keycloak"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 // The people in the approval tests: a member who cannot send, two approvers,
@@ -40,26 +40,26 @@ type approvalPerson struct {
 
 var (
 	elif = approvalPerson{"11111111-1111-4111-8111-111111111111", "Elif Yıldız", "elif@yildizskylab.com",
-		[]string{"skymail:access", "skymail:templates:read", "skymail:lists:read"}}
+		[]string{"skynotify:access", "skynotify:templates:read", "skynotify:lists:read"}}
 	fatih = approvalPerson{"22222222-2222-4222-8222-222222222222", "Fatih Naz", "fatih@yildizskylab.com",
-		[]string{"skymail:access", "skymail:mails:approve"}}
+		[]string{"skynotify:access", "skynotify:mails:approve"}}
 	yusuf = approvalPerson{"33333333-3333-4333-8333-333333333333", "Yusuf Durusoy", "yusuf@yildizskylab.com",
-		[]string{"skymail:access", "skymail:mails:approve", "skymail:mails:write", "skymail:templates:read", "skymail:lists:read"}}
+		[]string{"skynotify:access", "skynotify:mails:approve", "skynotify:mails:write", "skynotify:templates:read", "skynotify:lists:read"}}
 	baska = approvalPerson{"44444444-4444-4444-8444-444444444444", "Başka Üye", "baska@yildizskylab.com",
-		[]string{"skymail:access", "skymail:mails:read"}}
+		[]string{"skynotify:access", "skynotify:mails:read"}}
 	// A member who reads templates but not lists: they may submit a send to
 	// people, not to a list.
 	okur = approvalPerson{"77777777-7777-4777-8777-777777777777", "Şablon Okuru", "okur@yildizskylab.com",
-		[]string{"skymail:access", "skymail:templates:read"}}
+		[]string{"skynotify:access", "skynotify:templates:read"}}
 )
 
 // A member whose token carries no e-mail address, and one whose token carries
 // an address Keycloak has not verified.
 var (
 	adsiz = approvalPerson{"55555555-5555-4555-8555-555555555555", "Adsız Üye", "",
-		[]string{"skymail:access", "skymail:templates:read", "skymail:lists:read"}}
+		[]string{"skynotify:access", "skynotify:templates:read", "skynotify:lists:read"}}
 	dogrulanmamis = approvalPerson{"66666666-6666-4666-8666-666666666666", "Doğrulanmamış Üye", "",
-		[]string{"skymail:access", "skymail:templates:read", "skymail:lists:read"}}
+		[]string{"skynotify:access", "skynotify:templates:read", "skynotify:lists:read"}}
 	unverifiedSubs = map[string]bool{dogrulanmamis.sub: true}
 )
 
@@ -189,8 +189,8 @@ func (m *recordingMailer) EnqueueTrackedSingle(ctx context.Context, arg database
 	return recordingQueue{m: m, queue: m.Transactional}.EnqueueTrackedSingle(ctx, arg, preferences)
 }
 
-// EnqueueSystemSingle is a notification SkyMail sends itself, tracked by the
-// system when SKYMAIL_TRACKING_SYSTEM is on: recorded as a single.
+// EnqueueSystemSingle is a notification SkyNotify sends itself, tracked by the
+// system when SKYNOTIFY_TRACKING_SYSTEM is on: recorded as a single.
 func (m *recordingMailer) EnqueueSystemSingle(ctx context.Context, arg database.CreateSingleMailTaskParams, preferences *mailer.TrackingPreferences) (uuid.UUID, bool, error) {
 	id, tracked, err := m.Transactional.EnqueueSystemSingle(ctx, arg, preferences)
 	if err == nil {
@@ -311,7 +311,7 @@ func (m *recordingMailer) of(templateID uuid.UUID) []sentMail {
 	return out
 }
 
-// approvalWorld is SkyMail as production serves the approval routes — the real
+// approvalWorld is SkyNotify as production serves the approval routes — the real
 // routes, permission middleware, handler, error handler, validator, mailer and
 // Postgres — with Keycloak and the clock stood in for.
 type approvalWorld struct {
@@ -359,7 +359,7 @@ func newApprovalWorldWithPool(t *testing.T, poolSize int, opts ...mailer.Option)
 }
 
 // newApprovalWorldWith is newApprovalWorldWithPool whose send routes take
-// handlerOpts too (SKYMAIL_SENDER_SEES_RECIPIENTS, for one).
+// handlerOpts too (SKYNOTIFY_SENDER_SEES_RECIPIENTS, for one).
 func newApprovalWorldWith(t *testing.T, poolSize int, handlerOpts []handlers.MailHandlerOption, opts ...mailer.Option) *approvalWorld {
 	t.Helper()
 	postgres := testpostgres.StartDatabase(t)
@@ -410,8 +410,8 @@ func newApprovalWorldWith(t *testing.T, poolSize int, handlerOpts []handlers.Mai
 	w.directory.groups[w.group.String()] = []*gocloak.User{baska.user(), elif.user()}
 
 	w.handler = handlers.NewMailApprovalHandler(store, w.mail, w.directory, handlers.MailApprovalOptions{
-		ClientID: "skymail",
-		UIURL:    "https://iletisim.yildizskylab.com/",
+		ClientID: "skynotify",
+		UIURL:    "https://notify.yildizskylab.com/",
 		Now:      w.now,
 	})
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
@@ -432,7 +432,7 @@ func newApprovalWorldWith(t *testing.T, poolSize int, handlerOpts []handlers.Mai
 		c.Locals("roles", person.roles)
 		return c.Next()
 	})
-	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
 	registerMailApprovalRoutes(api, auth, w.handler)
 	registerMailTaskRoutes(api, auth, handlers.NewMailHandler(store, w.mail, w.directory, handlerOpts...))
 	w.app = app
@@ -671,7 +671,7 @@ func TestSubmittingASendQueuesNothingAndTellsTheApprovers(t *testing.T) {
 		t.Fatalf("approval-requested went to %s", got)
 	}
 	vars := notices[0].variables
-	link := "https://iletisim.yildizskylab.com/mail-approvals/show/" + answer.ID.String()
+	link := "https://notify.yildizskylab.com/mail-approvals/show/" + answer.ID.String()
 	if vars["RequesterName"] != "Elif Yıldız" || vars["TemplateName"] != "Serbest Gönderim" || vars["AudienceName"] != "Tüm üyeler" ||
 		vars["RecipientCount"] != "2" || vars["ApproveUrl"] != link || vars["PreviewUrl"] != link+"#preview" {
 		t.Errorf("approval-requested variables = %v", vars)
@@ -800,7 +800,7 @@ func TestSubmissionStandsWhenNoApproverCanBeTold(t *testing.T) {
 		unknown.Notification.Problem == nil || *unknown.Notification.Problem != "approver_lookup_failed" {
 		t.Errorf("with Keycloak failing: %+v", unknown.Notification)
 	}
-	if got := w.directory.roleCalls; len(got) != 2 || got[0] != "skymail skymail:mails:approve" {
+	if got := w.directory.roleCalls; len(got) != 2 || got[0] != "skynotify skynotify:mails:approve" {
 		t.Errorf("role lookups = %v", got)
 	}
 	if n := len(w.mail.of(w.requested.ID)); n != 0 {
@@ -901,7 +901,7 @@ func TestApprovingSendsExactlyWhatWasSubmittedOnce(t *testing.T) {
 	vars := notices[0].variables
 	if vars["Decision"] != "approved" || vars["DecidedBy"] != "Fatih Naz" || vars["DecisionNote"] != "Güzel olmuş." ||
 		vars["TemplateName"] != "Serbest Gönderim" || vars["AudienceName"] != "Tüm üyeler" ||
-		vars["RequestUrl"] != "https://iletisim.yildizskylab.com/mail-approvals/show/"+submitted.ID.String() ||
+		vars["RequestUrl"] != "https://notify.yildizskylab.com/mail-approvals/show/"+submitted.ID.String() ||
 		vars["DeadlineAt"] != "30.09.2026 13:00" {
 		t.Errorf("approval-resolved variables = %v", vars)
 	}
@@ -917,6 +917,10 @@ func TestApprovingSendsExactlyWhatWasSubmittedOnce(t *testing.T) {
 	}
 	if row := w.queuedRows(notices[0].taskID)[elif.email]; row.Priority != int16(mailer.PrioritySystem) {
 		t.Errorf("approval-resolved notice queued with priority %d, want the system lane", row.Priority)
+	}
+	// SkyNotify's own notice is a service's mail in the send list.
+	if kind := w.kindOf(notices[0].taskID); kind != "system" {
+		t.Errorf("approval-resolved notice kind %s, want system", kind)
 	}
 
 	// Approving it again sends nothing; with an edit it is refused.
@@ -1286,8 +1290,8 @@ func TestAnUndecidedRequestExpiresAndIsNeverSent(t *testing.T) {
 			expiredNotices = append(expiredNotices, notice)
 		}
 	}
-	if len(expiredNotices) != 2 || expiredNotices[0].recipients[0] != elif.email || expiredNotices[0].sentBy != "skymail" ||
-		expiredNotices[0].variables["DecidedBy"] != "SkyMail" || expiredNotices[0].variables["DecisionNote"] == "" {
+	if len(expiredNotices) != 2 || expiredNotices[0].recipients[0] != elif.email || expiredNotices[0].sentBy != "skynotify" ||
+		expiredNotices[0].variables["DecidedBy"] != "SkyNotify" || expiredNotices[0].variables["DecisionNote"] == "" {
 		t.Fatalf("expiry notices = %+v", expiredNotices)
 	}
 
@@ -1362,7 +1366,7 @@ func TestReadingAnOverdueRequestWritesAndSendsNothing(t *testing.T) {
 		t.Errorf("after the sweep: %s %s", read.State, read.kinds())
 	}
 	if notices := w.mail.of(w.resolved.ID); len(notices) != 1 || notices[0].variables["Decision"] != "expired" ||
-		notices[0].variables["RequestUrl"] != "https://iletisim.yildizskylab.com/mail-approvals/show/"+overdue.ID.String() ||
+		notices[0].variables["RequestUrl"] != "https://notify.yildizskylab.com/mail-approvals/show/"+overdue.ID.String() ||
 		notices[0].variables["DeadlineAt"] != "30.09.2026 13:00" {
 		t.Errorf("expiry notices = %+v", notices)
 	}

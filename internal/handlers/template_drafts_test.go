@@ -15,7 +15,7 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
 // servedDraft is one version whole, as the draft routes answer with it.

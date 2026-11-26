@@ -42,14 +42,14 @@ import (
 //
 // A member's rows live with the account (ADR-0062: "üyede hesapla birlikte")
 // and go with Account erasure: a row is emptied only when it names no subject
-// (recipient_sub is null), SkyMail never tied its address to one (another
+// (recipient_sub is null), SkyNotify never tied its address to one (another
 // queue row or a suppression), and Keycloak answered that no user has the
 // address as primary, school or personal e-mail. A Keycloak that does not
 // answer leaves the row as it is, for the next run. A row found to be
 // someone's is marked (account_at, mail_queue.recipient_account_at) and not
 // asked about again, so a run's bounded lookups always reach new addresses.
 
-// RecipientRetentionMode is what the run does: SKYMAIL_RECIPIENT_RETENTION.
+// RecipientRetentionMode is what the run does: SKYNOTIFY_RECIPIENT_RETENTION.
 type RecipientRetentionMode string
 
 const (
@@ -64,9 +64,9 @@ const (
 )
 
 // RecipientRetentionModeEnv names the variable that holds the mode.
-const RecipientRetentionModeEnv = "SKYMAIL_RECIPIENT_RETENTION"
+const RecipientRetentionModeEnv = "SKYNOTIFY_RECIPIENT_RETENTION"
 
-// RecipientRetentionModeFromEnv reads SKYMAIL_RECIPIENT_RETENTION: off,
+// RecipientRetentionModeFromEnv reads SKYNOTIFY_RECIPIENT_RETENTION: off,
 // dry-run (or unset) or apply. Anything else stops startup, so a typo never
 // turns destruction on or off.
 func RecipientRetentionModeFromEnv(getenv func(string) string) (RecipientRetentionMode, error) {
@@ -83,7 +83,7 @@ func RecipientRetentionModeFromEnv(getenv func(string) string) (RecipientRetenti
 // RecipientRetentionMaxRowsEnv names the brake: the most list memberships,
 // recipients, queue rows, request people, respondents, or request variables
 // and changes one apply may change before it changes nothing (refused_large).
-const RecipientRetentionMaxRowsEnv = "SKYMAIL_RECIPIENT_RETENTION_MAX_ROWS"
+const RecipientRetentionMaxRowsEnv = "SKYNOTIFY_RECIPIENT_RETENTION_MAX_ROWS"
 
 // DefaultRecipientRetentionMaxRows is the brake when the variable is unset.
 const DefaultRecipientRetentionMaxRows = 50000
@@ -92,7 +92,7 @@ const DefaultRecipientRetentionMaxRows = 50000
 // must not turn it off.
 const maxRecipientRetentionMaxRows = 10000000
 
-// RecipientRetentionMaxRowsFromEnv reads SKYMAIL_RECIPIENT_RETENTION_MAX_ROWS,
+// RecipientRetentionMaxRowsFromEnv reads SKYNOTIFY_RECIPIENT_RETENTION_MAX_ROWS,
 // a whole number from 1 to 10,000,000; unset is
 // DefaultRecipientRetentionMaxRows. Anything else stops startup.
 func RecipientRetentionMaxRowsFromEnv(getenv func(string) string) (int64, error) {
@@ -109,7 +109,7 @@ func RecipientRetentionMaxRowsFromEnv(getenv func(string) string) (int64, error)
 
 // RecipientRetentionLockName names the session advisory lock one run holds:
 // one run at a time across replicas.
-const RecipientRetentionLockName = "skymail-backend recipient retention"
+const RecipientRetentionLockName = "skynotify-backend recipient retention"
 
 // ErrRecipientRetentionLocked is returned when another run holds the lock.
 var ErrRecipientRetentionLocked = errors.New("recipient retention: another run holds the lock")
@@ -192,7 +192,7 @@ type RecipientRetentionCounts struct {
 	// Of them: the club's own (clubDomains), never a person's: kept, never
 	// asked about.
 	AddressesClub int64 `json:"addresses_club"`
-	// Of them: tied to a subject in SkyMail (another queue row, a
+	// Of them: tied to a subject in SkyNotify (another queue row, a
 	// suppression), or Account erasure's stand-in.
 	AddressesTied int64 `json:"addresses_tied"`
 	// Keycloak found a user with the address.
@@ -381,7 +381,7 @@ type recipientRetentionPlan struct {
 type recipientRetentionUnit []string
 
 // recipientRetentionPlan finds the lists, sends and requests due and decides
-// their addresses: those SkyMail ties to a subject, then Keycloak's answers,
+// their addresses: those SkyNotify ties to a subject, then Keycloak's answers,
 // asked list by list, send by send and request by request.
 func (s *Store) recipientRetentionPlan(ctx context.Context, now time.Time, opts RecipientRetentionOptions) (*recipientRetentionPlan, error) {
 	plan := &recipientRetentionPlan{days: opts.ContentRetentionDays}
@@ -428,7 +428,7 @@ func (s *Store) recipientRetentionPlan(ctx context.Context, now time.Time, opts 
 	sort.Strings(addresses)
 	plan.counts.Addresses = int64(len(addresses))
 
-	// The addresses SkyMail already ties to a subject: someone's.
+	// The addresses SkyNotify already ties to a subject: someone's.
 	tied := map[string]bool{DeletedUserEmail: true}
 	if len(addresses) > 0 {
 		rows, err := s.Conn.Query(ctx, `
@@ -1003,7 +1003,7 @@ var jsonAddress = regexp.MustCompile(`[\p{L}\p{N}_.%+\-]+@[\p{L}\p{N}_\-]+(?:\.[
 // jsonAddressesIn are the [start, end) of the addresses in s: the candidates
 // of jsonAddress that are not part of a link or a handle — right after a
 // slash, a colon (but mailto:) or an @ (a Mastodon handle, @kisi@sunucu.tld)
-// —, not followed by a path, and that the address parser SkyMail checks a
+// —, not followed by a path, and that the address parser SkyNotify checks a
 // Forms snapshot's addresses with (net/mail) takes as they are.
 func jsonAddressesIn(s string) [][2]int {
 	var out [][2]int

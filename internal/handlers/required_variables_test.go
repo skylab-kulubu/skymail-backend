@@ -11,8 +11,8 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // requiredVariablesApp is templateVersionsApp with the operator's Required
@@ -485,7 +485,7 @@ func TestAPartTheMailerCannotParseIsRefused(t *testing.T) {
 		})
 		assertUnparseable(t, response.StatusCode, body, tc.part)
 	}
-	if count, err := db.CountAllTemplatesIncludingArchived(context.Background()); err != nil || count != 0 {
+	if count, err := db.CountAllTemplatesIncludingArchived(context.Background(), nil); err != nil || count != 0 {
 		t.Fatalf("templates after refused creates = %d, %v", count, err)
 	}
 
@@ -555,7 +555,7 @@ func collatedHandlerStore(t *testing.T) *database.Store {
 	if _, err := postgres.Pool.Exec(ctx, `CREATE DATABASE collated TEMPLATE template0 LOCALE_PROVIDER icu ICU_LOCALE 'en-US' LOCALE 'C'`); err != nil {
 		t.Fatal(err)
 	}
-	pool, err := pgxpool.New(ctx, strings.Replace(postgres.URL, "/skymailtest?", "/collated?", 1))
+	pool, err := pgxpool.New(ctx, strings.Replace(postgres.URL, "/skynotifytest?", "/collated?", 1))
 	if err != nil {
 		t.Fatal(err)
 	}

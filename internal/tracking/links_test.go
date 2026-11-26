@@ -5,17 +5,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
-const base = "https://api.yildizskylab.com/api/skymail"
+const base = "https://api.yildizskylab.com/api/skynotify"
 
 // The links a click is counted on are the http and https addresses of the
 // mail's <a> tags, in order, each once, as the browser reads them (entities
 // decoded, blanks around trimmed). Everything else is left as it is: other
 // schemes, fragments, relative paths, addresses with a user, overlong ones,
-// unsubscribe and preference links, SkyMail's own /t/ addresses and a link
-// the template marks data-skymail-notrack. Nothing outside an <a> is a link.
+// unsubscribe and preference links, SkyNotify's own /t/ addresses and a link
+// the template marks data-skynotify-notrack. Nothing outside an <a> is a link.
 func TestLinksAreTheMailsTrackableAnchors(t *testing.T) {
 	long := "https://example.com/" + strings.Repeat("a", 2049-len("https://example.com/"))
 	body := `<!DOCTYPE html><html><head><link href="https://cdn.example.com/x.css"><style>a{color:red}</style></head>
@@ -36,7 +36,7 @@ func TestLinksAreTheMailsTrackableAnchors(t *testing.T) {
 <a href="https://my.yildizskylab.com/communication-preferences">Tercihler</a>
 <a href="https://liste.example/unsubscribe/42">Abonelik</a>
 <a href="` + base + `/t/c/AAAAAAAAAAAAAAAAAAAAAA/AAAAAAAAAAA">Eski takip</a>
-<a data-skymail-notrack href="https://skylab.example/gizli">İşaretli</a>
+<a data-skynotify-notrack href="https://skylab.example/gizli">İşaretli</a>
 <a>Bağlantısız</a>
 <img src="https://cdn.example.com/logo.png">
 <a href="https://skylab.example/bosluk icinde">Boşluklu</a>
@@ -89,7 +89,7 @@ func TestCommonLinksStopAtTheLimit(t *testing.T) {
 // as they are (Yusuf, 2026-10-21): an href a template action is part of — a
 // password reset, an e-mail verification or a login link, any address with
 // a variable — is never a literal link, wherever the action sits in it, and
-// neither is one marked data-skymail-notrack or one Trackable refuses. A
+// neither is one marked data-skynotify-notrack or one Trackable refuses. A
 // link inside an HTML comment is no link.
 func TestLiteralLinksAreTheOnesTheTemplateWritesOut(t *testing.T) {
 	template := `<!DOCTYPE html><html><body>
@@ -100,7 +100,7 @@ func TestLiteralLinksAreTheOnesTheTemplateWritesOut(t *testing.T) {
 <a href="https://my.yildizskylab.com/{{.path}}/onay">Onayla</a>
 <a href={{.loginUrl}}>Giriş</a>
 <a href="https://my.yildizskylab.com/verify?k={{/* yorum */}}x">Yorumlu</a>
-<a href="https://yildizskylab.com/gizli" data-skymail-notrack>İşaretli</a>
+<a href="https://yildizskylab.com/gizli" data-skynotify-notrack>İşaretli</a>
 <a href="mailto:info@yildizskylab.com">Yaz</a>
 <a href="https://my.yildizskylab.com/communication-preferences">Tercihler</a>
 <!-- <a href="https://yildizskylab.com/yorumda">Yorumda</a> -->

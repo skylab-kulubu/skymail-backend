@@ -12,20 +12,20 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 // POST /v1/mail_tasks/single with erase_after_send (core's account deletion
 // notices, 20261031230000): a service's mail that keeps no record of its
-// recipient. It is never tracked, even while SkyMail tracks system mail, and
+// recipient. It is never tracked, even while SkyNotify tracks system mail, and
 // it goes in the system lane; a person's send cannot ask for it.
 func TestASendThatKeepsNoRecordIsAServicesAndNeverTracked(t *testing.T) {
 	w, _ := systemTrackedWorld(t)
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
-	auth := middlewares.NewAuthMiddleware("skymail", claimsUserinfo(t), middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", claimsUserinfo(t), middlewares.AudienceOff)
 	registerMailTaskRoutes(protectedAPI(app, auth, nil), auth, handlers.NewMailHandler(w.store, w.mail, w.directory))
 	post := func(service bool) (int, []byte) {
 		t.Helper()
@@ -33,7 +33,7 @@ func TestASendThatKeepsNoRecordIsAServicesAndNeverTracked(t *testing.T) {
 		send["erase_after_send"] = true
 		body, _ := json.Marshal(send)
 		request := httptest.NewRequest(http.MethodPost, "/v1/mail_tasks/single", bytes.NewReader(body))
-		request.Header.Set("Authorization", "Bearer "+bearer(t, uuid.NewString(), service, "skymail:access", "skymail:mails:send"))
+		request.Header.Set("Authorization", "Bearer "+bearer(t, uuid.NewString(), service, "skynotify:access", "skynotify:mails:send"))
 		request.Header.Set("Content-Type", "application/json")
 		response, err := app.Test(request, fiber.TestConfig{Timeout: 30 * time.Second})
 		if err != nil {

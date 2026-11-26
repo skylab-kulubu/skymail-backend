@@ -326,7 +326,7 @@ func TestPersonalNameIsAnIPOrAPlace(t *testing.T) {
 }
 
 // The #63 review's attacks (notes/inceleme-arsivi-2026-10-09/
-// skymail-pr63-frontend-pr92-masked-content-review.md, S4–S6): each value
+// skynotify-pr63-frontend-pr92-masked-content-review.md, S4–S6): each value
 // must be gone from the masked mail, by the variables or by the patterns.
 func TestMaskSentHidesWhatTheReviewLeaked(t *testing.T) {
 	cases := []struct {

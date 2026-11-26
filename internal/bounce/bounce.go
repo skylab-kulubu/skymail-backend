@@ -1,6 +1,6 @@
 // Package bounce records what a delivery status notification (an NDR) says
-// about a mail SkyMail sent, and suppresses an address one permanent failure
-// was reported for (hub spec skymail-bounce-isleme §3–§4; README, "Geri dönen
+// about a mail SkyNotify sent, and suppresses an address one permanent failure
+// was reported for (hub spec skynotify-bounce-isleme §3–§4; README, "Geri dönen
 // posta ve bastırma listesi"). The reader that fetches the reports from the
 // sender mailbox (ticket 04) hands each one to Process; nothing here reads a
 // mailbox.
@@ -10,7 +10,7 @@
 // and its recipient together:
 //
 //  1. it is a delivery status notification (dsn.Parse);
-//  2. the returned message's Message-ID, or else its X-SkyMail-Queue-Id (a
+//  2. the returned message's Message-ID, or else its X-SkyNotify-Queue-Id (a
 //     mail sent through Graph, whose Message-ID is Exchange's), is
 //     <queue id@SMTP_FQDN>; a report that returned no headers is matched by
 //     its own In-Reply-To, then References (dsn.Report.QueueID);
@@ -36,8 +36,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/dsn"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/dsn"
 )
 
 // Outcome is what Process did with a report: the reader counts them.
@@ -47,7 +47,7 @@ const (
 	// OutcomeNotDSN: not a delivery status notification (an auto-reply, a
 	// person's mail, a plain-text bounce). Nothing recorded.
 	OutcomeNotDSN Outcome = "dsn_degil"
-	// OutcomeUnmatched: about no mail SkyMail sent and can still name (a
+	// OutcomeUnmatched: about no mail SkyNotify sent and can still name (a
 	// foreign Message-ID — the rotator's alarm mail, Keycloak's own SMTP —,
 	// no such row, a row not sent, a report from before it was sent, a row
 	// Account erasure cleared). Nothing recorded.
@@ -76,7 +76,7 @@ const RetentionDays = 365
 
 // sentAtSlack is how much earlier than the row's sent_at a report may say it
 // arrived: Graph's receivedDateTime has whole seconds and Exchange's clock is
-// not SkyMail's. Exchange Online's own report of a recipient it has no
+// not SkyNotify's. Exchange Online's own report of a recipient it has no
 // mailbox for comes within a second.
 const sentAtSlack = 2 * time.Minute
 
@@ -105,7 +105,7 @@ var ErrUnreadable = errors.New("the report cannot be read")
 var errDryRun = errors.New("dry run")
 
 // Process reads one report and records it. fqdn is SMTP_FQDN, the domain of
-// SkyMail's Message-IDs. An error is a report that could not be read
+// SkyNotify's Message-IDs. An error is a report that could not be read
 // (ErrUnreadable, ErrNoID) or a database failure: nothing was recorded, and
 // the reader may try it again.
 func Process(ctx context.Context, store *database.Store, fqdn string, ndr NDR) (Outcome, error) {

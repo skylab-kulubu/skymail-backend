@@ -5,7 +5,7 @@ import (
 )
 
 // SendPurpose is what a send says about its stream (ADR 0072 decision 2),
-// read only while SkyMail's purposes are on (SKYMAIL_MAIL_PURPOSE; GET
+// read only while SkyNotify's purposes are on (SKYNOTIFY_MAIL_PURPOSE; GET
 // /mail_tasks/tracking-mode purpose_available) and ignored while they are off.
 // Leave all four out and the send is duyuru (category club:duyuru): a list, a
 // Keycloak group, a Forms source, a Mail onayı request and a person's single
@@ -17,9 +17,9 @@ type SendPurpose struct {
 	Category *string `json:"category" example:"club:duyuru"`
 	// With islem, required and true: the sender's statement that the mail is about the recipient's own application or transaction (a changed place or time, a missing document, a result). Ignored with duyuru.
 	TransactionalStatement *bool `json:"transactional_statement"`
-	// The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyMail's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.
+	// The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyNotify's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.
 	CommercialContentAbsent *bool `json:"commercial_content_absent"`
-	// With duyuru to a list or a Keycloak group, while SkyMail holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.
+	// With duyuru to a list or a Keycloak group, while SkyNotify holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.
 	OwnEventStatement *bool `json:"own_event_statement"`
 }
 
@@ -27,7 +27,7 @@ type CreateMailTask struct {
 	TemplateID    uuid.UUID              `json:"template_id" validate:"required"`
 	MailListID    uuid.UUID              `json:"mail_list_id" validate:"required"`
 	BodyVariables map[string]interface{} `json:"body_variables"`
-	// Open and click tracking: each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links. Ignored (and answered false) while SkyMail's tracking is off and for a System or sensitive template, which are never tracked; a mailing list's address-only recipients are tracked too.
+	// Open and click tracking: each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links. Ignored (and answered false) while SkyNotify's tracking is off and for a System or sensitive template, which are never tracked; a mailing list's address-only recipients are tracked too.
 	Tracking bool `json:"tracking"`
 	SendPurpose
 	NoAttachments
@@ -35,7 +35,7 @@ type CreateMailTask struct {
 
 // SendSingleMail addresses the template either by id or by key. Keycloak's mail
 // provider uses the key so a reseed cannot break it; core keeps sending the uuid
-// it already has in SKYMAIL_WELCOME_TEMPLATE_ID / SKYMAIL_CERTIFICATE_TEMPLATE_ID.
+// it already has in SKYNOTIFY_WELCOME_TEMPLATE_ID / SKYNOTIFY_CERTIFICATE_TEMPLATE_ID.
 type SendSingleMail struct {
 	TemplateID        uuid.UUID              `json:"template_id"`
 	TemplateKey       string                 `json:"template_key" validate:"omitempty,templatekey"`
@@ -44,7 +44,7 @@ type SendSingleMail struct {
 	BodyVariables     map[string]interface{} `json:"body_variables"`
 	// Ignored for a service's token: its mail is always islem.
 	SendPurpose
-	// Open and click tracking for a mail a person sends (the compose form's people). Ignored (and answered false) while SkyMail's tracking is off, and for a System template or a sensitive one (a template that says nothing counts as sensitive for one person). A service's token (account and transaction mail) does not ask: the field is ignored, and its mail is tracked only while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM), in the system lane, with no click address on a link a variable fills and none at all in a sensitive mail. The recipient's account is looked up in Keycloak by address before the send is queued: the one enabled user whose primary e-mail equals it (case-insensitively) and is verified; none such, or Keycloak not answering, is tracked without an account, and core decides for the account found (it says no only for an inactive account or while its brake is on).
+	// Open and click tracking for a mail a person sends (the compose form's people). Ignored (and answered false) while SkyNotify's tracking is off, and for a System template or a sensitive one (a template that says nothing counts as sensitive for one person). A service's token (account and transaction mail) does not ask: the field is ignored, and its mail is tracked only while SkyNotify tracks system mail (SKYNOTIFY_TRACKING_SYSTEM), in the system lane, with no click address on a link a variable fills and none at all in a sensitive mail. The recipient's account is looked up in Keycloak by address before the send is queued: the one enabled user whose primary e-mail equals it (case-insensitively) and is verified; none such, or Keycloak not answering, is tracked without an account, and core decides for the account found (it says no only for an inactive account or while its brake is on).
 	Tracking bool `json:"tracking"`
 	// A service's mail that keeps no record of its recipient (core's account deletion notices, sent after the person's Erasure command): never tracked, in the system lane, and its queue row is erased the moment its outcome is written, as Account erasure leaves mail to an erased person (recipient Silinmiş kullanıcı, no address, no content, no variables; the row, its status and its dates stay). A person's token is refused (400 mail_task.erase_after_send_not_allowed). The answer says erase_after_send true when the send was queued so.
 	EraseAfterSend bool `json:"erase_after_send"`

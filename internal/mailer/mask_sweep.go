@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
 // MaskOptions bound one run of MaskSensitiveContent; a zero field is its
@@ -84,7 +84,7 @@ type MaskResult struct {
 	Failed int
 	// The run stopped after BreakerFailures sends failed one after another.
 	BreakerTripped bool
-	// The run masked no send, so its failures — maybe SkyMail's, not the
+	// The run masked no send, so its failures — maybe SkyNotify's, not the
 	// sends' — were not counted; they wait for a run that masks one.
 	FailuresUnconfirmed bool
 }
@@ -105,8 +105,8 @@ var maskSendHook func(uuid.UUID)
 // failed, so broken sends at the head of the queue hold no other back. Its
 // failure is counted only when a run masks some other send — the fault was
 // the send's — and only the failures of that run: one from a run that masked
-// none is never counted, as the fault may have been SkyMail's, so a fault
-// across SkyMail empties nothing once it is over. On the MaxFailures-th
+// none is never counted, as the fault may have been SkyNotify's, so a fault
+// across SkyNotify empties nothing once it is over. On the MaxFailures-th
 // counted failure the send is emptied (not kept). A run stops after
 // BreakerFailures sends fail one after another. Whatever was counted, a
 // sensitive send still failing Deadline after its first failure is emptied at
@@ -182,7 +182,7 @@ func MaskSensitiveContent(ctx context.Context, db *database.Store, opts MaskOpti
 	case total.Failed > 0:
 		total.FailuresUnconfirmed = true
 		log.Error().Int("failed", total.Failed).
-			Msg("masking failed and no send was masked: maybe a fault across SkyMail; this run's failures are not counted")
+			Msg("masking failed and no send was masked: maybe a fault across SkyNotify; this run's failures are not counted")
 	}
 	if ctx.Err() == nil {
 		emptied := clearPastDeadline(ctx, db, opts.Deadline)
@@ -226,7 +226,7 @@ func clearPastDeadline(ctx context.Context, db *database.Store, deadline time.Du
 }
 
 // safely runs fn with a panic turned into its error: one mail that breaks the
-// masking never brings SkyMail down, nor the sweep that runs as it starts.
+// masking never brings SkyNotify down, nor the sweep that runs as it starts.
 func safely(fn func() error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {

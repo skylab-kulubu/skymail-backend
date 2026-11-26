@@ -275,7 +275,7 @@ type MailApproval struct {
 	SubmittedAt              time.Time         `json:"submitted_at"`
 	DeadlineAt               time.Time         `json:"deadline_at"`
 	UpdatedAt                time.Time         `json:"updated_at"`
-	// The submitter asked for open and click tracking; the approved send asks for it if SKYMAIL_TRACKING is on then.
+	// The submitter asked for open and click tracking; the approved send asks for it if SKYNOTIFY_TRACKING is on then.
 	TrackingRequested bool       `json:"tracking_requested"`
 	FormSourceID      *uuid.UUID `json:"form_source_id"`
 	// The purpose of the send the request would queue (mail_tasks.purpose).
@@ -507,7 +507,7 @@ type MailTask struct {
 	ContentMaskUnconfirmed int16 `json:"content_mask_unconfirmed"`
 	// When masking the send first failed since it was last masked; past the sweep's deadline the send is emptied (not kept).
 	ContentMaskFailingSince *time.Time `json:"content_mask_failing_since"`
-	// The sender asked for open and click tracking and SKYMAIL_TRACKING was on when the send was queued.
+	// The sender asked for open and click tracking and SKYNOTIFY_TRACKING was on when the send was queued.
 	TrackingRequested bool `json:"tracking_requested"`
 	// When retention closed the send's tracking: events rolled up and deleted, tokens closed. Null while open.
 	TrackingClosedAt *time.Time `json:"tracking_closed_at"`
@@ -542,6 +542,8 @@ type MailTask struct {
 	EraseAfterSend bool `json:"erase_after_send"`
 	// When the recipient retention run decided every recipient of the send whose content is gone: address and name emptied, or an account found. Null until then.
 	RecipientRetentionAt *time.Time `json:"-"`
+	// Whether a service or SkyNotify itself queued the send (a service account's single mail, SkyNotify's notices); false for a person's single mail; NULL before 20261124200000 and where the kind does not need it.
+	SentByService *bool `json:"sent_by_service"`
 }
 
 // A service's Idempotency-Key on POST /mail_tasks/single: the request's digest, the send it queued and its answer, replayed to a retry. No address. Kept 72 hours.
@@ -592,7 +594,7 @@ type MailTrackingEvent struct {
 	ClassifierVersion int16     `json:"classifier_version"`
 }
 
-// Addresses that left a broadcast stream (duyuru) through SkyMail's link: that stream's mail is not sent to them. Removed by the person, by an operator at their request, or by Account erasure; never by itself.
+// Addresses that left a broadcast stream (duyuru) through SkyNotify's link: that stream's mail is not sent to them. Removed by the person, by an operator at their request, or by Account erasure; never by itself.
 type MailUnsubscribe struct {
 	Address   string    `json:"address"`
 	Stream    string    `json:"stream"`

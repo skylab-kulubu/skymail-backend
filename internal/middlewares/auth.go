@@ -9,16 +9,16 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
 )
 
 type AuthMiddleware interface {
 	Authenticate(c fiber.Ctx) error
 	// AuthenticatePerson is the person's own routes' check (/v1/me): a
-	// person's token issued for SkyMail, no role (see its doc).
+	// person's token issued for SkyNotify, no role (see its doc).
 	AuthenticatePerson(c fiber.Ctx) error
 	// AuthenticateTeamSender is Team mail's routes' check: Authenticate for
-	// a token with skymail:access, a person's own token without it (see its
+	// a token with skynotify:access, a person's own token without it (see its
 	// doc). RequireAccessOrTeamLeader follows it.
 	AuthenticateTeamSender(c fiber.Ctx) error
 	RequireAnyPermission(permissions ...string) func(c fiber.Ctx) error
@@ -79,14 +79,14 @@ func (a *authMiddlewareImpl) Authenticate(c fiber.Ctx) error {
 	return a.handleKeycloakAuth(c, tokenStr, false)
 }
 
-// AccessRole is what /v1 asks of every caller: using SkyMail.
-const AccessRole = "skymail:access"
+// AccessRole is what /v1 asks of every caller: using SkyNotify.
+const AccessRole = "skynotify:access"
 
 // AuthenticateTeamSender authenticates Team mail's routes (ADR-0067 addendum
-// of 2026-11-08), which a Leader reaches with or without SkyMail's roles. A
-// token that carries skymail:access is checked exactly as Authenticate
+// of 2026-11-08), which a Leader reaches with or without SkyNotify's roles. A
+// token that carries skynotify:access is checked exactly as Authenticate
 // checks it. One that does not must be a person's own token issued for
-// SkyMail, as AuthenticatePerson holds it: its aud names SkyMail whatever
+// SkyNotify, as AuthenticatePerson holds it: its aud names SkyNotify whatever
 // V1_TOKEN_AUDIENCE_MODE says (401), and a service account's token, or one
 // whose sub is not the one userinfo accepted, is 403 auth.person_required.
 // Such a caller goes on with no role at all, whatever else the token
@@ -143,13 +143,13 @@ func (a *authMiddlewareImpl) handleKeycloakAuth(c fiber.Ctx, tokenStr string, te
 }
 
 // authenticateRoleless is AuthenticateTeamSender for a token without
-// skymail:access: a person's own, issued for SkyMail.
+// skynotify:access: a person's own, issued for SkyNotify.
 func (a *authMiddlewareImpl) authenticateRoleless(c fiber.Ctx, tokenStr string, info userInfo) error {
 	if forUs, azp := tokenAudience(tokenStr, a.clientID); !forUs {
 		a.logger.Warn().
 			Str("event", PersonAudienceMissingEvent).
 			Str("azp", nonEmpty(azp)).
-			Msg("a Team mail route's token without skymail:access has an aud that does not name SkyMail")
+			Msg("a Team mail route's token without skynotify:access has an aud that does not name SkyNotify")
 		c.Set(fiber.HeaderWWWAuthenticate, `Bearer error="invalid_token"`)
 		return apperrors.ErrUnauthorized
 	}
@@ -157,8 +157,8 @@ func (a *authMiddlewareImpl) authenticateRoleless(c fiber.Ctx, tokenStr string, 
 	if identity.subject != info.ID || identity.clientID != "" {
 		return errPersonRequired
 	}
-	// Whatever other SkyMail role the token carries (an approver's, say)
-	// counts for nothing without skymail:access: such a caller is a Leader
+	// Whatever other SkyNotify role the token carries (an approver's, say)
+	// counts for nothing without skynotify:access: such a caller is a Leader
 	// on Team mail's routes, and nothing more.
 	setCaller(c, info, identity, []string{})
 	return c.Next()
@@ -192,7 +192,7 @@ var errPersonRequired = apperrors.New(
 // AuthenticatePerson authenticates a person's own routes (/v1/me: the inbox,
 // hub ticket iletisim-servisi 05; ADR 0070). Keycloak's userinfo must accept
 // the bearer, as on /v1. Then, whatever V1_TOKEN_AUDIENCE_MODE says, the
-// token's aud must name SkyMail's client — these routes ask for no role, so
+// token's aud must name SkyNotify's client — these routes ask for no role, so
 // the audience is what keeps a token issued for another service out (401) —
 // and it must be a person's: a service account's token (client_id = azp)
 // gets 403 auth.person_required, and so does a token whose sub is not the one
@@ -212,7 +212,7 @@ func (a *authMiddlewareImpl) AuthenticatePerson(c fiber.Ctx) error {
 		a.logger.Warn().
 			Str("event", PersonAudienceMissingEvent).
 			Str("azp", nonEmpty(azp)).
-			Msg("a person route's token aud does not name SkyMail")
+			Msg("a person route's token aud does not name SkyNotify")
 		c.Set(fiber.HeaderWWWAuthenticate, `Bearer error="invalid_token"`)
 		return apperrors.ErrUnauthorized
 	}
@@ -272,7 +272,7 @@ func stringClaim(tokenStr, name string) string {
 }
 
 // PersonAudienceMissingEvent is the event of the line AuthenticatePerson
-// writes for a token whose aud lacks SkyMail: the caller's client (azp) and
+// writes for a token whose aud lacks SkyNotify: the caller's client (azp) and
 // nothing else, as AudienceMissingEvent.
 const PersonAudienceMissingEvent = "person_token_audience_missing"
 
@@ -336,7 +336,7 @@ func (a *authMiddlewareImpl) logMissingAudience(azp string) {
 		Str("event", AudienceMissingEvent).
 		Str("azp", azp).
 		Str("mode", string(a.audience)).
-		Msg("v1 token aud does not name SkyMail")
+		Msg("v1 token aud does not name SkyNotify")
 }
 
 // displayName is what the caller is called: a person's token carries their

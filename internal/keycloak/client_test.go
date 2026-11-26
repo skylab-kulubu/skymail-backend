@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
+	"github.com/skylab-kulubu/skynotify-backend/internal/keycloak"
 )
 
 func TestListGroupsIncludesNestedChildren(t *testing.T) {
@@ -86,7 +86,7 @@ func newNestedGroupServer(t *testing.T) (keycloak.Client, nestedIDs) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skymail", "secret"), ids
+	return keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skynotify", "secret"), ids
 }
 
 // An approver holds the role directly or through a group, a subgroup of one
@@ -105,13 +105,13 @@ func TestClientRoleMembersIncludesGroupsAndSkipsDisabled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		admin := "/admin/realms/e-skylab"
-		role := admin + "/clients/" + clientUUID + "/roles/skymail:mails:approve"
+		role := admin + "/clients/" + clientUUID + "/roles/skynotify:mails:approve"
 		switch {
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/protocol/openid-connect/token"):
 			_, _ = w.Write([]byte(`{"access_token":"tok","expires_in":300,"token_type":"Bearer"}`))
 		case r.URL.Path == admin+"/clients":
 			clientQuery = r.URL.Query().Get("clientId")
-			_ = json.NewEncoder(w).Encode([]any{map[string]any{"id": clientUUID, "clientId": "skymail"}})
+			_ = json.NewEncoder(w).Encode([]any{map[string]any{"id": clientUUID, "clientId": "skynotify"}})
 		case r.URL.Path == role+"/users":
 			if r.URL.Query().Get("first") != "0" {
 				_ = json.NewEncoder(w).Encode([]any{})
@@ -135,14 +135,14 @@ func TestClientRoleMembersIncludesGroupsAndSkipsDisabled(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skymail-backend", "secret")
+	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skynotify-backend", "secret")
 
-	members, err := kc.ClientRoleMembers(context.Background(), "skymail", "skymail:mails:approve")
+	members, err := kc.ClientRoleMembers(context.Background(), "skynotify", "skynotify:mails:approve")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if clientQuery != "skymail" {
-		t.Errorf("client looked up by clientId %q, want skymail", clientQuery)
+	if clientQuery != "skynotify" {
+		t.Errorf("client looked up by clientId %q, want skynotify", clientQuery)
 	}
 	var emails []string
 	for _, m := range members {
@@ -169,9 +169,9 @@ func TestClientRoleMembersRefusesAnUnknownClient(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skymail-backend", "secret")
+	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skynotify-backend", "secret")
 
-	if _, err := kc.ClientRoleMembers(context.Background(), "skymail", "skymail:mails:approve"); err == nil {
+	if _, err := kc.ClientRoleMembers(context.Background(), "skynotify", "skynotify:mails:approve"); err == nil {
 		t.Fatal("an unknown client gave role members")
 	}
 }
@@ -191,12 +191,12 @@ func TestClientRoleMembersReadsEveryPageOfGroups(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		admin := "/admin/realms/e-skylab"
-		role := admin + "/clients/" + clientUUID + "/roles/skymail:mails:approve"
+		role := admin + "/clients/" + clientUUID + "/roles/skynotify:mails:approve"
 		switch {
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/protocol/openid-connect/token"):
 			_, _ = w.Write([]byte(`{"access_token":"tok","expires_in":300,"token_type":"Bearer"}`))
 		case r.URL.Path == admin+"/clients":
-			_ = json.NewEncoder(w).Encode([]any{map[string]any{"id": clientUUID, "clientId": "skymail"}})
+			_ = json.NewEncoder(w).Encode([]any{map[string]any{"id": clientUUID, "clientId": "skynotify"}})
 		case r.URL.Path == role+"/users":
 			_ = json.NewEncoder(w).Encode([]any{})
 		case r.URL.Path == role+"/groups":
@@ -222,9 +222,9 @@ func TestClientRoleMembersReadsEveryPageOfGroups(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skymail-backend", "secret")
+	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skynotify-backend", "secret")
 
-	members, err := kc.ClientRoleMembers(context.Background(), "skymail", "skymail:mails:approve")
+	members, err := kc.ClientRoleMembers(context.Background(), "skynotify", "skynotify:mails:approve")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestGetUserReadsOneUserAndANotFoundIsNil(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skymail", "secret")
+	kc := keycloak.NewClient(srv.URL+"/realms/e-skylab", "", "skynotify", "secret")
 
 	user, err := kc.GetUser(context.Background(), known)
 	if err != nil || user == nil || user.Email == nil || *user.Email != "ayse@example.com" ||

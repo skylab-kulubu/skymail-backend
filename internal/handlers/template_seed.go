@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 // errSeedConflict refuses a Template seed that would overwrite an operator's

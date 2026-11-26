@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/ptr"
+	"github.com/skylab-kulubu/skynotify-backend/internal/ptr"
 )
 
 // SeedConflictRule is one way an operator can have changed a template since

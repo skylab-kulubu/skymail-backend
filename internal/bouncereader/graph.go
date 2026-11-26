@@ -21,9 +21,9 @@ const DefaultGraphURL = "https://graph.microsoft.com/v1.0"
 // odata.maxpagesize); Graph may send fewer.
 const pageSize = 50
 
-// MaxMIME bounds one message the reader fetches: a report SkyMail asked for
+// MaxMIME bounds one message the reader fetches: a report SkyNotify asked for
 // (RET=HDRS) is a few kilobytes, one that returns the whole mail is at most
-// the size of a SkyMail mail (Graph's 4 MB) and its report. A larger one is
+// the size of a SkyNotify mail (Graph's 4 MB) and its report. A larger one is
 // not read and is counted as unreadable.
 const MaxMIME = 10 << 20
 

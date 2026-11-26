@@ -9,8 +9,8 @@ import (
 
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/rs/zerolog/log"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 // Whom an action tells, once it is done.
@@ -160,7 +160,7 @@ func (h *mailApprovalHandlerImpl) notifySubmitter(ctx context.Context, view data
 	}
 	sender := notice.by
 	if sender == "" {
-		sender = skymailSender
+		sender = skynotifySender
 	}
 	return h.notify(ctx, approvalResolvedKey, sender, []mailer.RecipientInfo{submitterOf(view.MailApproval)}, map[string]interface{}{
 		"TemplateName":   view.TemplateName,
@@ -220,7 +220,7 @@ func (h *mailApprovalHandlerImpl) resolvedRecipientCount(ctx context.Context, vi
 	return countText(&queued)
 }
 
-// requestURL is the request's page in the SkyMail UI.
+// requestURL is the request's page in the SkyNotify UI.
 func (h *mailApprovalHandlerImpl) requestURL(view database.GetMailApprovalRow) string {
 	return h.uiURL + "/mail-approvals/show/" + view.MailApproval.ID.String()
 }
@@ -253,7 +253,7 @@ func (h *mailApprovalHandlerImpl) approvers(ctx context.Context) ([]mailer.Recip
 }
 
 // notify queues the System template key to each recipient, one single send
-// each. With SKYMAIL_TRACKING_SYSTEM on they are tracked as a service's mail
+// each. With SKYNOTIFY_TRACKING_SYSTEM on they are tracked as a service's mail
 // is, and Keycloak and core are asked about all of them at once, before the
 // first is queued: the action waits at most the system's 2 seconds for
 // them, however many approvers there are.
@@ -279,15 +279,18 @@ func (h *mailApprovalHandlerImpl) notify(ctx context.Context, key, sentBy string
 		preferences = h.mailer.ResolveSystemTracking(ctx, to)
 	}
 	for _, recipient := range to {
+		// SkyNotify's own mail is a service's (mail_task_kind(): system).
+		sentBySkyNotify := true
 		arg := database.CreateSingleMailTaskParams{
 			SentBy:            sentBy,
 			TemplateID:        &template.ID,
 			BodyVariables:     raw,
 			RecipientFullName: recipient.FullName,
 			RecipientEmail:    recipient.Email,
+			SentByService:     &sentBySkyNotify,
 		}
-		// SkyMail's own mail: tracked as a service's is, when
-		// SKYMAIL_TRACKING_SYSTEM is on.
+		// SkyNotify's own mail: tracked as a service's is, when
+		// SKYNOTIFY_TRACKING_SYSTEM is on.
 		var err error
 		if system {
 			_, _, err = h.mailer.EnqueueSystemSingle(ctx, arg, preferences)

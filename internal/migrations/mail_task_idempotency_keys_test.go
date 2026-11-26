@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 const mailTaskIdempotencyKeys = uint(20261122120000)

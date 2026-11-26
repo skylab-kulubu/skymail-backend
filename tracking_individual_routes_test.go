@@ -15,22 +15,22 @@ import (
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 // Tracking in a mail sent to people one by one (Yusuf, 2026-10-20): the
 // compose form's people (POST /mail_tasks/single) and a request for approval
-// to people may ask for it, as a list send does. SkyMail knows these people
+// to people may ask for it, as a list send does. SkyNotify knows these people
 // by address; before the send's transaction it asks Keycloak for the one
 // enabled account whose verified primary e-mail is the address, and then
 // core, as for a group's members. No such account, or Keycloak not
 // answering: tracked all the same (B9), and the send goes on. A service's
 // single mail — account and transaction mail — is never tracked as asked
-// (only by SKYMAIL_TRACKING_SYSTEM, tracking_system_routes_test.go), nor a
+// (only by SKYNOTIFY_TRACKING_SYSTEM, tracking_system_routes_test.go), nor a
 // System or sensitive template.
 
 // setFreeBasic sets free.basic's System flag and content_sensitive (nil: the
@@ -331,20 +331,20 @@ func TestARequestToPeopleGoesOnWhenKeycloakDoesNotAnswer(t *testing.T) {
 }
 
 // singleSendWorld is POST /v1/mail_tasks/single through the chain production
-// registers — userinfo, skymail:access, the role, the handler — with tracking
+// registers — userinfo, skynotify:access, the role, the handler — with tracking
 // on, so a service's token and a person's are told apart as Authenticate
 // accepted them.
 func singleSendWorld(t *testing.T) (*fiber.App, *approvalWorld) {
 	t.Helper()
 	w, _ := accountsWorld(t, true)
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
-	auth := middlewares.NewAuthMiddleware("skymail", claimsUserinfo(t), middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", claimsUserinfo(t), middlewares.AudienceOff)
 	registerMailTaskRoutes(protectedAPI(app, auth, nil), auth, handlers.NewMailHandler(w.store, w.mail, w.directory))
 	return app, w
 }
 
 // A service's single mail is account or transaction mail: with
-// SKYMAIL_TRACKING_SYSTEM off (the default) it is never tracked, though it
+// SKYNOTIFY_TRACKING_SYSTEM off (the default) it is never tracked, though it
 // asks, stays in the system lane, and Keycloak is not asked about its
 // recipient. A person's token through the same chain gets it. (System
 // tracking on: TestAServicesSingleSendIsTrackedWithSystemTracking.)
@@ -357,7 +357,7 @@ func TestAServicesSingleSendIsNeverTracked(t *testing.T) {
 		asks := w.directory.accountAsks
 		body, _ := json.Marshal(w.singleSendTo(elif.email, "Elif", true))
 		request := httptest.NewRequest(http.MethodPost, "/v1/mail_tasks/single", bytes.NewReader(body))
-		request.Header.Set("Authorization", "Bearer "+bearer(t, uuid.NewString(), c.service, "skymail:access", "skymail:mails:send"))
+		request.Header.Set("Authorization", "Bearer "+bearer(t, uuid.NewString(), c.service, "skynotify:access", "skynotify:mails:send"))
 		request.Header.Set("Content-Type", "application/json")
 		response, err := app.Test(request, fiber.TestConfig{Timeout: 30 * time.Second})
 		if err != nil {

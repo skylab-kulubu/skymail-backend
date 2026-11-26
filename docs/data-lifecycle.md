@@ -1,6 +1,6 @@
 # Template and mailing-list lifecycle
 
-SkyMail retains durable templates, internal mailing lists and historical mail
+SkyNotify retains durable templates, internal mailing lists and historical mail
 delivery records. Operator-facing delete commands archive these records; they do
 not physically remove them.
 
@@ -68,8 +68,8 @@ write, which records the row as it then is.
 
 ## Template seed
 
-The Template seed writes the Mail templates kept in skymail-frontend's
-`emails/` by key, through `PUT /v1/templates/by-key/{key}`. It and SkyMail's
+The Template seed writes the Mail templates kept in skynotify-frontend's
+`emails/` by key, through `PUT /v1/templates/by-key/{key}`. It and SkyNotify's
 editor both write templates, and neither silently overwrites the other
 (ADR-0047). The seed writes everything it sends — the subject too — as a
 Template seed version, published at once; `react_email_content` holding a JSX
@@ -119,7 +119,7 @@ included — is checked against the sets the template has now. Both are served
 with every template and kept sorted by name, byte by byte:
 
 - `contract_required_variables` — `[{"name", "reason"}]`, the sending service's
-  contract, declared in skymail-frontend beside the Template key and written
+  contract, declared in skynotify-frontend beside the Template key and written
   only by the Template seed through `PUT /v1/templates/by-key/{key}`
   (`contract_required_variables`: entries, or names alone with a null reason;
   left out, the set stays as it is; `[]` clears it). The panel cannot change it.
@@ -130,7 +130,7 @@ with every template and kept sorted by name, byte by byte:
     contract name is refused with `409 template.required_variable_in_contract`;
     a name that is not required changes nothing.
 
-  Both need `skymail:templates:write`, answer with the template, record no
+  Both need `skynotify:templates:write`, answer with the template, record no
   version and leave `updated_at` alone. An archived template is `404`.
 
 The two sets never share a name; a name the contract comes to declare leaves
@@ -154,7 +154,7 @@ neither row nor version behind. The rules live in one place,
   in an action: inside an `if` it counts; in a comment, an HTML comment, plain
   text, a `range` or `with` element's field, or `index . "X"` it does not
   (`internal/mailer/variables.go`, and the cases in
-  `internal/mailer/testdata/referenced-variables.json`, which skymail-frontend
+  `internal/mailer/testdata/referenced-variables.json`, which skynotify-frontend
   holds a copy of).
 
 ## Mail approvals
@@ -230,16 +230,16 @@ run does (see [Recipients without an account](#recipients-without-an-account)):
   Account erasure of mail to the person. A sensitive send is masked once
   none of its rows is to go out, so its files are gone by then; masking has
   nothing of them to keep. Backups hold what the table held at dump time: a
-  file of a mail not yet sent then (minutes, usually). Outside SkyMail's
+  file of a mail not yet sent then (minutes, usually). Outside SkyNotify's
   database: a delivery status notification (bounce) that a receiving server
   returns to the sender mailbox may carry the original mail whole, its file
-  included (SkyMail asks for headers only, RET=HDRS, where the relay offers
+  included (SkyNotify asks for headers only, RET=HDRS, where the relay offers
   DSN, but a remote server may ignore it); such a report stays in that
   mailbox under its retention policy (30 days for Inbox) and is not deleted
   by the trigger or by Account erasure.
 - `mail_tasks.sent_by` — who sent: the Keycloak subject of the token that
   queued the send — for an approved Mail onayı request, its submitter's — or
-  `skymail` for the mail SkyMail sends of its own accord, the notice that a
+  `skynotify` for the mail SkyNotify sends of its own accord, the notice that a
   request expired.
 - `mail_tasks.body_variables` — the values of the send, which may name or
   address people; for Keycloak's mails, the person's reset or verification
@@ -283,13 +283,13 @@ run does (see [Recipients without an account](#recipients-without-an-account)):
   least 10 tracked recipients.
 - Bounces and the suppression list (see [Bounces and suppression](#bounces-and-suppression)):
   `mail_suppressions.address` and `recipient_sub` — an address a permanent
-  failure was reported for, and whose it is when SkyMail knew. `mail_bounces`
+  failure was reported for, and whose it is when SkyNotify knew. `mail_bounces`
   holds no address: it belongs to a queue row.
   `mail_suppression_removals.actor_sub` — who removed an address from the
   list (the address is not kept).
 - The unsubscribe record (see [Unsubscribe record](#unsubscribe-record)):
   `mail_unsubscribes.address` — an address that left the duyuru stream
-  through SkyMail's one-click link. `mail_unsubscribe_reactivations.actor_sub`
+  through SkyNotify's one-click link. `mail_unsubscribe_reactivations.actor_sub`
   and `reason` — who reversed an unsubscribe and why (the address is not
   kept).
 
@@ -301,7 +301,7 @@ for the guest's time; a manual list's people a year after it was archived
 saklaması"). A guest's time is the send's content time here,
 `MAIL_CONTENT_RETENTION_DAYS` (365 days by default; Yusuf, 2026-11-24). A
 list's archive does not touch accounts or members (Yusuf, 2026-11-24): a year
-on, only the memberships of people without an account go. The recipient retention run (`SKYMAIL_RECIPIENT_RETENTION`,
+on, only the memberships of people without an account go. The recipient retention run (`SKYNOTIFY_RECIPIENT_RETENTION`,
 `dry-run` by default) runs daily under an advisory lock, one transaction per
 list, send or request, with a brake and a receipt, as the tracking retention
 run does:
@@ -334,11 +334,11 @@ first; what it finds stays on the rows, so the next run reaches new ones.
 
 What a delivery status notification (an NDR, RFC 3464) or a relay's
 permanent refusal said about a queue row (README, "Geri dönen posta ve
-bastırma listesi"; hub spec skymail-bounce-isleme §5):
+bastırma listesi"; hub spec skynotify-bounce-isleme §5):
 
 | What | Kept | Then |
 |---|---|---|
-| the report itself (addresses, the returned headers) | never in SkyMail: read in memory and dropped; in the sender mailbox, 30 days (Exchange retention, not SkyMail's) | — |
+| the report itself (addresses, the returned headers) | never in SkyNotify: read in memory and dropped; in the sender mailbox, 30 days (Exchange retention, not SkyNotify's) | — |
 | `mail_bounces` (queue row, `source`, `kind`, `action`, enhanced code, SMTP code, Exchange's `AS(…)` token, `recipient_matched`, the SHA-256 of the report's id, `received_at`) — no address, no text | **one year** from `received_at` | deleted by the content sweep (every 5 minutes); with its queue row (`ON DELETE CASCADE`) |
 | `mail_suppressions` (lower-cased address, `recipient_sub`, `source`, `reason_code` — codes only —, first and last seen, count, last queue row, `exempt_flagged_at`) | until an operator removes it (`DELETE /v1/suppressions/{id}`) or the person is erased: nothing removes it by itself (Yusuf, 2026-10-20) | Account erasure deletes the person's |
 | `mail_suppression_removals` (who, when, the removed row's source, code, count and first seen) — no address | **three years** from `removed_at`, as the record of a reversed unsubscribe (Yusuf, 2026-10-27), then deleted by the content sweep (every 5 minutes) | Account erasure replaces the actor with Silinmiş kullanıcı |
@@ -355,7 +355,7 @@ or a report's text.
 
 ## Unsubscribe record
 
-An address that left the duyuru stream through SkyMail's own one-click link
+An address that left the duyuru stream through SkyNotify's own one-click link
 (README, "Tek tık çıkış ucu"; ADR 0072 decisions 4–9; hub ticket
 abonelik-cikisi 02). Purpose: not to mail it again from that stream (KVKK
 md. 5/2-f, legitimate interest; the one-click link is the balance's
@@ -363,7 +363,7 @@ safeguard).
 
 | What | Kept | Then |
 |---|---|---|
-| `mail_unsubscribes` (lower-cased address, `stream` — `duyuru` —, `source` — `link` —, `created_at`) | until the person resubscribes (the link's page), an operator with `skymail:unsubscribes:reactivate` reverses it at the person's request or after a mistake, or the person is erased: nothing removes it by itself | Account erasure deletes the person's addresses' |
+| `mail_unsubscribes` (lower-cased address, `stream` — `duyuru` —, `source` — `link` —, `created_at`) | until the person resubscribes (the link's page), an operator with `skynotify:unsubscribes:reactivate` reverses it at the person's request or after a mistake, or the person is erased: nothing removes it by itself | Account erasure deletes the person's addresses' |
 | `mail_unsubscribe_reactivations` (when, `actor` — `recipient` or `operator` —, the operator's `actor_sub` and `reason`, the record's stream, source and date) — no address | **three years** from `reactivated_at` (KVKK notice s6), then deleted by the content sweep (every 5 minutes) | Account erasure replaces the actor with Silinmiş kullanıcı, and clears a reason that names the person |
 | the link's token | never stored: it is sealed (XChaCha20-Poly1305) from the stream and the address, carries its key's version, and does not expire; it stops opening only when its key version is taken out of the ring after a leak | — |
 
@@ -371,11 +371,11 @@ A recipient of a duyuru send whose address is in the record is written
 failed when the send is queued (`suppressed: unsubscribed`), and a row
 already queued is written so when the dispatcher takes it; never sent. Mail
 of the islem stream (account mail, Forms confirmations, notices) is sent as
-before. The record is applied whatever `SKYMAIL_UNSUBSCRIBE_LINK` says.
+before. The record is applied whatever `SKYNOTIFY_UNSUBSCRIBE_LINK` says.
 
 The `/u/` endpoint keeps no IP address (its per-client limit counts in
 memory only), sets no cookie, and logs neither the path, the token nor the
-address. The edge's access log must not keep `/api/skymail/u/` paths (hub
+address. The edge's access log must not keep `/api/skynotify/u/` paths (hub
 ticket abonelik-cikisi 06).
 
 The migration's `down` drops both tables: every unsubscribe would be lost.
@@ -391,7 +391,7 @@ erasure:
 
 ## Open and click tracking
 
-Off unless `SKYMAIL_TRACKING=on` (hub ticket iletisim-servisi 14; design note
+Off unless `SKYNOTIFY_TRACKING=on` (hub ticket iletisim-servisi 14; design note
 07; README, "Açılma ve tıklama takibi"). What it keeps and for how long:
 
 | What | Kept | Then |
@@ -399,7 +399,7 @@ Off unless `SKYMAIL_TRACKING=on` (hub ticket iletisim-servisi 14; design note
 | `mail_queue.tracking_token` | 90 days from `sent_at`, then dropped (NULL; `tracking_disabled_at` says when): nothing ties the addresses of the recipient's old mail to them, and the links still redirect by their own token | dropped by the retention run, and at once on withdrawal and Account erasure |
 | `mail_queue.tracking_skip_reason`, `tracking_disabled_at`, `sent_at` | with the row | — |
 | `mail_tracking_events` | **90 days** from the recipient's `sent_at` (`tracking.EventRetentionDays` = 90; KVKK notice s6, 2026-10-23, replacing Yusuf's 2026-10-19 year). Past it no event is written or shown, and once the run has deleted them nothing ties an opening or a click to a person (no IP address is ever read) | deleted by the retention run; withdrawal (core, my.) and Account erasure delete the person's at once |
-| `mail_task_tracking_totals` | every send's counts without people (KVKK notice s6): without end with ≥10 tracked recipients (T4); with fewer, one year from the send's `created_at`, as its content; written by the retention run, from all the send's events, before the first of them goes | the retention run deletes a send's counts of fewer than 10 a year on; the reports show them to anyone with `skymail:mails:read` (Yusuf, 2026-11-24, K6), a system-lane send's only to who may read its people |
+| `mail_task_tracking_totals` | every send's counts without people (KVKK notice s6): without end with ≥10 tracked recipients (T4); with fewer, one year from the send's `created_at`, as its content; written by the retention run, from all the send's events, before the first of them goes | the retention run deletes a send's counts of fewer than 10 a year on; the reports show them to anyone with `skynotify:mails:read` (Yusuf, 2026-11-24, K6), a system-lane send's only to who may read its people |
 | `mail_task_links.url` | one year from the link's `created_at` (T3) | emptied by the retention run (`url_cleared_reason` `expired`); a send masked or sensitive since it went out (review D7) and Account erasure of a person it names: emptied (`erased`) |
 | `tracking_retention_runs` | without end: one row per run, counts and times only | — |
 
@@ -410,12 +410,12 @@ the person turned tracking off on my.: every token of mail to the subject
 was dropped (NULL, `tracking_disabled_at` set), sent or still queued, and
 their events were deleted. Rows closed that way stay as they are.
 
-**Retention** (`SKYMAIL_TRACKING_RETENTION` = `off` | `dry-run` | `apply` |
+**Retention** (`SKYNOTIFY_TRACKING_RETENTION` = `off` | `dry-run` | `apply` |
 `purge`; README, "Saklama"): daily, under an advisory lock, one transaction
 per send with the send's tracked queue rows locked first (then links, then
 events — Account erasure's order). The dry run runs the same statements and
 rolls them back; apply refuses a run past
-`SKYMAIL_TRACKING_RETENTION_MAX_ROWS` (50,000 by default; the brake). The
+`SKYNOTIFY_TRACKING_RETENTION_MAX_ROWS` (50,000 by default; the brake). The
 ≥10 threshold counts only delivered mail whose token is still open; a send below it keeps its counts a year from its creation, then the run deletes them. Every run
 writes its receipt to `tracking_retention_runs`. `purge`, the full
 roll-back, deletes every event and drops every token (tracking must be
@@ -425,9 +425,9 @@ The mail kept (`body_html`) never holds the pixel or a click address: they
 are put in as the mail goes to the relay, so the content panel shows the
 mail as rendered and looking at it is never an opening. A person's single
 mail that does not ask, System templates and sensitive templates are never
-tracked as asked. With `SKYMAIL_TRACKING_SYSTEM=on` (off by default; Yusuf,
+tracked as asked. With `SKYNOTIFY_TRACKING_SYSTEM=on` (off by default; Yusuf,
 2026-10-21) the mail services send — account and transaction mail, Forms
-confirmations, core's notifications, SkyMail's approval notices — is tracked
+confirmations, core's notifications, SkyNotify's approval notices — is tracked
 too, with the same tables, retention and withdrawal: the pixel always, a
 click address only on a link its template writes out as it is, none at all in
 a sensitive mail; so no `mail_task_links.url` of such a send holds what a
@@ -486,7 +486,7 @@ behind it as a defence (the sends an image from before `20261020120000`
 queues during a rollout copy the template's value alone). That migration
 wrote `true` into the copy of every kept send sensitive at the time. The Template seed sets the flag (`content_sensitive` in
 `PUT /v1/templates/by-key/{key}`), the panel either way
-(`PUT /v1/templates/{id}/content-sensitive`, `skymail:templates:write`).
+(`PUT /v1/templates/{id}/content-sensitive`, `skynotify:templates:write`).
 
 **Locked sensitive.** `keycloak.*`, `account.*`, `auth.*`, `login.*`,
 `otp.*`, `core.contact-consent-confirm`, `event.ticket-created`,
@@ -525,9 +525,9 @@ failed, so broken sends at the head of the queue hold no other back. Its
 failure waits (`content_mask_unconfirmed`) and is counted
 (`content_mask_failures`) only when the same run masks some other send — the
 fault was the send's — and only that run's failure: a run that masks none
-counts none, as the fault may be SkyMail's, and its failures are never
+counts none, as the fault may be SkyNotify's, and its failures are never
 counted later (they are dropped when the send's next failure is counted), so
-a fault across SkyMail empties nothing once it is over. On
+a fault across SkyNotify empties nothing once it is over. On
 its third counted failure the send is emptied (`not_kept`), so its raw mail
 is not kept. Counted or not, a sensitive send whose masking has kept failing
 for **seven days** since its first failure (`content_mask_failing_since`,
@@ -543,7 +543,7 @@ the kept sends that were sensitive then, so the first runs do not read the
 history first. A template's `content_sensitive` or key change makes its
 unmasked sends due again (`templates_mask_due`, `idx_mail_tasks_template`),
 waiting for a sweep that is deciding on one of them. Every code, one-time link and IP address becomes
-`••••••`; in the HTML's text `<mark data-skymail-masked="">••••••</mark>`.
+`••••••`; in the HTML's text `<mark data-skynotify-masked="">••••••</mark>`.
 Nothing is masked on reading. Two ways, the first when it can be proved:
 
 1. *Variables.* The send's variables that carry a code, a link, an IP address
@@ -602,12 +602,12 @@ is returned unless the row is written. It names no recipient; Account erasure
 replaces the actor; it is deleted after `SENT_CONTENT_VIEWS_RETENTION_DAYS`
 (two years by default, below). `GET /v1/mail_tasks/{id}/content-views` reads
 it, newest first, paged with `X-Total-Count`, never the recipient, and only
-for holders of `skymail:audit:read` (DK; Yusuf, 2026-11-22). The roles that
+for holders of `skynotify:audit:read` (DK; Yusuf, 2026-11-22). The roles that
 open the content do not read the record of their openings.
 
-**Who sees it.** The route takes `skymail:mails:read`; the handler then shows
+**Who sees it.** The route takes `skynotify:mails:read`; the handler then shows
 the content to the send's sender, for a send to many to holders of
-`skymail:mails:write`, and to holders of `skymail:system-mails:read`, the
+`skynotify:mails:write`, and to holders of `skynotify:system-mails:read`, the
 administrator's role. Anyone else gets `access: restricted`, sensitive or
 not.
 
@@ -667,7 +667,7 @@ or link is still, for a while, in these places (#63 review, R5):
   ticket account-erasure 19). A dump taken before a send was masked holds its
   raw mail until the dump is deleted. A restored dump comes back with
   `content_masked_at` empty for those sends, so the sweep masks them again on
-  its first run. Manual dumps (`skymail-production-dump-wizard.sh`) are kept at
+  its first run. Manual dumps (`skynotify-production-dump-wizard.sh`) are kept at
   most `PERIODIC_DESTRUCTION_INTERVAL` (90 days).
 - **PostgreSQL's dead row versions.** An `UPDATE` writes a new row version;
   the old one, with the raw mail, stays in the table's pages until `VACUUM`
@@ -697,7 +697,7 @@ or link is still, for a while, in these places (#63 review, R5):
   over SMTP into the sending mailbox's Sent Items: the off path (SMTP AUTH
   from `SMTP_FROM`) and a lane sent with `xoauth2` (README, "Gönderen
   şeritleri"; the duyuru mailbox keeps it one day by its Exchange retention
-  policy, hub ticket skymail-bounce-isleme 02). A lane sent through Graph
+  policy, hub ticket skynotify-bounce-isleme 02). A lane sent through Graph
   (`graph`, decided for hesap and bilgi: login codes, resets, transactional
   mail) sets `saveToSentItems` false, and no copy is made.
 - Not kept elsewhere: `mail_queue.error` holds the SMTP, Graph or render
@@ -719,15 +719,15 @@ opened a mailbox item (`MailItemsAccessed`), is kept for a fixed period
 separate from the mail's own retention — 180 days on Audit (Standard), one
 year on Audit (Premium), up to ten years with an add-on. Where it deviates:
 two years rather than 180 days or one year, for the yearly board term; and
-the period is SkyMail's one setting, not a per-plan default. Should the
+the period is SkyNotify's one setting, not a per-plan default. Should the
 content's period be set shorter than two years, a view row outlives the mail
 it names; it holds no content.
 
 ## Account erasure
 
 `PUT /internal/v1/account-erasures/{request_id}` is core's Erasure command for
-SkyMail (ADR-0051). Core's `docs/account-erasure-command.md` holds the
-contract; this section is SkyMail's part of it.
+SkyNotify (ADR-0051). Core's `docs/account-erasure-command.md` holds the
+contract; this section is SkyNotify's part of it.
 
 - **Reach.** Internal Docker network only (ADR-0016). A request carrying a
   forwarding header Traefik adds (`X-Forwarded-*`, `Forwarded`, `X-Real-Ip`)
@@ -735,12 +735,12 @@ contract; this section is SkyMail's part of it.
   `/v1` and does not go through `userinfo`.
 - **Token.** Checked locally against the realm's JWKS: signature (RS, PS or
   ES; never HMAC or unsigned), `iss` exactly `KEYCLOAK_REALM_URL`, `exp`
-  required. Then `azp` = `core-erasure`, `aud` ∋ `skymail`, and the role
-  `skymail:account:erase` under `resource_access.skymail.roles` — roles on any
+  required. Then `azp` = `core-erasure`, `aud` ∋ `skynotify`, and the role
+  `skynotify:account:erase` under `resource_access.skynotify.roles` — roles on any
   other client do not count. The caller's own access marker is checked as on
   every route.
 - **Subject must be blocked.** The subject's marker must already be in
-  account-access Redis, read with the same `skymail-reader` ACL as the gate.
+  account-access Redis, read with the same `skynotify-reader` ACL as the gate.
   Missing: `409 subject_not_blocked`. Redis unreachable: `503
   subject_block_unverifiable`. With `ACCOUNT_ACCESS_GATE_MODE=off`, as in
   sandbox, the block cannot be read and the answer is `503` too, never `409`.
@@ -750,7 +750,7 @@ contract; this section is SkyMail's part of it.
   characters. Anything else is `400 invalid_erasure_command`.
 
 What it erases, with S the subject, E the addresses (compared whole,
-case-insensitively) and N the full names SkyMail holds on S's actor rows and
+case-insensitively) and N the full names SkyNotify holds on S's actor rows and
 the recipient rows of E (and of S, in the queue). Free text is searched for E and N, case-insensitively; a
 single-word name is never searched for, and a namesake's text that contains
 the same full name is cleared too — the accepted cost. A field that names the
@@ -849,17 +849,17 @@ bastırma listesi").
 A dump taken before an Account erasure brings the erased person's rows back
 on restore. That includes the mail queue: mail still `pending` or `processing`
 in the dump would go out to the person, and another person's queued mail
-could still name them. So SkyMail restores with its sender paused, closes the
+could still name them. So SkyNotify restores with its sender paused, closes the
 queue the dump brought back without sending it, and only then lets core
 replay its erasures (account erasure spec §8) and turns the sender back on.
 
 `MAIL_SENDER` is `on` (the default, also when unset) or `paused`. Any other
 value stops startup. It is a plain environment value, not a secret. It is not a
 database flag, because a restored dump would bring back the flag's old value
-too. Scaling SkyMail to zero is no substitute: the replay goes to SkyMail's
+too. Scaling SkyNotify to zero is no substitute: the replay goes to SkyNotify's
 API.
 
-Paused, SkyMail:
+Paused, SkyNotify:
 
 - still puts back to `pending` the `processing` rows whose queue lease has
   run out (`MAIL_QUEUE_LEASE`, 10 minutes by default; README), at startup and
@@ -886,14 +886,14 @@ back on. Another person's queued mail that names them would keep the replay at
 who the mail was for, so the restored queue is closed by time, not by person
 (account erasure ticket 16).
 
-A SkyMail dump can be restored only together with a core and a Keycloak dump
+A SkyNotify dump can be restored only together with a core and a Keycloak dump
 taken at the same time: without them the replay has no addresses. The SKY LAB
-workspace's `ops/wizards/skymail-production-dump-wizard.sh` takes all three in
+workspace's `ops/wizards/skynotify-production-dump-wizard.sh` takes all three in
 one run.
 
 ### The procedure
 
-1. **Pause.** In Dokploy, set `MAIL_SENDER=paused` on SkyMail and deploy.
+1. **Pause.** In Dokploy, set `MAIL_SENDER=paused` on SkyNotify and deploy.
    Check that `GET /v1/mail_tasks/summary` answers `sender_paused: true`. The
    container that is running while the dump lands must already be paused:
    an unpaused dispatcher looks at the queue every 10 seconds and would send
@@ -901,7 +901,7 @@ one run.
 2. **Restore.** Just before `pg_restore` starts, write down the time in UTC
    on the host: `date -u +%Y-%m-%dT%H:%M:%SZ`. That is the restore instant,
    `--before` in step 4. Then `pg_restore` the dump.
-3. **Deploy.** SkyMail starts on the restored database, still paused: any
+3. **Deploy.** SkyNotify starts on the restored database, still paused: any
    pending migrations run, and rows the dump held as `processing` go back to
    `pending` once their lease has run out (at once for a dump older than the
    lease; one lease after startup for a row the dump holds without
@@ -909,15 +909,15 @@ one run.
    secret rotator for example, stays paused too, since the environment has
    not changed.
 4. **Close the restored queue.** On the Dokploy host, run the command in
-   SkyMail's own container (with `sudo` if your user cannot run `docker`), a
-   dry run first and then with `--apply`. Set `APP` to the SkyMail backend's
+   SkyNotify's own container (with `sudo` if your user cannot run `docker`), a
+   dry run first and then with `--apply`. Set `APP` to the SkyNotify backend's
    App Name in Dokploy, not its display name. Production and sandbox run on
    the same host, so check that `echo` prints the container being restored.
 
    ```sh
    C=$(docker ps --format '{{.Names}}' | grep "^${APP:?App Name}" | head -n 1); echo "$C"
-   docker exec "$C" /app/skymail-backend queue-close-restored --before 2026-09-26T09:00:00Z
-   docker exec "$C" /app/skymail-backend queue-close-restored --before 2026-09-26T09:00:00Z --apply
+   docker exec "$C" /app/skynotify-backend queue-close-restored --before 2026-09-26T09:00:00Z
+   docker exec "$C" /app/skynotify-backend queue-close-restored --before 2026-09-26T09:00:00Z --apply
    ```
 
    See below for what it prints.
@@ -932,15 +932,15 @@ one run.
    `--apply`:
 
    ```sh
-   core-backend replay-from-backup --service skymail --dumped-at <T>
-   core-backend replay-from-backup --service skymail --dumped-at <T> --apply
+   core-backend replay-from-backup --service skynotify --dumped-at <T>
+   core-backend replay-from-backup --service skynotify --dumped-at <T> --apply
    ```
 
-   `<T>` is when the SkyMail dump was taken: `start_utc` of `skymail.dump` in
+   `<T>` is when the SkyNotify dump was taken: `start_utc` of `skynotify.dump` in
    the dump folder's `MANIFEST.txt`. It is not the restore instant from
    step 2. Expect `200` with a receipt for each request.
 
-   **Do not send a replay with `emails: []` first.** SkyMail answers a
+   **Do not send a replay with `emails: []` first.** SkyNotify answers a
    repeated `request_id` with the receipt it recorded. An `emails: []` replay
    writes that receipt after erasing only subject-keyed rows, and
    `replay-from-backup` then gets the receipt back, exits 0 and never erases
@@ -953,16 +953,16 @@ one run.
 
 ### `queue-close-restored`
 
-`skymail-backend queue-close-restored --before <RFC3339> [--apply]` is a
+`skynotify-backend queue-close-restored --before <RFC3339> [--apply]` is a
 subcommand of the server's binary. It has no HTTP endpoint. It reads the
 environment the server reads (`DATABASE_URL`, `MAIL_SENDER`), which is why it
-runs through `docker exec` in SkyMail's container.
+runs through `docker exec` in SkyNotify's container.
 
 - `--before` is required: an RFC3339 time with its offset
   (`2026-09-26T09:00:00Z` or `2026-09-26T12:00:00+03:00`). A time in the future
   is refused. The rows it acts on are the `pending` and `processing` rows
   queued before that time. A row without `created_at` counts as one of them:
-  SkyMail stamps every row it queues, so only a dump can hold such a row. Rows
+  SkyNotify stamps every row it queues, so only a dump can hold such a row. Rows
   queued at or after `--before`, and every `sent` or `failed` row, are never
   touched.
 - Without `--apply` it only counts, and changes nothing. It runs whatever
@@ -1014,7 +1014,7 @@ failed as soon as one of its rows is (a row skipped for a reserved domain,
 is failed with the error `restore: gönderilmedi`. A list send that was partly
 out when the dump was taken shows its sent count beside it.
 
-A failed row is final. SkyMail has no retry for it: neither the API nor the
+A failed row is final. SkyNotify has no retry for it: neither the API nor the
 panel sends a failed row again. To send closed mail again, make a new send:
 
 - to a person: the send form, or `POST /v1/mail_tasks/single`, with the same
@@ -1032,7 +1032,7 @@ addresses of people erased after the dump was taken: their recipients, their
 list memberships and the closed rows to them. The closed rows do not show
 whose erasure they belong to. A Keycloak group is safe to send to again,
 because its members are read from Keycloak at send time and an erased person
-is no longer there. A SkyMail list restored from the dump can still hold an
+is no longer there. A SkyNotify list restored from the dump can still hold an
 erased person. For a person, send again only to someone whose account still
 exists or who asked for it.
 

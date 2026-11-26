@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/skylab-kulubu/skymail-backend/internal/health"
+	"github.com/skylab-kulubu/skynotify-backend/internal/health"
 )
 
 // The shutdown budget. Docker sends SIGTERM, waits the service's
 // stop_grace_period (10 s unless set) and then sends SIGKILL, so
-// shutdownTimeout must stay under it with room to spare: run SkyMail with
+// shutdownTimeout must stay under it with room to spare: run SkyNotify with
 // stop_grace_period 30 s (docs/health-and-shutdown.md).
 const (
 	// httpDrainTimeout is how long requests in flight get to finish. A

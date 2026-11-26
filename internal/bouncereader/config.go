@@ -1,13 +1,13 @@
 // Package bouncereader reads the delivery status notifications (NDRs) that
-// come back to SkyMail's sender mailboxes and hands each one to
-// internal/bounce (hub ticket skymail-bounce-isleme 04; e-skylab ADR 0073;
+// come back to SkyNotify's sender mailboxes and hands each one to
+// internal/bounce (hub ticket skynotify-bounce-isleme 04; e-skylab ADR 0073;
 // README, "Geri dönen posta ve bastırma listesi").
 //
 // Every PollInterval it reads each mailbox's Inbox through Microsoft Graph's
 // delta query (only what is new since the last poll), fetches a new item's
 // MIME ($value), and gives it to bounce.Process (on) or bounce.Evaluate
 // (dry-run) in memory: the message is never stored. The application's token
-// is the skymail-posta certificate's (internal/msauth); its right to read the
+// is the skynotify-posta certificate's (internal/msauth); its right to read the
 // mailboxes comes from Exchange RBAC for Applications (Application Mail.Read,
 // scoped to the sender mailboxes), so it can read nothing else and change
 // nothing. One process polls at a time (a Postgres advisory lock).
@@ -22,10 +22,10 @@ import (
 	"net/mail"
 	"strings"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/msauth"
+	"github.com/skylab-kulubu/skynotify-backend/internal/msauth"
 )
 
-// Mode is SKYMAIL_BOUNCE_READER.
+// Mode is SKYNOTIFY_BOUNCE_READER.
 type Mode string
 
 const (
@@ -42,11 +42,11 @@ const (
 
 // The environment the reader is configured from.
 const (
-	EnvMode      = "SKYMAIL_BOUNCE_READER"
-	EnvMailboxes = "SKYMAIL_BOUNCE_MAILBOXES"
+	EnvMode      = "SKYNOTIFY_BOUNCE_READER"
+	EnvMailboxes = "SKYNOTIFY_BOUNCE_MAILBOXES"
 )
 
-// maxMailboxes bounds SKYMAIL_BOUNCE_MAILBOXES: the club has three sender
+// maxMailboxes bounds SKYNOTIFY_BOUNCE_MAILBOXES: the club has three sender
 // mailboxes.
 const maxMailboxes = 10
 
@@ -58,9 +58,9 @@ type Config struct {
 	Credentials *msauth.Credentials
 }
 
-// ConfigFromEnv reads SKYMAIL_BOUNCE_READER: off (or unset), dry-run or on;
+// ConfigFromEnv reads SKYNOTIFY_BOUNCE_READER: off (or unset), dry-run or on;
 // any other value is an error that stops startup. Unless off, it needs
-// SKYMAIL_BOUNCE_MAILBOXES (the sender mailboxes, comma-separated bare
+// SKYNOTIFY_BOUNCE_MAILBOXES (the sender mailboxes, comma-separated bare
 // addresses: hesap@, bilgi@ and the duyuru mailbox) and the application's
 // GRAPH_* credentials, the sender lanes' own.
 func ConfigFromEnv(getenv func(string) string) (Config, error) {
@@ -83,7 +83,7 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	return Config{Mode: Mode(raw), Mailboxes: mailboxes, Credentials: creds}, nil
 }
 
-// parseMailboxes reads SKYMAIL_BOUNCE_MAILBOXES: bare addresses, no display
+// parseMailboxes reads SKYNOTIFY_BOUNCE_MAILBOXES: bare addresses, no display
 // names, each once.
 func parseMailboxes(value string) ([]string, error) {
 	var mailboxes []string

@@ -7,7 +7,7 @@ import (
 
 // Sender is whether this process sends the mail it queues, from MAIL_SENDER.
 //
-// Paused is how SkyMail starts after a restore from backup: the queue the dump
+// Paused is how SkyNotify starts after a restore from backup: the queue the dump
 // brought back can hold mail to people erased since it was taken, and nothing
 // may go out until core has replayed its erasures (account erasure spec §8).
 // Mail is still queued and the API answers as ever; only the dispatcher and

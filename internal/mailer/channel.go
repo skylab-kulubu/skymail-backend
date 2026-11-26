@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/dsn"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/dsn"
 	"github.com/wneessen/go-mail"
 )
 
@@ -162,7 +162,7 @@ func (m *mailerImpl) newXOAUTH2Client() (*mail.Client, error) {
 }
 
 // Send sends job from its lane's mailbox the way the lane says; with every
-// lane off, as SkyMail always has, without reading the send's template.
+// lane off, as SkyNotify always has, without reading the send's template.
 func (s *emailSender) Send(ctx context.Context, job database.MailQueue) error {
 	lane, config, err := s.laneOf(ctx, job)
 	if err != nil {
@@ -225,7 +225,7 @@ func (s *emailSender) laneOf(ctx context.Context, job database.MailQueue) (Lane,
 }
 
 // streamOf is job's sender lane: its send's template and purpose read
-// (LaneOf; the purpose only while SKYMAIL_MAIL_PURPOSE is on).
+// (LaneOf; the purpose only while SKYNOTIFY_MAIL_PURPOSE is on).
 func (s *emailSender) streamOf(ctx context.Context, job database.MailQueue) (Lane, error) {
 	send, err := s.templateKey(ctx, job.TaskID)
 	if err != nil {
@@ -234,7 +234,7 @@ func (s *emailSender) streamOf(ctx context.Context, job database.MailQueue) (Lan
 	return LaneOf(s.lanes.purposeOf(send.Purpose), send.Key, send.System, Priority(job.Priority)), nil
 }
 
-// message is job's mail from from. queueHeader adds X-SkyMail-Queue-Id, which
+// message is job's mail from from. queueHeader adds X-SkyNotify-Queue-Id, which
 // the lanes write (graph.go); the off path writes the mail as it always has,
 // with SMTP_REPLY_TO's Reply-To when it is set. With attachments the mail is
 // multipart/mixed: its body, then each file.

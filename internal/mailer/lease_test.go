@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 func TestQueueLeaseFromEnv(t *testing.T) {

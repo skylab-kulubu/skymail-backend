@@ -1,6 +1,6 @@
 # Bildirimler (`POST /v1/notifications`) ve Bildirim türleri
 
-Hub bileti iletişim-servisi 03; ADR 0070 (core ne oldu ve kime, SkyMail
+Hub bileti iletişim-servisi 03; ADR 0070 (core ne oldu ve kime, SkyNotify
 hangi kanaldan ve hangi metinle). Kanallar e-posta ve uygulama içi kutu
 (bilet 05, [`inbox.md`](inbox.md)); push (12) ve SMS (13) kendi biletleriyle
 gelir.
@@ -17,14 +17,14 @@ gelir.
 | `archived_at` | Doluysa tür kullanımda değildir. |
 | `inbox` | Türün kutu metni (`title`, `summary`, `link`); kanallarda `inbox` yoksa `null`. `notification_variants`'ta tutulur. |
 
-- Template seed yazar: `PUT /v1/notification_types/{key}` (`skymail:templates:write`),
+- Template seed yazar: `PUT /v1/notification_types/{key}` (`skynotify:templates:write`),
   gövde `{"category", "required", "default_channels", "lane", "inbox"}`. Var
   olan tür, kutu metniyle birlikte üzerine yazılır, arşivi olduğu gibi kalır.
   `inbox` kanallarda `inbox` varken zorunlu, yokken reddedilir
   ([`inbox.md`](inbox.md#türün-kutu-metni)). Kategori küçük harf, rakam, nokta,
   tire ve alt çizgi; 2–64 karakter.
 - Okuma: `GET /v1/notification_types`, `GET /v1/notification_types/{key}`
-  (`skymail:templates:read`).
+  (`skynotify:templates:read`).
 - Operatörün türü değiştireceği bir uç yok (konsol, bilet 10). O uç geldiğinde
   ADR-0047'nin kuralı (seed operatörün değişikliğini sessizce ezmez) buraya da
   uygulanır.
@@ -35,8 +35,8 @@ gelir.
 ## `POST /v1/notifications`
 
 Yalnız bir servis hesabının token'ı (client credentials: `client_id` = `azp`)
-ve `skymail:notifications:send` (bilet 04, core'un servis hesabına) girer;
-`/v1`'in her ucu gibi `skymail:access` de gerekir. Kişi token'ı rolü olsa da
+ve `skynotify:notifications:send` (bilet 04, core'un servis hesabına) girer;
+`/v1`'in her ucu gibi `skynotify:access` de gerekir. Kişi token'ı rolü olsa da
 `403 auth.service_account_required` alır.
 
 ```http
@@ -71,12 +71,12 @@ Content-Type: application/json
   postası çıkış bağlantısı taşımaz). Mutlak `https`, host'lu, kullanıcısız, en
   çok 960 karakter görünür ASCII, `<`, `>`, virgül ve tırnak yok; değilse
   `400 notification.unsubscribe_url_invalid` (ikisi de `params.recipient`
-  sırası). `SKYMAIL_BULK_PREFERENCE=on` iken isteğe bağlı ve `bulk` şeritli
+  sırası). `SKYNOTIFY_BULK_PREFERENCE=on` iken isteğe bağlı ve `bulk` şeritli
   türde e-postası gidecek her alıcı onu taşımalıdır, yoksa
   `400 notification.unsubscribe_url_required` (`params.recipient` sırası):
   dağıtıcı bağlantısız duyuru postasını göndermez (README, "Toplu postada
   tercih"). Bağlantı satırda (`mail_queue.list_unsubscribe_url`) saklanır,
-  şablona `.UnsubscribeUrl` olarak girer ve `SKYMAIL_LIST_UNSUBSCRIBE=on`
+  şablona `.UnsubscribeUrl` olarak girer ve `SKYNOTIFY_LIST_UNSUBSCRIBE=on`
   iken duyuru kutusundan `List-Unsubscribe` + `List-Unsubscribe-Post`
   başlıklarıyla gider (README, "Tek tık çıkış"). Boşsa istekte yazılmaz; eski
   bir isteğin `Idempotency-Key` özeti değişmez.
@@ -124,7 +124,7 @@ E-posta türün anahtarındaki şablonla, türün şeridinde, kişinin `sub`'ı
 `mail_queue.recipient_sub`'a yazılarak kuyruğa girer (bir gönderim,
 `mail_tasks.notification_id`). Gönderim bir listeye ya da onaylı isteğe
 gitmediği için içerik kuralında tekil sayılır (`docs/data-lifecycle.md`).
-Takip yalnız `SKYMAIL_TRACKING_SYSTEM=on` (ve `SKYMAIL_TRACKING=on`) iken
+Takip yalnız `SKYNOTIFY_TRACKING_SYSTEM=on` (ve `SKYNOTIFY_TRACKING=on`) iken
 vardır: core gönderimden önce (2 saniye içinde) sorulur, piksel konur, tıklama
 adresi yalnız şablonun olduğu gibi yazdığı bağlantılara, hassas şablonda hiçbir
 bağlantıya konmaz (README, "Sistem postaları"). Varsayılan: takip yok.
@@ -185,12 +185,14 @@ değişken yok):
 {"level":"info","event":"notification_queued","notification_id":"…","type":"event.cancelled","lane":"bulk","channel":"email","queued":12,"failed":0,"skipped_not_allowed":3}
 ```
 
-SkyMail'de bugün metrik ucu yok; tür ve kanal başına kuyruk derinliği ve
+SkyNotify'da bugün metrik ucu yok; tür ve kanal başına kuyruk derinliği ve
 gönderim sayısı metrikleri duyuru 05'in metrik maddesiyle birlikte gelir.
-O zamana kadar sayım bu satırdan (production sunucusunda, salt okunur):
+O zamana kadar sayım bu satırdan (production sunucusunda, salt okunur; `SERVIS`
+production SkyNotify uygulamasının Swarm servis adıdır, `docker service ls`
+gösterir):
 
 ```bash
-docker service logs --raw --since 24h sky-lab-production-skymail-tvrjzs 2>&1 | grep -F '"event":"notification_queued"' | grep -o '"type":"[^"]*","lane":"[^"]*","channel":"[^"]*","queued":[0-9]*' | sort | uniq -c
+docker service logs --raw --since 24h "$SERVIS" 2>&1 | grep -F '"event":"notification_queued"' | grep -o '"type":"[^"]*","lane":"[^"]*","channel":"[^"]*","queued":[0-9]*' | sort | uniq -c
 ```
 
 ## `POST /v1/mail_tasks/single` aynen kalır

@@ -1,6 +1,6 @@
 # Health, readiness and shutdown
 
-How SkyMail tells Docker Swarm whether a task should get traffic, and how it
+How SkyNotify tells Docker Swarm whether a task should get traffic, and how it
 stops. Code: `internal/health`, `serve.go`, `healthcheck.go`,
 `internal/mailer` (`Stop`).
 
@@ -15,7 +15,7 @@ several.
 
 | Route | Answers | Asks |
 |---|---|---|
-| `GET /health` | always `204` | nothing (liveness: the process answers). Release checks read it (`/api/skymail/health`) |
+| `GET /health` | always `204` | nothing (liveness: the process answers). Release checks read it (`/api/skynotify/health`) |
 | `GET /ready` | `204`, or `503` with `Cache-Control: no-store` and `Retry-After: 1` | in order: the task is not shutting down; the database answers a ping; the account access gate's contract sentinel (`ACCOUNT_ACCESS_GATE_MODE=enforce` only, `docs/account-access-gate.md`) |
 | `GET /ready?gate=skip` | the same | the first two only: the container's health check |
 
@@ -33,8 +33,8 @@ database does not answer. The `503` body never says why; the log does.
   most one ping a second. The log says once when the database stops answering
   and once when it is back. The connection is kept a day, not re-made every
   hour: re-made at a moment the database is at `max_connections`, it would
-  fail the check of a SkyMail that is fine.
-- **Migrations** are done by construction: SkyMail starts listening only
+  fail the check of a SkyNotify that is fine.
+- **Migrations** are done by construction: SkyNotify starts listening only
   after they have run (`DATABASE_MIGRATIONS_MODE=apply`).
 - **Shutting down.** From the stop signal on, `/ready` answers `503`.
 - **Not asked:** Keycloak, the SMTP relay, the account access gate's Redis
@@ -46,19 +46,19 @@ database does not answer. The `503` body never says why; the log does.
 Swarm has one health check, not Kubernetes' separate liveness and readiness:
 a task that fails it `retries` times in a row is replaced. So the health check
 asks `/ready?gate=skip`: the task and its database, not the gate's Redis.
-Restarting SkyMail for a gate Redis that is down fixes nothing and takes down
+Restarting SkyNotify for a gate Redis that is down fixes nothing and takes down
 what needs no Redis (the queue keeps sending; `/health`, `/docs`). With the
 gate down, `/v1` requests answer `503` as before, and `/ready` itself still
 says so.
 
-The database stays in the check: SkyMail can neither queue nor send without
+The database stays in the check: SkyNotify can neither queue nor send without
 it. The settings below let a database restart pass (a minute) without a
-restart of SkyMail. A longer outage restarts it; it comes back on its own once
+restart of SkyNotify. A longer outage restarts it; it comes back on its own once
 the database is back.
 
 ## The health check
 
-`skymail-backend healthcheck` asks this container's SkyMail for
+`skynotify-backend healthcheck` asks this container's SkyNotify for
 `/ready?gate=skip` (`http://127.0.0.1:$APP_PORT`, 3000 unset, 3 s) and exits 0
 on `2xx`, 1 otherwise, saying why on stderr (kept by Docker: `docker
 inspect`). The image needs no curl or wget.
@@ -67,16 +67,16 @@ The image carries it (`Dockerfile`):
 
 ```
 HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --start-interval=2s --retries=6 \
-  CMD ["/app/skymail-backend", "healthcheck"]
+  CMD ["/app/skynotify-backend", "healthcheck"]
 ```
 
 A Swarm service uses the image's health check unless its own replaces it, so
-Dokploy's Health Check field may stay empty for SkyMail. Set there (Advanced →
+Dokploy's Health Check field may stay empty for SkyNotify. Set there (Advanced →
 Swarm Settings; durations in nanoseconds), it is:
 
 ```json
 {
-  "Test": ["CMD", "/app/skymail-backend", "healthcheck"],
+  "Test": ["CMD", "/app/skynotify-backend", "healthcheck"],
   "Interval": 10000000000,
   "Timeout": 5000000000,
   "StartPeriod": 60000000000,
@@ -92,14 +92,14 @@ Swarm Settings; durations in nanoseconds), it is:
 | StartPeriod | 60 s | startup is the migrations and little else; a task waiting for another's migrations waits too (up to 5 minutes, `migrations.LockWait`). A release with a long migration needs more |
 | StartInterval | 2 s | during the start period: the new task is healthy within 2 s of listening, so a deploy moves over quickly (Docker Engine 25+; older engines ignore it and use Interval) |
 | Retries | 6 | a task is replaced after about a minute of failures; a database restart passes |
-| **Stop Grace Period** | **30 s** (`30000000000`) | must be over SkyMail's 25 s shutdown; Swarm's default is 10 s |
+| **Stop Grace Period** | **30 s** (`30000000000`) | must be over SkyNotify's 25 s shutdown; Swarm's default is 10 s |
 
 The Dokploy settings are written by the hub's Swarm settings wizard
 (sky_lab_genel `.scratch/horizontal-scale`, ticket 19).
 
 ## Shutdown
 
-On SIGTERM (Docker's stop; SIGINT too, a second one kills at once) SkyMail:
+On SIGTERM (Docker's stop; SIGINT too, a second one kills at once) SkyNotify:
 
 1. answers `/ready` with `503`;
 2. stops the mailer, beside the HTTP drain:
@@ -131,7 +131,7 @@ Swarm takes the task out of the service's virtual IP and waits two seconds
 before it sends SIGTERM: moby's `controller.Shutdown` deactivates the service
 binding and sleeps `defaultGossipConvergeDelay` (2 s) before stopping the
 container (`daemon/cluster/executor/container/controller.go`, Docker 28.x).
-That covers the callers that reach SkyMail by the service name (Keycloak,
+That covers the callers that reach SkyNotify by the service name (Keycloak,
 core, Forms on the Docker network). A proxy that tracks the tasks itself
 (Traefik's Swarm provider sends to task addresses, refreshed on its own
 interval, unless told to use the virtual IP) may still open a connection
@@ -141,7 +141,7 @@ request with a 502. The keep-alive connections it already holds are told
 
 A send is bounded by `SendBudget` (1 minute from dial to QUIT), so a send can
 outlast the mailer's 22 s on a stalled relay. go-mail watches its context
-only while dialling; SkyMail closes the connection itself when the send's
+only while dialling; SkyNotify closes the connection itself when the send's
 context ends (`withSend` in `internal/mailer/lease.go`), so the cut at step 4
 ends the conversation then and there:
 
@@ -153,7 +153,7 @@ ends the conversation then and there:
   have taken it; the row goes again after the lease, so the person may get it
   twice, as after a crash. That window is a round trip;
 - once the relay has answered `250`, the mail is sent, whatever happens to
-  what go-mail says after it (`RSET`, then `QUIT`; SkyMail's client sends no
+  what go-mail says after it (`RSET`, then `QUIT`; SkyNotify's client sends no
   `NOOP`, `mail.WithoutNoop`): one of them failing, stalling or being cut
   off, or the relay hanging up, is no failed send (go-mail marks the message
   delivered at the `250`, `Msg.IsDelivered`; a warning is logged). The worker writes `sent` with a context of its own (5 s, not the
@@ -187,7 +187,7 @@ once, with the downtime announced. More, rollback and dirty-version recovery
 included: `docs/database-migrations.md`.
 
 Tasks starting together (a scale-up, two replicas) migrate one at a time: a
-task holds the session advisory lock `hashtextextended('skymail-backend
+task holds the session advisory lock `hashtextextended('skynotify-backend
 migrations', 0)` from before it reads the version until it is through, and the
 others wait for it (up to 5 minutes, then the task fails and restarts), then
 find nothing to do. Without it a task starting during another's migration

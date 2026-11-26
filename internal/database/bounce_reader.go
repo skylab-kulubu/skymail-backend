@@ -8,7 +8,7 @@ import (
 // BounceReaderLockName names the session advisory lock one poll of the NDR
 // reader holds (hashtextextended(BounceReaderLockName, 0)): with several
 // replicas, one reads the mailboxes at a time.
-const BounceReaderLockName = "skymail-backend bounce reader"
+const BounceReaderLockName = "skynotify-backend bounce reader"
 
 // WithBounceReaderLock runs fn holding the NDR reader's advisory lock, on a
 // connection of its own; ran is false (and fn not run) when another process

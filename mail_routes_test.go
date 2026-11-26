@@ -10,12 +10,12 @@ import (
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 type idleMailer struct{}
@@ -88,7 +88,7 @@ func mailRoutesApp(t *testing.T, roles ...string) *fiber.App {
 		c.Locals("roles", roles)
 		return c.Next()
 	})
-	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
 	registerMailTaskRoutes(api, auth, handlers.NewMailHandler(store, idleMailer{}, noGroups{}))
 	return app
 }
@@ -101,8 +101,8 @@ func TestSendSummaryAndStatusFilterRequireMailsRead(t *testing.T) {
 	}
 
 	for _, roles := range [][]string{
-		{"skymail:access"},
-		{"skymail:access", "skymail:mails:write", "skymail:mails:send", "skymail:templates:read", "skymail:lists:read"},
+		{"skynotify:access"},
+		{"skynotify:access", "skynotify:mails:write", "skynotify:mails:send", "skynotify:templates:read", "skynotify:lists:read"},
 	} {
 		app := mailRoutesApp(t, roles...)
 		for _, path := range paths {
@@ -124,10 +124,10 @@ func TestSendSummaryAndStatusFilterRequireMailsRead(t *testing.T) {
 	}
 }
 
-// The content route reaches its handler with skymail:mails:read, which then
+// The content route reaches its handler with skynotify:mails:read, which then
 // decides what the caller sees; a row that is not there is 404.
 func TestSentMailContentIsServedWithMailsRead(t *testing.T) {
-	app := mailRoutesApp(t, "skymail:access", "skymail:mails:read")
+	app := mailRoutesApp(t, "skynotify:access", "skynotify:mails:read")
 	response, err := app.Test(httptest.NewRequest(fiber.MethodGet,
 		"/v1/mail_tasks/40000000-0000-4000-8000-000000000001/queue/40000000-0000-4000-8000-000000000002/content", nil))
 	if err != nil {
@@ -140,7 +140,7 @@ func TestSentMailContentIsServedWithMailsRead(t *testing.T) {
 }
 
 func TestSendSummaryIsServedWithMailsRead(t *testing.T) {
-	app := mailRoutesApp(t, "skymail:access", "skymail:mails:read")
+	app := mailRoutesApp(t, "skynotify:access", "skynotify:mails:read")
 
 	// /summary sits beside /:id; it has to reach the summary, not be read as a
 	// task id.

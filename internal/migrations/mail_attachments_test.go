@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 const mailAttachments = uint(20261122150000)

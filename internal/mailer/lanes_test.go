@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/msauth"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/msauth"
 )
 
 const (
@@ -23,7 +23,7 @@ const (
 )
 
 // appKey is a throwaway key and self-signed certificate standing for the
-// skymail-posta application's, made once.
+// skynotify-posta application's, made once.
 var appKey = sync.OnceValues(func() (*rsa.PrivateKey, []byte) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -31,7 +31,7 @@ var appKey = sync.OnceValues(func() (*rsa.PrivateKey, []byte) {
 	}
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "skymail-posta-test"},
+		Subject:      pkix.Name{CommonName: "skynotify-posta-test"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
@@ -63,12 +63,12 @@ func appEnv() map[string]string {
 // through Graph, duyuru with XOAUTH2, Reply-To info@.
 func decidedEnv() map[string]string {
 	env := appEnv()
-	env["SKYMAIL_SEND_HESAP"] = "graph"
-	env["SKYMAIL_FROM_HESAP"] = "SKY LAB Hesap <hesap@bildirim.example.org>"
-	env["SKYMAIL_SEND_BILGI"] = "graph"
-	env["SKYMAIL_FROM_BILGI"] = "SKY LAB Bildirim Hizmeti <bilgi@bildirim.example.org>"
-	env["SKYMAIL_SEND_DUYURU"] = "xoauth2"
-	env["SKYMAIL_FROM_DUYURU"] = "SKY LAB Bildirim Hizmeti <duyuru@bildirim.example.org>"
+	env["SKYNOTIFY_SEND_HESAP"] = "graph"
+	env["SKYNOTIFY_FROM_HESAP"] = "SKY LAB Hesap <hesap@bildirim.example.org>"
+	env["SKYNOTIFY_SEND_BILGI"] = "graph"
+	env["SKYNOTIFY_FROM_BILGI"] = "SKY LAB Bildirim Hizmeti <bilgi@bildirim.example.org>"
+	env["SKYNOTIFY_SEND_DUYURU"] = "xoauth2"
+	env["SKYNOTIFY_FROM_DUYURU"] = "SKY LAB Bildirim Hizmeti <duyuru@bildirim.example.org>"
 	env["SMTP_REPLY_TO"] = "info@example.org"
 	return env
 }
@@ -157,12 +157,12 @@ func TestSendLanesFromEnv(t *testing.T) {
 		change map[string]string
 		error  string
 	}{
-		"a typo":                  {map[string]string{"SKYMAIL_SEND_BILGI": "grahp"}, "SKYMAIL_SEND_BILGI must be off, graph or xoauth2"},
-		"no From":                 {map[string]string{"SKYMAIL_FROM_HESAP": ""}, "SKYMAIL_SEND_HESAP=graph needs SKYMAIL_FROM_HESAP"},
-		"a From that is not":      {map[string]string{"SKYMAIL_FROM_DUYURU": "duyuru at example"}, "SKYMAIL_FROM_DUYURU is not an address"},
+		"a typo":                  {map[string]string{"SKYNOTIFY_SEND_BILGI": "grahp"}, "SKYNOTIFY_SEND_BILGI must be off, graph or xoauth2"},
+		"no From":                 {map[string]string{"SKYNOTIFY_FROM_HESAP": ""}, "SKYNOTIFY_SEND_HESAP=graph needs SKYNOTIFY_FROM_HESAP"},
+		"a From that is not":      {map[string]string{"SKYNOTIFY_FROM_DUYURU": "duyuru at example"}, "SKYNOTIFY_FROM_DUYURU is not an address"},
 		"no certificate":          {map[string]string{msauth.EnvClientCert: ""}, "a sender lane is on: GRAPH_CLIENT_CERT is required"},
 		"a bad Reply-To":          {map[string]string{"SMTP_REPLY_TO": "info"}, "SMTP_REPLY_TO is not an address"},
-		"a list-unsubscribe typo": {map[string]string{"SKYMAIL_LIST_UNSUBSCRIBE": "true"}, "SKYMAIL_LIST_UNSUBSCRIBE must be off or on"},
+		"a list-unsubscribe typo": {map[string]string{"SKYNOTIFY_LIST_UNSUBSCRIBE": "true"}, "SKYNOTIFY_LIST_UNSUBSCRIBE must be off or on"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			env := decidedEnv()
@@ -178,18 +178,18 @@ func TestSendLanesFromEnv(t *testing.T) {
 
 	// Upper case and spaces are read; OFF is off.
 	env := decidedEnv()
-	env["SKYMAIL_SEND_HESAP"] = " GRAPH "
-	env["SKYMAIL_SEND_DUYURU"] = "OFF"
+	env["SKYNOTIFY_SEND_HESAP"] = " GRAPH "
+	env["SKYNOTIFY_SEND_DUYURU"] = "OFF"
 	lanes, err = mailer.SendLanesFromEnv(getenv(env))
 	if err != nil || lanes.Lane(mailer.LaneHesap).Transport != mailer.TransportGraph || lanes.Lane(mailer.LaneDuyuru).Transport != mailer.TransportOff {
 		t.Fatalf("%+v %v", lanes, err)
 	}
 
-	// SKYMAIL_LIST_UNSUBSCRIBE: off unless on, which needs no lane on.
+	// SKYNOTIFY_LIST_UNSUBSCRIBE: off unless on, which needs no lane on.
 	for value, want := range map[string]bool{"": false, "off": false, " ON ": true, "on": true} {
-		lanes, err := mailer.SendLanesFromEnv(getenv(map[string]string{"SKYMAIL_LIST_UNSUBSCRIBE": value}))
+		lanes, err := mailer.SendLanesFromEnv(getenv(map[string]string{"SKYNOTIFY_LIST_UNSUBSCRIBE": value}))
 		if err != nil || lanes.ListUnsubscribe != want {
-			t.Errorf("SKYMAIL_LIST_UNSUBSCRIBE=%q: %v %v, want %v", value, lanes.ListUnsubscribe, err, want)
+			t.Errorf("SKYNOTIFY_LIST_UNSUBSCRIBE=%q: %v %v, want %v", value, lanes.ListUnsubscribe, err, want)
 		}
 	}
 }

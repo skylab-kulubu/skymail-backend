@@ -12,9 +12,9 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/consent"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/unsubscribe"
+	"github.com/skylab-kulubu/skynotify-backend/internal/consent"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/unsubscribe"
 )
 
 // The bulk preference check (ADR 0072 decision 3; hub ticket
@@ -67,7 +67,7 @@ func preferenceWorld(t *testing.T, core *routeVerdicts) *approvalWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gate := mailer.PreferenceGate{On: true, Core: core, Links: unsubscribe.Config{On: true, BaseURL: "https://api.example.org/api/skymail", Ring: ring}}
+	gate := mailer.PreferenceGate{On: true, Core: core, Links: unsubscribe.Config{On: true, BaseURL: "https://api.example.org/api/skynotify", Ring: ring}}
 	return newFormSourceWorld(t, purposesOn(), mailer.WithPreferenceGate(gate))
 }
 

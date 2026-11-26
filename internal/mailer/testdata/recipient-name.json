@@ -1,13 +1,13 @@
 {
   "about": [
-    "The recipient's name tags a send's own variables may hold (skymail-backend internal/mailer/recipient_name.go): exactly",
+    "The recipient's name tags a send's own variables may hold (skynotify-backend internal/mailer/recipient_name.go): exactly",
     "{{.FullName}} and {{or .FullName \"fallback\"}} (1-60 characters, none of \" \\ { } < > & and no control character).",
     "Any other {{...}} stays as text. An empty name prints the fallback, or nothing. The name's white space and control",
     "characters become single spaces, trimmed. \"text\" is a value the subject prints, filled as it is; \"markup\" a value",
     "printed through safeHTML, filled in its text only and escaped as Go's html.EscapeString escapes. Each markup case is",
     "already what the server's allow-list writes, so the server's fill and the panel's preview give the same markup.",
-    "The same file, byte for byte, is read by skymail-backend (internal/mailer/testdata/recipient-name.json) and",
-    "skymail-frontend (src/lib/mail-render/testdata/recipient-name.json); each repo's test pins its SHA-256."
+    "The same file, byte for byte, is read by skynotify-backend (internal/mailer/testdata/recipient-name.json) and",
+    "skynotify-frontend (src/lib/mail-render/testdata/recipient-name.json); each repo's test pins its SHA-256."
   ],
   "text": [
     {

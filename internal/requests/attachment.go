@@ -4,10 +4,10 @@ package requests
 // service hands with one mail, today core's ticket PDF. Only a service's
 // mail to one person takes it (POST /mail_tasks/single, POST /notifications
 // to one recipient), only the e-mail goes with it, PDF or PNG, at most 2 and
-// 512 KB decoded in all. SkyMail keeps the file only until the mail is sent
+// 512 KB decoded in all. SkyNotify keeps the file only until the mail is sent
 // or fails for good.
 type MailAttachment struct {
-	// The name the recipient sees. SkyMail reduces it to letters, digits, '.', '-' and '_' (Turkish letters become their Latin ones, a space a '-'), at most 100 characters, and ends it with the type's extension (.pdf, .png). Never a person's name: the file name stays with the send's report.
+	// The name the recipient sees. SkyNotify reduces it to letters, digits, '.', '-' and '_' (Turkish letters become their Latin ones, a space a '-'), at most 100 characters, and ends it with the type's extension (.pdf, .png). Never a person's name: the file name stays with the send's report.
 	Filename string `json:"filename" example:"bilet-gecekodu-2026.pdf"`
 	// application/pdf or image/png; the file must begin as that type does.
 	ContentType string `json:"content_type" example:"application/pdf" enums:"application/pdf,image/png"`

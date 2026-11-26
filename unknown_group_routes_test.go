@@ -9,12 +9,12 @@ import (
 
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/gofiber/fiber/v3"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/keycloak"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // goneGroups is a Keycloak that has no group of any id: GetGroupMembers
@@ -47,12 +47,12 @@ func TestAnUnknownKeycloakGroupIsRefusedNotEmpty(t *testing.T) {
 	api := app.Group("/v1")
 	api.Use(func(c fiber.Ctx) error {
 		c.Locals("user_id", "31ef736f-72da-4a40-8791-d523199cf9f0")
-		c.Locals("roles", []string{"skymail:access", "skymail:mails:write", "skymail:lists:read"})
+		c.Locals("roles", []string{"skynotify:access", "skynotify:mails:write", "skynotify:lists:read"})
 		return c.Next()
 	})
-	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
 	registerMailTaskRoutes(api, auth, handlers.NewMailHandler(store, idleMailer{}, goneGroups{}))
-	api.Get("/mailing_lists/:id/recipients", auth.RequireAnyPermission("skymail:lists:read"), handlers.NewListHandler(store, goneGroups{}).GetRecipients)
+	api.Get("/mailing_lists/:id/recipients", auth.RequireAnyPermission("skynotify:lists:read"), handlers.NewListHandler(store, goneGroups{}).GetRecipients)
 
 	request := httptest.NewRequest(fiber.MethodPost, "/v1/mail_tasks",
 		strings.NewReader(`{"template_id":"`+templateID+`","mail_list_id":"`+groupID+`"}`))

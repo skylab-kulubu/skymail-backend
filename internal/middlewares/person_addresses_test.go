@@ -45,14 +45,14 @@ func TestAuthenticatePersonKeepsThePersonsOwnAddresses(t *testing.T) {
 				body += `,` + tc.userinfo
 			}
 			body += `}`
-			claims := map[string]any{"sub": audienceTestSubject, "azp": "account-center", "aud": []string{"skymail"}}
+			claims := map[string]any{"sub": audienceTestSubject, "azp": "account-center", "aud": []string{"skynotify"}}
 			for k, v := range tc.tokenClaims {
 				claims[k] = v
 			}
 			var got []string
 			reached := false
 			app := fiber.New(fiber.Config{ErrorHandler: testErrorHandler})
-			app.Use(NewAuthMiddleware("skymail", userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body), AudienceOff).AuthenticatePerson)
+			app.Use(NewAuthMiddleware("skynotify", userinfoStub(t, http.StatusOK, fiber.MIMEApplicationJSON, body), AudienceOff).AuthenticatePerson)
 			app.Get("/probe", func(c fiber.Ctx) error {
 				reached = true
 				got = PersonAddresses(c)

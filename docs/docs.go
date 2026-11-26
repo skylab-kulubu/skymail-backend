@@ -36,7 +36,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "type": {
-                        "description": "Type is about:blank: the problem is what the status says (§4.2.1);\nwhat SkyMail means is code.",
+                        "description": "Type is about:blank: the problem is what the status says (§4.2.1);\nwhat SkyNotify means is code.",
                         "type": "string"
                     }
                 },
@@ -145,7 +145,7 @@ const docTemplate = `{
                 "description": "Who: an operator in the panel, or the Template seed; sub and name as their token carried them.",
                 "properties": {
                     "kind": {
-                        "description": "operator: written in SkyMail; template_seed: written by the Template seed from the repo.",
+                        "description": "operator: written in SkyNotify; template_seed: written by the Template seed from the repo.",
                         "enum": [
                             "operator",
                             "template_seed"
@@ -391,7 +391,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "purpose": {
-                        "description": "The send's purpose (ADR 0072 decision 2): islem or duyuru, as written on the send; null while SkyMail's purposes are off (GET /mail_tasks/tracking-mode purpose_available false).",
+                        "description": "The send's purpose (ADR 0072 decision 2): islem or duyuru, as written on the send; null while SkyNotify's purposes are off (GET /mail_tasks/tracking-mode purpose_available false).",
                         "enum": [
                             "islem",
                             "duyuru"
@@ -399,7 +399,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Whether the send is tracked. A person's send: it asked for open and click tracking and got it — false when it did not ask, when SkyMail's tracking is off (GET /mail_tasks/summary tracking_available), or when its template is a System template or sensitive — or SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then true whatever it asked and whatever its template. A service's single mail does not ask: true only when SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) and its recipient is tracked (has an account core lets be tracked).",
+                        "description": "Whether the send is tracked. A person's send: it asked for open and click tracking and got it — false when it did not ask, when SkyNotify's tracking is off (GET /mail_tasks/summary tracking_available), or when its template is a System template or sensitive — or SkyNotify tracks every person's send (SKYNOTIFY_TRACKING_OPERATOR; summary tracking_always): then true whatever it asked and whatever its template. A service's single mail does not ask: true only when SkyNotify tracks system mail (SKYNOTIFY_TRACKING_SYSTEM) and its recipient is tracked (has an account core lets be tracked).",
                         "type": "boolean"
                     }
                 },
@@ -407,6 +407,9 @@ const docTemplate = `{
             },
             "handlers.DailySent": {
                 "properties": {
+                    "by_stream": {
+                        "$ref": "#/components/schemas/handlers.StreamCounts"
+                    },
                     "date": {
                         "example": "2026-09-22",
                         "type": "string"
@@ -613,7 +616,7 @@ const docTemplate = `{
                         "$ref": "#/components/schemas/handlers.MailApprovalRecipient"
                     },
                     "purpose": {
-                        "description": "islem or duyuru. Null for a send queued while SkyMail's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).",
+                        "description": "islem or duyuru. Null for a send queued while SkyNotify's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).",
                         "enum": [
                             "islem",
                             "duyuru"
@@ -674,7 +677,7 @@ const docTemplate = `{
                         "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
                     },
                     "tracking": {
-                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyMail tracks every person's send, it is tracked whatever this says, islem too.",
+                        "description": "The submitter asked for open and click tracking, with SkyNotify's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyNotify tracked every person's send (SKYNOTIFY_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyNotify tracks every person's send, it is tracked whatever this says, islem too.",
                         "type": "boolean"
                     },
                     "transactional_statement": {
@@ -731,7 +734,7 @@ const docTemplate = `{
                         "uniqueItems": false
                     },
                     "kind": {
-                        "description": "submitted, resubmitted and accepted, declined are the submitter's; edited, returned, approved, rejected an approver's; expired SkyMail's.",
+                        "description": "submitted, resubmitted and accepted, declined are the submitter's; edited, returned, approved, rejected an approver's; expired SkyNotify's.",
                         "enum": [
                             "submitted",
                             "resubmitted",
@@ -795,7 +798,7 @@ const docTemplate = `{
                         "type": "boolean"
                     },
                     "purpose": {
-                        "description": "islem or duyuru. Null for a send queued while SkyMail's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).",
+                        "description": "islem or duyuru. Null for a send queued while SkyNotify's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).",
                         "enum": [
                             "islem",
                             "duyuru"
@@ -849,7 +852,7 @@ const docTemplate = `{
                         "$ref": "#/components/schemas/handlers.MailApprovalTemplate"
                     },
                     "tracking": {
-                        "description": "The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyMail tracks every person's send, it is tracked whatever this says, islem too.",
+                        "description": "The submitter asked for open and click tracking, with SkyNotify's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyNotify tracked every person's send (SKYNOTIFY_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyNotify tracks every person's send, it is tracked whatever this says, islem too.",
                         "type": "boolean"
                     },
                     "transactional_statement": {
@@ -870,7 +873,7 @@ const docTemplate = `{
                         "type": "integer"
                     },
                     "problem": {
-                        "description": "Why it reached no one or fewer than it was for: no_approvers (no one holding skymail:mails:approve has an address), approver_lookup_failed (Keycloak did not say in time), no_address (the submitter's token carried no e-mail), unverified_address (it carried one Keycloak had not verified, which is not used), template_unavailable (the System template is not seeded), enqueue_failed. Null when it reached everyone.",
+                        "description": "Why it reached no one or fewer than it was for: no_approvers (no one holding skynotify:mails:approve has an address), approver_lookup_failed (Keycloak did not say in time), no_address (the submitter's token carried no e-mail), unverified_address (it carried one Keycloak had not verified, which is not used), template_unavailable (the System template is not seeded), enqueue_failed. Null when it reached everyone.",
                         "enum": [
                             "no_approvers",
                             "approver_lookup_failed",
@@ -893,7 +896,7 @@ const docTemplate = `{
                 "type": "object"
             },
             "handlers.MailApprovalPerson": {
-                "description": "Who did it; null when SkyMail expired the request.",
+                "description": "Who did it; null when SkyNotify expired the request.",
                 "properties": {
                     "name": {
                         "type": "string"
@@ -1052,6 +1055,15 @@ const docTemplate = `{
                     "id": {
                         "type": "string"
                     },
+                    "kind": {
+                        "description": "bulk (a list, a group, a Forms source, an approved send, a News send), system (mail a service or SkyNotify sent: a core notification, a service's single mail such as a login code, a ticket or a Forms confirmation, a Mail onayı notice; a single send from before 2026-11-24 by its lane) or single (a person's single mail); the kind filter of GET /mail_tasks.",
+                        "enum": [
+                            "bulk",
+                            "single",
+                            "system"
+                        ],
+                        "type": "string"
+                    },
                     "mail_list_id": {
                         "type": "string"
                     },
@@ -1067,7 +1079,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "paused_reason": {
-                        "description": "operator (paused by hand) or failure_rate (its recipients failed past SKYMAIL_FAILURE_PAUSE_COUNT and SKYMAIL_FAILURE_PAUSE_PERCENT); null when not paused.",
+                        "description": "operator (paused by hand) or failure_rate (its recipients failed past SKYNOTIFY_FAILURE_PAUSE_COUNT and SKYNOTIFY_FAILURE_PAUSE_PERCENT); null when not paused.",
                         "enum": [
                             "operator",
                             "failure_rate"
@@ -1075,7 +1087,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "purpose": {
-                        "description": "islem or duyuru. Null for a send queued while SkyMail's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).",
+                        "description": "islem or duyuru. Null for a send queued while SkyNotify's purposes were off, or before them: its stream was read by the rule of before (a list, a group, a Forms source, an approved or a tracked send duyuru; any other islem).",
                         "enum": [
                             "islem",
                             "duyuru"
@@ -1101,7 +1113,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Whether the send is tracked: it asked for open and click tracking, SkyMail's tracking was on when it was queued and its template may be tracked (not System, not sensitive); or it is a person's send queued while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); or it is a service's mail queued while SkyMail tracked system mail (SKYMAIL_TRACKING_SYSTEM).",
+                        "description": "Whether the send is tracked: it asked for open and click tracking, SkyNotify's tracking was on when it was queued and its template may be tracked (not System, not sensitive); or it is a person's send queued while SkyNotify tracked every person's send (SKYNOTIFY_TRACKING_OPERATOR); or it is a service's mail queued while SkyNotify tracked system mail (SKYNOTIFY_TRACKING_SYSTEM).",
                         "type": "boolean"
                     },
                     "transactional_statement": {
@@ -1143,7 +1155,7 @@ const docTemplate = `{
             "handlers.NewsSendAvailability": {
                 "properties": {
                     "available": {
-                        "description": "True while SKYMAIL_NEWS_SEND=on: a News record may be previewed, tested and sent.",
+                        "description": "True while SKYNOTIFY_NEWS_SEND=on: a News record may be previewed, tested and sent.",
                         "type": "boolean"
                     },
                     "read_more": {
@@ -1219,7 +1231,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "purpose": {
-                        "description": "The send's purpose (ADR 0072 decision 2): islem or duyuru, as written on the send; null while SkyMail's purposes are off (GET /mail_tasks/tracking-mode purpose_available false).",
+                        "description": "The send's purpose (ADR 0072 decision 2): islem or duyuru, as written on the send; null while SkyNotify's purposes are off (GET /mail_tasks/tracking-mode purpose_available false).",
                         "enum": [
                             "islem",
                             "duyuru"
@@ -1234,7 +1246,7 @@ const docTemplate = `{
                         "$ref": "#/components/schemas/handlers.NewsSendSource"
                     },
                     "tracking": {
-                        "description": "Whether the send is tracked. A person's send: it asked for open and click tracking and got it — false when it did not ask, when SkyMail's tracking is off (GET /mail_tasks/summary tracking_available), or when its template is a System template or sensitive — or SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then true whatever it asked and whatever its template. A service's single mail does not ask: true only when SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) and its recipient is tracked (has an account core lets be tracked).",
+                        "description": "Whether the send is tracked. A person's send: it asked for open and click tracking and got it — false when it did not ask, when SkyNotify's tracking is off (GET /mail_tasks/summary tracking_available), or when its template is a System template or sensitive — or SkyNotify tracks every person's send (SKYNOTIFY_TRACKING_OPERATOR; summary tracking_always): then true whatever it asked and whatever its template. A service's single mail does not ask: true only when SkyNotify tracks system mail (SKYNOTIFY_TRACKING_SYSTEM) and its recipient is tracked (has an account core lets be tracked).",
                         "type": "boolean"
                     }
                 },
@@ -1462,7 +1474,7 @@ const docTemplate = `{
                         "type": "integer"
                     },
                     "unsubscribed": {
-                        "description": "Skipped, never sent: the address left SkyMail's duyuru stream through its own link (in suppressed and failed too).",
+                        "description": "Skipped, never sent: the address left SkyNotify's duyuru stream through its own link (in suppressed and failed too).",
                         "type": "integer"
                     }
                 },
@@ -1751,7 +1763,7 @@ const docTemplate = `{
             "handlers.SendSummary": {
                 "properties": {
                     "bulk_held_until": {
-                        "description": "Until when the bulk lane takes nothing because the relay throttled the account (SMTP 421, 432, 4.7.x; Graph 429, 503; SKYMAIL_THROTTLE_PAUSE): lists, groups and News sends wait, single mail goes. Null when not held.",
+                        "description": "Until when the bulk lane takes nothing because the relay throttled the account (SMTP 421, 432, 4.7.x; Graph 429, 503; SKYNOTIFY_THROTTLE_PAUSE): lists, groups and News sends wait, single mail goes. Null when not held.",
                         "type": "string"
                     },
                     "daily_sent": {
@@ -1762,11 +1774,11 @@ const docTemplate = `{
                         "uniqueItems": false
                     },
                     "list_consent_available": {
-                        "description": "True while SKYMAIL_LIST_CONSENT=on, as tracking-mode says it: the list send form shows the own event statement box.",
+                        "description": "True while SKYNOTIFY_LIST_CONSENT=on, as tracking-mode says it: the list send form shows the own event statement box.",
                         "type": "boolean"
                     },
                     "purpose_available": {
-                        "description": "True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru) and a duyuru send its category, and the purpose picks the mailbox it goes out from. The send form shows its purpose, category and statements only then; while it is false they are ignored.",
+                        "description": "True while SKYNOTIFY_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru) and a duyuru send its category, and the purpose picks the mailbox it goes out from. The send form shows its purpose, category and statements only then; while it is false they are ignored.",
                         "type": "boolean"
                     },
                     "queue_counts": {
@@ -1783,7 +1795,7 @@ const docTemplate = `{
                         "$ref": "#/components/schemas/handlers.SendCounts"
                     },
                     "sender_paused": {
-                        "description": "True while MAIL_SENDER=paused holds the sender back, as after a restore\nfrom backup: mail is queued and stays pending, and none is sent until\nthe variable is removed and SkyMail redeployed.",
+                        "description": "True while MAIL_SENDER=paused holds the sender back, as after a restore\nfrom backup: mail is queued and stays pending, and none is sent until\nthe variable is removed and SkyNotify redeployed.",
                         "type": "boolean"
                     },
                     "time_zone": {
@@ -1791,11 +1803,11 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking_always": {
-                        "description": "True while SKYMAIL_TRACKING_OPERATOR=on with SKYMAIL_TRACKING=on: every person's send (a list, a group, people, a Forms source, a Mail onayı request) is tracked whether it asked or not, of any template. The send form then shows no tracking box: a send's tracking field is ignored.",
+                        "description": "True while SKYNOTIFY_TRACKING_OPERATOR=on with SKYNOTIFY_TRACKING=on: every person's send (a list, a group, people, a Forms source, a Mail onayı request) is tracked whether it asked or not, of any template. The send form then shows no tracking box: a send's tracking field is ignored.",
                         "type": "boolean"
                     },
                     "tracking_available": {
-                        "description": "True while SKYMAIL_TRACKING=on: a send may ask for open and click tracking. The send form shows its tracking box only then.",
+                        "description": "True while SKYNOTIFY_TRACKING=on: a send may ask for open and click tracking. The send form shows its tracking box only then.",
                         "type": "boolean"
                     }
                 },
@@ -1844,7 +1856,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "html": {
-                        "description": "The HTML part: show it only in a sandboxed frame, with remote content\nblocked unless the operator asks for it. Masked, each masked value in its\ntext is \u003cmark data-skymail-masked=\"\"\u003e••••••\u003c/mark\u003e.",
+                        "description": "The HTML part: show it only in a sandboxed frame, with remote content\nblocked unless the operator asks for it. Masked, each masked value in its\ntext is \u003cmark data-skynotify-masked=\"\"\u003e••••••\u003c/mark\u003e.",
                         "type": "string"
                     },
                     "id": {
@@ -1903,6 +1915,21 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
+            "handlers.StreamCounts": {
+                "description": "The day's sent mail by stream; the three add up to sent.",
+                "properties": {
+                    "duyuru": {
+                        "type": "integer"
+                    },
+                    "islem": {
+                        "type": "integer"
+                    },
+                    "system": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
             "handlers.Suppression": {
                 "properties": {
                     "address": {
@@ -1933,7 +1960,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "reason": {
-                        "description": "bounce: a permanent failure, mail of every stream is held (account\nmail is sent, flagged); unsubscribed: the address left a stream\nthrough SkyMail's link, only that stream's mail is held.",
+                        "description": "bounce: a permanent failure, mail of every stream is held (account\nmail is sent, flagged); unsubscribed: the address left a stream\nthrough SkyNotify's link, only that stream's mail is held.",
                         "enum": [
                             "bounce",
                             "unsubscribed"
@@ -1950,7 +1977,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "source": {
-                        "description": "dsn: a delivery status notification said the address does not exist;\nsmtp: the relay refused it when the mail was sent; link: the address\nunsubscribed through SkyMail's link (the one-click POST or its page).",
+                        "description": "dsn: a delivery status notification said the address does not exist;\nsmtp: the relay refused it when the mail was sent; link: the address\nunsubscribed through SkyNotify's link (the one-click POST or its page).",
                         "enum": [
                             "dsn",
                             "smtp",
@@ -2321,23 +2348,23 @@ const docTemplate = `{
             "handlers.TrackingMode": {
                 "properties": {
                     "list_consent_available": {
-                        "description": "True while SKYMAIL_LIST_CONSENT=on: an address without an account gets a duyuru only with its announcement consent, whatever the send (a list, a Forms source's respondents, one person, an approved send); islem mail is not held. A list or group send that states own_event_statement (the mail is about the list's own event or work) needs none. The list send form shows that box only then.",
+                        "description": "True while SKYNOTIFY_LIST_CONSENT=on: an address without an account gets a duyuru only with its announcement consent, whatever the send (a list, a Forms source's respondents, one person, an approved send); islem mail is not held. A list or group send that states own_event_statement (the mail is about the list's own event or work) needs none. The list send form shows that box only then.",
                         "type": "boolean"
                     },
                     "promotional_available": {
-                        "description": "True while SKYMAIL_PROMOTIONAL=on (with purpose_available): a duyuru send may say it is promotional (commercial_content_absent false: its main purpose is promoting a product or a service, such as a discount code, a company's job posting, a sale or a raffle), and then goes only to those who consented to promotional mail, each with the link that withdraws that consent. False: such a send is refused (400 mail_task.commercial_content_not_allowed).",
+                        "description": "True while SKYNOTIFY_PROMOTIONAL=on (with purpose_available): a duyuru send may say it is promotional (commercial_content_absent false: its main purpose is promoting a product or a service, such as a discount code, a company's job posting, a sale or a raffle), and then goes only to those who consented to promotional mail, each with the link that withdraws that consent. False: such a send is refused (400 mail_task.commercial_content_not_allowed).",
                         "type": "boolean"
                     },
                     "purpose_available": {
-                        "description": "True while SKYMAIL_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru), and a duyuru send its category; tracking follows tracking_available and tracking_always whatever the purpose. False: the fields are ignored.",
+                        "description": "True while SKYNOTIFY_MAIL_PURPOSE=on: a send names its purpose (islem or duyuru), and a duyuru send its category; tracking follows tracking_available and tracking_always whatever the purpose. False: the fields are ignored.",
                         "type": "boolean"
                     },
                     "tracking_always": {
-                        "description": "True while SKYMAIL_TRACKING_OPERATOR=on too: every person's send is tracked, the send form shows no box and a send's tracking field is ignored.",
+                        "description": "True while SKYNOTIFY_TRACKING_OPERATOR=on too: every person's send is tracked, the send form shows no box and a send's tracking field is ignored.",
                         "type": "boolean"
                     },
                     "tracking_available": {
-                        "description": "True while SKYMAIL_TRACKING=on: a send may ask for open and click tracking.",
+                        "description": "True while SKYNOTIFY_TRACKING=on: a send may ask for open and click tracking.",
                         "type": "boolean"
                     }
                 },
@@ -2650,14 +2677,14 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyMail's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.",
+                        "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyNotify's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.",
                         "type": "boolean"
                     },
                     "mail_list_id": {
                         "type": "string"
                     },
                     "own_event_statement": {
-                        "description": "With duyuru to a list or a Keycloak group, while SkyMail holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.",
+                        "description": "With duyuru to a list or a Keycloak group, while SkyNotify holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.",
                         "type": "boolean"
                     },
                     "purpose": {
@@ -2672,7 +2699,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Open and click tracking: each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links. Ignored (and answered false) while SkyMail's tracking is off and for a System or sensitive template, which are never tracked; a mailing list's address-only recipients are tracked too.",
+                        "description": "Open and click tracking: each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links. Ignored (and answered false) while SkyNotify's tracking is off and for a System or sensitive template, which are never tracked; a mailing list's address-only recipients are tracked too.",
                         "type": "boolean"
                     },
                     "transactional_statement": {
@@ -2793,7 +2820,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "filename": {
-                        "description": "The name the recipient sees. SkyMail reduces it to letters, digits, '.', '-' and '_' (Turkish letters become their Latin ones, a space a '-'), at most 100 characters, and ends it with the type's extension (.pdf, .png). Never a person's name: the file name stays with the send's report.",
+                        "description": "The name the recipient sees. SkyNotify reduces it to letters, digits, '.', '-' and '_' (Turkish letters become their Latin ones, a space a '-'), at most 100 characters, and ends it with the type's extension (.pdf, .png). Never a person's name: the file name stays with the send's report.",
                         "example": "bilet-gecekodu-2026.pdf",
                         "type": "string"
                     }
@@ -2840,7 +2867,7 @@ const docTemplate = `{
                         "uniqueItems": false
                     },
                     "email": {
-                        "description": "The address to e-mail, when the caller knows it; left out, SkyMail reads the person's primary e-mail from Keycloak.",
+                        "description": "The address to e-mail, when the caller knows it; left out, SkyNotify reads the person's primary e-mail from Keycloak.",
                         "example": "ayse@example.com",
                         "maxLength": 254,
                         "type": "string"
@@ -2857,7 +2884,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "unsubscribe_url": {
-                        "description": "The person's one-click unsubscribe link as core signed it (core's /v1/communication-preferences/unsubscribe?t=…), for an optional type of the bulk lane only: the e-mail renders it as .UnsubscribeUrl and, while SKYMAIL_LIST_UNSUBSCRIBE is on, carries it in List-Unsubscribe and List-Unsubscribe-Post from the duyuru mailbox. An https URL of visible ASCII, at most 960 characters, without \u003c \u003e , or \".",
+                        "description": "The person's one-click unsubscribe link as core signed it (core's /v1/communication-preferences/unsubscribe?t=…), for an optional type of the bulk lane only: the e-mail renders it as .UnsubscribeUrl and, while SKYNOTIFY_LIST_UNSUBSCRIBE is on, carries it in List-Unsubscribe and List-Unsubscribe-Post from the duyuru mailbox. An https URL of visible ASCII, at most 960 characters, without \u003c \u003e , or \".",
                         "example": "https://api.yildizskylab.com/v1/communication-preferences/unsubscribe?t=AQEB",
                         "maxLength": 960,
                         "type": "string"
@@ -3045,14 +3072,14 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyMail's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.",
+                        "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyNotify's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.",
                         "type": "boolean"
                     },
                     "form_source_id": {
                         "type": "string"
                     },
                     "own_event_statement": {
-                        "description": "With duyuru to a list or a Keycloak group, while SkyMail holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.",
+                        "description": "With duyuru to a list or a Keycloak group, while SkyNotify holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.",
                         "type": "boolean"
                     },
                     "purpose": {
@@ -3114,7 +3141,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Open and click tracking, by the rules of every person's send (SKYMAIL_TRACKING, SKYMAIL_TRACKING_OPERATOR).",
+                        "description": "Open and click tracking, by the rules of every person's send (SKYNOTIFY_TRACKING, SKYNOTIFY_TRACKING_OPERATOR).",
                         "type": "boolean"
                     }
                 },
@@ -3190,7 +3217,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyMail's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.",
+                        "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyNotify's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.",
                         "type": "boolean"
                     },
                     "erase_after_send": {
@@ -3198,7 +3225,7 @@ const docTemplate = `{
                         "type": "boolean"
                     },
                     "own_event_statement": {
-                        "description": "With duyuru to a list or a Keycloak group, while SkyMail holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.",
+                        "description": "With duyuru to a list or a Keycloak group, while SkyNotify holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.",
                         "type": "boolean"
                     },
                     "purpose": {
@@ -3222,7 +3249,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Open and click tracking for a mail a person sends (the compose form's people). Ignored (and answered false) while SkyMail's tracking is off, and for a System template or a sensitive one (a template that says nothing counts as sensitive for one person). A service's token (account and transaction mail) does not ask: the field is ignored, and its mail is tracked only while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM), in the system lane, with no click address on a link a variable fills and none at all in a sensitive mail. The recipient's account is looked up in Keycloak by address before the send is queued: the one enabled user whose primary e-mail equals it (case-insensitively) and is verified; none such, or Keycloak not answering, is tracked without an account, and core decides for the account found (it says no only for an inactive account or while its brake is on).",
+                        "description": "Open and click tracking for a mail a person sends (the compose form's people). Ignored (and answered false) while SkyNotify's tracking is off, and for a System template or a sensitive one (a template that says nothing counts as sensitive for one person). A service's token (account and transaction mail) does not ask: the field is ignored, and its mail is tracked only while SkyNotify tracks system mail (SKYNOTIFY_TRACKING_SYSTEM), in the system lane, with no click address on a link a variable fills and none at all in a sensitive mail. The recipient's account is looked up in Keycloak by address before the send is queued: the one enabled user whose primary e-mail equals it (case-insensitively) and is verified; none such, or Keycloak not answering, is tracked without an account, and core decides for the account found (it says no only for an inactive account or while its brake is on).",
                         "type": "boolean"
                     },
                     "transactional_statement": {
@@ -3259,7 +3286,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "commercial_content_absent": {
-                        "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyMail's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.",
+                        "description": "The sender's statement that the mail's main purpose is not promotion (KVKK notice s6 §5.10; ADR 0072 decision 9): a short thanks to a sponsor or its logo is allowed; a discount code, a company job advert, a sale or a draw makes a mail promotional. false makes a duyuru send promotional while SkyNotify's promotional sends are on (tracking-mode promotional_available): it then goes only to those who consented to promotional mail, each with the link that withdraws that consent. Otherwise, and always with islem, false is refused (400 mail_task.commercial_content_not_allowed). With duyuru, true is kept; a later version requires it. Ignored with islem.",
                         "type": "boolean"
                     },
                     "form_source_id": {
@@ -3271,7 +3298,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "own_event_statement": {
-                        "description": "With duyuru to a list or a Keycloak group, while SkyMail holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.",
+                        "description": "With duyuru to a list or a Keycloak group, while SkyNotify holds a list's addresses without an account to their announcement consent (tracking-mode list_consent_available): the sender's statement that the mail is about the event or the work the list was made for (a changed session time, a cancellation; KVKK notice s6 row 15). Then the mail goes to those addresses without asking for the consent, still as a duyuru with its unsubscribe link, and the statement is kept with the send. Ignored otherwise.",
                         "type": "boolean"
                     },
                     "purpose": {
@@ -3292,7 +3319,7 @@ const docTemplate = `{
                         "uniqueItems": false
                     },
                     "team_ids": {
-                        "description": "Team mail (ADR-0067 addendum of 2026-11-08): Teams the caller leads, as GET /me/team_audiences lists them, 1..50. Choose exactly one of this, mail_list_id, recipients or form_source_id. No skymail:lists:read is needed; a picked Sub-team of a picked Team is dropped; each remaining Team is its own send once approved, always duyuru with its own category team:\u003cid\u003e:duyuru (purpose may be omitted or duyuru, category omitted or one of the picked Teams'); a person in two picked Teams gets one mail. A Leader without skymail:access sends only the free announcement (template free.basic).",
+                        "description": "Team mail (ADR-0067 addendum of 2026-11-08): Teams the caller leads, as GET /me/team_audiences lists them, 1..50. Choose exactly one of this, mail_list_id, recipients or form_source_id. No skynotify:lists:read is needed; a picked Sub-team of a picked Team is dropped; each remaining Team is its own send once approved, always duyuru with its own category team:\u003cid\u003e:duyuru (purpose may be omitted or duyuru, category omitted or one of the picked Teams'); a person in two picked Teams gets one mail. A Leader without skynotify:access sends only the free announcement (template free.basic).",
                         "items": {
                             "type": "string"
                         },
@@ -3304,7 +3331,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "tracking": {
-                        "description": "Open and click tracking for the send once approved (as POST /mail_tasks takes it). Ignored (and kept false) while SkyMail's tracking is off, for a System or sensitive template (to people, a template that says nothing counts as sensitive) and for a Forms source. People named here are looked up in Keycloak by address when the request is sent, as POST /mail_tasks/single does: one enabled account with that verified primary e-mail; an address without one is tracked too.",
+                        "description": "Open and click tracking for the send once approved (as POST /mail_tasks takes it). Ignored (and kept false) while SkyNotify's tracking is off, for a System or sensitive template (to people, a template that says nothing counts as sensitive) and for a Forms source. People named here are looked up in Keycloak by address when the request is sent, as POST /mail_tasks/single does: one enabled account with that verified primary e-mail; an address without one is tracked too.",
                         "type": "boolean"
                     },
                     "transactional_statement": {
@@ -3361,7 +3388,7 @@ const docTemplate = `{
             "requests.UpsertTemplateByKey": {
                 "properties": {
                     "content_sensitive": {
-                        "description": "Whether the content of this template's sends is never shown in SkyMail: true for mail that carries a code or a one-time link, false for mail whose content may be shown. Leave it out (or null) to keep what the template has; a template that never said leaves it to the kind of send, a single mail hidden and a send to many shown.",
+                        "description": "Whether the content of this template's sends is never shown in SkyNotify: true for mail that carries a code or a one-time link, false for mail whose content may be shown. Leave it out (or null) to keep what the template has; a template that never said leaves it to the kind of send, a single mail hidden and a send to many shown.",
                         "type": "boolean"
                     },
                     "contract_required_variables": {
@@ -3403,7 +3430,7 @@ const docTemplate = `{
                         "type": "string"
                     },
                     "system": {
-                        "description": "Whether the template is a system template: one another service sends by its key, which cannot be archived or renamed; an account.* or keycloak.* one also goes past the suppression list. Changing it — true for a new key, or other than what the template has — takes skymail:templates:system (the Template seed's service account); without it, send what the template has.",
+                        "description": "Whether the template is a system template: one another service sends by its key, which cannot be archived or renamed; an account.* or keycloak.* one also goes past the suppression list. Changing it — true for a new key, or other than what the template has — takes skynotify:templates:system (the Template seed's service account); without it, send what the template has.",
                         "type": "boolean"
                     }
                 },
@@ -3446,7 +3473,7 @@ const docTemplate = `{
     "paths": {
         "/form_mail_sources": {
             "post": {
-                "description": "Only the configured Forms service account may create this source, after the existing bearer userinfo, SkyMail access, send-or-write permission and exact service identity checks. Forms derives owner_sub, form metadata and recipients from its authorized HTTP caller. No mail or approval is created. The source expires after 30 minutes unless its owner consumes it. The configured recipient count and existing HTTP body limits reject excess input without truncation. The response is metadata only, with no recipient addresses, and is not cacheable.",
+                "description": "Only the configured Forms service account may create this source, after the existing bearer userinfo, SkyNotify access, send-or-write permission and exact service identity checks. Forms derives owner_sub, form metadata and recipients from its authorized HTTP caller. No mail or approval is created. The source expires after 30 minutes unless its owner consumes it. The configured recipient count and existing HTTP body limits reject excess input without truncation. The response is metadata only, with no recipient addresses, and is not cacheable.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -3582,7 +3609,7 @@ const docTemplate = `{
         },
         "/mail_approvals": {
             "get": {
-                "description": "An approver (skymail:mails:approve) lists everyone's requests, or only their own with mine=true; anyone else lists only their own. Newest submission first; X-Total-Count counts the filtered requests. A request undecided past its deadline is listed, and filtered, as expired; listing writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.",
+                "description": "An approver (skynotify:mails:approve) lists everyone's requests, or only their own with mine=true; anyone else lists only their own. Newest submission first; X-Total-Count counts the filtered requests. A request undecided past its deadline is listed, and filtered, as expired; listing writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.",
                 "parameters": [
                     {
                         "description": "Only requests in this state",
@@ -3606,6 +3633,14 @@ const docTemplate = `{
                         "name": "mine",
                         "schema": {
                             "type": "boolean"
+                        }
+                    },
+                    {
+                        "description": "Part of the template's name, key or subject, the list's name, the Forms form's title or the requester's name (at most 200 characters)",
+                        "in": "query",
+                        "name": "q",
+                        "schema": {
+                            "type": "string"
                         }
                     },
                     {
@@ -3684,7 +3719,7 @@ const docTemplate = `{
                 ]
             },
             "post": {
-                "description": "Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Submitting takes skymail:templates:read, and skymail:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing — before the body is checked, when templates:read is missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, \"Gönderim amacı ve kategori\") on the request and on its sends once approved: islem only to people or a Forms source (400 mail_task.purpose_not_allowed for a list or a group); a request without one is duyuru, club:duyuru.\n\nAlternatively, form_source_id selects the caller's immutable Forms snapshot instead of mail_list_id or manual recipients. Choose exactly one audience. This source does not need lists:read; its configured recipient limit is separate from the manual 100-person limit. Submission atomically binds the source to one pending request without expanding its recipients. An exact retry returns 200 with the same request, including after preparation TTL. Source ownership is checked before returning metadata; another owner's source is 404. An unconsumed expired source is 410; invalidated, differently consumed or busy source is 409. Source recipients and form metadata cannot be supplied by the browser. This source version requests no recipient tracking.\n\nEvery approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.",
+                "description": "Mail onayı (ADR-0031): anyone who can use SkyNotify submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skynotify:mails:approve approves it. Submitting takes skynotify:templates:read, and skynotify:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing — before the body is checked, when templates:read is missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent. Purposes (SKYNOTIFY_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, \"Gönderim amacı ve kategori\") on the request and on its sends once approved: islem only to people or a Forms source (400 mail_task.purpose_not_allowed for a list or a group); a request without one is duyuru, club:duyuru.\n\nAlternatively, form_source_id selects the caller's immutable Forms snapshot instead of mail_list_id or manual recipients. Choose exactly one audience. This source does not need lists:read; its configured recipient limit is separate from the manual 100-person limit. Submission atomically binds the source to one pending request without expanding its recipients. An exact retry returns 200 with the same request, including after preparation TTL. Source ownership is checked before returning metadata; another owner's source is 404. An unconsumed expired source is 410; invalidated, differently consumed or busy source is 409. Source recipients and form metadata cannot be supplied by the browser. This source version requests no recipient tracking.\n\nEvery approver — the submitter too, if they hold the role — is mailed the mail.approval-requested System template with a link to the request. That mail is best effort: a submission succeeds whether or not anyone could be told, and notification says how it went.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -3734,7 +3769,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "validation.error (params.errors: [{field, code, params}]): no template_id; not exactly one of mail_list_id and recipients (mail_list_id, exactly_one_of); more than 100 people (recipients, max_length); a missing or malformed address (recipients[i].email, required or invalid_email); an address twice (recipients[i].email, duplicate, params.first naming the first; or, for an address only Postgres finds twice, recipients, duplicate). attachment.not_allowed: a request takes no attachments. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid (duyuru)"
+                        "description": "validation.error (params.errors: [{field, code, params}]): no template_id; not exactly one of mail_list_id and recipients (mail_list_id, exactly_one_of); more than 100 people (recipients, max_length); a missing or malformed address (recipients[i].email, required or invalid_email); an address twice (recipients[i].email, duplicate, params.first naming the first; or, for an address only Postgres finds twice, recipients, duplicate). attachment.not_allowed: a request takes no attachments. Purpose, checked in this order, while purposes are on (SKYNOTIFY_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid (duyuru)"
                     },
                     "403": {
                         "content": {
@@ -3744,7 +3779,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "server.forbidden: params.missing_roles names what the caller lacks of skymail:templates:read and, for a mailing list, skymail:lists:read"
+                        "description": "server.forbidden: params.missing_roles names what the caller lacks of skynotify:templates:read and, for a mailing list, skynotify:lists:read"
                     },
                     "404": {
                         "content": {
@@ -3805,7 +3840,7 @@ const docTemplate = `{
         },
         "/mail_approvals/{id}": {
             "get": {
-                "description": "A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. An approved request has result: how its sends went, in totals only (sent, skipped, failed, pending; tracking, the opens and clicks of its tracked sends summed, null and tracking_withheld true when a send is mail the system sends and the caller may not read the sends' people, by GET /mail_tasks/{id}/tracking's rule; shown whatever the number of tracked recipients), with no person in it and one total for a request to people, never a row per send; it needs no skymail:mails:read. Any other request has none. Reading the result never fails the read: totals not read in time leave the answer without result, opens and clicks not read in time leave tracking null with tracking_withheld false. preview_recipient is whose mail the preview is: the first of its people, or for a list the submitter, as if they were on it; it is given also when the preview does not render. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.",
+                "description": "A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. An approved request has result: how its sends went, in totals only (sent, skipped, failed, pending; tracking, the opens and clicks of its tracked sends summed, null and tracking_withheld true when a send is mail the system sends and the caller may not read the sends' people, by GET /mail_tasks/{id}/tracking's rule; shown whatever the number of tracked recipients), with no person in it and one total for a request to people, never a row per send; it needs no skynotify:mails:read. Any other request has none. Reading the result never fails the read: totals not read in time leave the answer without result, opens and clicks not read in time leave tracking null with tracking_withheld false. preview_recipient is whose mail the preview is: the first of its people, or for a list the submitter, as if they were on it; it is given also when the preview does not render. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.",
                 "parameters": [
                     {
                         "description": "Request ID",
@@ -3898,7 +3933,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "mail_approval.not_submitter; server.forbidden (params.missing_roles skymail:access) for a Leader without skymail:access accepting a request that is not Team mail"
+                        "description": "mail_approval.not_submitter; server.forbidden (params.missing_roles skynotify:access) for a Leader without skynotify:access accepting a request that is not Team mail"
                     },
                     "404": {
                         "content": {
@@ -3989,7 +4024,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "validation.error; mail_task.category_unknown: the duyuru send's team is no team (SKYMAIL_BULK_PREFERENCE)"
+                        "description": "validation.error; mail_task.category_unknown: the duyuru send's team is no team (SKYNOTIFY_BULK_PREFERENCE)"
                     },
                     "403": {
                         "content": {
@@ -4049,7 +4084,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE), core did not say whom the send may go to at the approval; nothing is queued and the request stays as it was. team_mail.leadership_unavailable (Retry-After): for Team mail, core did not say which Teams the submitter leads; the request stays as it was"
+                        "description": "mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYNOTIFY_BULK_PREFERENCE), core did not say whom the send may go to at the approval; nothing is queued and the request stays as it was. team_mail.leadership_unavailable (Retry-After): for Team mail, core did not say which Teams the submitter leads; the request stays as it was"
                     }
                 },
                 "summary": "Approve a request and send it",
@@ -4487,7 +4522,7 @@ const docTemplate = `{
         },
         "/mail_tasks": {
             "get": {
-                "description": "Get a list of all mail tasks with pagination, newest first, each with its derived status, recipients by status and audience. The status filter keeps only sends with that derived status; X-Total-Count counts the filtered sends. Keycloak group names are looked up within 2 seconds for the whole page and are null past that.",
+                "description": "Get a list of all mail tasks with pagination, newest first, each with its derived status, recipients by status and audience. Every filter given keeps only the sends that match it, and X-Total-Count counts them. q (valid UTF-8, no NUL, at most 200 characters) matches the template's name, key or subject, the list's name, the Forms form's title, an approved send's requester or, on a send to people (no list, no Forms source, not a News send), a recipient's address or name; in any case, Turkish capitals included, with I, ı, İ and i read as one letter. kind: bulk (a list, a group, a Forms source, an approved send, a News send), system (mail a service or SkyNotify sent: a core notification, a service account's single mail, a Mail onayı notice; a single send queued before 2026-11-24 counts as system when it went in the system lane), single (a person's single mail). _sort=open_rate orders by the share of tracked recipients who likely opened (unique_likely_human_opens / tracked_recipients, as GET /mail_tasks/{id}/tracking reads them), sends with no rate last; it needs skynotify:mails:tracking:read (403 mail_task.sort_forbidden), since the order tells counts that endpoint may withhold. Keycloak group names are looked up within 2 seconds for the whole page and are null past that.",
                 "parameters": [
                     {
                         "description": "Start index",
@@ -4514,6 +4549,95 @@ const docTemplate = `{
                                 "failed",
                                 "sending",
                                 "sent"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Text to find (at most 200 characters)",
+                        "in": "query",
+                        "name": "q",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Sends created on or after this date (YYYY-MM-DD, Europe/Istanbul) or RFC 3339 time (encode + as %2B; a space where + was is read as +)",
+                        "in": "query",
+                        "name": "from",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Sends created on or before this date (YYYY-MM-DD, Europe/Istanbul, the whole day) or RFC 3339 time (encode + as %2B)",
+                        "in": "query",
+                        "name": "to",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "bulk (a list, a group, a Forms source, an approved send, a News send), system (mail a service or SkyNotify sent), single (a person's single mail)",
+                        "in": "query",
+                        "name": "kind",
+                        "schema": {
+                            "enum": [
+                                "bulk",
+                                "single",
+                                "system"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Sends of this template",
+                        "in": "query",
+                        "name": "template_id",
+                        "schema": {
+                            "format": "uuid",
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Sends to this list or Keycloak group (mail_list_id)",
+                        "in": "query",
+                        "name": "list_id",
+                        "schema": {
+                            "format": "uuid",
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Sends by this sender (the sender's sub, as sent_by returns it)",
+                        "in": "query",
+                        "name": "sent_by",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Order",
+                        "in": "query",
+                        "name": "_sort",
+                        "schema": {
+                            "default": "created_at",
+                            "enum": [
+                                "created_at",
+                                "open_rate"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Direction",
+                        "in": "query",
+                        "name": "_order",
+                        "schema": {
+                            "default": "desc",
+                            "enum": [
+                                "asc",
+                                "desc"
                             ],
                             "type": "string"
                         }
@@ -4578,7 +4702,7 @@ const docTemplate = `{
                 ]
             },
             "post": {
-                "description": "Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyMail's tracking is off, or for a System or sensitive template (never tracked), the field is ignored and the answer says tracking false. While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored too and every send is tracked, of any template: a sensitive one with the pixel only, any other with a click address on the links every recipient gets alike (written in the template or in the send's own variables, such as a free body), never on one made from the recipient (.Email, .FullName). Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, \"Gönderim amacı ve kategori\"); a list or a Keycloak group is always duyuru with core's category (club:duyuru by default), islem is refused with 400 mail_task.purpose_not_allowed.",
+                "description": "Create a new mail task and queue emails for all recipients. Supports both internal mailing lists and Keycloak groups. With tracking, each member of a Keycloak group whom core lets be tracked gets a pixel and tracked links; while SkyNotify's tracking is off, or for a System or sensitive template (never tracked), the field is ignored and the answer says tracking false. While SkyNotify tracks every person's send (SKYNOTIFY_TRACKING_OPERATOR; summary tracking_always) the field is ignored too and every send is tracked, of any template: a sensitive one with the pixel only, any other with a click address on the links every recipient gets alike (written in the template or in the send's own variables, such as a free body), never on one made from the recipient (.Email, .FullName). Purposes (SKYNOTIFY_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, \"Gönderim amacı ve kategori\"); a list or a Keycloak group is always duyuru with core's category (club:duyuru by default), islem is refused with 400 mail_task.purpose_not_allowed.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -4618,7 +4742,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "Bad Request. attachment.not_allowed: a send to a list or a group takes no attachments. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team"
+                        "description": "Bad Request. attachment.not_allowed: a send to a list or a group takes no attachments. Purpose, checked in this order, while purposes are on (SKYNOTIFY_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (SKYNOTIFY_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team"
                     },
                     "422": {
                         "content": {
@@ -4648,7 +4772,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE; README, \\\"Toplu postada tercih\\\"), core did not say whom the send may go to; nothing is queued"
+                        "description": "mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYNOTIFY_BULK_PREFERENCE; README, \\\"Toplu postada tercih\\\"), core did not say whom the send may go to; nothing is queued"
                     }
                 },
                 "summary": "Create a new mail task",
@@ -4659,7 +4783,7 @@ const docTemplate = `{
         },
         "/mail_tasks/form-source": {
             "post": {
-                "description": "The source owner holding current skymail:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is tracked without an account) and core deciding, and the answer says tracking true. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, \"Gönderim amacı ve kategori\"): duyuru with a category by default; islem with transactional_statement true when the mail is about each respondent's own application: tracked as any Forms source send, queued in the bulk lane, sent from bilgi@ without List-Unsubscribe. The purpose is part of an exact retry.",
+                "description": "The source owner holding current skynotify:mails:write permission queues one bulk task for the fixed source recipients. Source consumption, task and queue rows commit together. The browser supplies no recipients or form metadata. An exact retry of the same source, template, canonical body variables and requested tracking returns the same task, including after preparation TTL; changed payload or target is refused. The send is untracked, and the answer says tracking false, unless SkyNotify tracks every person's send (SKYNOTIFY_TRACKING_OPERATOR; summary tracking_always): then it is tracked whatever it asks, each respondent's account looked up in Keycloak by address before the transaction (none is tracked without an account) and core deciding, and the answer says tracking true. Purposes (SKYNOTIFY_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, \"Gönderim amacı ve kategori\"): duyuru with a category by default; islem with transactional_statement true when the mail is about each respondent's own application: tracked as any Forms source send, queued in the bulk lane, sent from bilgi@ without List-Unsubscribe. The purpose is part of an exact retry.",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -4702,7 +4826,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "Invalid request or caller-supplied recipient/metadata fields. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team. A retry whose purpose differs is not the same request: 409 form_source.consumed"
+                        "description": "Invalid request or caller-supplied recipient/metadata fields. Purpose, checked in this order, while purposes are on (SKYNOTIFY_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYNOTIFY_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team. A retry whose purpose differs is not the same request: 409 form_source.consumed"
                     },
                     "403": {
                         "content": {
@@ -4712,7 +4836,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "Current skymail:mails:write permission required: skymail:mails:send opens single mails only, its holder submits the source for approval"
+                        "description": "Current skynotify:mails:write permission required: skynotify:mails:send opens single mails only, its holder submits the source for approval"
                     },
                     "404": {
                         "content": {
@@ -4762,7 +4886,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "Transactional sending unavailable; mail_task.preference_unavailable (Retry-After): a duyuru send while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing is queued, the source is not consumed"
+                        "description": "Transactional sending unavailable; mail_task.preference_unavailable (Retry-After): a duyuru send while every duyuru send obeys the recipients' preferences (SKYNOTIFY_BULK_PREFERENCE), and core did not answer; nothing is queued, the source is not consumed"
                     }
                 },
                 "summary": "Send to an immutable Forms audience",
@@ -4773,7 +4897,7 @@ const docTemplate = `{
         },
         "/mail_tasks/single": {
             "post": {
-                "description": "Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyMail's tracking is off, or for a System or sensitive template). While SkyMail tracks every person's send (SKYMAIL_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is tracked without an account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyMail tracks system mail (SKYMAIL_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, \"Gönderim amacı ve kategori\"): a person's send may be islem (with transactional_statement true; bilgi@; tracked as any person's send, in the bulk lane then, else the system lane) or duyuru with a category (the bulk lane, duyuru@); without a purpose, duyuru, club:duyuru, tracked or not. A service's token is always islem; its fields are ignored. A service's mail with erase_after_send keeps no record of its recipient: never tracked, in the system lane, its row erased when its outcome is written (recipient Silinmiş kullanıcı, no address, no content, no variables); the answer says erase_after_send true. A service may send an Idempotency-Key (optional; a person's token may not): the same key from the same service answers the first answer again (Idempotent-Replayed: true) and queues nothing, for 72 hours; a different request with it is 422. Without it a retry queues the mail again. A service's mail may carry Mail attachments (ADR 0082; README \"Posta eki\"): at most 2, application/pdf or image/png, 512 KB decoded in all, standard base64; the file name is reduced to [A-Za-z0-9._-], at most 100 characters, with the type's extension. The files go with the e-mail (SMTP multipart/mixed; Graph fileAttachment) and are kept only until the row's outcome is written; the queue then shows their name, type and size. They are not part of the Idempotency-Key's digest: a retry with a file drawn again answers the first answer and writes no file. The answer's attachments says how many went with the mail.",
+                "description": "Send a single email to a specific recipient using a template. A person's send may ask for open and click tracking: it then goes in the bulk lane, and the answer says whether it got it (never while SkyNotify's tracking is off, or for a System or sensitive template). While SkyNotify tracks every person's send (SKYNOTIFY_TRACKING_OPERATOR; summary tracking_always) the field is ignored: every person's send is tracked, in the bulk lane, of any template, with the pixel and a click address on the links every recipient would get alike — written in the template or in the send's variables, never made from the recipient (.Email, .FullName), though it goes to one person (none at all in a sensitive mail). The recipient's account is found in Keycloak by address before the send is queued (exact primary e-mail, enabled, verified; none is tracked without an account), and core decides for it. A service's token (account and transaction mail) does not ask: its mail stays in the system lane, and while SkyNotify tracks system mail (SKYNOTIFY_TRACKING_SYSTEM) it is tracked the same way, with the pixel and a click address only on the links the template writes out as they are (never on a link a variable fills, such as a reset or verification link; none at all in a sensitive mail); the answer says tracking true when its recipient is tracked. Purposes (SKYNOTIFY_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, \"Gönderim amacı ve kategori\"): a person's send may be islem (with transactional_statement true; bilgi@; tracked as any person's send, in the bulk lane then, else the system lane) or duyuru with a category (the bulk lane, duyuru@); without a purpose, duyuru, club:duyuru, tracked or not. A service's token is always islem; its fields are ignored. A service's mail with erase_after_send keeps no record of its recipient: never tracked, in the system lane, its row erased when its outcome is written (recipient Silinmiş kullanıcı, no address, no content, no variables); the answer says erase_after_send true. A service may send an Idempotency-Key (optional; a person's token may not): the same key from the same service answers the first answer again (Idempotent-Replayed: true) and queues nothing, for 72 hours; a different request with it is 422. Without it a retry queues the mail again. A service's mail may carry Mail attachments (ADR 0082; README \"Posta eki\"): at most 2, application/pdf or image/png, 512 KB decoded in all, standard base64; the file name is reduced to [A-Za-z0-9._-], at most 100 characters, with the type's extension. The files go with the e-mail (SMTP multipart/mixed; Graph fileAttachment) and are kept only until the row's outcome is written; the queue then shows their name, type and size. They are not part of the Idempotency-Key's digest: a retry with a file drawn again answers the first answer and writes no file. The answer's attachments says how many went with the mail.",
                 "parameters": [
                     {
                         "description": "A service's own key for this mail: 1 to 255 visible ASCII characters, the same on every retry; it names the record (a ticket, a response), never an address, a name or a person's subject",
@@ -4831,7 +4955,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "Bad Request. A person's purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYMAIL_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team; mail_task.erase_after_send_not_allowed: a person's token asked for erase_after_send; mail_task.idempotency_key_invalid; mail_task.idempotency_key_not_allowed: a person's token sent an Idempotency-Key; attachment.service_only: a person's token sent attachments; attachment.too_many, attachment.type_not_allowed, attachment.content_invalid, attachment.content_type_mismatch, attachment.too_large (params.index: which file)"
+                        "description": "Bad Request. A person's purpose, checked in this order, while purposes are on (SKYNOTIFY_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid, mail_task.commercial_statement_required (duyuru, SKYNOTIFY_BULK_PREFERENCE); mail_task.category_unknown: core calls the team category no team; mail_task.erase_after_send_not_allowed: a person's token asked for erase_after_send; mail_task.idempotency_key_invalid; mail_task.idempotency_key_not_allowed: a person's token sent an Idempotency-Key; attachment.service_only: a person's token sent attachments; attachment.too_many, attachment.type_not_allowed, attachment.content_invalid, attachment.content_type_mismatch, attachment.too_large (params.index: which file)"
                     },
                     "422": {
                         "content": {
@@ -4861,7 +4985,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "mail_task.preference_unavailable (Retry-After): a person's duyuru mail while every duyuru send obeys the recipient's preferences (SKYMAIL_BULK_PREFERENCE), and core did not answer; nothing is queued"
+                        "description": "mail_task.preference_unavailable (Retry-After): a person's duyuru mail while every duyuru send obeys the recipient's preferences (SKYNOTIFY_BULK_PREFERENCE), and core did not answer; nothing is queued"
                     }
                 },
                 "summary": "Send a single email",
@@ -4872,7 +4996,7 @@ const docTemplate = `{
         },
         "/mail_tasks/summary": {
             "get": {
-                "description": "Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYMAIL_TRACKING=on (a send may ask for open and click tracking); tracking_always, true while SKYMAIL_TRACKING_OPERATOR=on too (every person's send is tracked, the field is ignored, the send form shows no box); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today); and the latest sends. Derived status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).",
+                "description": "Queue rows (one per recipient) by status; sender_paused, true while MAIL_SENDER=paused holds the sender back (after a restore from backup: mail is queued and stays pending, none is sent); tracking_available, true while SKYNOTIFY_TRACKING=on (a send may ask for open and click tracking); tracking_always, true while SKYNOTIFY_TRACKING_OPERATOR=on too (every person's send is tracked, the field is ignored, the send form shows no box); sends by derived status, each equal to the X-Total-Count of the send list filtered by it; mail sent per Europe/Istanbul day over the last days (zero-filled, oldest first, ending today), each split by stream (by_stream: system, duyuru, islem); and the latest sends. Derived status: failed (a recipient failed, other than one skipped: a reserved domain (reserved_domain) or a suppressed address (suppressed); every recipient was skipped; or none was queued a minute after the send), sending (none failed and some pending or processing, or none queued yet within that minute), sent (none failed or queued, some sent).",
                 "parameters": [
                     {
                         "description": "Days in the daily series, ending today in Europe/Istanbul (1-90)",
@@ -4943,7 +5067,7 @@ const docTemplate = `{
         },
         "/mail_tasks/tracking-mode": {
             "get": {
-                "description": "tracking_available, tracking_always and purpose_available, as the summary says them, and promotional_available, for anyone who may use SkyMail: someone who only submits a send for approval sees whether it will be tracked and whether it names a purpose. It is a setting of SkyMail, not of any send.",
+                "description": "tracking_available, tracking_always and purpose_available, as the summary says them, and promotional_available, for anyone who may use SkyNotify: someone who only submits a send for approval sees whether it will be tracked and whether it names a purpose. It is a setting of SkyNotify, not of any send.",
                 "responses": {
                     "200": {
                         "content": {
@@ -5108,7 +5232,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/content-views": {
             "get": {
-                "description": "Every opening of a recipient's masked mail of the send (GET /mail_tasks/{id}/queue/{itemId}/content answering masked), newest first: who, when, which queue row, how it was masked. Names no recipient. Takes skymail:audit:read, which the roles that open the content do not carry. An erased account reads as Silinmiş kullanıcı. Records older than SENT_CONTENT_VIEWS_RETENTION_DAYS are gone. Never cached.",
+                "description": "Every opening of a recipient's masked mail of the send (GET /mail_tasks/{id}/queue/{itemId}/content answering masked), newest first: who, when, which queue row, how it was masked. Names no recipient. Takes skynotify:audit:read, which the roles that open the content do not carry. An erased account reads as Silinmiş kullanıcı. Records older than SENT_CONTENT_VIEWS_RETENTION_DAYS are gone. Never cached.",
                 "parameters": [
                     {
                         "description": "Task ID",
@@ -5207,7 +5331,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/pause": {
             "post": {
-                "description": "The bulk lane takes none of the send's rows until it is resumed; rows being sent finish. A paused send stays paused (200). The send's own sender with skymail:mails:write, or anyone with skymail:announcements:send. A send may also pause itself when its recipients fail past SKYMAIL_FAILURE_PAUSE_COUNT and SKYMAIL_FAILURE_PAUSE_PERCENT (paused_reason failure_rate).",
+                "description": "The bulk lane takes none of the send's rows until it is resumed; rows being sent finish. A paused send stays paused (200). The send's own sender with skynotify:mails:write, or anyone with skynotify:announcements:send. A send may also pause itself when its recipients fail past SKYNOTIFY_FAILURE_PAUSE_COUNT and SKYNOTIFY_FAILURE_PAUSE_PERCENT (paused_reason failure_rate).",
                 "parameters": [
                     {
                         "description": "Task ID",
@@ -5238,7 +5362,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "Forbidden: neither skymail:announcements:send nor the send's sender"
+                        "description": "Forbidden: neither skynotify:announcements:send nor the send's sender"
                     },
                     "404": {
                         "content": {
@@ -5269,7 +5393,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/queue": {
             "get": {
-                "description": "Get a send's recipients, one queue row each, newest first with the row id breaking ties so pages neither repeat nor skip a recipient. The status filter keeps only recipients in that queue status; X-Total-Count counts the filtered recipients.",
+                "description": "Get a send's recipients, one queue row each, newest first with the row id breaking ties so pages neither repeat nor skip a recipient. The status filter keeps only recipients in that queue status, or with skipped the failed ones that were not sent on purpose (a reserved domain, a suppressed or unsubscribed address, a preference, a cancelled send: the rows that never make the send read failed); failed still lists every failed row. q keeps the recipients whose address or name contains it (any case, Turkish capitals included; I, ı, İ and i alike). X-Total-Count counts the filtered recipients.",
                 "parameters": [
                     {
                         "description": "Task ID",
@@ -5297,7 +5421,7 @@ const docTemplate = `{
                         }
                     },
                     {
-                        "description": "Recipient queue status",
+                        "description": "Recipient queue status, or skipped",
                         "in": "query",
                         "name": "status",
                         "schema": {
@@ -5305,8 +5429,17 @@ const docTemplate = `{
                                 "pending",
                                 "processing",
                                 "sent",
-                                "failed"
+                                "failed",
+                                "skipped"
                             ],
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Part of an address or a name (at most 200 characters)",
+                        "in": "query",
+                        "name": "q",
+                        "schema": {
                             "type": "string"
                         }
                     }
@@ -5372,7 +5505,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/queue/{itemId}/content": {
             "get": {
-                "description": "The subject, plain text and HTML a recipient of the send was sent, as SkyMail keeps it. access says whether and how they are shown: available — as sent; masked — the send is sensitive (its template carries a code or a one-time link, or said so when it was sent, or it is a single mail whose template does not say it may be shown), and the content sweep replaced every code, one-time link and IP address with •••••• once the send was done (masked_variables, masked_by); the unmasked mail is not kept, and each opening is recorded in sent_content_views; pending — sensitive and not masked yet (a row still to go out, or sent in the last minutes): not shown; restricted — shown to the send's sender, for a send to a list, a group or an approved request to holders of skymail:mails:write, and to holders of skymail:system-mails:read; expired — past MAIL_CONTENT_RETENTION_DAYS (365 by default) and no longer kept; not_kept — a sensitive send whose content was emptied (before sensitive content was kept, 2026-10-13, or because it could not be masked for certain), which does not come back; unavailable — holds nothing (Account erasure emptied it, or it never rendered). The fields are null unless access is available or masked. The HTML may reach the network (images, a tracking pixel): show it sandboxed, with remote content blocked by default. Never cached.",
+                "description": "The subject, plain text and HTML a recipient of the send was sent, as SkyNotify keeps it. access says whether and how they are shown: available — as sent; masked — the send is sensitive (its template carries a code or a one-time link, or said so when it was sent, or it is a single mail whose template does not say it may be shown), and the content sweep replaced every code, one-time link and IP address with •••••• once the send was done (masked_variables, masked_by); the unmasked mail is not kept, and each opening is recorded in sent_content_views; pending — sensitive and not masked yet (a row still to go out, or sent in the last minutes): not shown; restricted — shown to the send's sender, for a send to a list, a group or an approved request to holders of skynotify:mails:write, and to holders of skynotify:system-mails:read; expired — past MAIL_CONTENT_RETENTION_DAYS (365 by default) and no longer kept; not_kept — a sensitive send whose content was emptied (before sensitive content was kept, 2026-10-13, or because it could not be masked for certain), which does not come back; unavailable — holds nothing (Account erasure emptied it, or it never rendered). The fields are null unless access is available or masked. The HTML may reach the network (images, a tracking pixel): show it sandboxed, with remote content blocked by default. Never cached.",
                 "parameters": [
                     {
                         "description": "Task ID",
@@ -5515,7 +5648,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/tracking": {
             "get": {
-                "description": "Requires skymail:mails:read. No identities or link tokens. Each link of clicks_by_link has its full target, url: as sent, one-time links and codes included (nothing masked); null once the link was emptied (url_cleared_reason expired or erased). After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts are shown to anyone with skymail:mails:read whatever its number of tracked recipients (Yusuf, 2026-11-24, K6); only mail the system sends (the system lane) tells of people: then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skymail:mails:tracking:read; the send's own sender outside the system lane only while SKYMAIL_SENDER_SEES_RECIPIENTS=on) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4). recipients_readable says whether the caller may read the send's people.",
+                "description": "Requires skynotify:mails:read. No identities or link tokens. Each link of clicks_by_link has its full target, url: as sent, one-time links and codes included (nothing masked); null once the link was emptied (url_cleared_reason expired or erased). After 90 days only retained totals, or null: for good with at least 10 tracked recipients, until a year after the send with fewer. tracking_available follows the current flag. A send's counts are shown to anyone with skynotify:mails:read whatever its number of tracked recipients (Yusuf, 2026-11-24, K6); only mail the system sends (the system lane) tells of people: then only one who may read its people (GET /mail_tasks/{id}/tracking/recipients: skynotify:mails:tracking:read; the send's own sender outside the system lane only while SKYNOTIFY_SENDER_SEES_RECIPIENTS=on) gets report; anyone else gets withheld true and report null (KVKK notice s3, §4). recipients_readable says whether the caller may read the send's people.",
                 "parameters": [
                     {
                         "description": "Mail task ID",
@@ -5567,7 +5700,7 @@ const docTemplate = `{
         },
         "/mail_tasks/{id}/tracking/recipients": {
             "get": {
-                "description": "Requires skymail:mails:tracking:read. The send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role) reads it only while SKYMAIL_SENDER_SEES_RECIPIENTS=on; off, the default, the sender gets 403 and reads the counts (GET /mail_tasks/{id}/tracking). Mail the system sends (account and transaction mail in the system lane, SkyMail's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 90 days after the last mail went out, even if retention has not run. Does not return tracking tokens. Each clicked link has its position and full target url, as sent (nothing masked).",
+                "description": "Requires skynotify:mails:tracking:read. The send's own sender (sent_by equals token sub, a person's token: a service's token reads the mail it sent only with the role) reads it only while SKYNOTIFY_SENDER_SEES_RECIPIENTS=on; off, the default, the sender gets 403 and reads the counts (GET /mail_tasks/{id}/tracking). Mail the system sends (account and transaction mail in the system lane, SkyNotify's own Mail onayı notices included, though sent_by names the person who acted) is read with the role only: its sender is refused. First likely human opening falls back to a non-automated click, marked click_inferred. Returns 410 90 days after the last mail went out, even if retention has not run. Does not return tracking tokens. Each clicked link has its position and full target url, as sent (nothing masked).",
                 "parameters": [
                     {
                         "description": "Mail task ID",
@@ -5653,7 +5786,7 @@ const docTemplate = `{
         },
         "/mailing_lists": {
             "get": {
-                "description": "Get a list of all mailing lists (internal + Keycloak groups) with pagination.",
+                "description": "Get a list of all mailing lists (internal + Keycloak groups) with pagination. q keeps the internal lists whose name or description contains it and the Keycloak groups whose name or path does (any case, Turkish capitals included; I, ı, İ and i alike); X-Total-Count counts them.",
                 "parameters": [
                     {
                         "description": "Start index",
@@ -5682,6 +5815,14 @@ const docTemplate = `{
                                 "inactive",
                                 "all"
                             ],
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Part of a name (at most 200 characters)",
+                        "in": "query",
+                        "name": "q",
+                        "schema": {
                             "type": "string"
                         }
                     }
@@ -6240,7 +6381,7 @@ const docTemplate = `{
         },
         "/me/email-delivery": {
             "get": {
-                "description": "The caller's own addresses on the suppression list: the rows suppressed with their sub, and the rows of the addresses their token says are theirs — Keycloak's email (only when email_verified is true) and school_email — compared lower-cased and trimmed, each once, oldest first. since is when the address was first suppressed. No source, code or id; no parameter: someone else's address cannot be asked about. Only a person's own token issued for SkyMail (aud skymail) may call it; no role is needed. Served with Cache-Control: no-store.",
+                "description": "The caller's own addresses on the suppression list: the rows suppressed with their sub, and the rows of the addresses their token says are theirs — Keycloak's email (only when email_verified is true) and school_email — compared lower-cased and trimmed, each once, oldest first. since is when the address was first suppressed. No source, code or id; no parameter: someone else's address cannot be asked about. Only a person's own token issued for SkyNotify (aud skynotify) may call it; no role is needed. Served with Cache-Control: no-store.",
                 "responses": {
                     "200": {
                         "content": {
@@ -6260,7 +6401,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "server.unauthorized: no live token, or one not issued for SkyMail"
+                        "description": "server.unauthorized: no live token, or one not issued for SkyNotify"
                     },
                     "403": {
                         "content": {
@@ -6281,7 +6422,7 @@ const docTemplate = `{
         },
         "/me/inbox": {
             "get": {
-                "description": "The caller's own inbox items, newest first, a page at a time: next_cursor goes into cursor for the next page, null on the last. Archived items are left out unless archived says include or only; an item past its expiry (90 days, or sooner) is never served. Only a person's own token issued for SkyMail (aud skymail) may call it; no role is needed.",
+                "description": "The caller's own inbox items, newest first, a page at a time: next_cursor goes into cursor for the next page, null on the last. Archived items are left out unless archived says include or only; an item past its expiry (90 days, or sooner) is never served. Only a person's own token issued for SkyNotify (aud skynotify) may call it; no role is needed.",
                 "parameters": [
                     {
                         "description": "The next_cursor of the page before",
@@ -6339,7 +6480,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "server.unauthorized: no live token, or one not issued for SkyMail"
+                        "description": "server.unauthorized: no live token, or one not issued for SkyNotify"
                     },
                     "403": {
                         "content": {
@@ -6731,7 +6872,7 @@ const docTemplate = `{
         },
         "/me/team_audiences": {
             "get": {
-                "description": "Team mail (ADR-0067 addendum of 2026-11-08): the Teams core says the caller leads — each Team whose Leader group (LIDERLER or KOORDINATORLER) they are directly in, and every Sub-team below it — in path order, the tree in parent_id and depth, each with how many it would reach (its and its Sub-teams' members with an address, Leader groups included, each once; never an address or a name) and its fixed category. Core's answer may be up to a minute old; submitting asks again. A Leader without skymail:access reaches this route; anyone else without it gets 403. An empty list means the caller leads no Team.",
+                "description": "Team mail (ADR-0067 addendum of 2026-11-08): the Teams core says the caller leads — each Team whose Leader group (LIDERLER or KOORDINATORLER) they are directly in, and every Sub-team below it — in path order, the tree in parent_id and depth, each with how many it would reach (its and its Sub-teams' members with an address, Leader groups included, each once; never an address or a name) and its fixed category. Core's answer may be up to a minute old; submitting asks again. A Leader without skynotify:access reaches this route; anyone else without it gets 403. An empty list means the caller leads no Team.",
                 "responses": {
                     "200": {
                         "content": {
@@ -6751,7 +6892,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "A token without skymail:access whose aud does not name SkyMail"
+                        "description": "A token without skynotify:access whose aud does not name SkyNotify"
                     },
                     "403": {
                         "content": {
@@ -6761,7 +6902,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "Neither skymail:access nor a Team the caller leads; auth.person_required for a service account's token without skymail:access"
+                        "description": "Neither skynotify:access nor a Team the caller leads; auth.person_required for a service account's token without skynotify:access"
                     },
                     "404": {
                         "content": {
@@ -6771,7 +6912,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "team_mail.off: SKYMAIL_TEAM_SEND is off"
+                        "description": "team_mail.off: SKYNOTIFY_TEAM_SEND is off"
                     },
                     "503": {
                         "content": {
@@ -6792,7 +6933,7 @@ const docTemplate = `{
         },
         "/news_sends": {
             "post": {
-                "description": "Reads the record of slug from the CMS (inscribed, anonymously: only public records in Faz 1), asks core who it goes to (every Member, or some teams with their sub-teams and followers; core leaves out who turned the category off, a disabled, unverified or address-less account, and answers each person's own unsubscribe link and why they get it), and queues the club.news template to each in the bulk lane, as a duyuru of core's category with List-Unsubscribe from that link. The send keeps the record as it was (source.version; a later edit changes the web, never the mail). A record's mail goes to a mailbox once: an address a row of this record already went to (an earlier send to another audience) is left out and counted already_received; the same record to the same audience again is 409 news_send.already_sent with that send's id. A cancelled send holds nothing back: its recipients who never got the mail get it when the record is sent again (409 news_send.cancel_finishing while its rows being sent finish). Only a person with skymail:announcements:send sends directly; Mail onayı for the others comes with a later version. Off unless SKYMAIL_NEWS_SEND=on (503 news_send.not_enabled).",
+                "description": "Reads the record of slug from the CMS (inscribed, anonymously: only public records in Faz 1), asks core who it goes to (every Member, or some teams with their sub-teams and followers; core leaves out who turned the category off, a disabled, unverified or address-less account, and answers each person's own unsubscribe link and why they get it), and queues the club.news template to each in the bulk lane, as a duyuru of core's category with List-Unsubscribe from that link. The send keeps the record as it was (source.version; a later edit changes the web, never the mail). A record's mail goes to a mailbox once: an address a row of this record already went to (an earlier send to another audience) is left out and counted already_received; the same record to the same audience again is 409 news_send.already_sent with that send's id. A cancelled send holds nothing back: its recipients who never got the mail get it when the record is sent again (409 news_send.cancel_finishing while its rows being sent finish). Only a person with skynotify:announcements:send sends directly; Mail onayı for the others comes with a later version. Off unless SKYNOTIFY_NEWS_SEND=on (503 news_send.not_enabled).",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -6842,7 +6983,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "server.forbidden: no skymail:announcements:send"
+                        "description": "server.forbidden: no skynotify:announcements:send"
                     },
                     "404": {
                         "content": {
@@ -6893,7 +7034,7 @@ const docTemplate = `{
         },
         "/news_sends/availability": {
             "get": {
-                "description": "available while SKYMAIL_NEWS_SEND=on; the send form shows \"Haberden gönder\" only then. A setting of SkyMail, not of any send.",
+                "description": "available while SKYNOTIFY_NEWS_SEND=on; the send form shows \"Haberden gönder\" only then. A setting of SkyNotify, not of any send.",
                 "responses": {
                     "200": {
                         "content": {
@@ -7156,7 +7297,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "server.forbidden: no skymail:announcements:send or skymail:mails:write"
+                        "description": "server.forbidden: no skynotify:announcements:send or skynotify:mails:write"
                     },
                     "404": {
                         "content": {
@@ -7362,7 +7503,7 @@ const docTemplate = `{
         },
         "/notifications": {
             "post": {
-                "description": "core says what happened (type) and to whom (recipients, by Keycloak sub); SkyMail picks each person's channels: the type's default channels, for an optional type only those in the person's allowed_channels (a required type ignores them), and only where the person has an address. E-mail goes to the request's address or, without one, to the person's primary e-mail in Keycloak; a person Keycloak does not know, a disabled account and an unverified address are skipped and counted. The e-mail is the template of the type's key, queued in the type's lane. The inbox does not look at allowed_channels: every recipient gets an item, the type's inbox text rendered with the variables, kept 90 days or until expires_at. An optional type of the bulk lane may give a recipient core's unsubscribe_url: the e-mail renders it as .UnsubscribeUrl and, while SKYMAIL_LIST_UNSUBSCRIBE is on, carries it in List-Unsubscribe and List-Unsubscribe-Post (RFC 8058) from the duyuru mailbox; any other type refuses it. The Idempotency-Key header is required: the same key from the same caller answers the first answer again (Idempotent-Replayed: true) and queues nothing; a different request with it is 422. A notification to exactly one recipient may carry Mail attachments (ADR 0082), by the rules of POST /mail_tasks/single: only its e-mail carries them, the inbox ignores them; they are not part of the Idempotency-Key's digest. Only a service account's token with skymail:notifications:send may call it.",
+                "description": "core says what happened (type) and to whom (recipients, by Keycloak sub); SkyNotify picks each person's channels: the type's default channels, for an optional type only those in the person's allowed_channels (a required type ignores them), and only where the person has an address. E-mail goes to the request's address or, without one, to the person's primary e-mail in Keycloak; a person Keycloak does not know, a disabled account and an unverified address are skipped and counted. The e-mail is the template of the type's key, queued in the type's lane. The inbox does not look at allowed_channels: every recipient gets an item, the type's inbox text rendered with the variables, kept 90 days or until expires_at. An optional type of the bulk lane may give a recipient core's unsubscribe_url: the e-mail renders it as .UnsubscribeUrl and, while SKYNOTIFY_LIST_UNSUBSCRIBE is on, carries it in List-Unsubscribe and List-Unsubscribe-Post (RFC 8058) from the duyuru mailbox; any other type refuses it. The Idempotency-Key header is required: the same key from the same caller answers the first answer again (Idempotent-Replayed: true) and queues nothing; a different request with it is 422. A notification to exactly one recipient may carry Mail attachments (ADR 0082), by the rules of POST /mail_tasks/single: only its e-mail carries them, the inbox ignores them; they are not part of the Idempotency-Key's digest. Only a service account's token with skynotify:notifications:send may call it.",
                 "parameters": [
                     {
                         "description": "The notification's own key: 1 to 255 visible ASCII characters, the same on every retry",
@@ -7421,7 +7562,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "validation.error; notification.idempotency_key_required; notification.allowed_channels_required, notification.unsubscribe_url_not_allowed, notification.unsubscribe_url_invalid, notification.unsubscribe_url_required (an optional bulk-lane type's e-mail recipient without one while SKYMAIL_BULK_PREFERENCE is on) (params.recipient: its index); notification.expires_at_past; attachment.single_recipient_only, attachment.too_many, attachment.type_not_allowed, attachment.content_invalid, attachment.content_type_mismatch, attachment.too_large (params.index: which file)"
+                        "description": "validation.error; notification.idempotency_key_required; notification.allowed_channels_required, notification.unsubscribe_url_not_allowed, notification.unsubscribe_url_invalid, notification.unsubscribe_url_required (an optional bulk-lane type's e-mail recipient without one while SKYNOTIFY_BULK_PREFERENCE is on) (params.recipient: its index); notification.expires_at_past; attachment.single_recipient_only, attachment.too_many, attachment.type_not_allowed, attachment.content_invalid, attachment.content_type_mismatch, attachment.too_large (params.index: which file)"
                     },
                     "403": {
                         "content": {
@@ -7431,7 +7572,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "server.forbidden: no skymail:notifications:send; auth.service_account_required: a person's token"
+                        "description": "server.forbidden: no skynotify:notifications:send; auth.service_account_required: a person's token"
                     },
                     "409": {
                         "content": {
@@ -7472,7 +7613,7 @@ const docTemplate = `{
         },
         "/suppressions": {
             "get": {
-                "description": "One list of two records, most recent first. reason bounce: an address mail is not sent to after one permanent failure (a relay's refusal of the address, or a delivery status notification saying it does not exist), in every stream; account mail (keycloak.*, account.* templates) is still sent to it and flagged. reason unsubscribed: an address that left the duyuru stream through SkyMail's one-click link; mail of the islem stream still goes to it. Nothing leaves the list by itself: an operator removes a bounce, the person (or an operator with skymail:unsubscribes:reactivate, at their request) reverses an unsubscribe, or Account erasure does. reason keeps one of the two; q keeps the addresses that contain it, case-insensitively; X-Total-Count counts them. Needs skymail:suppressions:manage or skymail:unsubscribes:reactivate.",
+                "description": "One list of two records, most recent first. reason bounce: an address mail is not sent to after one permanent failure (a relay's refusal of the address, or a delivery status notification saying it does not exist), in every stream; account mail (keycloak.*, account.* templates) is still sent to it and flagged. reason unsubscribed: an address that left the duyuru stream through SkyNotify's one-click link; mail of the islem stream still goes to it. Nothing leaves the list by itself: an operator removes a bounce, the person (or an operator with skynotify:unsubscribes:reactivate, at their request) reverses an unsubscribe, or Account erasure does. reason keeps one of the two; q keeps the addresses that contain it, case-insensitively; X-Total-Count counts them. Needs skynotify:suppressions:manage or skynotify:unsubscribes:reactivate.",
                 "parameters": [
                     {
                         "description": "Only bounce or only unsubscribed rows",
@@ -7572,7 +7713,7 @@ const docTemplate = `{
         },
         "/suppressions/bounces": {
             "get": {
-                "description": "Of the e-mails sent in the last days days (1 to 90, 7 by default), how many a delivery status notification later said did not reach their address (hard), failed otherwise (soft) or were delayed, and hard_rate = hard / sent. reader is each sender mailbox's last poll and counts, without the reader's place in the mailbox. Needs skymail:suppressions:manage. No address of a person.",
+                "description": "Of the e-mails sent in the last days days (1 to 90, 7 by default), how many a delivery status notification later said did not reach their address (hard), failed otherwise (soft) or were delayed, and hard_rate = hard / sent. reader is each sender mailbox's last poll and counts, without the reader's place in the mailbox. Needs skynotify:suppressions:manage. No address of a person.",
                 "parameters": [
                     {
                         "description": "The window, in days (1 to 90)",
@@ -7633,7 +7774,7 @@ const docTemplate = `{
         },
         "/suppressions/reactivations": {
             "get": {
-                "description": "Who reversed an unsubscribe and when — the person themself, or an operator with the reason they gave — newest first, without the address. Needs skymail:unsubscribes:reactivate. X-Total-Count counts them.",
+                "description": "Who reversed an unsubscribe and when — the person themself, or an operator with the reason they gave — newest first, without the address. Needs skynotify:unsubscribes:reactivate. X-Total-Count counts them.",
                 "parameters": [
                     {
                         "description": "Start index",
@@ -7703,7 +7844,7 @@ const docTemplate = `{
         },
         "/suppressions/soft-bounces": {
             "get": {
-                "description": "The addresses that had 3 or more soft bounces (a full mailbox, a policy refusal, a time-out: a permanent failure other than \"no such address\") in the last 30 days, most recent first: how many mails, when the last one was and its codes, never its text. A soft bounce never suppresses (ADR 0073 decision 5), so these addresses are not on the suppression list and mail still goes to them; an address already suppressed is left out. A mail counts once however many reports it had; only reports that named the mail's own address count. The window and the threshold are fixed. q keeps the addresses that contain it, case-insensitively; X-Total-Count counts them. Needs skymail:suppressions:manage.",
+                "description": "The addresses that had 3 or more soft bounces (a full mailbox, a policy refusal, a time-out: a permanent failure other than \"no such address\") in the last 30 days, most recent first: how many mails, when the last one was and its codes, never its text. A soft bounce never suppresses (ADR 0073 decision 5), so these addresses are not on the suppression list and mail still goes to them; an address already suppressed is left out. A mail counts once however many reports it had; only reports that named the mail's own address count. The window and the threshold are fixed. q keeps the addresses that contain it, case-insensitively; X-Total-Count counts them. Needs skynotify:suppressions:manage.",
                 "parameters": [
                     {
                         "description": "Part of an address",
@@ -7866,7 +8007,7 @@ const docTemplate = `{
         },
         "/suppressions/{id}/reactivate": {
             "post": {
-                "description": "Only when the person asks, or after a mistake (ADR 0072 decision 7): duyuru mail is sent to the address again. Needs skymail:unsubscribes:reactivate. The reason is required (10 to 500 printable characters) and must not contain an address. The reversal is recorded — who, when, the reason, and the record's stream, source and date — without the address. A bounce row is 409 suppression.use_delete.",
+                "description": "Only when the person asks, or after a mistake (ADR 0072 decision 7): duyuru mail is sent to the address again. Needs skynotify:unsubscribes:reactivate. The reason is required (10 to 500 printable characters) and must not contain an address. The reversal is recorded — who, when, the reason, and the record's stream, source and date — without the address. A bounce row is 409 suppression.use_delete.",
                 "parameters": [
                     {
                         "description": "Suppression ID (an unsubscribed row)",
@@ -7961,7 +8102,7 @@ const docTemplate = `{
         },
         "/templates": {
             "get": {
-                "description": "Get a list of all email templates with pagination.",
+                "description": "Get a list of all email templates with pagination. q keeps the templates whose name, key or subject contains it (any case, Turkish capitals included; I, ı, İ and i alike); X-Total-Count counts them.",
                 "parameters": [
                     {
                         "description": "Start index",
@@ -7990,6 +8131,14 @@ const docTemplate = `{
                                 "inactive",
                                 "all"
                             ],
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Part of a name, key or subject (at most 200 characters)",
+                        "in": "query",
+                        "name": "q",
+                        "schema": {
                             "type": "string"
                         }
                     }
@@ -8146,7 +8295,7 @@ const docTemplate = `{
                 ]
             },
             "put": {
-                "description": "The Template seed's path: creates the template when the key is new and replaces its content — the subject included — when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once; react_email_content holding a JSX source (anything but whitespace and comments, so not the seed's old pointer comment) makes it the version's JSX Main source, and otherwise the HTML content is the HTML Main source. Writes the contract Required variables when sent, and keeps them when not. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.\n\nWhether the template is a system template (system) is changed only with skymail:templates:system, which the Template seed's service account holds: without it, system must be what the template has — false for a new key — or the write is refused with 403 server.forbidden (params.missing_roles [\"skymail:templates:system\"], params.field \"system\", params.system the mark it has) and nothing is written. So skymail:templates:write still rewrites a system template's content here, and never makes or unmakes one.\n\nNeither the seed nor an operator silently overwrites the other (ADR-0047). A template an operator changed since the last seed is refused with 409 template.seed_conflict and nothing is written, when any of these holds (params.rules lists each that does): published_by_operator — the version the template sends is not the last Template seed version; newer_operator_version — an operator wrote a version after the last seed version, a draft included and a discarded draft not; operator_subject — the subject sent is an operator's that the seed would overwrite: neither the one the last seed version asked for nor the one asked for now (for a template whose last seed version is the migration's first one, which does not know what the seed asked for: the seed asks for a subject other than the one sent). The refusal is kept on the template as seed_refusal until a seed goes through. A seed that would leave the template as its published version already is overwrites nothing and is never refused. force=true writes over the operator's change anyway, as a published Template seed version; their versions stay in the history and can be restored, and the answer names what was overridden in overrode (left out when nothing was).",
+                "description": "The Template seed's path: creates the template when the key is new and replaces its content — the subject included — when it already exists. Un-archives the template so a seed always leaves a usable template behind. Records the content the template ends up with as a Template seed version, published at once; react_email_content holding a JSX source (anything but whitespace and comments, so not the seed's old pointer comment) makes it the version's JSX Main source, and otherwise the HTML content is the HTML Main source. Writes the contract Required variables when sent, and keeps them when not. The subject, plain text and HTML content must parse as Go templates, and the HTML content must reference every Required variable — the contract set it ends up with and the operators' — or nothing is written.\n\nWhether the template is a system template (system) is changed only with skynotify:templates:system, which the Template seed's service account holds: without it, system must be what the template has — false for a new key — or the write is refused with 403 server.forbidden (params.missing_roles [\"skynotify:templates:system\"], params.field \"system\", params.system the mark it has) and nothing is written. So skynotify:templates:write still rewrites a system template's content here, and never makes or unmakes one.\n\nNeither the seed nor an operator silently overwrites the other (ADR-0047). A template an operator changed since the last seed is refused with 409 template.seed_conflict and nothing is written, when any of these holds (params.rules lists each that does): published_by_operator — the version the template sends is not the last Template seed version; newer_operator_version — an operator wrote a version after the last seed version, a draft included and a discarded draft not; operator_subject — the subject sent is an operator's that the seed would overwrite: neither the one the last seed version asked for nor the one asked for now (for a template whose last seed version is the migration's first one, which does not know what the seed asked for: the seed asks for a subject other than the one sent). The refusal is kept on the template as seed_refusal until a seed goes through. A seed that would leave the template as its published version already is overwrites nothing and is never refused. force=true writes over the operator's change anyway, as a published Template seed version; their versions stay in the history and can be restored, and the answer names what was overridden in overrode (left out when nothing was).",
                 "parameters": [
                     {
                         "description": "Template key",
@@ -8215,7 +8364,7 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "description": "server.forbidden: system differs from what the template has (false for a new key) and the caller lacks skymail:templates:system; params: missing_roles, field (system), system (the mark the template has)"
+                        "description": "server.forbidden: system differs from what the template has (false for a new key) and the caller lacks skynotify:templates:system; params: missing_roles, field (system), system (the mark the template has)"
                     },
                     "409": {
                         "content": {
@@ -9499,13 +9648,13 @@ const docTemplate = `{
             "name": "Mail approval"
         },
         {
-            "description": "Ekip postası: a Leader's announcement to Teams core says they lead, through Mail onayı (SKYMAIL_TEAM_SEND)",
+            "description": "Ekip postası: a Leader's announcement to Teams core says they lead, through Mail onayı (SKYNOTIFY_TEAM_SEND)",
             "name": "Team mail"
         }
     ],
     "servers": [
         {
-            "url": "skymail-api.yildizskylab.com/v1"
+            "url": "api.yildizskylab.com/api/skynotify/v1"
         }
     ]
 }`
@@ -9513,8 +9662,8 @@ const docTemplate = `{
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
 	Version:          "1.0",
-	Title:            "Skymail",
-	Description:      "This is the API documentation for Skymail.",
+	Title:            "SkyNotify",
+	Description:      "This is the API documentation for SkyNotify.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

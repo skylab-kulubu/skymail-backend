@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: SkyMail public tracking
+  title: SkyNotify public tracking
   version: 1.0.0
   description: >-
     Public routes outside /v1. Targets come only from mail_task_links.
@@ -8,7 +8,7 @@ info:
     tokens, User-Agent or Referer in logs. Feature enablement requires the
     rollout gates documented in README; the default remains off.
 servers:
-  - url: https://api.yildizskylab.com/api/skymail
+  - url: https://api.yildizskylab.com/api/skynotify
 security: []
 paths:
   /t/o/{rt}:

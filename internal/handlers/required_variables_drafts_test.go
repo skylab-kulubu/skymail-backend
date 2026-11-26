@@ -6,7 +6,7 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
 // The editor's writes — saving a draft, restoring a version as one, and

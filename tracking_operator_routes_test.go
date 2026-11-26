@@ -11,21 +11,21 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
-// Operator tracking through the routes (SKYMAIL_TRACKING_OPERATOR, Yusuf
+// Operator tracking through the routes (SKYNOTIFY_TRACKING_OPERATOR, Yusuf
 // 2026-10-21): with it on, every send a person makes in the panel — to one
 // person, a group, a list, through Mail onayı — is tracked whether it asked
 // or not, whatever its template; the summary says so, and the send form
-// shows no box. A service's mail is not a person's send: SKYMAIL_TRACKING_SYSTEM
+// shows no box. A service's mail is not a person's send: SKYNOTIFY_TRACKING_SYSTEM
 // alone decides it.
 
-// operatorTrackedWorld is accountsWorld with SKYMAIL_TRACKING_OPERATOR on and
+// operatorTrackedWorld is accountsWorld with SKYNOTIFY_TRACKING_OPERATOR on and
 // system tracking off.
 func operatorTrackedWorld(t *testing.T) (*approvalWorld, *routePreferences) {
 	t.Helper()
@@ -33,7 +33,7 @@ func operatorTrackedWorld(t *testing.T) (*approvalWorld, *routePreferences) {
 	accounts := &laterAccounts{}
 	w := newApprovalWorldWithPool(t, 0, mailer.WithTracking(mailer.Tracking{
 		Config: tracking.Config{Mode: tracking.ModeOn, Operator: tracking.ModeOn,
-			BaseURL: "https://api.example.test/api/skymail", CoreURL: "http://core.invalid"},
+			BaseURL: "https://api.example.test/api/skynotify", CoreURL: "http://core.invalid"},
 		Preferences: prefs,
 		Accounts:    accounts,
 	}))
@@ -196,7 +196,7 @@ func TestARequestThatDoesNotAskIsTrackedWithOperatorTracking(t *testing.T) {
 func TestAServicesSingleMailSaysWhetherItsRecipientIsTracked(t *testing.T) {
 	w, _ := systemTrackedWorld(t)
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
-	auth := middlewares.NewAuthMiddleware("skymail", claimsUserinfo(t), middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", claimsUserinfo(t), middlewares.AudienceOff)
 	registerMailTaskRoutes(protectedAPI(app, auth, nil), auth, handlers.NewMailHandler(w.store, w.mail, w.directory))
 	service := uuid.NewString()
 	for _, c := range []struct {
@@ -205,7 +205,7 @@ func TestAServicesSingleMailSaysWhetherItsRecipientIsTracked(t *testing.T) {
 	}{{elif.email, "", true}, {baska.email, tracking.SkipPreferenceOff, false}, {ayseKaya.Email, "", true}} {
 		body, _ := json.Marshal(w.singleSendTo(c.email, "Kişi", false))
 		request := httptest.NewRequest(http.MethodPost, "/v1/mail_tasks/single", bytes.NewReader(body))
-		request.Header.Set("Authorization", "Bearer "+bearer(t, service, true, "skymail:access", "skymail:mails:send"))
+		request.Header.Set("Authorization", "Bearer "+bearer(t, service, true, "skynotify:access", "skynotify:mails:send"))
 		request.Header.Set("Content-Type", "application/json")
 		response, err := app.Test(request, fiber.TestConfig{Timeout: 30 * time.Second})
 		if err != nil {
@@ -228,7 +228,7 @@ func TestAServicesSingleMailSaysWhetherItsRecipientIsTracked(t *testing.T) {
 // sent the approvers their notice, and the approver whose decision sent the
 // requester theirs, are refused its people. The requester reads the people
 // of her own send, approved and queued in the bulk lane, only while
-// SKYMAIL_SENDER_SEES_RECIPIENTS is on (ADR-0074 decision 9, addendum
+// SKYNOTIFY_SENDER_SEES_RECIPIENTS is on (ADR-0074 decision 9, addendum
 // 2026-11-08); off, the default, she reads its counts only.
 func TestASystemMailsPeopleAreReadWithTheRoleOnly(t *testing.T) {
 	for _, on := range []bool{false, true} {
@@ -281,7 +281,7 @@ func aSystemMailsPeopleAreReadWithTheRoleOnly(t *testing.T, senderSees bool) {
 	}
 }
 
-// The tracking mode is a setting anyone who may use SkyMail reads: someone
+// The tracking mode is a setting anyone who may use SkyNotify reads: someone
 // who only submits for approval (okur: no mails:read) sees that every send
 // is tracked.
 func TestTheTrackingModeIsReadWithoutMailsRead(t *testing.T) {
@@ -308,7 +308,7 @@ func operatorFormSourceWorld(t *testing.T) (*approvalWorld, *routePreferences) {
 	accounts := &laterAccounts{}
 	w := newFormSourceWorld(t, mailer.WithTracking(mailer.Tracking{
 		Config: tracking.Config{Mode: tracking.ModeOn, Operator: tracking.ModeOn,
-			BaseURL: "https://api.example.test/api/skymail", CoreURL: "http://core.invalid"},
+			BaseURL: "https://api.example.test/api/skynotify", CoreURL: "http://core.invalid"},
 		Preferences: prefs,
 		Accounts:    accounts,
 	}))

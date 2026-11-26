@@ -36,7 +36,7 @@ func TestRedisGateChecksHumanAndClientSubjectsWithSameContract(t *testing.T) {
 
 	for _, subject := range []string{
 		"3babe8e3-4d2b-4d10-ba5f-95bfaf35c0dc",
-		"service-account-skymail-backend",
+		"service-account-skynotify-backend",
 	} {
 		t.Run(subject, func(t *testing.T) {
 			client := &stubRedisReader{mgetValues: []interface{}{ContractValue, nil}}

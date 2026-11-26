@@ -16,7 +16,7 @@ const (
 	FormatSummary = "summary"
 )
 
-// The places "Devamını oku" opens (SKYMAIL_NEWS_READ_MORE).
+// The places "Devamını oku" opens (SKYNOTIFY_NEWS_READ_MORE).
 const (
 	// ReadMoreHome: the site's home page, until the site has its News pages
 	// (bilet 11); never sky-app.
@@ -29,7 +29,7 @@ const (
 // SiteURL is the club's site.
 const SiteURL = "https://yildizskylab.com"
 
-// TemplateKey is the System template a News send is made with (skymail-
+// TemplateKey is the System template a News send is made with (skynotify-
 // frontend emails/club-news.tsx, written by the Template seed).
 const TemplateKey = "club.news"
 
@@ -113,7 +113,7 @@ func webLink(link string) string {
 }
 
 // DefaultImageHosts are the hosts a record's cover is shown from when
-// SKYMAIL_NEWS_IMAGE_HOSTS is unset: the club's own domain and its
+// SKYNOTIFY_NEWS_IMAGE_HOSTS is unset: the club's own domain and its
 // subdomains.
 var DefaultImageHosts = []string{"yildizskylab.com"}
 
@@ -136,11 +136,11 @@ func imageLink(link string, hosts []string) string {
 	return ""
 }
 
-// MailOptions are SkyMail's settings a News mail is made with.
+// MailOptions are SkyNotify's settings a News mail is made with.
 type MailOptions struct {
-	// ReadMore is SKYMAIL_NEWS_READ_MORE: ReadMoreHome or ReadMorePages.
+	// ReadMore is SKYNOTIFY_NEWS_READ_MORE: ReadMoreHome or ReadMorePages.
 	ReadMore string
-	// ImageHosts are the hosts a cover may come from (SKYMAIL_NEWS_IMAGE_HOSTS).
+	// ImageHosts are the hosts a cover may come from (SKYNOTIFY_NEWS_IMAGE_HOSTS).
 	ImageHosts []string
 }
 

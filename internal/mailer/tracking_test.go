@@ -17,14 +17,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
-const trackingBase = "https://api.yildizskylab.com/api/skymail"
+const trackingBase = "https://api.yildizskylab.com/api/skynotify"
 
 var (
 	announcementTemplate = uuid.MustParse("70000000-0000-4000-8000-000000000001")
@@ -47,7 +47,7 @@ const announcementHTML = `<!DOCTYPE html><html><head><style>a{color:#003694}</st
 <a href="https://skylab.example/form?e={{.Email}}">Sana özel</a>
 <a href="mailto:yk@example.com">Yaz</a>
 <a href="https://api.yildizskylab.com/v1/communication-preferences/unsubscribe?t=abc">Çık</a>
-<a href="https://skylab.example/gizli" data-skymail-notrack>Sayılmaz</a>
+<a href="https://skylab.example/gizli" data-skynotify-notrack>Sayılmaz</a>
 <a href="https://skylab.example/etkinlik?gun=1&amp;saat=2">Yine etkinlik</a>
 </body></html>`
 
@@ -147,7 +147,7 @@ func trackingOn(prefs tracking.Preferences) mailer.Option {
 }
 
 // groupOf is a Keycloak group of Ayşe, Mehmet and Zeynep, and a member
-// whose id SkyMail does not know.
+// whose id SkyNotify does not know.
 func groupOf() []mailer.RecipientInfo {
 	return []mailer.RecipientInfo{
 		{FullName: "Ayşe Yılmaz", Email: "ayse@example.com", Sub: &ayse},
@@ -227,18 +227,18 @@ func linksOf(t *testing.T, db *database.Store, task uuid.UUID) []registeredLink 
 }
 
 // A tracked send to a Keycloak group: each person core lets be tracked, and
-// the member SkyMail knows by address only (B9), gets a token of their own;
+// the member SkyNotify knows by address only (B9), gets a token of their own;
 // whom core says no for gets why not; core is asked once about the people
 // with an id, and only them. The links every recipient has are
 // registered with a token each; a personal one, a mail address, an
-// unsubscribe link and a link marked data-skymail-notrack are not.
+// unsubscribe link and a link marked data-skynotify-notrack are not.
 func TestATrackedGroupSendGivesATokenToWhomCoreAllows(t *testing.T) {
 	captureMailerLogs(t)
 	db := trackingQueue(t)
 	prefs := coreSays()
 	m := mailer.NewMailer(db, startFakeSMTP(t).config(), mailer.SenderOn, trackingOn(prefs))
 	if !m.TrackingAvailable() {
-		t.Fatal("TrackingAvailable() = false with SKYMAIL_TRACKING=on")
+		t.Fatal("TrackingAvailable() = false with SKYNOTIFY_TRACKING=on")
 	}
 
 	task, err := m.EnqueueWithRecipients(context.Background(), mailer.EnqueueWithRecipientsParams{
@@ -282,7 +282,7 @@ func TestATrackedGroupSendGivesATokenToWhomCoreAllows(t *testing.T) {
 }
 
 // Core is asked before the send's transaction begins: no transaction is
-// open, and so no lock or connection is held, while SkyMail waits for core
+// open, and so no lock or connection is held, while SkyNotify waits for core
 // (up to 5 seconds).
 func TestCoreIsAskedBeforeTheSendsTransaction(t *testing.T) {
 	captureMailerLogs(t)
@@ -509,7 +509,7 @@ func TestASendGivesCoreFiveSeconds(t *testing.T) {
 	}
 }
 
-// With SKYMAIL_TRACKING off, tracking asked for is ignored: the send says it
+// With SKYNOTIFY_TRACKING off, tracking asked for is ignored: the send says it
 // did not ask, no row has a token or a reason, nothing is registered, core
 // is not asked.
 func TestTrackingOffIgnoresTheRequest(t *testing.T) {
@@ -520,7 +520,7 @@ func TestTrackingOffIgnoresTheRequest(t *testing.T) {
 		Config: tracking.Config{Mode: tracking.ModeOff}, Preferences: prefs,
 	}))
 	if m.TrackingAvailable() {
-		t.Fatal("TrackingAvailable() = true with SKYMAIL_TRACKING=off")
+		t.Fatal("TrackingAvailable() = true with SKYNOTIFY_TRACKING=off")
 	}
 	template, list := announcementTemplate, announcementList
 	group, err := m.EnqueueWithRecipients(context.Background(), mailer.EnqueueWithRecipientsParams{
@@ -676,7 +676,7 @@ func sendAll(t *testing.T, db *database.Store, m mailer.Transactional, relay *an
 
 // A tracked mail goes out with the pixel right after <body> and the links
 // every recipient has pointing at /t/c with the recipient's token; personal
-// links, mail addresses, unsubscribe and data-skymail-notrack links are as
+// links, mail addresses, unsubscribe and data-skynotify-notrack links are as
 // they were, and nothing else is added: no sentence, no /t/x link (T8). The
 // plain text is as kept. The mail kept (body_html) is byte for byte what was
 // rendered, before the send and after it; an untracked recipient's mail is
@@ -717,7 +717,7 @@ func TestATrackedMailGoesOutWithThePixelAndItsLinks(t *testing.T) {
 		`<a href="https://skylab.example/form?e=ayse%40example.com">Sana özel</a>`,
 		`<a href="mailto:yk@example.com">Yaz</a>`,
 		`<a href="https://api.yildizskylab.com/v1/communication-preferences/unsubscribe?t=abc">Çık</a>`,
-		`<a href="https://skylab.example/gizli" data-skymail-notrack>Sayılmaz</a>`,
+		`<a href="https://skylab.example/gizli" data-skynotify-notrack>Sayılmaz</a>`,
 	} {
 		if !strings.Contains(ayseMail.html, kept) {
 			t.Errorf("Ayşe's mail lacks %s", kept)

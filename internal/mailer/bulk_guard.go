@@ -12,32 +12,32 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
 // The bulk lane's guards (hub ticket duyuru-haber 05, G3; README, "Kısma ve
 // görev düzeyinde işlemler"):
 //
 //   - a throttling reply of the relay (SMTP 421, 432 or 4.7.x; Graph 429 or
-//     503) holds every process's bulk lane for SKYMAIL_THROTTLE_PAUSE, or the
+//     503) holds every process's bulk lane for SKYNOTIFY_THROTTLE_PAUSE, or the
 //     reply's Retry-After if longer, and puts a bulk row it answered back to
 //     pending with no attempt counted: the reply is about the account's pace,
 //     not the recipient. A system row keeps its retries as before, so a login
 //     code never waits on the bulk lane's hold;
 //   - a send whose recipients fail for good at the relay past
-//     SKYMAIL_FAILURE_PAUSE_COUNT, and past SKYMAIL_FAILURE_PAUSE_PERCENT of
+//     SKYNOTIFY_FAILURE_PAUSE_COUNT, and past SKYNOTIFY_FAILURE_PAUSE_PERCENT of
 //     those the relay answered, is paused (the listmonk pattern): its rows
 //     wait until an operator resumes or cancels it.
 const (
-	ThrottlePauseEnv       = "SKYMAIL_THROTTLE_PAUSE"
-	FailurePauseCountEnv   = "SKYMAIL_FAILURE_PAUSE_COUNT"
-	FailurePausePercentEnv = "SKYMAIL_FAILURE_PAUSE_PERCENT"
+	ThrottlePauseEnv       = "SKYNOTIFY_THROTTLE_PAUSE"
+	FailurePauseCountEnv   = "SKYNOTIFY_FAILURE_PAUSE_COUNT"
+	FailurePausePercentEnv = "SKYNOTIFY_FAILURE_PAUSE_PERCENT"
 
 	DefaultThrottlePause       = 5 * time.Minute
 	DefaultFailurePauseCount   = 10
 	DefaultFailurePausePercent = 10
 
-	// maxThrottlePause bounds SKYMAIL_THROTTLE_PAUSE: past an hour a throttled
+	// maxThrottlePause bounds SKYNOTIFY_THROTTLE_PAUSE: past an hour a throttled
 	// account is a matter for an operator, not for waiting.
 	maxThrottlePause = time.Hour
 
@@ -63,9 +63,9 @@ type BulkGuard struct {
 	FailurePercent int
 }
 
-// BulkGuardFromEnv reads SKYMAIL_THROTTLE_PAUSE (a Go duration, unset: 5m, 0
-// for no hold, at most 1h), SKYMAIL_FAILURE_PAUSE_COUNT (a whole number,
-// unset: 10, 0 never pauses) and SKYMAIL_FAILURE_PAUSE_PERCENT (1 to 100,
+// BulkGuardFromEnv reads SKYNOTIFY_THROTTLE_PAUSE (a Go duration, unset: 5m, 0
+// for no hold, at most 1h), SKYNOTIFY_FAILURE_PAUSE_COUNT (a whole number,
+// unset: 10, 0 never pauses) and SKYNOTIFY_FAILURE_PAUSE_PERCENT (1 to 100,
 // unset: 10). Anything else is an error that stops startup.
 func BulkGuardFromEnv(getenv func(string) string) (BulkGuard, error) {
 	guard := BulkGuard{

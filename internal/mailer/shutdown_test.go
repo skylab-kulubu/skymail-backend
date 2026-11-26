@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 func stopWithin(t *testing.T, m mailer.Transactional, budget time.Duration) error {

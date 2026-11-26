@@ -8,8 +8,8 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
-	dbmigrations "github.com/skylab-kulubu/skymail-backend/db/migrations"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	dbmigrations "github.com/skylab-kulubu/skynotify-backend/db/migrations"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // The schema the template-version migration finds in production: every
@@ -21,10 +21,10 @@ const beforeTemplateVersions = uint(20260922235000)
 const templateVersions = uint(20260923120000)
 
 // The seed's pointer comment, exactly as scripts/seed-templates.ts in
-// skymail-frontend writes it into react_email_content instead of the .tsx
+// skynotify-frontend writes it into react_email_content instead of the .tsx
 // source.
 func seedPointer(key string) string {
-	return "// Kaynak: skymail-frontend/emails/" + key + ".tsx — burada düzenlersen repodaki kaynakla ayrışır.\n"
+	return "// Kaynak: skynotify-frontend/emails/" + key + ".tsx — burada düzenlersen repodaki kaynakla ayrışır.\n"
 }
 
 // A React Email source as the old panel saves it: the panel refuses to save
@@ -75,7 +75,7 @@ var existingTemplates = []existingTemplate{
 	},
 	{
 		name: "Hoş Geldin", key: ptr("core.welcome"), system: true,
-		// Reworded in SkyMail; #18 kept it through later seeds.
+		// Reworded in SkyNotify; #18 kept it through later seeds.
 		subject: "SKY LAB'e hoş geldin, {{.FullName}}",
 		html:    `<!DOCTYPE html><html><body><p>Hoş geldin {{.FullName}}</p></body></html>`, plainText: "Hoş geldin {{.FullName}}",
 		react: seedPointer("core.welcome"),

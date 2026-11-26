@@ -1,4 +1,4 @@
-module github.com/skylab-kulubu/skymail-backend
+module github.com/skylab-kulubu/skynotify-backend
 
 go 1.25.0
 

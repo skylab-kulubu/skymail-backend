@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 // A News send (POST /v1/news_sends, duyuru-haber 06) is a duyuru like every

@@ -12,8 +12,8 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
 )
 
 // maskNow runs the content sweep's masking, as every replica does every few
@@ -191,7 +191,7 @@ func TestSensitiveContentIsMaskedWhenStoredAndTheOpeningRecorded(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	now := time.Now().UTC().Truncate(time.Second)
 	app := contentApp(t, db, now)
-	system := []string{"skymail:access", "skymail:mails:read", SystemMailsReadRole}
+	system := []string{"skynotify:access", "skynotify:mails:read", SystemMailsReadRole}
 	task, row := seedRenderedSend(t, db, keycloakLike("keycloak.reset-password", "service-account-keycloak-mailer", now.Add(-time.Hour)))
 	path := "/mail_tasks/" + task.String() + "/queue/" + row.String() + "/content"
 
@@ -231,7 +231,7 @@ func TestSensitiveContentIsMaskedWhenStoredAndTheOpeningRecorded(t *testing.T) {
 			t.Errorf("html lost %q: %s", open, *answer.HTML)
 		}
 	}
-	if !strings.Contains(*answer.HTML, `<mark data-skymail-masked="">`) {
+	if !strings.Contains(*answer.HTML, `<mark data-skynotify-masked="">`) {
 		t.Errorf("html does not mark what it masked: %s", *answer.HTML)
 	}
 	if answer.MaskedBy == nil || *answer.MaskedBy != "variables" || strings.Join(answer.MaskedVariables, ",") != "code,link" {
@@ -258,7 +258,7 @@ func TestSensitiveContentIsMaskedWhenStoredAndTheOpeningRecorded(t *testing.T) {
 	}
 
 	// Who may not read it learns nothing, and nothing is recorded.
-	if answer := contentAs(t, app, task, row, contentOther, "skymail:access", "skymail:mails:read", "skymail:mails:write"); answer.Access != "restricted" || answer.Subject != nil {
+	if answer := contentAs(t, app, task, row, contentOther, "skynotify:access", "skynotify:mails:read", "skynotify:mails:write"); answer.Access != "restricted" || answer.Subject != nil {
 		t.Errorf("a list sender: %+v, want restricted", answer)
 	}
 	if n := countViews(t, db, task); n != 2 {
@@ -283,7 +283,7 @@ func TestMaskedContentIsNotShownWhenTheOpeningCannotBeRecorded(t *testing.T) {
 		CREATE TRIGGER refuse_view BEFORE INSERT ON sent_content_views FOR EACH ROW EXECUTE FUNCTION refuse_view();`); err != nil {
 		t.Fatal(err)
 	}
-	status, body := getAs(t, app, "/mail_tasks/"+task.String()+"/queue/"+row.String()+"/content", contentSender, "skymail:access", "skymail:mails:read")
+	status, body := getAs(t, app, "/mail_tasks/"+task.String()+"/queue/"+row.String()+"/content", contentSender, "skynotify:access", "skynotify:mails:read")
 	if status == 200 || strings.Contains(string(body), "Merhaba") || strings.Contains(string(body), "Parola") {
 		t.Errorf("content with no record = %d %s, want an error and no content", status, body)
 	}
@@ -303,7 +303,7 @@ func TestShownContentIsAsSentAndNotRecorded(t *testing.T) {
 		t.Fatalf("sweep masked %+v of a shown send", result)
 	}
 
-	answer := contentAs(t, app, task, row, contentSender, "skymail:access", "skymail:mails:read")
+	answer := contentAs(t, app, task, row, contentSender, "skynotify:access", "skynotify:mails:read")
 	if answer.Access != "available" || answer.HTML == nil || !strings.Contains(*answer.HTML, "action-token?key=") ||
 		!strings.Contains(*answer.PlainText, resetLink) || !strings.Contains(*answer.Subject, loginCode) {
 		t.Errorf("content = %+v, want the mail as sent", answer)
@@ -340,7 +340,7 @@ func TestASendSensitiveWhenQueuedStaysMasked(t *testing.T) {
 		if !flipBeforeSweep {
 			flip()
 		}
-		answer := contentAs(t, app, task, row, contentSender, "skymail:access", "skymail:mails:read")
+		answer := contentAs(t, app, task, row, contentSender, "skynotify:access", "skynotify:mails:read")
 		if answer.Access != "masked" {
 			t.Errorf("flipped before the sweep %v: %+v, want masked", flipBeforeSweep, answer)
 		}
@@ -378,7 +378,7 @@ func TestMaskingUsesOnlyTheTemplateInForceWhenTheSendWasQueued(t *testing.T) {
 	}
 
 	maskNow(t, db)
-	answer := contentAs(t, app, task, row, contentSender, "skymail:access", "skymail:mails:read")
+	answer := contentAs(t, app, task, row, contentSender, "skynotify:access", "skynotify:mails:read")
 	if answer.Access != "masked" || answer.MaskedBy == nil || *answer.MaskedBy != "variables" {
 		t.Fatalf("content = %+v, want masked by variables, with the version in force", answer)
 	}
@@ -399,7 +399,7 @@ func TestSensitiveContentIsMaskedByPatternsWhenNothingRendersIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	maskNow(t, db)
-	answer := contentAs(t, app, task, row, contentSender, "skymail:access", "skymail:mails:read")
+	answer := contentAs(t, app, task, row, contentSender, "skynotify:access", "skynotify:mails:read")
 	if answer.Access != "masked" || answer.MaskedBy == nil || *answer.MaskedBy != "patterns" {
 		t.Fatalf("content = %+v, want masked by patterns", answer)
 	}
@@ -430,7 +430,7 @@ func TestSensitiveContentThatCannotBeMaskedIsNotKept(t *testing.T) {
 		t.Fatalf("sweep = %+v, want one send not kept", result)
 	}
 	assertNoSecret(t, "kept", keptContent(t, db, task), "abcdefgh", "referans")
-	answer := contentAs(t, app, task, row, contentSender, "skymail:access", "skymail:mails:read")
+	answer := contentAs(t, app, task, row, contentSender, "skynotify:access", "skynotify:mails:read")
 	if answer.Access != "not_kept" || answer.Subject != nil || answer.PlainText != nil || answer.HTML != nil {
 		t.Errorf("content = %+v, want not_kept with nothing in it", answer)
 	}
@@ -445,7 +445,7 @@ func TestSensitiveSendEmptiedBeforeItWasKeptIsNotKept(t *testing.T) {
 	db := lifecycleHandlerStore(t)
 	now := time.Now().UTC().Truncate(time.Second)
 	app := contentApp(t, db, now)
-	system := []string{"skymail:access", "skymail:mails:read", SystemMailsReadRole}
+	system := []string{"skynotify:access", "skynotify:mails:read", SystemMailsReadRole}
 
 	sensitive := keycloakLike("keycloak.reset-password", contentSender, now.Add(-48*time.Hour))
 	sensitive.cleared = true
@@ -460,7 +460,7 @@ func TestSensitiveSendEmptiedBeforeItWasKeptIsNotKept(t *testing.T) {
 	if err := json.Unmarshal(body, &send); status != 200 || err != nil || send.ContentAccess != "not_kept" {
 		t.Errorf("send = %d %s, want content_access not_kept", status, body)
 	}
-	if answer := contentAs(t, app, task, row, contentOther, "skymail:access", "skymail:mails:read"); answer.Access != "restricted" {
+	if answer := contentAs(t, app, task, row, contentOther, "skynotify:access", "skynotify:mails:read"); answer.Access != "restricted" {
 		t.Errorf("a reader: %+v, want restricted", answer)
 	}
 
@@ -528,10 +528,10 @@ func TestMaskingAFailingSendHoldsNoOtherBackAndIsEmptiedOnItsThirdFailure(t *tes
 		t.Fatalf("first run = %+v, want the second send's five rows masked and the first failed", first)
 	}
 	assertNoSecret(t, "the second send", keptContent(t, db, many), resetLink, loginCode)
-	if answer := contentAs(t, app, many, manyRow, contentSender, "skymail:access", "skymail:mails:read"); answer.Access != "masked" {
+	if answer := contentAs(t, app, many, manyRow, contentSender, "skynotify:access", "skynotify:mails:read"); answer.Access != "masked" {
 		t.Errorf("second send: %+v, want masked", answer)
 	}
-	if answer := contentAs(t, app, failing, failingRow, contentSender, "skymail:access", "skymail:mails:read"); answer.Access != "pending" {
+	if answer := contentAs(t, app, failing, failingRow, contentSender, "skynotify:access", "skynotify:mails:read"); answer.Access != "pending" {
 		t.Errorf("failing send after one failure: %+v, want pending", answer)
 	}
 	// Each later run has a new send to mask, which shows the fault is the
@@ -548,7 +548,7 @@ func TestMaskingAFailingSendHoldsNoOtherBackAndIsEmptiedOnItsThirdFailure(t *tes
 		t.Fatalf("third run = %+v, want the new send masked and the failing send emptied", third)
 	}
 	assertNoSecret(t, "the failing send", keptContent(t, db, failing), resetLink, loginCode, "Merhaba")
-	if answer := contentAs(t, app, failing, failingRow, contentSender, "skymail:access", "skymail:mails:read"); answer.Access != "not_kept" {
+	if answer := contentAs(t, app, failing, failingRow, contentSender, "skynotify:access", "skynotify:mails:read"); answer.Access != "not_kept" {
 		t.Errorf("failing send after three failures: %+v, want not_kept", answer)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -580,7 +580,7 @@ func TestASendFoundNotSensitiveIsLookedAtAgainWhenItsTemplateChanges(t *testing.
 	if result := maskNow(t, db); result.Sends != 1 {
 		t.Fatalf("after the template changed = %+v, want the send masked", result)
 	}
-	if answer := contentAs(t, app, task, row, contentSender, "skymail:access", "skymail:mails:read"); answer.Access != "masked" {
+	if answer := contentAs(t, app, task, row, contentSender, "skynotify:access", "skynotify:mails:read"); answer.Access != "masked" {
 		t.Errorf("content = %+v, want masked", answer)
 	}
 	assertNoSecret(t, "kept", keptContent(t, db, task), resetLink, loginCode)
@@ -607,7 +607,7 @@ func TestShownSendsDoNotHoldAMaskingRunBack(t *testing.T) {
 	if result.Sends != 1 || result.NotSensitive != 3 {
 		t.Fatalf("run = %+v, want three shown sends looked at and the sensitive one masked", result)
 	}
-	if answer := contentAs(t, app, task, row, contentSender, "skymail:access", "skymail:mails:read"); answer.Access != "masked" {
+	if answer := contentAs(t, app, task, row, contentSender, "skynotify:access", "skynotify:mails:read"); answer.Access != "masked" {
 		t.Errorf("content = %+v, want masked", answer)
 	}
 }

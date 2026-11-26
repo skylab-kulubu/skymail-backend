@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/skylab-kulubu/skymail-backend/internal/tracking"
+	"github.com/skylab-kulubu/skynotify-backend/internal/tracking"
 )
 
 // Open and click tracking's withdrawal and retention (hub ticket
@@ -84,7 +84,7 @@ const trackingLockTimeout = "5s"
 
 // TrackingRetentionLockName names the session advisory lock one run holds:
 // one run at a time across replicas.
-const TrackingRetentionLockName = "skymail-backend tracking retention"
+const TrackingRetentionLockName = "skynotify-backend tracking retention"
 
 // TrackingRetentionBrakeMaxRows is the brake: an apply that would close
 // more tokens, delete more events or empty more links than this in one run
@@ -140,7 +140,7 @@ type TrackingRetentionOptions struct {
 	// Mode is dry-run, apply or purge.
 	Mode tracking.RetentionMode
 	// BrakeMaxRows replaces TrackingRetentionBrakeMaxRows when positive
-	// (SKYMAIL_TRACKING_RETENTION_MAX_ROWS).
+	// (SKYNOTIFY_TRACKING_RETENTION_MAX_ROWS).
 	BrakeMaxRows int64
 	// OnlyIfDue makes the run check, once it holds the lock, that a run of
 	// its mode is due (TrackingRetentionDue), and do nothing otherwise

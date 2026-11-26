@@ -12,13 +12,13 @@ import (
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/consent"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/middlewares"
-	"github.com/skylab-kulubu/skymail-backend/internal/teams"
-	"github.com/skylab-kulubu/skymail-backend/internal/unsubscribe"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/consent"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/middlewares"
+	"github.com/skylab-kulubu/skynotify-backend/internal/teams"
+	"github.com/skylab-kulubu/skynotify-backend/internal/unsubscribe"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 // Team mail through Mail onayı (ADR-0067 addendum of 2026-11-08; hub tickets
@@ -42,12 +42,12 @@ var (
 )
 
 // The people: lider leads WEBLAB (and so FRONTEND) and ALGOLAB without any
-// SkyMail role; kaptan leads WEBLAB with skymail:access and
-// skymail:templates:read; the members are ayse, mehmet and zeynep.
+// SkyNotify role; kaptan leads WEBLAB with skynotify:access and
+// skynotify:templates:read; the members are ayse, mehmet and zeynep.
 var (
 	lider  = approvalPerson{"20000000-0000-4000-8000-000000000001", "Lider Rolsüz", "lider@yildizskylab.com", []string{}}
 	kaptan = approvalPerson{"20000000-0000-4000-8000-000000000002", "Kaptan Rollü", "kaptan@yildizskylab.com",
-		[]string{"skymail:access", "skymail:templates:read"}}
+		[]string{"skynotify:access", "skynotify:templates:read"}}
 	ayse   = approvalPerson{"20000000-0000-4000-8000-000000000003", "Ayşe Kaya", "ayse@example.com", nil}
 	mehmet = approvalPerson{"20000000-0000-4000-8000-000000000004", "Mehmet Demir", "mehmet@example.com", nil}
 	zeynep = approvalPerson{"20000000-0000-4000-8000-000000000005", "Zeynep Ak", "zeynep@example.com", nil}
@@ -80,11 +80,11 @@ type teamWorld struct {
 	verdicts *teamVerdicts
 }
 
-// liderRollu is lider as they were when they held SkyMail's roles; sablonsuz
-// leads WEBLAB with skymail:access and nothing else.
+// liderRollu is lider as they were when they held SkyNotify's roles; sablonsuz
+// leads WEBLAB with skynotify:access and nothing else.
 var (
-	liderRollu = approvalPerson{lider.sub, lider.name, lider.email, []string{"skymail:access", "skymail:templates:read", "skymail:lists:read"}}
-	sablonsuz  = approvalPerson{"20000000-0000-4000-8000-000000000006", "Şablonsuz Lider", "sablonsuz@yildizskylab.com", []string{"skymail:access"}}
+	liderRollu = approvalPerson{lider.sub, lider.name, lider.email, []string{"skynotify:access", "skynotify:templates:read", "skynotify:lists:read"}}
+	sablonsuz  = approvalPerson{"20000000-0000-4000-8000-000000000006", "Şablonsuz Lider", "sablonsuz@yildizskylab.com", []string{"skynotify:access"}}
 )
 
 var teamPeople = map[string]approvalPerson{"lider": lider, "kaptan": kaptan, "lider-rollu": liderRollu, "sablonsuz": sablonsuz}
@@ -96,7 +96,7 @@ func newTeamWorld(t *testing.T) *teamWorld {
 		t.Fatal(err)
 	}
 	verdicts := &teamVerdicts{off: map[string][]string{}}
-	gate := mailer.PreferenceGate{On: true, Core: verdicts, Links: unsubscribe.Config{On: true, BaseURL: "https://api.example.org/api/skymail", Ring: ring}}
+	gate := mailer.PreferenceGate{On: true, Core: verdicts, Links: unsubscribe.Config{On: true, BaseURL: "https://api.example.org/api/skynotify", Ring: ring}}
 	w := newApprovalWorldWithPool(t, 0, purposesOn(), mailer.WithPreferenceGate(gate))
 	leaders := &chainLeaders{led: map[string][]teams.Team{
 		lider.sub:     {algolab, weblab, frontend},
@@ -110,7 +110,7 @@ func newTeamWorld(t *testing.T) *teamWorld {
 	w.directory.groups[teamLeaders.String()] = []*gocloak.User{lider.user()}
 
 	w.handler = handlers.NewMailApprovalHandler(w.store, w.mail, w.directory, handlers.MailApprovalOptions{
-		ClientID: "skymail", UIURL: "https://iletisim.yildizskylab.com/", Now: w.now, Teams: leaders,
+		ClientID: "skynotify", UIURL: "https://notify.yildizskylab.com/", Now: w.now, Teams: leaders,
 	})
 	app := fiber.New(fiber.Config{ErrorHandler: errorHandler, StructValidator: validator.NewStructValidator()})
 	app.Use(func(c fiber.Ctx) error {
@@ -133,9 +133,9 @@ func newTeamWorld(t *testing.T) *teamWorld {
 	app.Get("/v1/mail_approvals/:id", seat, w.handler.Get)
 	app.Post("/v1/mail_approvals/:id/resubmit", seat, w.handler.Resubmit)
 	app.Post("/v1/mail_approvals/:id/accept", seat, w.handler.Accept)
-	auth := middlewares.NewAuthMiddleware("skymail", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
+	auth := middlewares.NewAuthMiddleware("skynotify", "http://keycloak.invalid/realms/skylab", middlewares.AudienceOff)
 	api := app.Group("/v1")
-	api.Use(auth.RequireAnyPermission("skymail:access"))
+	api.Use(auth.RequireAnyPermission("skynotify:access"))
 	registerMailApprovalRoutes(api, auth, w.handler)
 	w.app = app
 	return &teamWorld{approvalWorld: w, leaders: leaders, verdicts: verdicts}
@@ -175,7 +175,7 @@ func (w *teamWorld) teamsOf(id uuid.UUID) teamAnswer {
 	return answer
 }
 
-// A Leader without any SkyMail role submits the free announcement to Teams
+// A Leader without any SkyNotify role submits the free announcement to Teams
 // they lead: a picked Sub-team of a picked Team drops, the rest are in path
 // order, the purpose is duyuru with the first Team's category. Another Team,
 // a Leader group, another template, another purpose or category, or a list
@@ -225,7 +225,7 @@ func TestALeaderSubmitsTeamMail(t *testing.T) {
 	}
 
 	// Its own category of a picked Team is accepted; a Leader with
-	// skymail:templates:read may send another template, without the list
+	// skynotify:templates:read may send another template, without the list
 	// read role.
 	if status, _, failure := w.submitAs("lider", with(w.teamSend(teamWeblab), map[string]any{"purpose": "duyuru", "category": "team:" + teamWeblab.String() + ":duyuru"})); status != fiber.StatusCreated {
 		t.Fatalf("own category = %d %+v", status, failure)
@@ -354,7 +354,7 @@ func TestTeamLeadershipIsCheckedAgainAtTheApproval(t *testing.T) {
 }
 
 // The free announcement needs no template read role in Team mail, whoever
-// sends it; another template still does, with skymail:access too.
+// sends it; another template still does, with skynotify:access too.
 func TestTheFreeAnnouncementNeedsNoTemplateRoleInTeamMail(t *testing.T) {
 	w := newTeamWorld(t)
 	if status, _, failure := w.submitAs("sablonsuz", w.teamSend(teamWeblab)); status != fiber.StatusCreated {
@@ -371,7 +371,7 @@ func TestTheFreeAnnouncementNeedsNoTemplateRoleInTeamMail(t *testing.T) {
 	}
 }
 
-// A Leader without skymail:access sends nothing but Team mail: their own
+// A Leader without skynotify:access sends nothing but Team mail: their own
 // request from before, to a list, returned to them, they cannot accept.
 func TestALeaderWithoutRolesCannotSendTheirOldListRequest(t *testing.T) {
 	w := newTeamWorld(t)

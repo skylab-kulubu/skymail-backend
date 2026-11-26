@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/health"
+	"github.com/skylab-kulubu/skynotify-backend/internal/health"
 )
 
 type fakeDatabase struct {

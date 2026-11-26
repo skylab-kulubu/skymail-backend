@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/handlers"
+	"github.com/skylab-kulubu/skynotify-backend/internal/handlers"
 )
 
 // The counts of a send to fewer than 10 tracked people go to anyone with
@@ -38,8 +38,8 @@ func trackingCountsOfASmallSend(t *testing.T, senderSees bool) {
 	if _, err := w.store.Conn.Exec(ctx, `UPDATE mail_queue SET status='sent',sent_at=now()-interval '2 minutes' WHERE task_id=$1`, created.ID); err != nil {
 		t.Fatal(err)
 	}
-	approvalPeople["takip_okur"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skymail:access", "skymail:mails:read", handlers.TrackingReadRole}}
-	approvalPeople["yusuf_okur"] = approvalPerson{sub: yusuf.sub, name: yusuf.name, email: yusuf.email, roles: append(append([]string{}, yusuf.roles...), "skymail:mails:read")}
+	approvalPeople["takip_okur"] = approvalPerson{sub: uuid.NewString(), roles: []string{"skynotify:access", "skynotify:mails:read", handlers.TrackingReadRole}}
+	approvalPeople["yusuf_okur"] = approvalPerson{sub: yusuf.sub, name: yusuf.name, email: yusuf.email, roles: append(append([]string{}, yusuf.roles...), "skynotify:mails:read")}
 	defer delete(approvalPeople, "takip_okur")
 	defer delete(approvalPeople, "yusuf_okur")
 	base := "/v1/mail_tasks/" + created.ID.String() + "/tracking"

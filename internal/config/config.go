@@ -4,13 +4,13 @@ import (
 	"errors"
 	"reflect"
 
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 	"github.com/spf13/viper"
 )
 
-// DefaultKeycloakClientID is the client SkyMail's roles are on when
+// DefaultKeycloakClientID is the client SkyNotify's roles are on when
 // KEYCLOAK_CLIENT_ID does not say.
-const DefaultKeycloakClientID = "skymail"
+const DefaultKeycloakClientID = "skynotify"
 
 type Config struct {
 	DatabaseURL      string `mapstructure:"DATABASE_URL" validate:"required"`
@@ -25,7 +25,7 @@ type Config struct {
 	// Optional: where Admin REST and the service account's token for it go
 	// instead of KEYCLOAK_REALM_URL's host. Token checks stay on the realm URL.
 	KeycloakAdminURL string `mapstructure:"KEYCLOAK_ADMIN_URL"`
-	// The Keycloak client whose roles SkyMail's permissions are: skymail when unset.
+	// The Keycloak client whose roles SkyNotify's permissions are: skynotify when unset.
 	KeycloakClientID            string `mapstructure:"KEYCLOAK_CLIENT_ID"`
 	KeycloakServiceClientID     string `mapstructure:"KEYCLOAK_SERVICE_CLIENT_ID" validate:"required"`
 	KeycloakServiceClientSecret string `mapstructure:"KEYCLOAK_SERVICE_CLIENT_SECRET" validate:"required"`

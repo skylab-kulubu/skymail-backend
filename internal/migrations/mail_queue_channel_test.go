@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/skylab-kulubu/skymail-backend/internal/testpostgres"
+	"github.com/skylab-kulubu/skynotify-backend/internal/testpostgres"
 )
 
 // The migration that gives each queue row its channel (email, the only one

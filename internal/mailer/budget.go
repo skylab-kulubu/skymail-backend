@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
 )
 
 // The send budget keeps every process together within the relay's limits:
-// SKYMAIL_RATE_PER_MINUTE messages a minute and SKYMAIL_DAILY_RECIPIENT_BUDGET
+// SKYNOTIFY_RATE_PER_MINUTE messages a minute and SKYNOTIFY_DAILY_RECIPIENT_BUDGET
 // recipients a day (one queue row is one message to one recipient). The
 // counters are rows in Postgres (mail_send_windows), which every replica
 // reads and writes, so the limits hold however many processes send.
@@ -23,8 +23,8 @@ import (
 // and only counted after it, so the budget never holds one back or drops one;
 // what it takes past its share narrows what the bulk lane may take.
 const (
-	RatePerMinuteEnv        = "SKYMAIL_RATE_PER_MINUTE"
-	DailyRecipientBudgetEnv = "SKYMAIL_DAILY_RECIPIENT_BUDGET"
+	RatePerMinuteEnv        = "SKYNOTIFY_RATE_PER_MINUTE"
+	DailyRecipientBudgetEnv = "SKYNOTIFY_DAILY_RECIPIENT_BUDGET"
 
 	// DefaultRatePerMinute is under Exchange Online's 30 messages a minute
 	// (smtp.office365.com, the production relay), with room for the lanes'
@@ -45,8 +45,8 @@ type RateBudget struct {
 // Off says neither limit applies.
 func (b RateBudget) Off() bool { return b.PerMinute <= 0 && b.PerDay <= 0 }
 
-// RateBudgetFromEnv reads SKYMAIL_RATE_PER_MINUTE (unset: 25) and
-// SKYMAIL_DAILY_RECIPIENT_BUDGET (unset: 9000), each a whole number, 0 for no
+// RateBudgetFromEnv reads SKYNOTIFY_RATE_PER_MINUTE (unset: 25) and
+// SKYNOTIFY_DAILY_RECIPIENT_BUDGET (unset: 9000), each a whole number, 0 for no
 // limit. Anything else is an error that stops startup.
 func RateBudgetFromEnv(getenv func(string) string) (RateBudget, error) {
 	perMinute, err := limitFromEnv(getenv, RatePerMinuteEnv, DefaultRatePerMinute)

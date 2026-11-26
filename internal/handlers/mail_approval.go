@@ -9,16 +9,16 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
-	"github.com/skylab-kulubu/skymail-backend/internal/mailer"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
-	"github.com/skylab-kulubu/skymail-backend/internal/teams"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/keycloak"
+	"github.com/skylab-kulubu/skynotify-backend/internal/mailer"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/internal/teams"
 )
 
 // Mail onayı (ADR-0031, CONTEXT.md): a send a User without send permission
-// submits, held in SkyMail until an approver decides it. The rules are
+// submits, held in SkyNotify until an approver decides it. The rules are
 // Yusuf's (ticket 18):
 //
 //   - an approver holds MailApproverRole, a client role apart from sending;
@@ -40,24 +40,24 @@ import (
 // permission, which is exactly who the ADR is for.
 const (
 	// MailApproverRole is the client role of an approver (ticket 18, decision 1).
-	MailApproverRole = "skymail:mails:approve"
-	// What submitting a request takes, besides skymail:access (ticket 21 /
+	MailApproverRole = "skynotify:mails:approve"
+	// What submitting a request takes, besides skynotify:access (ticket 21 /
 	// Yusuf's decision, 2026-09-24: submitting needs reading what is submitted).
-	templatesReadRole = "skymail:templates:read"
-	listsReadRole     = "skymail:lists:read"
+	templatesReadRole = "skynotify:templates:read"
+	listsReadRole     = "skynotify:lists:read"
 	// How long a submission waits for a decision (ticket 18, decision 2).
 	mailApprovalDeadline = 7 * 24 * time.Hour
 	// All the time a notification gives Keycloak to name the approvers, or a
 	// group's name and size, however many calls that takes.
 	approvalKeycloakBudget = 5 * time.Second
 	// The System templates the notifications are sent with, seeded from
-	// skymail-frontend's emails/.
+	// skynotify-frontend's emails/.
 	approvalRequestedKey = "mail.approval-requested"
 	approvalResolvedKey  = "mail.approval-resolved"
-	// Where the SkyMail UI is when SKYMAIL_UI_URL does not say.
-	DefaultSkyMailUIURL = "https://iletisim.yildizskylab.com"
-	// Who sends the mail SkyMail sends of its own accord: an expiry's notice.
-	skymailSender = "skymail"
+	// Where the SkyNotify UI is when SKYNOTIFY_UI_URL does not say.
+	DefaultSkyNotifyUIURL = "https://notify.yildizskylab.com"
+	// Who sends the mail SkyNotify sends of its own accord: an expiry's notice.
+	skynotifySender = "skynotify"
 )
 
 var (
@@ -173,9 +173,9 @@ type MailApprovalChange struct {
 type MailApprovalEvent struct {
 	// 1, 2, 3… in the order they happened.
 	Seq int `json:"seq"`
-	// submitted, resubmitted and accepted, declined are the submitter's; edited, returned, approved, rejected an approver's; expired SkyMail's.
+	// submitted, resubmitted and accepted, declined are the submitter's; edited, returned, approved, rejected an approver's; expired SkyNotify's.
 	Kind string `json:"kind" enums:"submitted,resubmitted,edited,returned,accepted,declined,approved,rejected,expired"`
-	// Who did it; null when SkyMail expired the request.
+	// Who did it; null when SkyNotify expired the request.
 	Actor *MailApprovalPerson `json:"actor"`
 	// A rejection's reason, or the note an approver or the submitter left.
 	Note *string `json:"note"`
@@ -211,9 +211,9 @@ type MailApprovalItem struct {
 	TeamIDs []uuid.UUID `json:"team_ids"`
 	// What happened to it last.
 	LastEvent *MailApprovalEvent `json:"last_event"`
-	// The submitter asked for open and click tracking, with SkyMail's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyMail tracked every person's send (SKYMAIL_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyMail tracks every person's send, it is tracked whatever this says, islem too.
+	// The submitter asked for open and click tracking, with SkyNotify's tracking on then and a template that may be tracked (not System, not sensitive), or it was submitted while SkyNotify tracked every person's send (SKYNOTIFY_TRACKING_OPERATOR); the approved send gets it if that still holds. Approved while SkyNotify tracks every person's send, it is tracked whatever this says, islem too.
 	Tracking bool `json:"tracking"`
-	// The purpose of the send once approved, as submitted. Null for a request submitted while SkyMail's purposes were off: approved while they are on, it goes as duyuru, club:duyuru.
+	// The purpose of the send once approved, as submitted. Null for a request submitted while SkyNotify's purposes were off: approved while they are on, it goes as duyuru, club:duyuru.
 	SendPurposeFields
 }
 
@@ -244,7 +244,7 @@ type MailApprovalNotification struct {
 	TemplateKey string `json:"template_key" enums:"mail.approval-requested,mail.approval-resolved"`
 	// How many people it was queued to.
 	Notified int `json:"notified"`
-	// Why it reached no one or fewer than it was for: no_approvers (no one holding skymail:mails:approve has an address), approver_lookup_failed (Keycloak did not say in time), no_address (the submitter's token carried no e-mail), unverified_address (it carried one Keycloak had not verified, which is not used), template_unavailable (the System template is not seeded), enqueue_failed. Null when it reached everyone.
+	// Why it reached no one or fewer than it was for: no_approvers (no one holding skynotify:mails:approve has an address), approver_lookup_failed (Keycloak did not say in time), no_address (the submitter's token carried no e-mail), unverified_address (it carried one Keycloak had not verified, which is not used), template_unavailable (the System template is not seeded), enqueue_failed. Null when it reached everyone.
 	Problem *string `json:"problem" enums:"no_approvers,approver_lookup_failed,no_address,unverified_address,template_unavailable,enqueue_failed"`
 }
 
@@ -285,16 +285,16 @@ type MailApprovalHandler interface {
 
 // MailApprovalOptions are what the handler needs besides its stores.
 type MailApprovalOptions struct {
-	// The Keycloak client whose MailApproverRole makes an approver: skymail.
+	// The Keycloak client whose MailApproverRole makes an approver: skynotify.
 	ClientID string
-	// The SkyMail UI the notifications link to; DefaultSkyMailUIURL when empty.
+	// The SkyNotify UI the notifications link to; DefaultSkyNotifyUIURL when empty.
 	UIURL string
 	// The clock; time.Now when nil.
 	Now func() time.Time
 	// Teams says which Teams a person leads (core); nil while Team mail is
-	// off (SKYMAIL_TEAM_SEND).
+	// off (SKYNOTIFY_TEAM_SEND).
 	Teams teams.Reader
-	// SKYMAIL_SENDER_SEES_RECIPIENTS: the submitter reads the people of
+	// SKYNOTIFY_SENDER_SEES_RECIPIENTS: the submitter reads the people of
 	// their approved sends, so a result's small counts too.
 	SenderSeesRecipients bool
 }
@@ -307,7 +307,7 @@ type mailApprovalHandlerImpl struct {
 	uiURL    string
 	now      func() time.Time
 	teams    teams.Reader
-	// SKYMAIL_SENDER_SEES_RECIPIENTS (MailApprovalOptions).
+	// SKYNOTIFY_SENDER_SEES_RECIPIENTS (MailApprovalOptions).
 	senderSeesRecipients bool
 }
 
@@ -327,7 +327,7 @@ func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc ke
 		senderSeesRecipients: opts.SenderSeesRecipients,
 	}
 	if h.uiURL == "" {
-		h.uiURL = DefaultSkyMailUIURL
+		h.uiURL = DefaultSkyNotifyUIURL
 	}
 	if h.now == nil {
 		h.now = time.Now
@@ -338,7 +338,7 @@ func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc ke
 // Submit godoc
 //
 //	@Summary		Submit a send for approval
-//	@Description	Mail onayı (ADR-0031): anyone who can use SkyMail submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skymail:mails:approve approves it. Submitting takes skymail:templates:read, and skymail:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing — before the body is checked, when templates:read is missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent. Purposes (SKYMAIL_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori") on the request and on its sends once approved: islem only to people or a Forms source (400 mail_task.purpose_not_allowed for a list or a group); a request without one is duyuru, club:duyuru.
+//	@Description	Mail onayı (ADR-0031): anyone who can use SkyNotify submits a filled-in send — a template and either a mailing list (an internal list or a Keycloak group, as POST /mail_tasks takes it) or 1..100 people in recipients, each address once whatever its case (each is sent to on their own, as POST /mail_tasks/single sends to one), never both — and nothing is sent until someone holding skynotify:mails:approve approves it. Submitting takes skynotify:templates:read, and skynotify:lists:read too for a mailing list: without them it is refused with 403 server.forbidden, params.missing_roles naming the roles missing — before the body is checked, when templates:read is missing. It is checked as a send would be: the template exists, is not archived and has a published version, which the request is pinned to; the list exists and is not archived, or the Keycloak group exists; every Required variable of the template has a value (FullName and Email are the mailer's); and the template renders with the values, for the first person. It waits seven days; undecided by then, it expires and is never sent. Purposes (SKYNOTIFY_MAIL_PURPOSE; tracking-mode purpose_available): while they are on the send is written with purpose and category (README, "Gönderim amacı ve kategori") on the request and on its sends once approved: islem only to people or a Forms source (400 mail_task.purpose_not_allowed for a list or a group); a request without one is duyuru, club:duyuru.
 //	@Description
 //	@Description	Alternatively, form_source_id selects the caller's immutable Forms snapshot instead of mail_list_id or manual recipients. Choose exactly one audience. This source does not need lists:read; its configured recipient limit is separate from the manual 100-person limit. Submission atomically binds the source to one pending request without expanding its recipients. An exact retry returns 200 with the same request, including after preparation TTL. Source ownership is checked before returning metadata; another owner's source is 404. An unconsumed expired source is 410; invalidated, differently consumed or busy source is 409. Source recipients and form metadata cannot be supplied by the browser. This source version requests no recipient tracking.
 //	@Description
@@ -349,8 +349,8 @@ func NewMailApprovalHandler(db *database.Store, mail mailer.Transactional, kc ke
 //	@Param			send	body		requests.SubmitMailApproval	true	"The send"
 //	@Success		201		{object}	handlers.MailApproval		"The request, pending, with notification"
 //	@Success		200		{object}	handlers.MailApproval		"Same request for an exact Forms source retry"
-//	@Failure		400		{object}	apperrors.Problem			"validation.error (params.errors: [{field, code, params}]): no template_id; not exactly one of mail_list_id and recipients (mail_list_id, exactly_one_of); more than 100 people (recipients, max_length); a missing or malformed address (recipients[i].email, required or invalid_email); an address twice (recipients[i].email, duplicate, params.first naming the first; or, for an address only Postgres finds twice, recipients, duplicate). attachment.not_allowed: a request takes no attachments. Purpose, checked in this order, while purposes are on (SKYMAIL_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid (duyuru)"
-//	@Failure		403		{object}	apperrors.Problem			"server.forbidden: params.missing_roles names what the caller lacks of skymail:templates:read and, for a mailing list, skymail:lists:read"
+//	@Failure		400		{object}	apperrors.Problem			"validation.error (params.errors: [{field, code, params}]): no template_id; not exactly one of mail_list_id and recipients (mail_list_id, exactly_one_of); more than 100 people (recipients, max_length); a missing or malformed address (recipients[i].email, required or invalid_email); an address twice (recipients[i].email, duplicate, params.first naming the first; or, for an address only Postgres finds twice, recipients, duplicate). attachment.not_allowed: a request takes no attachments. Purpose, checked in this order, while purposes are on (SKYNOTIFY_MAIL_PURPOSE): mail_task.purpose_required, mail_task.commercial_content_not_allowed, mail_task.purpose_invalid, then the purpose's own: mail_task.purpose_not_allowed (islem to a list or a group), mail_task.category_not_allowed, mail_task.transactional_statement_required (islem); mail_task.category_required, mail_task.category_invalid (duyuru)"
+//	@Failure		403		{object}	apperrors.Problem			"server.forbidden: params.missing_roles names what the caller lacks of skynotify:templates:read and, for a mailing list, skynotify:lists:read"
 //	@Failure		404		{object}	apperrors.Problem			"No such Forms source owned by the caller"
 //	@Failure		409		{object}	apperrors.Problem			"Forms source invalidated, consumed differently or busy"
 //	@Failure		410		{object}	apperrors.Problem			"Prepare the Forms audience again"
@@ -362,7 +362,7 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	// A Leader without skymail:access submits Team mail only.
+	// A Leader without skynotify:access submits Team mail only.
 	if caller.teamSeat && !teamsNamedIn(c.Body()) {
 		return errAccessRequired()
 	}
@@ -466,11 +466,12 @@ func (h *mailApprovalHandlerImpl) Submit(c fiber.Ctx) error {
 // List godoc
 //
 //	@Summary		List requests for approval
-//	@Description	An approver (skymail:mails:approve) lists everyone's requests, or only their own with mine=true; anyone else lists only their own. Newest submission first; X-Total-Count counts the filtered requests. A request undecided past its deadline is listed, and filtered, as expired; listing writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.
+//	@Description	An approver (skynotify:mails:approve) lists everyone's requests, or only their own with mine=true; anyone else lists only their own. Newest submission first; X-Total-Count counts the filtered requests. A request undecided past its deadline is listed, and filtered, as expired; listing writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.
 //	@Tags			Mail approval
 //	@Produce		json
 //	@Param			state	query		string	false	"Only requests in this state"	Enums(pending,returned,approved,rejected,declined,expired)
 //	@Param			mine	query		bool	false	"Only the caller's own requests"
+//	@Param			q		query		string	false	"Part of the template's name, key or subject, the list's name, the Forms form's title or the requester's name (at most 200 characters)"
 //	@Param			_start	query		int		false	"Start index"
 //	@Param			_end	query		int		false	"End index"
 //	@Success		200		{array}		handlers.MailApprovalItem
@@ -492,16 +493,20 @@ func (h *mailApprovalHandlerImpl) List(c fiber.Ctx) error {
 	if !caller.approver || c.Query("mine") == "true" {
 		submitter = &caller.sub
 	}
+	search, ok := searchParam(c.Query("q"))
+	if !ok {
+		return errSearchTooLong
+	}
 
 	now := h.now()
 	limit, offset := getPaginationParams(c)
 	rows, err := h.db.ListMailApprovals(c.Context(), database.ListMailApprovalsParams{
-		Limit: limit, Offset: offset, SubmitterSub: submitter, State: state, AsOf: now,
+		Limit: limit, Offset: offset, SubmitterSub: submitter, State: state, AsOf: now, Search: search,
 	})
 	if err != nil {
 		return err
 	}
-	count, err := h.db.CountMailApprovals(c.Context(), database.CountMailApprovalsParams{SubmitterSub: submitter, State: state, AsOf: now})
+	count, err := h.db.CountMailApprovals(c.Context(), database.CountMailApprovalsParams{SubmitterSub: submitter, State: state, AsOf: now, Search: search})
 	if err != nil {
 		return err
 	}
@@ -537,7 +542,7 @@ func (h *mailApprovalHandlerImpl) List(c fiber.Ctx) error {
 // Get godoc
 //
 //	@Summary		Read a request for approval
-//	@Description	A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. An approved request has result: how its sends went, in totals only (sent, skipped, failed, pending; tracking, the opens and clicks of its tracked sends summed, null and tracking_withheld true when a send is mail the system sends and the caller may not read the sends' people, by GET /mail_tasks/{id}/tracking's rule; shown whatever the number of tracked recipients), with no person in it and one total for a request to people, never a row per send; it needs no skymail:mails:read. Any other request has none. Reading the result never fails the read: totals not read in time leave the answer without result, opens and clicks not read in time leave tracking null with tracking_withheld false. preview_recipient is whose mail the preview is: the first of its people, or for a list the submitter, as if they were on it; it is given also when the preview does not render. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.
+//	@Description	A request whole — with how many it would reach, the mail it would queue rendered by the mailer from the template version it is pinned to (preview.html is operator HTML: show it only in a sandboxed iframe), and its history — for an approver or its submitter; to anyone else it is not found. An approved request has result: how its sends went, in totals only (sent, skipped, failed, pending; tracking, the opens and clicks of its tracked sends summed, null and tracking_withheld true when a send is mail the system sends and the caller may not read the sends' people, by GET /mail_tasks/{id}/tracking's rule; shown whatever the number of tracked recipients), with no person in it and one total for a request to people, never a row per send; it needs no skynotify:mails:read. Any other request has none. Reading the result never fails the read: totals not read in time leave the answer without result, opens and clicks not read in time leave tracking null with tracking_withheld false. preview_recipient is whose mail the preview is: the first of its people, or for a list the submitter, as if they were on it; it is given also when the preview does not render. A request undecided past its deadline reads as expired; reading writes nothing and mails no one — the sweep, within a minute, records the expiry and tells the submitter.
 //	@Tags			Mail approval
 //	@Produce		json
 //	@Param			id	path		string	true	"Request ID"
@@ -584,13 +589,13 @@ func (h *mailApprovalHandlerImpl) Get(c fiber.Ctx) error {
 //	@Param			id			path		string							true	"Request ID"
 //	@Param			approval	body		requests.ApproveMailApproval	false	"An edit and a note, both optional"
 //	@Success		200			{object}	handlers.MailApproval			"The request, approved, with its task_ids and notification"
-//	@Failure		400			{object}	apperrors.Problem				"validation.error; mail_task.category_unknown: the duyuru send's team is no team (SKYMAIL_BULK_PREFERENCE)"
+//	@Failure		400			{object}	apperrors.Problem				"validation.error; mail_task.category_unknown: the duyuru send's team is no team (SKYNOTIFY_BULK_PREFERENCE)"
 //	@Failure		403			{object}	apperrors.Problem				"Not an approver"
 //	@Failure		404			{object}	apperrors.Problem				"No such request"
 //	@Failure		409			{object}	apperrors.Problem				"mail_approval.state_conflict (params.state, params.allowed), mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished (params.submitted_version_id, params.published_version_id), mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty; for Team mail mail_approval.team_leadership_lost (the submitter leads none of its Teams now: the request is rejected with that reason) or mail_approval.team_mail_off. A Team led no more, or gone from Keycloak, is dropped and recorded (an edited event) and the rest go"
 //	@Failure		422			{object}	apperrors.Problem				"The edit leaves a Required variable empty (mail_approval.required_variables_missing) or does not render (mail_approval.unrenderable)"
 //	@Failure		500			{object}	apperrors.Problem				"Internal Server Error"
-//	@Failure		503			{object}	apperrors.Problem				"mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYMAIL_BULK_PREFERENCE), core did not say whom the send may go to at the approval; nothing is queued and the request stays as it was. team_mail.leadership_unavailable (Retry-After): for Team mail, core did not say which Teams the submitter leads; the request stays as it was"
+//	@Failure		503			{object}	apperrors.Problem				"mail_task.preference_unavailable (Retry-After): while every duyuru send obeys the recipients' preferences (SKYNOTIFY_BULK_PREFERENCE), core did not say whom the send may go to at the approval; nothing is queued and the request stays as it was. team_mail.leadership_unavailable (Retry-After): for Team mail, core did not say which Teams the submitter leads; the request stays as it was"
 //	@Router			/mail_approvals/{id}/approve [post]
 func (h *mailApprovalHandlerImpl) Approve(c fiber.Ctx) error {
 	var params requests.ApproveMailApproval
@@ -718,7 +723,7 @@ func (h *mailApprovalHandlerImpl) Reject(c fiber.Ctx) error {
 //	@Produce		json
 //	@Param			id	path		string					true	"Request ID"
 //	@Success		200	{object}	handlers.MailApproval	"The request, approved, with its task_ids"
-//	@Failure		403	{object}	apperrors.Problem		"mail_approval.not_submitter; server.forbidden (params.missing_roles skymail:access) for a Leader without skymail:access accepting a request that is not Team mail"
+//	@Failure		403	{object}	apperrors.Problem		"mail_approval.not_submitter; server.forbidden (params.missing_roles skynotify:access) for a Leader without skynotify:access accepting a request that is not Team mail"
 //	@Failure		404	{object}	apperrors.Problem		"No such request, or not the caller's to see"
 //	@Failure		409	{object}	apperrors.Problem		"mail_approval.state_conflict, mail_approval.expired, mail_approval.busy, mail_approval.changed, mail_approval.template_republished, mail_approval.template_unavailable, mail_approval.audience_unavailable or mail_approval.audience_empty; for Team mail as Approve"
 //	@Failure		500	{object}	apperrors.Problem		"Internal Server Error"

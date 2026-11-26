@@ -10,11 +10,11 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/skylab-kulubu/skymail-backend/internal/apperrors"
-	"github.com/skylab-kulubu/skymail-backend/internal/database"
-	"github.com/skylab-kulubu/skymail-backend/internal/requests"
-	"github.com/skylab-kulubu/skymail-backend/internal/requiredvars"
-	"github.com/skylab-kulubu/skymail-backend/pkg/validator"
+	"github.com/skylab-kulubu/skynotify-backend/internal/apperrors"
+	"github.com/skylab-kulubu/skynotify-backend/internal/database"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requests"
+	"github.com/skylab-kulubu/skynotify-backend/internal/requiredvars"
+	"github.com/skylab-kulubu/skynotify-backend/pkg/validator"
 )
 
 var errInvalidBase = apperrors.New(

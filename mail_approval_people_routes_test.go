@@ -428,14 +428,14 @@ func TestSubmittingTakesReadAccessToWhatIsSubmitted(t *testing.T) {
 			t.Errorf("%s posting %s = %d %s, want 403 missing %s", who, path, status, raw, want)
 		}
 	}
-	refused("baska", "/v1/mail_approvals", w.listSend(), "skymail:templates:read", "skymail:lists:read")
-	refused("baska", "/v1/mail_approvals", w.peopleSend(ayseKaya), "skymail:templates:read")
+	refused("baska", "/v1/mail_approvals", w.listSend(), "skynotify:templates:read", "skynotify:lists:read")
+	refused("baska", "/v1/mail_approvals", w.peopleSend(ayseKaya), "skynotify:templates:read")
 	// Without templates:read nothing in the body matters: it is refused before
 	// the body is checked.
 	malformed := w.peopleSend(approvalRecipient{Email: "ayse"}, approvalRecipient{Email: "ayse"})
 	delete(malformed, "template_id")
-	refused("baska", "/v1/mail_approvals", malformed, "skymail:templates:read")
-	refused("okur", "/v1/mail_approvals", w.listSend(), "skymail:lists:read")
+	refused("baska", "/v1/mail_approvals", malformed, "skynotify:templates:read")
+	refused("okur", "/v1/mail_approvals", w.listSend(), "skynotify:lists:read")
 	var kept int64
 	if err := w.store.Conn.QueryRow(context.Background(), `SELECT count(*) FROM mail_approvals`).Scan(&kept); err != nil {
 		t.Fatal(err)
@@ -446,7 +446,7 @@ func TestSubmittingTakesReadAccessToWhatIsSubmitted(t *testing.T) {
 
 	toPeople := w.submit("okur", w.peopleSend(ayseKaya))
 	w.act("fatih", toPeople.ID, "reject", map[string]any{"reason": "Listeye gitsin."})
-	refused("okur", "/v1/mail_approvals/"+toPeople.ID.String()+"/resubmit", w.listSend(), "skymail:lists:read")
+	refused("okur", "/v1/mail_approvals/"+toPeople.ID.String()+"/resubmit", w.listSend(), "skynotify:lists:read")
 	if status, _, failure := w.act("okur", toPeople.ID, "resubmit", w.peopleSend(ayseKaya, mehmetDemir)); status != fiber.StatusOK {
 		t.Fatalf("okur resubmitting to people = %d %+v", status, failure)
 	}

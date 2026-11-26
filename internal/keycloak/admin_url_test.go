@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/skylab-kulubu/skymail-backend/internal/keycloak"
+	"github.com/skylab-kulubu/skynotify-backend/internal/keycloak"
 )
 
 func TestParseAdminURL(t *testing.T) {
@@ -57,14 +57,14 @@ func TestParseAdminURL(t *testing.T) {
 	}
 }
 
-// Without KEYCLOAK_ADMIN_URL SkyMail does what it always did: the service
+// Without KEYCLOAK_ADMIN_URL SkyNotify does what it always did: the service
 // account's token and every Admin REST call go to KEYCLOAK_REALM_URL's host.
 func TestAdminRESTUsesTheRealmURLWithoutAdminURL(t *testing.T) {
 	t.Parallel()
 	public := newRecordingKeycloak(t, "")
 	internal := newRecordingKeycloak(t, "")
 
-	kc := keycloak.NewClient(public.srv.URL+"/realms/e-skylab", "", "skymail-backend", "secret")
+	kc := keycloak.NewClient(public.srv.URL+"/realms/e-skylab", "", "skynotify-backend", "secret")
 	exerciseAdminREST(t, kc)
 
 	if got := internal.paths(); len(got) != 0 {
@@ -81,7 +81,7 @@ func TestAdminRESTAndItsTokenGoToAdminURL(t *testing.T) {
 	public := newRecordingKeycloak(t, "")
 	internal := newRecordingKeycloak(t, "")
 
-	kc := keycloak.NewClient(public.srv.URL+"/realms/e-skylab", internal.srv.URL+"/", "skymail-backend", "secret")
+	kc := keycloak.NewClient(public.srv.URL+"/realms/e-skylab", internal.srv.URL+"/", "skynotify-backend", "secret")
 	exerciseAdminREST(t, kc)
 
 	if got := public.paths(); len(got) != 0 {
@@ -96,7 +96,7 @@ func TestAdminURLKeepsItsContextPath(t *testing.T) {
 	public := newRecordingKeycloak(t, "")
 	internal := newRecordingKeycloak(t, "/auth")
 
-	kc := keycloak.NewClient(public.srv.URL+"/realms/e-skylab", internal.srv.URL+"/auth//", "skymail-backend", "secret")
+	kc := keycloak.NewClient(public.srv.URL+"/realms/e-skylab", internal.srv.URL+"/auth//", "skynotify-backend", "secret")
 	exerciseAdminREST(t, kc)
 
 	if got := public.paths(); len(got) != 0 {
@@ -124,7 +124,7 @@ func exerciseAdminREST(t *testing.T, kc keycloak.Client) {
 	if _, err := kc.GetGroupMembers(ctx, recordedGroupID); err != nil {
 		t.Fatalf("GetGroupMembers: %v", err)
 	}
-	if _, err := kc.ClientRoleMembers(ctx, "skymail", "skymail:mails:approve"); err != nil {
+	if _, err := kc.ClientRoleMembers(ctx, "skynotify", "skynotify:mails:approve"); err != nil {
 		t.Fatalf("ClientRoleMembers: %v", err)
 	}
 }
@@ -154,7 +154,7 @@ func newRecordingKeycloak(t *testing.T, prefix string) *recordingKeycloak {
 			return
 		}
 		admin := "/admin/realms/e-skylab"
-		role := admin + "/clients/" + recordedClientID + "/roles/skymail:mails:approve"
+		role := admin + "/clients/" + recordedClientID + "/roles/skynotify:mails:approve"
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodPost && path == "/realms/e-skylab/protocol/openid-connect/token":
@@ -172,7 +172,7 @@ func newRecordingKeycloak(t *testing.T, prefix string) *recordingKeycloak {
 		case path == admin+"/groups/"+recordedGroupID+"/members":
 			_ = json.NewEncoder(w).Encode([]any{member})
 		case path == admin+"/clients":
-			_ = json.NewEncoder(w).Encode([]any{map[string]any{"id": recordedClientID, "clientId": "skymail"}})
+			_ = json.NewEncoder(w).Encode([]any{map[string]any{"id": recordedClientID, "clientId": "skynotify"}})
 		case path == role+"/groups":
 			_ = json.NewEncoder(w).Encode([]any{group})
 		default:
@@ -197,7 +197,7 @@ func (kc *recordingKeycloak) assertServedEveryFamily(t *testing.T, prefix string
 	got := kc.paths()
 	admin := prefix + "/admin/realms/e-skylab"
 	token := prefix + "/realms/e-skylab/protocol/openid-connect/token"
-	role := admin + "/clients/" + recordedClientID + "/roles/skymail:mails:approve"
+	role := admin + "/clients/" + recordedClientID + "/roles/skynotify:mails:approve"
 	for _, want := range []string{
 		"POST " + token,
 		"GET " + admin + "/groups",
